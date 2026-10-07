@@ -173,6 +173,16 @@ func FindProjectRoot(cwd string) (string, bool) {
 	}
 }
 
+// ProjectKey names the project of cwd in socket paths: ProjectHash of the
+// project root, or "user" when cwd is outside any project (profiles from
+// the user config only). The console and its clients must agree on it.
+func ProjectKey(cwd string) string {
+	if root, ok := FindProjectRoot(cwd); ok {
+		return ProjectHash(root)
+	}
+	return "user"
+}
+
 // ProjectHash returns the first 8 hex digits of sha256 of the absolute,
 // cleaned project root.
 func ProjectHash(root string) string {

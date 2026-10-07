@@ -246,3 +246,17 @@ func TestProjectHash(t *testing.T) {
 		t.Error("ProjectHash must be stable on the cleaned path and differ between roots")
 	}
 }
+
+func TestProjectKey(t *testing.T) {
+	root := installProject(t, "basic.toml")
+	sub := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := ProjectKey(sub); got != ProjectHash(root) {
+		t.Errorf("ProjectKey(sub) = %q, want %q", got, ProjectHash(root))
+	}
+	if got := ProjectKey(t.TempDir()); got != "user" {
+		t.Errorf("ProjectKey outside a project = %q, want user", got)
+	}
+}

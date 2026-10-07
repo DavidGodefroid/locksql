@@ -46,7 +46,7 @@ func TestHelpPrintsUsageAndSucceeds(t *testing.T) {
 }
 
 func TestKnownCommandsAreNotImplementedYet(t *testing.T) {
-	for _, cmd := range []string{"console", "forget", "init", "status", "tables", "describe", "plan", "run", "pii", "request", "logout", "mcp"} {
+	for _, cmd := range []string{"forget", "init", "status", "tables", "describe", "plan", "run", "pii", "request", "logout", "mcp"} {
 		var out, errb bytes.Buffer
 		if code := run([]string{cmd}, &out, &errb); code != exitFail {
 			t.Fatalf("%s: code = %d, want %d", cmd, code, exitFail)
@@ -63,6 +63,15 @@ func TestExitCodeValues(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("exit codes = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestConsoleUsage(t *testing.T) {
+	for _, args := range [][]string{{"console"}, {"console", "--profile"}, {"console", "--profile", "uat", "extra"}, {"console", "--bogus"}} {
+		var out, errb bytes.Buffer
+		if code := run(args, &out, &errb); code != exitUsage {
+			t.Fatalf("%v: code = %d, want %d (stderr %q)", args, code, exitUsage, errb.String())
 		}
 	}
 }

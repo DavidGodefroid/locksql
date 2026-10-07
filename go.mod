@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/creack/pty v1.1.24
 	github.com/go-mysql-org/go-mysql v1.16.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/zalando/go-keyring v0.2.8

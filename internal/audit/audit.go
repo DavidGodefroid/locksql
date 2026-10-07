@@ -16,15 +16,16 @@ import (
 
 // Events, spec §15.
 const (
-	EventLogin    = "login"
-	EventPolicy   = "policy"   // policy change, applied or refused (see Decision)
-	EventRefused  = "refused"  // plan refused by the classifier, the tier or the weight check
-	EventApproved = "approved" // the human approved
-	EventDenied   = "denied"   // the human denied
-	EventTimeout  = "timeout"  // approval timed out
-	EventAuto     = "auto"     // auto-approved under --skip-permissions
-	EventCatalog  = "catalog"  // catalog read
-	EventLogout   = "logout"
+	EventLogin     = "login"
+	EventPolicy    = "policy"    // policy change, applied or refused (see Decision)
+	EventRefused   = "refused"   // plan refused by the classifier, the tier or the weight check
+	EventApproved  = "approved"  // the human approved
+	EventDenied    = "denied"    // the human denied
+	EventTimeout   = "timeout"   // approval timed out
+	EventAbandoned = "abandoned" // the client left while its approval was pending
+	EventAuto      = "auto"      // auto-approved under --skip-permissions
+	EventCatalog   = "catalog"   // catalog read
+	EventLogout    = "logout"
 )
 
 // Record is one audit event. It has no field able to hold a password or row

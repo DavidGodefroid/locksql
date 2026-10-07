@@ -44,7 +44,6 @@ Other:
 
 // commands lists every subcommand that is dispatched but not handled inline.
 var commands = map[string]bool{
-	"console":  true,
 	"forget":   true,
 	"init":     true,
 	"status":   true,
@@ -75,6 +74,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usageText)
 		return exitOK
+	case "console":
+		return runConsole(args[1:], stdout, stderr)
 	default:
 		if commands[cmd] {
 			fmt.Fprintf(stderr, "locksql %s: not implemented yet\n", cmd)
