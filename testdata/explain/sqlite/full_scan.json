@@ -1,0 +1,21 @@
+{
+  "root": {
+    "est_rows": -1,
+    "detail": "QUERY",
+    "children": [
+      {
+        "table": "users",
+        "access": "full",
+        "est_rows": 5000000,
+        "detail": "SCAN users"
+      }
+    ]
+  },
+  "raw": [
+    {
+      "id": 2,
+      "parent": 0,
+      "detail": "SCAN users"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "root": {
+    "est_rows": -1,
+    "detail": "QUERY",
+    "children": [
+      {
+        "table": "orders",
+        "access": "range",
+        "est_rows": 2500,
+        "detail": "SEARCH orders USING COVERING INDEX orders_user (user_id>? AND user_id<?)"
+      }
+    ]
+  },
+  "raw": [
+    {
+      "id": 2,
+      "parent": 0,
+      "detail": "SEARCH orders USING COVERING INDEX orders_user (user_id>? AND user_id<?)"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "root": {
+    "est_rows": -1,
+    "detail": "QUERY",
+    "children": [
+      {
+        "table": "countries",
+        "access": "full",
+        "est_rows": 200,
+        "detail": "SCAN c"
+      },
+      {
+        "table": "users",
+        "access": "lookup",
+        "est_rows": 1,
+        "detail": "SEARCH u USING INTEGER PRIMARY KEY (rowid=?)"
+      }
+    ]
+  },
+  "raw": [
+    {
+      "id": 3,
+      "parent": 0,
+      "detail": "SCAN c"
+    },
+    {
+      "id": 5,
+      "parent": 0,
+      "detail": "SEARCH u USING INTEGER PRIMARY KEY (rowid=?)"
+    }
+  ]
+}

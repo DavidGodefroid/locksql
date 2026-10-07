@@ -1,0 +1,28 @@
+{
+  "root": {
+    "est_rows": -1,
+    "sort": true,
+    "temp": true,
+    "detail": "QUERY",
+    "children": [
+      {
+        "table": "users",
+        "access": "full",
+        "est_rows": 5000000,
+        "detail": "SCAN users"
+      }
+    ]
+  },
+  "raw": [
+    {
+      "id": 3,
+      "parent": 0,
+      "detail": "SCAN users"
+    },
+    {
+      "id": 11,
+      "parent": 0,
+      "detail": "USE TEMP B-TREE FOR ORDER BY"
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "root": {
+    "est_rows": -1,
+    "detail": "QUERY",
+    "children": [
+      {
+        "est_rows": -1,
+        "detail": "MERGE (UNION)",
+        "children": [
+          {
+            "est_rows": -1,
+            "sort": true,
+            "temp": true,
+            "detail": "LEFT",
+            "children": [
+              {
+                "table": "users",
+                "access": "full",
+                "est_rows": 5000000,
+                "detail": "SCAN users"
+              }
+            ]
+          },
+          {
+            "est_rows": -1,
+            "sort": true,
+            "temp": true,
+            "detail": "RIGHT",
+            "children": [
+              {
+                "table": "countries",
+                "access": "full",
+                "est_rows": 200,
+                "detail": "SCAN countries"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "raw": [
+    {
+      "id": 2,
+      "parent": 0,
+      "detail": "MERGE (UNION)"
+    },
+    {
+      "id": 4,
+      "parent": 2,
+      "detail": "LEFT"
+    },
+    {
+      "id": 7,
+      "parent": 4,
+      "detail": "SCAN users"
+    },
+    {
+      "id": 13,
+      "parent": 4,
+      "detail": "USE TEMP B-TREE FOR ORDER BY"
+    },
+    {
+      "id": 22,
+      "parent": 2,
+      "detail": "RIGHT"
+    },
+    {
+      "id": 25,
+      "parent": 22,
+      "detail": "SCAN countries"
+    },
+    {
+      "id": 31,
+      "parent": 22,
+      "detail": "USE TEMP B-TREE FOR ORDER BY"
+    }
+  ]
+}

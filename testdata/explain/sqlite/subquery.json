@@ -1,0 +1,43 @@
+{
+  "root": {
+    "est_rows": -1,
+    "detail": "QUERY",
+    "children": [
+      {
+        "table": "countries",
+        "access": "lookup",
+        "est_rows": 1,
+        "detail": "SEARCH countries USING INTEGER PRIMARY KEY (rowid=?)"
+      },
+      {
+        "est_rows": -1,
+        "detail": "LIST SUBQUERY 1",
+        "children": [
+          {
+            "table": "orders",
+            "access": "lookup",
+            "est_rows": 4,
+            "detail": "SEARCH orders USING COVERING INDEX orders_user (user_id=?)"
+          }
+        ]
+      }
+    ]
+  },
+  "raw": [
+    {
+      "id": 2,
+      "parent": 0,
+      "detail": "SEARCH countries USING INTEGER PRIMARY KEY (rowid=?)"
+    },
+    {
+      "id": 6,
+      "parent": 0,
+      "detail": "LIST SUBQUERY 1"
+    },
+    {
+      "id": 8,
+      "parent": 6,
+      "detail": "SEARCH orders USING COVERING INDEX orders_user (user_id=?)"
+    }
+  ]
+}

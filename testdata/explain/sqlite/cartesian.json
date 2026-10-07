@@ -1,0 +1,33 @@
+{
+  "root": {
+    "est_rows": -1,
+    "detail": "QUERY",
+    "children": [
+      {
+        "table": "users",
+        "access": "full",
+        "est_rows": 5000000,
+        "detail": "SCAN users"
+      },
+      {
+        "table": "orders",
+        "access": "full",
+        "est_rows": 40000,
+        "no_join_cond": true,
+        "detail": "SCAN orders"
+      }
+    ]
+  },
+  "raw": [
+    {
+      "id": 3,
+      "parent": 0,
+      "detail": "SCAN users"
+    },
+    {
+      "id": 5,
+      "parent": 0,
+      "detail": "SCAN orders"
+    }
+  ]
+}

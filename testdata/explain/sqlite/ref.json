@@ -1,0 +1,21 @@
+{
+  "root": {
+    "est_rows": -1,
+    "detail": "QUERY",
+    "children": [
+      {
+        "table": "users",
+        "access": "lookup",
+        "est_rows": 1,
+        "detail": "SEARCH users USING INTEGER PRIMARY KEY (rowid=?)"
+      }
+    ]
+  },
+  "raw": [
+    {
+      "id": 2,
+      "parent": 0,
+      "detail": "SEARCH users USING INTEGER PRIMARY KEY (rowid=?)"
+    }
+  ]
+}

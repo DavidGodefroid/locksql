@@ -1,0 +1,44 @@
+{
+  "root": {
+    "est_rows": -1,
+    "detail": "QUERY",
+    "children": [
+      {
+        "table": "users",
+        "access": "full",
+        "est_rows": 5000000,
+        "detail": "SCAN u"
+      },
+      {
+        "est_rows": -1,
+        "correlated": true,
+        "detail": "CORRELATED SCALAR SUBQUERY 1",
+        "children": [
+          {
+            "table": "orders",
+            "access": "full",
+            "est_rows": 40000,
+            "detail": "SCAN o"
+          }
+        ]
+      }
+    ]
+  },
+  "raw": [
+    {
+      "id": 2,
+      "parent": 0,
+      "detail": "SCAN u"
+    },
+    {
+      "id": 6,
+      "parent": 0,
+      "detail": "CORRELATED SCALAR SUBQUERY 1"
+    },
+    {
+      "id": 11,
+      "parent": 6,
+      "detail": "SCAN o"
+    }
+  ]
+}
