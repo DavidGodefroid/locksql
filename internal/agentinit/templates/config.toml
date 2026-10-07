@@ -1,0 +1,24 @@
+# locksql project configuration. See https://github.com/DavidGodefroid/locksql
+#
+# Profiles name the databases agents may query through `locksql console`.
+# This file never holds a secret: the console asks for the password, or
+# reads it from the OS keychain. Keys that look like secrets are refused.
+#
+# Uncomment and adapt the example, then start the console in a separate
+# terminal with: locksql console --profile dev
+
+# [profiles.dev]
+# engine      = "postgres"          # mariadb | mysql | postgres | sqlite
+# host        = "127.0.0.1"         # for sqlite, use path instead of host and port
+# port        = 5432
+# user        = ""                  # empty: asked at console start
+# database    = ""                  # empty: chosen per query, listed at start
+# credentials = "ask"               # ask | keychain
+# tier        = "read"              # read | write | ddl | admin
+# production  = false               # true: stricter limits, typed approval
+
+# [profiles.dev.limits]
+# statement_timeout   = "30s"
+# explain_rows_warn   = 100000
+# explain_rows_refuse = 1000000
+# max_rows            = 200

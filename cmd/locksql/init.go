@@ -1,0 +1,69 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"io"
+	"slices"
+	"strings"
+
+	"github.com/DavidGodefroid/locksql/internal/agentinit"
+)
+
+// runInit is `locksql init AGENT...`: it writes the agent integration files
+// into the project of the current directory and prints the steps for any
+// file outside it.
+func runInit(e env, args []string) int {
+	usage := "locksql init " + strings.Join(agentinit.Agents(), "|") + " [...]"
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	agents, err := parseInterleaved(fs, args)
+	if err != nil {
+		return usageFail(e, "init", usage, err.Error())
+	}
+	if len(agents) == 0 {
+		return usageFail(e, "init", usage, "name at least one agent")
+	}
+	for _, a := range agents {
+		if !slices.Contains(agentinit.Agents(), a) {
+			return usageFail(e, "init", usage, fmt.Sprintf("unknown agent %q", a))
+		}
+	}
+
+	root := agentinit.ProjectRoot(e.cwd)
+	fmt.Fprintf(e.stdout, "Project: %s\n", root)
+	seenAgent := map[string]bool{}
+	seenPath := map[string]bool{}
+	var notes []string
+	for _, a := range agents {
+		if seenAgent[a] {
+			continue
+		}
+		seenAgent[a] = true
+		res, err := agentinit.Init(root, a)
+		for _, act := range res.Actions {
+			if seenPath[act.Path] {
+				continue
+			}
+			seenPath[act.Path] = true
+			line := fmt.Sprintf("  %-9s  %s", act.Status, act.Path)
+			if act.Detail != "" {
+				line += " (" + act.Detail + ")"
+			}
+			fmt.Fprintln(e.stdout, line)
+		}
+		if err != nil {
+			fmt.Fprintf(e.stderr, "locksql init %s: %v\n", a, err)
+			return exitFail
+		}
+		if res.Notes != "" {
+			notes = append(notes, res.Notes)
+		}
+	}
+	fmt.Fprintln(e.stdout)
+	for _, n := range notes {
+		fmt.Fprint(e.stdout, n)
+	}
+	fmt.Fprint(e.stdout, agentinit.NextSteps)
+	return exitOK
+}

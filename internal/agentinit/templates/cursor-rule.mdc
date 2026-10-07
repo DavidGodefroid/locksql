@@ -1,0 +1,6 @@
+---
+description: Database lookups through locksql. Apply when the user explicitly asks to look something up in a database, gives database credentials, or when tempted to run mysql, psql, sqlite3 or a database driver directly.
+globs:
+alwaysApply: false
+---
+

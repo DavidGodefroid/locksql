@@ -24,7 +24,7 @@ const usageText = `usage: locksql <command> [arguments]
 Human commands:
   console  --profile P [--skip-permissions]   run the approval console
   forget   --profile P                        remove the keychain secret
-  init     claude|codex|cursor|gemini         write agent integration files
+  init     claude|codex|cursor|gemini [...]   write agent integration files
 
 Client commands:
   status   [--profile P]
@@ -50,7 +50,6 @@ Other:
 // yet.
 var commands = map[string]bool{
 	"forget": true,
-	"init":   true,
 }
 
 func main() {
@@ -87,6 +86,8 @@ func runEnv(e env, args []string) int {
 		return runStatus(e, args[1:])
 	case "mcp":
 		return runMCP(e, args[1:])
+	case "init":
+		return runInit(e, args[1:])
 	case "pii":
 		return runPII(e, args[1:])
 	case "tables", "describe", "plan", "run", "request", "logout":

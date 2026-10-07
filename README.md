@@ -68,6 +68,28 @@ finds the project's consoles.
   and its clients must see the same value. The tests use it to keep sockets in a
   temporary directory.
 
+## Agent integration
+
+```sh
+locksql init claude|codex|cursor|gemini [...]
+```
+
+`init` writes project files only, at the project root (the directory holding
+`.locksql/config.toml`, else the git root, else the current directory):
+
+| Agent | Writes | Prints |
+|---|---|---|
+| claude | `.mcp.json` entry `locksql`; `.claude/skills/locksql/SKILL.md` | permission suggestions |
+| codex | `AGENTS.md` locksql section | the `~/.codex/config.toml` MCP snippet |
+| cursor | `.cursor/mcp.json`; `.cursor/rules/locksql.mdc` | |
+| gemini | `.gemini/settings.json` MCP entry; `GEMINI.md` locksql section | |
+
+It also creates `.locksql/config.toml` with a commented example profile when
+absent. Existing MCP configs are merged (other servers and keys are kept), an
+existing locksql entry, skill or rule is never overwritten, and the Markdown
+section is appended once between `<!-- locksql:begin -->` markers. Running it
+again changes nothing.
+
 ## Build
 
 ```sh
