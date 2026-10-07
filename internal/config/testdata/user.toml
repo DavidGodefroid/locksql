@@ -1,0 +1,8 @@
+[profiles.uat]
+engine = "mysql"
+host   = "user-side.example.com"
+
+[profiles.mine]
+engine = "postgres"
+host   = "localhost"
+port   = 5433

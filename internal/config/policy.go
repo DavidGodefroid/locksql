@@ -1,0 +1,264 @@
+package config
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"slices"
+	"strconv"
+	"time"
+)
+
+// Policy is the security-relevant view of one profile plus its PII rules.
+// The console compares the current policy with the last approved one and
+// asks the human before applying any loosening.
+type Policy struct {
+	Profile  Profile  `json:"profile"`
+	PIIMask  []string `json:"pii_mask"`  // sorted column patterns
+	PIIAllow []string `json:"pii_allow"` // sorted column patterns
+}
+
+// Change is one difference between two policies. For list fields (detectors,
+// pii.mask, pii.allow) each added or removed element is its own Change, with
+// Old empty for an addition and New empty for a removal.
+type Change struct {
+	Field    string
+	Old, New string
+	Loosens  bool
+}
+
+// NewPolicy builds a policy with sorted, de-duplicated PII lists.
+func NewPolicy(p Profile, mask, allow []string) Policy {
+	return canonical(Policy{Profile: p, PIIMask: mask, PIIAllow: allow})
+}
+
+// sortedSet returns a sorted, de-duplicated, non-nil copy of s.
+func sortedSet(s []string) []string {
+	out := slices.Clone(s)
+	slices.Sort(out)
+	out = slices.Compact(out)
+	if out == nil {
+		out = []string{}
+	}
+	return out
+}
+
+func canonical(p Policy) Policy {
+	p.Profile.Detectors = sortedSet(p.Profile.Detectors)
+	p.PIIMask = sortedSet(p.PIIMask)
+	p.PIIAllow = sortedSet(p.PIIAllow)
+	return p
+}
+
+// Fingerprint returns the hex sha256 of the policy's canonical JSON.
+// List order does not change the fingerprint.
+func Fingerprint(p Policy) string {
+	b, err := json.Marshal(canonical(p))
+	if err != nil {
+		// Only an out-of-range Tier can fail; fingerprint its raw form so
+		// that it still differs from every valid policy.
+		b = fmt.Appendf(nil, "invalid:%#v", p)
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// Diff lists the changes from approved to current and marks each loosening
+// (spec section 4): a higher tier, production true→false, a larger limit
+// (0 means unlimited), a removed PII rule or detector, an added allow rule,
+// any change of engine, host, port, path, database or user, and a
+// credentials mode other than ask.
+func Diff(approved, current Policy) []Change {
+	a, c := canonical(approved), canonical(current)
+	ap, cp := a.Profile, c.Profile
+	var out []Change
+
+	same := func(field, o, n string) {
+		if o != n {
+			out = append(out, Change{Field: field, Old: o, New: n, Loosens: true})
+		}
+	}
+	same("engine", ap.Engine, cp.Engine)
+	same("host", ap.Host, cp.Host)
+	same("port", strconv.Itoa(ap.Port), strconv.Itoa(cp.Port))
+	same("path", ap.Path, cp.Path)
+	same("database", ap.Database, cp.Database)
+	same("user", ap.User, cp.User)
+
+	if ap.Tier != cp.Tier {
+		out = append(out, Change{Field: "tier", Old: ap.Tier.String(), New: cp.Tier.String(), Loosens: cp.Tier > ap.Tier})
+	}
+	if ap.Production != cp.Production {
+		out = append(out, Change{Field: "production", Old: strconv.FormatBool(ap.Production), New: strconv.FormatBool(cp.Production), Loosens: ap.Production})
+	}
+	if ap.Credentials != cp.Credentials {
+		out = append(out, Change{Field: "credentials", Old: ap.Credentials, New: cp.Credentials, Loosens: cp.Credentials != CredentialsAsk})
+	}
+
+	limit := func(field string, o, n int64, format func(int64) string) {
+		if o != n {
+			out = append(out, Change{Field: "limits." + field, Old: format(o), New: format(n), Loosens: looserLimit(o, n)})
+		}
+	}
+	num := func(v int64) string { return strconv.FormatInt(v, 10) }
+	dur := func(v int64) string { return time.Duration(v).String() }
+	al, cl := ap.Limits, cp.Limits
+	limit("statement_timeout", int64(al.StatementTimeout), int64(cl.StatementTimeout), dur)
+	limit("explain_rows_warn", al.ExplainRowsWarn, cl.ExplainRowsWarn, num)
+	limit("explain_rows_refuse", al.ExplainRowsRefuse, cl.ExplainRowsRefuse, num)
+	limit("max_rows", int64(al.MaxRows), int64(cl.MaxRows), num)
+	limit("max_cell_chars", int64(al.MaxCellChars), int64(cl.MaxCellChars), num)
+	limit("max_output_bytes", int64(al.MaxOutputBytes), int64(cl.MaxOutputBytes), num)
+
+	out = append(out, setDiff("detectors", ap.Detectors, cp.Detectors, true)...)
+	out = append(out, setDiff("pii.mask", a.PIIMask, c.PIIMask, true)...)
+	out = append(out, setDiff("pii.allow", a.PIIAllow, c.PIIAllow, false)...)
+	return out
+}
+
+// looserLimit reports whether moving a limit from o to n loosens it.
+// Zero means unlimited.
+func looserLimit(o, n int64) bool {
+	switch {
+	case n == 0:
+		return o != 0
+	case o == 0:
+		return false
+	default:
+		return n > o
+	}
+}
+
+// setDiff reports removed and added elements of two sorted sets. When
+// removalLoosens, a removal loosens the policy; otherwise an addition does.
+func setDiff(field string, old, cur []string, removalLoosens bool) []Change {
+	var out []Change
+	for _, v := range old {
+		if _, found := slices.BinarySearch(cur, v); !found {
+			out = append(out, Change{Field: field, Old: v, Loosens: removalLoosens})
+		}
+	}
+	for _, v := range cur {
+		if _, found := slices.BinarySearch(old, v); !found {
+			out = append(out, Change{Field: field, New: v, Loosens: !removalLoosens})
+		}
+	}
+	return out
+}
+
+var stateKeyRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// ApprovedKey names the approved-policy file of a profile:
+// <ProjectHash(root)>-<profile>, or user-<profile> for a profile that comes
+// from the user config only (root == "").
+func ApprovedKey(root, profile string) string {
+	if root == "" {
+		return "user-" + profile
+	}
+	return ProjectHash(root) + "-" + profile
+}
+
+func approvedPath(stateDir, key string) (string, error) {
+	if !stateKeyRe.MatchString(key) {
+		return "", fmt.Errorf("config: invalid approved-policy key %q", key)
+	}
+	return filepath.Join(stateDir, appDirName, "approved", key+".json"), nil
+}
+
+// LoadApproved reads <stateDir>/locksql/approved/<key>.json. When no policy
+// was approved yet, the error wraps fs.ErrNotExist.
+func LoadApproved(stateDir, key string) (*Policy, error) {
+	path, err := approvedPath(stateDir, key)
+	if err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("config: approved policy: %w", err)
+	}
+	var p Policy
+	if err := json.Unmarshal(b, &p); err != nil {
+		return nil, fmt.Errorf("config: approved policy %s: %w", path, err)
+	}
+	p = canonical(p)
+	return &p, nil
+}
+
+// SaveApproved atomically writes the policy to
+// <stateDir>/locksql/approved/<key>.json with mode 0600.
+func SaveApproved(stateDir, key string, p Policy) error {
+	path, err := approvedPath(stateDir, key)
+	if err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(canonical(p), "", "  ")
+	if err != nil {
+		return fmt.Errorf("config: approved policy: %w", err)
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("config: approved policy: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, "."+key+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("config: approved policy: %w", err)
+	}
+	tmpName := tmp.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil && runtime.GOOS != "windows" {
+		return fmt.Errorf("config: approved policy: %w", err)
+	}
+	if _, err := tmp.Write(append(b, '\n')); err != nil {
+		return fmt.Errorf("config: approved policy: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("config: approved policy: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("config: approved policy: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("config: approved policy: %w", err)
+	}
+	ok = true
+	return nil
+}
+
+// StateDir returns the user state directory (without the locksql suffix):
+// $XDG_STATE_HOME or ~/.local/state on Linux and other Unix systems,
+// os.UserConfigDir() on macOS, and %LOCALAPPDATA% on Windows.
+func StateDir() (string, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		return os.UserConfigDir()
+	case "windows":
+		if d := os.Getenv("LOCALAPPDATA"); d != "" {
+			return d, nil
+		}
+		return os.UserConfigDir()
+	default:
+		if d := os.Getenv("XDG_STATE_HOME"); d != "" && filepath.IsAbs(d) {
+			return d, nil
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		if home == "" {
+			return "", errors.New("config: no home directory for the state dir")
+		}
+		return filepath.Join(home, ".local", "state"), nil
+	}
+}

@@ -1,0 +1,19 @@
+[profiles.uat]
+engine   = "mariadb"
+host     = "db.uat.example.com"
+database = "app"
+
+[profiles.prod]
+engine     = "postgres"
+host       = "db.example.com"
+production = true
+
+[profiles.local]
+engine = "sqlite"
+path   = "app.db"
+tier   = "write"
+detectors = ["email", "be_niss"]
+
+[profiles.local.limits]
+max_rows          = 50
+statement_timeout = "5s"
