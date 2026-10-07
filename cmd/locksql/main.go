@@ -36,25 +36,22 @@ Client commands:
   request  --profile P "tier=write" | "limits.max_rows=500" | "allow=app.t.c"
   logout   --profile P
   mcp      [--profile P]
+  Client commands accept --json. --profile may be left out when exactly
+  one profile is configured.
+
+Exit codes: 0 ok, 1 refused/denied/failed, 2 no console, 3 usage/config error.
 
 Other:
   version                                     print the version
   help                                        print this help
 `
 
-// commands lists every subcommand that is dispatched but not handled inline.
+// commands lists every subcommand that is dispatched but not implemented
+// yet.
 var commands = map[string]bool{
-	"forget":   true,
-	"init":     true,
-	"status":   true,
-	"tables":   true,
-	"describe": true,
-	"plan":     true,
-	"run":      true,
-	"pii":      true,
-	"request":  true,
-	"logout":   true,
-	"mcp":      true,
+	"forget": true,
+	"init":   true,
+	"mcp":    true,
 }
 
 func main() {
@@ -63,6 +60,17 @@ func main() {
 
 // run dispatches args to a subcommand and returns the process exit code.
 func run(args []string, stdout, stderr io.Writer) int {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(stderr, "locksql:", err)
+		return exitFail
+	}
+	return runEnv(env{stdin: os.Stdin, stdout: stdout, stderr: stderr, cwd: cwd}, args)
+}
+
+// runEnv is run with an explicit environment.
+func runEnv(e env, args []string) int {
+	stdout, stderr := e.stdout, e.stderr
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usageText)
 		return exitUsage
@@ -76,6 +84,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	case "console":
 		return runConsole(args[1:], stdout, stderr)
+	case "status":
+		return runStatus(e, args[1:])
+	case "pii":
+		return runPII(e, args[1:])
+	case "tables", "describe", "plan", "run", "request", "logout":
+		return runClient(e, cmd, args[1:])
 	default:
 		if commands[cmd] {
 			fmt.Fprintf(stderr, "locksql %s: not implemented yet\n", cmd)

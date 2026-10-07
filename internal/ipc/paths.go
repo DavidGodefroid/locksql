@@ -35,7 +35,8 @@ func checkName(what, s string) error {
 
 // SocketPath returns the console socket of a project and profile:
 // <runtime dir>/locksql/<project-hash>-<profile>.sock, where the runtime
-// dir is $XDG_RUNTIME_DIR (Linux), $TMPDIR (macOS) or, on Windows,
+// dir is $LOCKSQL_RUNTIME_DIR when set, else $XDG_RUNTIME_DIR (Linux),
+// $TMPDIR (macOS) or, on Windows,
 // %LOCALAPPDATA% with the path %LOCALAPPDATA%\locksql\run\... When
 // $XDG_RUNTIME_DIR or $TMPDIR is unusable the directory is
 // <temp>/locksql-<uid>. A name that would exceed the OS socket path limit
@@ -64,7 +65,16 @@ func SocketPath(projectHash, profile string) (string, error) {
 	return p, nil
 }
 
+// RuntimeDirEnv overrides the runtime dir on every OS when set to an
+// absolute path: the sockets then live in $LOCKSQL_RUNTIME_DIR/locksql. The
+// console and its clients must see the same value. Tests use it to keep
+// sockets in a temp dir.
+const RuntimeDirEnv = "LOCKSQL_RUNTIME_DIR"
+
 func runtimeDir() (string, error) {
+	if d := os.Getenv(RuntimeDirEnv); d != "" && filepath.IsAbs(d) {
+		return filepath.Join(d, "locksql"), nil
+	}
 	switch runtime.GOOS {
 	case "windows":
 		base := os.Getenv("LOCALAPPDATA")

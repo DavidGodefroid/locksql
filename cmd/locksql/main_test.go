@@ -46,7 +46,7 @@ func TestHelpPrintsUsageAndSucceeds(t *testing.T) {
 }
 
 func TestKnownCommandsAreNotImplementedYet(t *testing.T) {
-	for _, cmd := range []string{"forget", "init", "status", "tables", "describe", "plan", "run", "pii", "request", "logout", "mcp"} {
+	for _, cmd := range []string{"forget", "init", "mcp"} {
 		var out, errb bytes.Buffer
 		if code := run([]string{cmd}, &out, &errb); code != exitFail {
 			t.Fatalf("%s: code = %d, want %d", cmd, code, exitFail)

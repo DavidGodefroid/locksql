@@ -75,3 +75,23 @@ func TestRuntimeDirFallbackLinux(t *testing.T) {
 		t.Fatalf("relative XDG_RUNTIME_DIR used: %q", p)
 	}
 }
+
+func TestSocketPathRuntimeDirOverride(t *testing.T) {
+	base := shortDir(t)
+	t.Setenv("LOCKSQL_RUNTIME_DIR", base)
+	t.Setenv("XDG_RUNTIME_DIR", "/nonexistent-xdg")
+	t.Setenv("TMPDIR", "/nonexistent-tmp")
+	t.Setenv("LOCALAPPDATA", `C:\nonexistent`)
+	p, err := SocketPath("abcd1234", "uat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(base, "locksql", "abcd1234-uat.sock"); p != want {
+		t.Fatalf("SocketPath = %q, want %q", p, want)
+	}
+	// A relative override is ignored.
+	t.Setenv("LOCKSQL_RUNTIME_DIR", "relative/dir")
+	if p, err := SocketPath("abcd1234", "uat"); err == nil && strings.HasPrefix(p, "relative") {
+		t.Fatalf("relative override used: %q", p)
+	}
+}

@@ -233,6 +233,10 @@ type job struct {
 	resp chan ipc.Response
 }
 
+// flushWait bounds how long an ending session waits for the last responses
+// (such as the answer to logout) to reach their clients.
+const flushWait = 2 * time.Second
+
 // Serve accepts clients on ln and serves their requests one at a time until
 // ctx ends or the session ends (logout, timeouts, :quit). lines are the
 // console commands typed by the human (nil for none). ln is closed on
@@ -241,14 +245,16 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener, lines <-chan string
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	jobs := make(chan job)
-	var wg sync.WaitGroup
+	// inflight counts responses handed to connections but not yet written.
+	var wg, inflight sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		s.accept(ctx, ln, jobs, &wg)
+		s.accept(ctx, ln, jobs, &wg, &inflight)
 	}()
 	defer func() {
 		ln.Close()
+		waitFor(&inflight, flushWait)
 		cancel()
 		wg.Wait()
 	}()
@@ -265,6 +271,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener, lines <-chan string
 			s.End("interrupted")
 			return nil
 		case j := <-jobs:
+			inflight.Add(1)
 			if j.ctx.Err() != nil {
 				j.resp <- errResp(j.req.ID, ipc.CodeDenied, "client gone")
 				continue
@@ -286,7 +293,20 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener, lines <-chan string
 	}
 }
 
-func (s *Server) accept(ctx context.Context, ln net.Listener, jobs chan<- job, wg *sync.WaitGroup) {
+// waitFor waits for wg, at most d.
+func waitFor(wg *sync.WaitGroup, d time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+	}
+}
+
+func (s *Server) accept(ctx context.Context, ln net.Listener, jobs chan<- job, wg, inflight *sync.WaitGroup) {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -308,7 +328,7 @@ func (s *Server) accept(ctx context.Context, ln net.Listener, jobs chan<- job, w
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			serveConn(ctx, c, jobs)
+			serveConn(ctx, c, jobs, inflight)
 		}()
 	}
 }
@@ -321,8 +341,9 @@ type readResult struct {
 // serveConn reads requests from c and hands them to the console goroutine
 // one by one. While a request is being served, the next read doubles as a
 // probe: a closed connection cancels the request's context, which cancels
-// a pending approval prompt.
-func serveConn(ctx context.Context, c net.Conn, jobs chan<- job) {
+// a pending approval prompt. Every response received from the console
+// goroutine is marked done on inflight once written (or dropped).
+func serveConn(ctx context.Context, c net.Conn, jobs chan<- job, inflight *sync.WaitGroup) {
 	defer c.Close()
 	stop := context.AfterFunc(ctx, func() { c.Close() })
 	defer stop()
@@ -396,14 +417,16 @@ func serveConn(ctx context.Context, c net.Conn, jobs chan<- job) {
 		}
 		jcancel()
 		if gone {
+			inflight.Done()
 			return
 		}
-		if err := ipc.WriteMsg(c, resp); err != nil {
-			if errors.Is(err, ipc.ErrTooLarge) {
-				_ = ipc.WriteMsg(c, errResp(resp.ID, ipc.CodeInternal,
-					"result larger than 1 MiB: lower limits.max_output_bytes or select fewer columns"))
-				continue
-			}
+		err := ipc.WriteMsg(c, resp)
+		if errors.Is(err, ipc.ErrTooLarge) {
+			err = ipc.WriteMsg(c, errResp(resp.ID, ipc.CodeInternal,
+				"result larger than 1 MiB: lower limits.max_output_bytes or select fewer columns"))
+		}
+		inflight.Done()
+		if err != nil {
 			return
 		}
 	}
