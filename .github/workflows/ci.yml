@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 3 * * *" # nightly: fuzzing
 
 permissions:
   contents: read
@@ -42,3 +44,17 @@ jobs:
         run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  fuzz:
+    name: fuzz (nightly)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: FuzzLexNoPanic
+        run: go test -run '^$' -fuzz '^FuzzLexNoPanic$' -fuzztime 30s ./internal/sqlclass/
