@@ -51,7 +51,6 @@ Other:
 var commands = map[string]bool{
 	"forget": true,
 	"init":   true,
-	"mcp":    true,
 }
 
 func main() {
@@ -86,6 +85,8 @@ func runEnv(e env, args []string) int {
 		return runConsole(args[1:], stdout, stderr)
 	case "status":
 		return runStatus(e, args[1:])
+	case "mcp":
+		return runMCP(e, args[1:])
 	case "pii":
 		return runPII(e, args[1:])
 	case "tables", "describe", "plan", "run", "request", "logout":
