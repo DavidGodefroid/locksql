@@ -62,3 +62,9 @@ jobs:
         run: go test -run '^$' -fuzz '^FuzzParsePlanNoPanic$' -fuzztime 30s ./internal/engine/mysql/
       - name: FuzzParsePlanNoPanic (postgres)
         run: go test -run '^$' -fuzz '^FuzzParsePlanNoPanic$' -fuzztime 30s ./internal/engine/postgres/
+      - name: FuzzDetectorsNoPanic
+        run: go test -run '^$' -fuzz '^FuzzDetectorsNoPanic$' -fuzztime 30s ./internal/pii/
+      - name: FuzzAliasViolationNoPanic
+        run: go test -run '^$' -fuzz '^FuzzAliasViolationNoPanic$' -fuzztime 30s ./internal/pii/
+      - name: FuzzRenderNoPanic
+        run: go test -run '^$' -fuzz '^FuzzRenderNoPanic$' -fuzztime 30s ./internal/render/
