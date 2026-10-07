@@ -1,0 +1,19 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.0113438,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "small",
+          "access_type": "ALL",
+          "loops": 1,
+          "rows": 3,
+          "cost": 0.0113438,
+          "filtered": 100,
+          "attached_condition": "small.label = 'a'"
+        }
+      }
+    ]
+  }
+}

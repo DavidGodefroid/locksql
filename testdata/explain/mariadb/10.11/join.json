@@ -1,0 +1,37 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "s",
+          "access_type": "ALL",
+          "possible_keys": [
+            "PRIMARY"
+          ],
+          "rows": 3,
+          "filtered": 100
+        }
+      },
+      {
+        "table": {
+          "table_name": "a",
+          "access_type": "eq_ref",
+          "possible_keys": [
+            "PRIMARY"
+          ],
+          "key": "PRIMARY",
+          "key_length": "4",
+          "used_key_parts": [
+            "id"
+          ],
+          "ref": [
+            "app.s.id"
+          ],
+          "rows": 1,
+          "filtered": 100
+        }
+      }
+    ]
+  }
+}

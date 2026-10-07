@@ -1,0 +1,33 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost": 231910.2349,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "a",
+          "access_type": "ALL",
+          "loops": 1,
+          "rows": 49959,
+          "cost": 8.345647,
+          "filtered": 100
+        }
+      },
+      {
+        "block-nl-join": {
+          "table": {
+            "table_name": "b",
+            "access_type": "ALL",
+            "loops": 49959,
+            "rows": 49959,
+            "cost": 231901.8892,
+            "filtered": 100
+          },
+          "buffer_type": "flat",
+          "buffer_size": "256KiB",
+          "join_type": "BNL"
+        }
+      }
+    ]
+  }
+}

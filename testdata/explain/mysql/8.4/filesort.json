@@ -1,0 +1,31 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "5040.25"
+    },
+    "ordering_operation": {
+      "using_filesort": true,
+      "table": {
+        "table_name": "big",
+        "access_type": "ALL",
+        "rows_examined_per_scan": 49840,
+        "rows_produced_per_join": 4984,
+        "filtered": "10.00",
+        "cost_info": {
+          "read_cost": "4541.85",
+          "eval_cost": "498.40",
+          "prefix_cost": "5040.25",
+          "data_read_per_join": "2M"
+        },
+        "used_columns": [
+          "id",
+          "status",
+          "email",
+          "created_at"
+        ],
+        "attached_condition": "(`app`.`big`.`status` = 'sent')"
+      }
+    }
+  }
+}

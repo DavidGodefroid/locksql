@@ -1,0 +1,49 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "237314617.83"
+    },
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "a",
+          "access_type": "ALL",
+          "rows_examined_per_scan": 48714,
+          "rows_produced_per_join": 48714,
+          "filtered": "100.00",
+          "cost_info": {
+            "read_cost": "56.25",
+            "eval_cost": "4871.40",
+            "prefix_cost": "4927.65",
+            "data_read_per_join": "23M"
+          },
+          "used_columns": [
+            "id",
+            "email"
+          ]
+        }
+      },
+      {
+        "table": {
+          "table_name": "b",
+          "access_type": "ALL",
+          "rows_examined_per_scan": 48714,
+          "rows_produced_per_join": 237305383,
+          "filtered": "10.00",
+          "using_join_buffer": "hash join",
+          "cost_info": {
+            "read_cost": "4310.58",
+            "eval_cost": "23730538.31",
+            "prefix_cost": "237314617.83",
+            "data_read_per_join": "109G"
+          },
+          "used_columns": [
+            "email"
+          ],
+          "attached_condition": "(`app`.`b`.`email` = `app`.`a`.`email`)"
+        }
+      }
+    ]
+  }
+}

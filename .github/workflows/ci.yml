@@ -58,3 +58,5 @@ jobs:
           go-version-file: go.mod
       - name: FuzzLexNoPanic
         run: go test -run '^$' -fuzz '^FuzzLexNoPanic$' -fuzztime 30s ./internal/sqlclass/
+      - name: FuzzParsePlanNoPanic
+        run: go test -run '^$' -fuzz '^FuzzParsePlanNoPanic$' -fuzztime 30s ./internal/engine/mysql/

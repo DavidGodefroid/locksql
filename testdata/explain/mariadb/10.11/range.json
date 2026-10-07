@@ -1,0 +1,24 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "big",
+          "access_type": "range",
+          "possible_keys": [
+            "idx_created"
+          ],
+          "key": "idx_created",
+          "key_length": "6",
+          "used_key_parts": [
+            "created_at"
+          ],
+          "rows": 9,
+          "filtered": 100,
+          "index_condition": "big.created_at > <cache>(current_timestamp() - interval 10 minute)"
+        }
+      }
+    ]
+  }
+}

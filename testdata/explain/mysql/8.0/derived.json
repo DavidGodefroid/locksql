@@ -1,0 +1,57 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "5482.82"
+    },
+    "table": {
+      "table_name": "d",
+      "access_type": "ALL",
+      "rows_examined_per_scan": 48714,
+      "rows_produced_per_join": 48714,
+      "filtered": "100.00",
+      "cost_info": {
+        "read_cost": "611.42",
+        "eval_cost": "4871.40",
+        "prefix_cost": "5482.83",
+        "data_read_per_join": "4M"
+      },
+      "used_columns": [
+        "status",
+        "n"
+      ],
+      "materialized_from_subquery": {
+        "using_temporary_table": true,
+        "dependent": false,
+        "cacheable": true,
+        "query_block": {
+          "select_id": 2,
+          "cost_info": {
+            "query_cost": "4927.65"
+          },
+          "grouping_operation": {
+            "using_temporary_table": true,
+            "using_filesort": false,
+            "table": {
+              "table_name": "big",
+              "access_type": "ALL",
+              "rows_examined_per_scan": 48714,
+              "rows_produced_per_join": 48714,
+              "filtered": "100.00",
+              "cost_info": {
+                "read_cost": "56.25",
+                "eval_cost": "4871.40",
+                "prefix_cost": "4927.65",
+                "data_read_per_join": "23M"
+              },
+              "used_columns": [
+                "id",
+                "status"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

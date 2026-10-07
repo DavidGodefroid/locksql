@@ -1,0 +1,20 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "filesort": {
+      "sort_key": "big.`status`",
+      "temporary_table": {
+        "nested_loop": [
+          {
+            "table": {
+              "table_name": "big",
+              "access_type": "ALL",
+              "rows": 49959,
+              "filtered": 100
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.0113438,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "s",
+          "access_type": "ALL",
+          "loops": 1,
+          "rows": 3,
+          "cost": 0.0113438,
+          "filtered": 100
+        }
+      }
+    ],
+    "subqueries": [
+      {
+        "subquery_cache": {
+          "state": "uninitialized",
+          "query_block": {
+            "select_id": 2,
+            "cost": 8.345647,
+            "nested_loop": [
+              {
+                "table": {
+                  "table_name": "b",
+                  "access_type": "ALL",
+                  "loops": 1,
+                  "rows": 49959,
+                  "cost": 8.345647,
+                  "filtered": 100,
+                  "attached_condition": "b.`status` = s.label"
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

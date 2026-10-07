@@ -1,0 +1,21 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "nested_loop": [
+      {
+        "read_sorted_file": {
+          "filesort": {
+            "sort_key": "big.email",
+            "table": {
+              "table_name": "big",
+              "access_type": "ALL",
+              "rows": 49959,
+              "filtered": 100,
+              "attached_condition": "big.`status` = 'sent'"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

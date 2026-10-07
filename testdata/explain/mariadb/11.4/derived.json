@@ -1,0 +1,41 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost": 2.242397931,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "<derived2>",
+          "access_type": "ALL",
+          "loops": 1,
+          "rows": 49959,
+          "cost": 2.242397931,
+          "filtered": 100,
+          "materialized": {
+            "query_block": {
+              "select_id": 2,
+              "cost": 41.80302498,
+              "filesort": {
+                "sort_key": "big.`status`",
+                "temporary_table": {
+                  "nested_loop": [
+                    {
+                      "table": {
+                        "table_name": "big",
+                        "access_type": "ALL",
+                        "loops": 1,
+                        "rows": 49959,
+                        "cost": 8.345647,
+                        "filtered": 100
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

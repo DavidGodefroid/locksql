@@ -1,0 +1,29 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "a",
+          "access_type": "ALL",
+          "rows": 49959,
+          "filtered": 100
+        }
+      },
+      {
+        "block-nl-join": {
+          "table": {
+            "table_name": "b",
+            "access_type": "ALL",
+            "rows": 49959,
+            "filtered": 100
+          },
+          "buffer_type": "flat",
+          "buffer_size": "256KiB",
+          "join_type": "BNL",
+          "attached_condition": "b.email = a.email"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "4.31"
+    },
+    "table": {
+      "table_name": "big",
+      "access_type": "range",
+      "possible_keys": [
+        "idx_created"
+      ],
+      "key": "idx_created",
+      "used_key_parts": [
+        "created_at"
+      ],
+      "key_length": "6",
+      "rows_examined_per_scan": 9,
+      "rows_produced_per_join": 9,
+      "filtered": "100.00",
+      "index_condition": "(`app`.`big`.`created_at` > <cache>((now() - interval 10 minute)))",
+      "cost_info": {
+        "read_cost": "3.41",
+        "eval_cost": "0.90",
+        "prefix_cost": "4.31",
+        "data_read_per_join": "4K"
+      },
+      "used_columns": [
+        "id",
+        "status",
+        "email",
+        "created_at"
+      ]
+    }
+  }
+}

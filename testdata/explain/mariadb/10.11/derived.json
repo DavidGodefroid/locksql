@@ -1,0 +1,35 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "<derived2>",
+          "access_type": "ALL",
+          "rows": 49959,
+          "filtered": 100,
+          "materialized": {
+            "query_block": {
+              "select_id": 2,
+              "filesort": {
+                "sort_key": "big.`status`",
+                "temporary_table": {
+                  "nested_loop": [
+                    {
+                      "table": {
+                        "table_name": "big",
+                        "access_type": "ALL",
+                        "rows": 49959,
+                        "filtered": 100
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.0113438,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "s",
+          "access_type": "ALL",
+          "loops": 1,
+          "rows": 3,
+          "cost": 0.0113438,
+          "filtered": 100,
+          "attached_condition": "s.label = (subquery#3)"
+        }
+      }
+    ],
+    "subqueries": [
+      {
+        "query_block": {
+          "select_id": 3,
+          "nested_loop": [
+            {
+              "table": {
+                "table_name": "small",
+                "access_type": "const",
+                "possible_keys": [
+                  "PRIMARY"
+                ],
+                "key": "PRIMARY",
+                "key_length": "4",
+                "used_key_parts": [
+                  "id"
+                ],
+                "ref": [
+                  "const"
+                ],
+                "rows": 1,
+                "filtered": 100
+              }
+            }
+          ]
+        }
+      },
+      {
+        "query_block": {
+          "select_id": 2,
+          "table": {
+            "message": "Select tables optimized away"
+          }
+        }
+      }
+    ]
+  }
+}
