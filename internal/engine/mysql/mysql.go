@@ -18,6 +18,7 @@ package mysql
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"math"
@@ -93,11 +94,19 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (eng
 		addr = net.JoinHostPort(p.Host, strconv.Itoa(p.Port))
 	}
 	pw := string(secret)
-	conn, err := dial(ctx, addr, p.User, pw, p.Database, 0)
+	// TLS as PostgreSQL's sslmode=prefer: encrypted whenever the server
+	// offers it (certificate not verified), plain otherwise. A Unix socket
+	// stays plain.
+	useTLS := !strings.HasPrefix(p.Host, "/")
+	conn, err := dial(ctx, addr, p.User, pw, p.Database, 0, useTLS)
+	if err != nil && useTLS && noServerTLS(err) {
+		useTLS = false
+		conn, err = dial(ctx, addr, p.User, pw, p.Database, 0, false)
+	}
 	if err != nil {
 		return nil, connectError(err, pw)
 	}
-	ctl, err := dial(ctx, addr, p.User, pw, "", killTimeout)
+	ctl, err := dial(ctx, addr, p.User, pw, "", killTimeout, useTLS)
 	if err != nil {
 		conn.Close()
 		return nil, connectError(err, pw)
@@ -116,7 +125,7 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (eng
 // dial connects with a deadline covering the TCP connect and the handshake
 // (the driver has none for the handshake). readTimeout > 0 bounds every
 // later read and write too.
-func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duration) (*client.Conn, error) {
+func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duration, useTLS bool) (*client.Conn, error) {
 	deadline := time.Now().Add(connectTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
@@ -139,6 +148,12 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 			return nil
 		})
 	}
+	if useTLS {
+		opts = append(opts, func(c *client.Conn) error {
+			c.SetTLSConfig(&tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}) // prefer: encrypt, do not verify
+			return nil
+		})
+	}
 	c, err := client.ConnectWithDialer(ctx, "", addr, user, pw, db, dialer, opts...)
 	if err != nil {
 		return nil, err
@@ -148,6 +163,13 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 		return nil, err
 	}
 	return c, nil
+}
+
+// noServerTLS reports whether a handshake failed because the server does
+// not offer TLS (go-mysql checks the server's CLIENT_SSL capability before
+// sending anything, the secret included).
+func noServerTLS(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "does not support TLS")
 }
 
 // connectError keeps the server's reason and drops anything that could
@@ -210,8 +232,9 @@ func (s *session) ServerVersion() string { return s.version }
 func (s *session) Flavor() engine.Flavor { return s.flavor }
 
 // OriginColumns is true: the protocol reports each column's schema, table
-// and column. Views and MariaDB derived tables report themselves as the
-// origin; Task 9's masking checks the origin against the catalog.
+// and column. Views, and on MariaDB derived tables and CTEs, report
+// themselves as the origin, so Run keeps an origin only when it is trusted,
+// see trustOrigins.
 func (s *session) OriginColumns() bool { return true }
 
 func (s *session) Ping(ctx context.Context) error {
@@ -370,7 +393,13 @@ func (s *session) Run(ctx context.Context, db string, st sqlclass.Statement, max
 	if st.Class == sqlclass.Read {
 		begin = readOnlyTx
 	}
-	res, err := s.inTx(ctx, db, begin, func() (engine.Result, error) { return s.stream(st.SQL, maxRows) }, true)
+	res, err := s.inTx(ctx, db, begin, func() (engine.Result, error) {
+		r, err := s.stream(st.SQL, maxRows)
+		if err == nil {
+			s.trustOrigins(st.SQL, r.Columns)
+		}
+		return r, err
+	}, true)
 	if err != nil {
 		return engine.Result{}, err
 	}
@@ -556,4 +585,96 @@ func (s *session) Explain(ctx context.Context, db, q string) (engine.Plan, error
 		return engine.Plan{}, errors.New("mysql: EXPLAIN returned no plan")
 	}
 	return ParsePlan(raw)
+}
+
+// untrustedWords make every origin of a statement untrusted: they bring in
+// a derived table, a CTE, a table function or a compound select, whose
+// columns MariaDB (and MySQL, for a materialised derived table) report
+// under the alias the statement chose. That alias may also name a real
+// base table, so the catalog check alone cannot catch it.
+var untrustedWords = map[string]bool{
+	"WITH": true, "TABLE": true, "VALUES": true, "JSON_TABLE": true, "LATERAL": true,
+	"UNION": true, "INTERSECT": true, "EXCEPT": true,
+}
+
+// originsTrustable reports whether the result origins of q can be trusted
+// at all: q holds at most one SELECT and none of untrustedWords. A
+// statement that does not lex is never trusted.
+func originsTrustable(q string) bool {
+	toks, err := sqlclass.Lex(sqlclass.MySQL, q)
+	if err != nil {
+		return false
+	}
+	selects := 0
+	for _, t := range toks {
+		if t.Kind != sqlclass.TokWord {
+			continue
+		}
+		if t.Text == "SELECT" {
+			selects++
+		}
+		if selects > 1 || untrustedWords[t.Text] {
+			return false
+		}
+	}
+	return true
+}
+
+// trustOrigins blanks every origin that does not name a column of a base
+// table: all of them when the statement's shape makes them untrusted (see
+// originsTrustable), otherwise those whose table the catalog does not list
+// as a base table with that column (a view, a temporary table). Masking then
+// matches such a column by name and refuses renamed uses (pii.AliasViolation).
+// It runs in the statement's own transaction; if the catalog cannot be read,
+// every origin is blanked. Called with mu held.
+func (s *session) trustOrigins(q string, cols []engine.ResultColumn) {
+	type table struct{ db, name string }
+	tables := map[table]map[string]bool{}
+	for _, c := range cols {
+		if c.HasOrigin() {
+			tables[table{c.OriginDB, c.OriginTable}] = nil
+		}
+	}
+	if len(tables) == 0 {
+		return
+	}
+	trusted := originsTrustable(q)
+	for t := range tables {
+		if !trusted {
+			break
+		}
+		names, err := s.baseColumns(t.db, t.name)
+		if err != nil {
+			trusted = false
+			break
+		}
+		tables[t] = names
+	}
+	for i, c := range cols {
+		if !c.HasOrigin() {
+			continue
+		}
+		if trusted && tables[table{c.OriginDB, c.OriginTable}][strings.ToLower(c.OriginColumn)] {
+			continue
+		}
+		cols[i].OriginDB, cols[i].OriginTable, cols[i].OriginColumn = "", "", ""
+	}
+}
+
+// baseColumns returns the lower-cased column names of db.name when the
+// catalog lists it as a base table, an empty set otherwise. Called with mu
+// held, inside a transaction.
+func (s *session) baseColumns(db, name string) (map[string]bool, error) {
+	r, err := s.conn.Execute(`SELECT c.COLUMN_NAME FROM information_schema.TABLES t
+		JOIN information_schema.COLUMNS c ON c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME
+		WHERE t.TABLE_SCHEMA = ? AND t.TABLE_NAME = ? AND t.TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED')`, db, name)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	out := map[string]bool{}
+	for _, row := range r.Values {
+		out[strings.ToLower(str(value(row[0], r.Fields[0])))] = true
+	}
+	return out, nil
 }

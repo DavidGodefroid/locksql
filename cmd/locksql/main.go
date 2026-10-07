@@ -46,12 +46,6 @@ Other:
   help                                        print this help
 `
 
-// commands lists every subcommand that is dispatched but not implemented
-// yet.
-var commands = map[string]bool{
-	"forget": true,
-}
-
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -84,6 +78,8 @@ func runEnv(e env, args []string) int {
 		return runConsole(args[1:], stdout, stderr)
 	case "status":
 		return runStatus(e, args[1:])
+	case "forget":
+		return runForget(e, args[1:])
 	case "mcp":
 		return runMCP(e, args[1:])
 	case "init":
@@ -93,10 +89,6 @@ func runEnv(e env, args []string) int {
 	case "tables", "describe", "plan", "run", "request", "logout":
 		return runClient(e, cmd, args[1:])
 	default:
-		if commands[cmd] {
-			fmt.Fprintf(stderr, "locksql %s: not implemented yet\n", cmd)
-			return exitFail
-		}
 		fmt.Fprintf(stderr, "locksql: unknown command %q\n\n%s", cmd, usageText)
 		return exitUsage
 	}

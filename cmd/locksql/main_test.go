@@ -45,18 +45,6 @@ func TestHelpPrintsUsageAndSucceeds(t *testing.T) {
 	}
 }
 
-func TestKnownCommandsAreNotImplementedYet(t *testing.T) {
-	for _, cmd := range []string{"forget"} {
-		var out, errb bytes.Buffer
-		if code := run([]string{cmd}, &out, &errb); code != exitFail {
-			t.Fatalf("%s: code = %d, want %d", cmd, code, exitFail)
-		}
-		if !strings.Contains(errb.String(), "not implemented yet") {
-			t.Fatalf("%s: stderr = %q", cmd, errb.String())
-		}
-	}
-}
-
 func TestExitCodeValues(t *testing.T) {
 	got := []int{exitOK, exitFail, exitNoConsole, exitUsage}
 	want := []int{0, 1, 2, 3}

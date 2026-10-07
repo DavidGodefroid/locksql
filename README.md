@@ -101,7 +101,9 @@ only guide the agent; the console's checks are the guarantee.
 - **PII masking.** On first start the console proposes column rules from the
   schema (multilingual names and types). Matching cells are masked by their
   origin column, and value detectors (email, phone, IBAN, card, opt-in
-  national ids) mask the rest. Aliasing a masked column is refused.
+  national ids) mask the rest. Only base-table origins count: columns read
+  through a view, or (on MariaDB and MySQL) a derived table or CTE, are
+  matched by name, and aliasing a masked column is refused.
 - **The AI tightens, the human loosens.** Agents may add mask rules and
   request changes. A config edit that loosens the policy (higher tier, larger
   limits, new host, removed PII rule, ...) only takes effect after you
@@ -148,7 +150,7 @@ max_output_bytes    = 65536
 | `path` | required for sqlite | relative to the project root; the file is never created |
 | `user` | asked at start | |
 | `database` | none | the default database for queries |
-| `credentials` | `ask` | `keychain` offers to save the secret after the first successful login |
+| `credentials` | `ask` | `keychain` offers to save the secret after the first successful login; `locksql forget --profile P` removes it |
 | `tier` | `read` | highest statement class allowed |
 | `production` | `false` | stricter limits, typed approval, `--skip-permissions` ignored |
 | `detectors` | `email`, `phone`, `iban`, `card` | also `be_niss`, `fr_nir`, `nl_bsn`, `us_ssn`; `[]` disables them |
@@ -193,12 +195,11 @@ iteration, and it is deliberately narrow:
 - **Windows peer check.** On Linux and macOS the console checks the uid of
   every socket peer. On Windows it relies on the ACL of the socket directory
   under `%LOCALAPPDATA%` only.
-- **TLS is not configurable yet.** PostgreSQL connects with `sslmode=prefer`
-  (encrypted when the server offers it, certificate not verified); MariaDB and
-  MySQL connect without TLS. Use an SSH tunnel (`ssh -L`) for remote servers.
-- **`locksql forget` is not implemented yet.** To remove a saved secret, delete
-  the keychain item with service `locksql` and account `<profile>@<host>`
-  using your OS keychain tool.
+- **TLS is not configurable yet.** PostgreSQL, MariaDB and MySQL connect like
+  PostgreSQL's `sslmode=prefer`: encrypted when the server offers TLS, plain
+  otherwise, and the certificate is not verified, so an active attacker on the
+  path can intercept or downgrade the connection. Use an SSH tunnel (`ssh -L`)
+  for remote servers.
 - One console per profile and project, one request at a time. No remote or
   shared consoles, no data export.
 

@@ -24,9 +24,11 @@ func maskText(s string) string {
 
 // MaskResult masks res in place.
 //
-// A column is masked whole when its origin matches a rule. When origin is
-// false (the session reports no origins), or a column has none (an
-// expression, a UNION, an untrusted origin the engine blanked), the column
+// A column is masked whole when its origin matches a rule. Engines report
+// an origin only when the catalog confirms it is a base-table column; a
+// view, a derived table or a CTE alias never counts. When origin is false
+// (the session reports no origins), or a column has none (an expression, a
+// UNION, an untrusted origin the engine blanked), the column
 // label is matched by name instead, see Rules.MatchesName; the console must
 // then also refuse renamed uses with AliasViolation (see NeedsAliasCheck).
 // Binary cells under a rule become "<masked bytes:N>"; NULL stays NULL.

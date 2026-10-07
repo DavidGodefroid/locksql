@@ -16,6 +16,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	lsmysql "github.com/DavidGodefroid/locksql/internal/engine/mysql"
+	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -268,6 +269,74 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		}
 		if c[2].Label != "id" || c[2].OriginTable != "big" || c[2].OriginColumn != "id" {
 			t.Errorf("id = %+v", c[2])
+		}
+	})
+
+	t.Run("untrusted origins are dropped", func(t *testing.T) {
+		admin := connectMySQL(t, m, srv, "rw", config.TierDDL, 5*time.Second)
+		ddl := func(q string) {
+			t.Helper()
+			if _, err := admin.Run(ctx, "app", sqlclass.Statement{Class: sqlclass.DDL, Kind: "ddl", SQL: q, Limit: -1}, 0); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+		}
+		ddl("CREATE VIEW v_big AS SELECT id, email FROM big")
+		t.Cleanup(func() { ddl("DROP VIEW IF EXISTS v_big") })
+		s := connectMySQL(t, m, srv, "ro", config.TierRead, 5*time.Second)
+		rules := pii.Rules{Mask: []string{"app.big.email"}}
+		for _, q := range []string{
+			// MariaDB reports the derived table as the origin (app.d.x).
+			"SELECT d.x FROM (SELECT email AS x FROM big) d ORDER BY d.x LIMIT 1",
+			// The alias names an existing base table and column.
+			"SELECT small.label FROM (SELECT email AS label FROM big) small ORDER BY 1 LIMIT 1",
+			"WITH small AS (SELECT email AS label FROM big) SELECT small.label FROM small ORDER BY 1 LIMIT 1",
+			// A view reports itself, not the table behind it.
+			"SELECT email AS e FROM v_big ORDER BY id LIMIT 1",
+		} {
+			r := mustRun(t, s, q)
+			if len(r.Columns) != 1 || r.Columns[0].HasOrigin() {
+				t.Errorf("%s: columns = %+v", q, r.Columns)
+				continue
+			}
+			if !pii.NeedsAliasCheck(r, s.OriginColumns()) {
+				t.Errorf("%s: no alias check", q)
+			}
+			st, err := sqlclass.Classify(sqlclass.MySQL, q, 200)
+			if err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+			if pii.AliasViolation(st, rules, sqlclass.MySQL) == nil {
+				t.Errorf("%s: not refused", q)
+			}
+		}
+		// A plain base-table column keeps its origin, and the view case
+		// without a rename is masked by name.
+		r := mustRun(t, s, "SELECT email FROM v_big ORDER BY id LIMIT 1")
+		pii.MaskResult(&r, rules, nil, s.OriginColumns())
+		if v := fmt.Sprint(r.Rows[0][0]); !strings.Contains(v, "***") {
+			t.Errorf("view email not masked: %s", v)
+		}
+		r = mustRun(t, s, "SELECT b.email FROM big b ORDER BY id LIMIT 1")
+		if c := r.Columns[0]; c.OriginTable != "big" || c.OriginColumn != "email" {
+			t.Errorf("base column origin = %+v", c)
+		}
+	})
+
+	t.Run("tls when the server offers it", func(t *testing.T) {
+		s := connectMySQL(t, m, srv, "ro", config.TierRead, 5*time.Second)
+		r := mustRun(t, s, "SHOW SESSION STATUS LIKE 'Ssl_cipher'")
+		cipher := ""
+		if len(r.Rows) == 1 {
+			cipher = fmt.Sprint(r.Rows[0][1])
+		}
+		// mariadb:10.11 images ship without a certificate; MariaDB 11.4
+		// and MySQL 8 generate one at startup.
+		wantTLS := !(m.flavor == engine.FlavorMariaDB && strings.HasPrefix(m.version, "10."))
+		if wantTLS && cipher == "" {
+			t.Errorf("no TLS: %v", r.Rows)
+		}
+		if !wantTLS && cipher != "" {
+			t.Logf("TLS on a server expected without it: %s", cipher)
 		}
 	})
 

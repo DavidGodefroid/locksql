@@ -222,9 +222,8 @@ func (s *session) ServerVersion() string { return s.version }
 func (s *session) Flavor() engine.Flavor { return engine.FlavorPostgres }
 
 // OriginColumns is true: the protocol reports each column's table OID and
-// attribute number, resolved through pg_attribute. A view reports itself as
-// the origin, as on MySQL; Task 9's masking checks the origin against the
-// catalog.
+// attribute number, resolved through pg_attribute. Only base-table columns
+// keep an origin (see originKinds); a view's columns get none.
 func (s *session) OriginColumns() bool { return true }
 
 func (s *session) Ping(ctx context.Context) error {

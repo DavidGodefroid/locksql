@@ -17,6 +17,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	_ "github.com/DavidGodefroid/locksql/internal/engine/postgres"
+	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -238,11 +239,20 @@ func testPostgresServer(t *testing.T, version string, srv Server) {
 		if c[2].Label != "id" || c[2].OriginTable != "big" || c[2].OriginColumn != "id" {
 			t.Errorf("id = %+v", c[2])
 		}
-		// A view reports itself as the origin, as on MySQL: PII rules on
-		// the view's columns (which Columns lists) must match.
-		r = mustRun(t, s, "SELECT email FROM v_big ORDER BY id LIMIT 1")
-		if c := r.Columns[0]; c.OriginDB != "public" || c.OriginTable != "v_big" || c.OriginColumn != "email" {
+		// A view would report itself, not the table behind it: such an
+		// origin is dropped, so masking falls back to the column name and
+		// the alias check.
+		r = mustRun(t, s, "SELECT email AS e FROM v_big ORDER BY id LIMIT 1")
+		if c := r.Columns[0]; c.HasOrigin() {
 			t.Errorf("view column origin = %+v", c)
+		}
+		if !pii.NeedsAliasCheck(r, s.OriginColumns()) {
+			t.Error("view: no alias check")
+		}
+		// Derived tables and CTEs resolve to the base table.
+		r = mustRun(t, s, "WITH c AS (SELECT email AS x FROM big) SELECT d.x FROM (SELECT x FROM c) d LIMIT 1")
+		if c := r.Columns[0]; c.OriginTable != "big" || c.OriginColumn != "email" {
+			t.Errorf("derived column origin = %+v", c)
 		}
 	})
 

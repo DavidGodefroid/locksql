@@ -144,3 +144,42 @@ func TestConnectRefusesOtherEngines(t *testing.T) {
 		t.Error("sqlite profile accepted")
 	}
 }
+
+func TestOriginsTrustable(t *testing.T) {
+	cases := []struct {
+		q    string
+		want bool
+	}{
+		{"SELECT email AS x, b.id FROM big b WHERE id = 1", true},
+		{"select email from big join small on small.id = big.id", true},
+		{"DELETE FROM big WHERE id = 1 RETURNING email", true},
+		{"SHOW TABLES", true},
+		{"SELECT `select`, `table` FROM big", true},
+		// MariaDB reports a derived table or CTE alias as the origin
+		// table; any table name the agent picks could pass a catalog check.
+		{"SELECT d.x FROM (SELECT email AS x FROM big) d", false},
+		{"SELECT small.label FROM (SELECT email AS label FROM big) small", false},
+		{"WITH c AS (SELECT email FROM big) SELECT * FROM c", false},
+		{"SELECT id FROM big WHERE id IN (SELECT id FROM small)", false},
+		{"SELECT t.id FROM (TABLE big) t", false},
+		{"SELECT v.a FROM (VALUES ROW(1)) v (a)", false},
+		{"SELECT j.id FROM big, JSON_TABLE(JSON_ARRAY(big.email), '$[*]' COLUMNS (id TEXT PATH '$')) j", false},
+		{"SELECT id FROM big UNION SELECT id FROM small", false},
+		{"SELECT l.x FROM big, LATERAL (SELECT big.email AS x) l", false},
+		{"not valid 'sql", false},
+	}
+	for _, c := range cases {
+		if got := originsTrustable(c.q); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.q, got, c.want)
+		}
+	}
+}
+
+func TestNoServerTLS(t *testing.T) {
+	if !noServerTLS(errors.New("the MySQL Server does not support TLS required by the client")) {
+		t.Error("TLS refusal not recognised")
+	}
+	if noServerTLS(errors.New("access denied")) || noServerTLS(nil) {
+		t.Error("other error taken for a TLS refusal")
+	}
+}

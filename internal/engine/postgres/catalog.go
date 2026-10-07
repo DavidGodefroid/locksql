@@ -32,11 +32,12 @@ type origin struct {
 }
 
 // originKinds are the relations whose columns count as an origin: tables,
-// partitioned tables, foreign tables, materialized views and views. A view
-// reports itself, not the table behind it, as MySQL does; Task 9's masking
-// checks the origin against the catalog, and Columns lists view columns,
-// so PII rules can name them.
-const originKinds = `c.relkind IN ('r', 'p', 'f', 'm', 'v')`
+// partitioned tables and foreign tables. A view or a materialized view
+// reports itself, not the table behind it, and may rename a PII column, so
+// its columns get no origin: masking then matches them by name and refuses
+// renamed uses (pii.AliasViolation). Derived tables and CTEs resolve to the
+// base table.
+const originKinds = `c.relkind IN ('r', 'p', 'f')`
 
 // resolveOrigins fills in the origin of each result column from the table
 // OID and attribute number the server reported, with one catalog query per
