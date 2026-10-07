@@ -8,7 +8,7 @@
       {
         "table": "users",
         "access": "full",
-        "est_rows": 5000000,
+        "est_rows": 50000,
         "detail": "SCAN users"
       }
     ]

@@ -78,7 +78,7 @@ func fixtureDB(t *testing.T) string {
 		`INSERT INTO countries VALUES (1, 'BE', 'Belgium')`,
 		`ANALYZE`,
 		`DELETE FROM sqlite_stat1`,
-		`INSERT INTO sqlite_stat1 VALUES ('users', NULL, '5000000')`,
+		`INSERT INTO sqlite_stat1 VALUES ('users', NULL, '50000')`,
 		`INSERT INTO sqlite_stat1 VALUES ('orders', 'orders_user', '40000 4')`,
 		`INSERT INTO sqlite_stat1 VALUES ('countries', NULL, '200')`,
 	} {
