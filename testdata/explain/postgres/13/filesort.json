@@ -1,0 +1,42 @@
+[
+  {
+    "Plan": {
+      "Node Type": "Limit",
+      "Parallel Aware": false,
+      "Startup Cost": 2021.67,
+      "Total Cost": 2021.69,
+      "Plan Rows": 10,
+      "Plan Width": 38,
+      "Output": ["id", "status", "email", "created_at"],
+      "Plans": [
+        {
+          "Node Type": "Sort",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Startup Cost": 2021.67,
+          "Total Cost": 2134.31,
+          "Plan Rows": 45057,
+          "Plan Width": 38,
+          "Output": ["id", "status", "email", "created_at"],
+          "Sort Key": ["big.email"],
+          "Plans": [
+            {
+              "Node Type": "Seq Scan",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Relation Name": "big",
+              "Schema": "public",
+              "Alias": "big",
+              "Startup Cost": 0.00,
+              "Total Cost": 1048.00,
+              "Plan Rows": 45057,
+              "Plan Width": 38,
+              "Output": ["id", "status", "email", "created_at"],
+              "Filter": "((big.status)::text = 'sent'::text)"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,76 @@
+[
+  {
+    "Plan": {
+      "Node Type": "Subquery Scan",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Alias": "d",
+      "Startup Cost": 1173.03,
+      "Total Cost": 1173.06,
+      "Plan Rows": 1,
+      "Plan Width": 13,
+      "Output": ["d.status", "d.c"],
+      "Filter": "(d.c > 1)",
+      "Plans": [
+        {
+          "Node Type": "Limit",
+          "Parent Relationship": "Subquery",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 1173.03,
+          "Total Cost": 1173.04,
+          "Plan Rows": 2,
+          "Plan Width": 13,
+          "Output": ["big.status", "(count(*))"],
+          "Plans": [
+            {
+              "Node Type": "Sort",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Startup Cost": 1173.03,
+              "Total Cost": 1173.04,
+              "Plan Rows": 2,
+              "Plan Width": 13,
+              "Output": ["big.status", "(count(*))"],
+              "Sort Key": ["(count(*)) DESC"],
+              "Plans": [
+                {
+                  "Node Type": "Aggregate",
+                  "Strategy": "Hashed",
+                  "Partial Mode": "Simple",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Startup Cost": 1173.00,
+                  "Total Cost": 1173.02,
+                  "Plan Rows": 2,
+                  "Plan Width": 13,
+                  "Output": ["big.status", "count(*)"],
+                  "Group Key": ["big.status"],
+                  "Planned Partitions": 0,
+                  "Plans": [
+                    {
+                      "Node Type": "Seq Scan",
+                      "Parent Relationship": "Outer",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Relation Name": "big",
+                      "Schema": "public",
+                      "Alias": "big",
+                      "Startup Cost": 0.00,
+                      "Total Cost": 923.00,
+                      "Plan Rows": 50000,
+                      "Plan Width": 5,
+                      "Output": ["big.id", "big.status", "big.email", "big.created_at"]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

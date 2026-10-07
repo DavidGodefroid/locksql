@@ -1,0 +1,64 @@
+[
+  {
+    "Plan": {
+      "Node Type": "Nested Loop",
+      "Parallel Aware": false,
+      "Join Type": "Inner",
+      "Startup Cost": 0.00,
+      "Total Cost": 31251971.00,
+      "Plan Rows": 2500000000,
+      "Plan Width": 76,
+      "Output": ["a.id", "a.status", "a.email", "a.created_at", "b.id", "b.status", "b.email", "b.created_at"],
+      "Inner Unique": false,
+      "Plans": [
+        {
+          "Node Type": "Seq Scan",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Relation Name": "big",
+          "Schema": "public",
+          "Alias": "a",
+          "Startup Cost": 0.00,
+          "Total Cost": 923.00,
+          "Plan Rows": 50000,
+          "Plan Width": 38,
+          "Output": ["a.id", "a.status", "a.email", "a.created_at"]
+        },
+        {
+          "Node Type": "Materialize",
+          "Parent Relationship": "Inner",
+          "Parallel Aware": false,
+          "Startup Cost": 0.00,
+          "Total Cost": 1173.00,
+          "Plan Rows": 50000,
+          "Plan Width": 38,
+          "Output": ["b.id", "b.status", "b.email", "b.created_at"],
+          "Plans": [
+            {
+              "Node Type": "Seq Scan",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Relation Name": "big",
+              "Schema": "public",
+              "Alias": "b",
+              "Startup Cost": 0.00,
+              "Total Cost": 923.00,
+              "Plan Rows": 50000,
+              "Plan Width": 38,
+              "Output": ["b.id", "b.status", "b.email", "b.created_at"]
+            }
+          ]
+        }
+      ]
+    },
+    "JIT": {
+      "Functions": 3,
+      "Options": {
+        "Inlining": true,
+        "Optimization": true,
+        "Expressions": true,
+        "Deforming": true
+      }
+    }
+  }
+]
