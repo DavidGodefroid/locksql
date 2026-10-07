@@ -68,3 +68,5 @@ jobs:
         run: go test -run '^$' -fuzz '^FuzzAliasViolationNoPanic$' -fuzztime 30s ./internal/pii/
       - name: FuzzRenderNoPanic
         run: go test -run '^$' -fuzz '^FuzzRenderNoPanic$' -fuzztime 30s ./internal/render/
+      - name: FuzzReadMsgNoPanic
+        run: go test -run '^$' -fuzz '^FuzzReadMsgNoPanic$' -fuzztime 30s ./internal/ipc/
