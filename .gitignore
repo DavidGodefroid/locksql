@@ -1,0 +1,15 @@
+# Build output
+/locksql
+/locksql.exe
+/dist/
+
+# Test and coverage artefacts
+*.test
+*.out
+coverage.*
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
