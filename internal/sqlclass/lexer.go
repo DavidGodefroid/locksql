@@ -23,6 +23,8 @@ type Token struct {
 	Kind  TokKind
 	Text  string
 	Depth int
+	// Pos and End are the byte offsets of the token in the lexed text.
+	Pos, End int
 }
 
 // Name returns the identifier a word or quoted identifier names, folded to
@@ -113,8 +115,9 @@ func (l *lexer) peek(off int) byte {
 	return 0
 }
 
-func (l *lexer) emit(kind TokKind, text string) {
-	l.tokens = append(l.tokens, Token{Kind: kind, Text: text, Depth: l.depth})
+// emit appends a token spanning l.s[pos:end].
+func (l *lexer) emit(kind TokKind, text string, pos, end int) {
+	l.tokens = append(l.tokens, Token{Kind: kind, Text: text, Depth: l.depth, Pos: pos, End: end})
 }
 
 const errBackslash = "backslashes are not allowed outside PostgreSQL E'' strings (escape quotes by doubling them)"
@@ -137,7 +140,7 @@ func (l *lexer) run() ([]Token, error) {
 			return nil, refuse("assignments (:=) are not allowed")
 		case c == '@' && l.d == MySQL && l.accountAt():
 			// MySQL account names: 'user'@'host', `user`@`host`.
-			l.emit(TokPunct, "@")
+			l.emit(TokPunct, "@", l.i, l.i+1)
 			l.i++
 		case c == '@':
 			// PostgreSQL has @-operators (@>, <@, @@, @ for abs); an '@'
@@ -145,7 +148,7 @@ func (l *lexer) run() ([]Token, error) {
 			if l.d != Postgres || isIdentChar(l.peek(1)) || l.peek(1) == '"' {
 				return nil, refuse("user and system variables (@) are not allowed")
 			}
-			l.emit(TokPunct, "@")
+			l.emit(TokPunct, "@", l.i, l.i+1)
 			l.i++
 		case c == '?' && l.d != Postgres:
 			// In PostgreSQL '?' is a jsonb operator.
@@ -186,6 +189,7 @@ func (l *lexer) run() ([]Token, error) {
 				return nil, err
 			}
 			l.tokens[len(l.tokens)-1].Text = l.s[start:l.i]
+			l.tokens[len(l.tokens)-1].Pos = start
 		case isDigit(c) || c == '.' && isDigit(l.peek(1)):
 			if err := l.number(); err != nil {
 				return nil, err
@@ -195,7 +199,7 @@ func (l *lexer) run() ([]Token, error) {
 			for j < len(l.s) && isIdentChar(l.s[j]) {
 				j++
 			}
-			l.emit(TokWord, fold(l.s[l.i:j]))
+			l.emit(TokWord, fold(l.s[l.i:j]), l.i, j)
 			l.i = j
 		case c == '&' && l.d == Postgres && l.i > 0 && (l.s[l.i-1] == 'U' || l.s[l.i-1] == 'u') &&
 			(l.peek(1) == '"' || l.peek(1) == '\''):
@@ -213,7 +217,7 @@ func (l *lexer) run() ([]Token, error) {
 					return nil, refuse("unbalanced parentheses")
 				}
 			}
-			l.emit(TokPunct, string(c))
+			l.emit(TokPunct, string(c), l.i, l.i+1)
 			l.i++
 		}
 	}
@@ -248,7 +252,7 @@ func (l *lexer) quoted(open, close byte, kind TokKind, backslashEscapes bool) er
 				continue
 			}
 			l.i = j + 1
-			l.emit(kind, l.s[start:l.i])
+			l.emit(kind, l.s[start:l.i], start, l.i)
 			return nil
 		}
 		j++
@@ -277,7 +281,7 @@ func (l *lexer) dollar() error {
 		return refuse("unterminated dollar-quoted string")
 	}
 	stop := j + 1 + end + len(delim)
-	l.emit(TokString, l.s[l.i:stop])
+	l.emit(TokString, l.s[l.i:stop], l.i, stop)
 	l.i = stop
 	return nil
 }
@@ -341,7 +345,7 @@ func (l *lexer) number() error {
 			j++
 		}
 	}
-	l.emit(TokNumber, fold(l.s[l.i:j]))
+	l.emit(TokNumber, fold(l.s[l.i:j]), l.i, j)
 	l.i = j
 	return nil
 }

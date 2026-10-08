@@ -12,24 +12,33 @@ func TestLexTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	src := `select "A""b", E'x\'y', $q$z$q$, f(1, (2)) from t`
+	for _, tk := range toks {
+		if src[tk.Pos:tk.End] != tk.Text && strings.ToUpper(src[tk.Pos:tk.End]) != tk.Text {
+			t.Errorf("token %q spans %q", tk.Text, src[tk.Pos:tk.End])
+		}
+	}
+	for i := range toks {
+		toks[i].Pos, toks[i].End = 0, 0
+	}
 	want := []Token{
-		{TokWord, "SELECT", 0},
-		{TokQuotedIdent, `"A""b"`, 0},
-		{TokPunct, ",", 0},
-		{TokString, `E'x\'y'`, 0},
-		{TokPunct, ",", 0},
-		{TokString, "$q$z$q$", 0},
-		{TokPunct, ",", 0},
-		{TokWord, "F", 0},
-		{TokPunct, "(", 1},
-		{TokNumber, "1", 1},
-		{TokPunct, ",", 1},
-		{TokPunct, "(", 2},
-		{TokNumber, "2", 2},
-		{TokPunct, ")", 1},
-		{TokPunct, ")", 0},
-		{TokWord, "FROM", 0},
-		{TokWord, "T", 0},
+		{TokWord, "SELECT", 0, 0, 0},
+		{TokQuotedIdent, `"A""b"`, 0, 0, 0},
+		{TokPunct, ",", 0, 0, 0},
+		{TokString, `E'x\'y'`, 0, 0, 0},
+		{TokPunct, ",", 0, 0, 0},
+		{TokString, "$q$z$q$", 0, 0, 0},
+		{TokPunct, ",", 0, 0, 0},
+		{TokWord, "F", 0, 0, 0},
+		{TokPunct, "(", 1, 0, 0},
+		{TokNumber, "1", 1, 0, 0},
+		{TokPunct, ",", 1, 0, 0},
+		{TokPunct, "(", 2, 0, 0},
+		{TokNumber, "2", 2, 0, 0},
+		{TokPunct, ")", 1, 0, 0},
+		{TokPunct, ")", 0, 0, 0},
+		{TokWord, "FROM", 0, 0, 0},
+		{TokWord, "T", 0, 0, 0},
 	}
 	if !reflect.DeepEqual(toks, want) {
 		t.Errorf("Lex =\n%v\nwant\n%v", toks, want)
