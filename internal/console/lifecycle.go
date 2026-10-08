@@ -97,11 +97,15 @@ func Run(ctx context.Context, o Options) error {
 		sort.Strings(names)
 		return fmt.Errorf("%w: no profile %q (profiles: %s)", ErrConfig, o.Profile, strings.Join(names, ", "))
 	}
-	piiRoot := cfg.ProjectRoot
-	if piiRoot == "" {
-		if piiRoot, err = filepath.Abs(o.Cwd); err != nil {
+	var rulesPath string
+	if cfg.ProjectRoot != "" {
+		rulesPath = filepath.Join(cfg.ProjectRoot, pii.RulesFile)
+	} else {
+		ucp, err := config.UserConfigPath()
+		if err != nil {
 			return err
 		}
+		rulesPath = filepath.Join(filepath.Dir(ucp), "pii.toml")
 	}
 	key := config.ApprovedKey(cfg.ProjectRoot, p.Name)
 	log, err := audit.Open(o.StateDir)
@@ -119,7 +123,7 @@ func Run(ctx context.Context, o Options) error {
 		if !ok {
 			return config.Policy{}, fmt.Errorf("profile %q is no longer in the config", o.Profile)
 		}
-		r, err := pii.LoadRules(piiRoot)
+		r, err := pii.LoadRulesFile(rulesPath)
 		if err != nil {
 			return config.Policy{}, err
 		}
@@ -210,7 +214,7 @@ func Run(ctx context.Context, o Options) error {
 	}
 
 	// 7. PII first-run proposal.
-	approved, err = st.piiBootstrap(ctx, sess, dbs, piiRoot, o.StateDir, key, approved)
+	approved, err = st.piiBootstrap(ctx, sess, dbs, rulesPath, o.StateDir, key, approved)
 	if err != nil {
 		closeSess()
 		return err
@@ -229,7 +233,7 @@ func Run(ctx context.Context, o Options) error {
 	}
 
 	s, err := NewServer(ServerConfig{
-		Policy: approved, Root: piiRoot, StateDir: o.StateDir, ApprovedKey: key,
+		Policy: approved, RulesPath: rulesPath, StateDir: o.StateDir, ApprovedKey: key,
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Now: o.Now,
 		SkipPermissions: o.SkipPermissions, Version: o.Version, LoadPolicy: loadPolicy,
 		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health,
@@ -488,8 +492,8 @@ func (st *starter) privileges(ctx context.Context, sess engine.Session) error {
 // the columns that look like personal data and that no rule names yet
 // (neither a mask nor an allow rule). It returns the policy including the
 // accepted rules, which only tighten it.
-func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []string, root, stateDir, key string, ap config.Policy) (config.Policy, error) {
-	_, statErr := os.Stat(filepath.Join(root, pii.RulesFile))
+func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []string, rulesPath, stateDir, key string, ap config.Policy) (config.Policy, error) {
+	_, statErr := os.Stat(rulesPath)
 	firstRun := errors.Is(statErr, fs.ErrNotExist)
 	scan := dbs
 	if st.profile.Database != "" {
@@ -565,13 +569,13 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 	case firstRun:
 		// Write the file even when empty, so that the first-run proposal
 		// runs once.
-		if err := pii.SaveRules(root, rules); err != nil {
+		if err := pii.SaveRulesFile(rulesPath, rules); err != nil {
 			return ap, err
 		}
 	case config.Fingerprint(next) != config.Fingerprint(ap):
 		// Add the accepted rules to the file as it is on disk, so that
 		// unconfirmed edits are neither lost nor applied.
-		onDisk, err := pii.LoadRules(root)
+		onDisk, err := pii.LoadRulesFile(rulesPath)
 		if err != nil {
 			return ap, err
 		}
@@ -582,7 +586,7 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 				}
 			}
 		}
-		if err := pii.SaveRules(root, onDisk); err != nil {
+		if err := pii.SaveRulesFile(rulesPath, onDisk); err != nil {
 			return ap, err
 		}
 	}
@@ -592,7 +596,7 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 			return ap, err
 		}
 		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "tightened"})
-		st.io.Println(fmt.Sprintf("PII: %d mask rules in %s", len(next.PIIMask), pii.RulesFile))
+		st.io.Println(fmt.Sprintf("PII: %d mask rules in %s", len(next.PIIMask), rulesPath))
 	}
 	return next, nil
 }

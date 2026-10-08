@@ -65,7 +65,14 @@ type rulesFile struct {
 // LoadRules reads <projectRoot>/.locksql/pii.toml. A missing file gives
 // empty rules and no error.
 func LoadRules(projectRoot string) (Rules, error) {
-	raw, err := os.ReadFile(filepath.Join(projectRoot, RulesFile))
+	return LoadRulesFile(filepath.Join(projectRoot, RulesFile))
+}
+
+// LoadRulesFile reads the rules file at path. A missing file gives empty
+// rules and no error.
+func LoadRulesFile(path string) (Rules, error) {
+	name := filepath.Base(path)
+	raw, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Rules{}, nil
 	}
@@ -77,22 +84,22 @@ func LoadRules(projectRoot string) (Rules, error) {
 	if err != nil {
 		var perr toml.ParseError
 		if errors.As(err, &perr) {
-			return Rules{}, fmt.Errorf("pii: %s: syntax error at line %d", RulesFile, perr.Position.Line)
+			return Rules{}, fmt.Errorf("pii: %s: syntax error at line %d", name, perr.Position.Line)
 		}
-		return Rules{}, fmt.Errorf("pii: %s: %w", RulesFile, err)
+		return Rules{}, fmt.Errorf("pii: %s: %w", name, err)
 	}
 	if und := md.Undecoded(); len(und) > 0 {
-		return Rules{}, fmt.Errorf("pii: %s: unknown key %q", RulesFile, und[0].String())
+		return Rules{}, fmt.Errorf("pii: %s: unknown key %q", name, und[0].String())
 	}
 	var r Rules
 	for _, e := range f.Mask {
 		if err := r.AddMode(e.Column, e.Mode); err != nil {
-			return Rules{}, fmt.Errorf("pii: %s: %w", RulesFile, err)
+			return Rules{}, fmt.Errorf("pii: %s: %w", name, err)
 		}
 	}
 	for _, e := range f.Allow {
 		if err := r.addAllow(e.Column); err != nil {
-			return Rules{}, fmt.Errorf("pii: %s: %w", RulesFile, err)
+			return Rules{}, fmt.Errorf("pii: %s: %w", name, err)
 		}
 	}
 	return r, nil
@@ -101,6 +108,12 @@ func LoadRules(projectRoot string) (Rules, error) {
 // SaveRules writes the rules to <root>/.locksql/pii.toml, sorted and
 // de-duplicated, replacing the file atomically.
 func SaveRules(root string, r Rules) error {
+	return SaveRulesFile(filepath.Join(root, RulesFile), r)
+}
+
+// SaveRulesFile writes the rules to path, sorted and de-duplicated,
+// replacing the file atomically. Missing directories are created.
+func SaveRulesFile(path string, r Rules) error {
 	var b bytes.Buffer
 	b.WriteString("# locksql PII column rules: \"db.table.column\", '*' matches any segment.\n")
 	b.WriteString("# [[mask]] masks whole cells; [[allow]] is an exception that is never masked.\n")
@@ -117,7 +130,7 @@ func SaveRules(root string, r Rules) error {
 	write("mask", r.Mask)
 	write("allow", r.Allow)
 
-	dir := filepath.Join(root, filepath.Dir(RulesFile))
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("pii: %w", err)
 	}
@@ -137,7 +150,7 @@ func SaveRules(root string, r Rules) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("pii: %w", err)
 	}
-	if err := os.Rename(tmp.Name(), filepath.Join(root, RulesFile)); err != nil {
+	if err := os.Rename(tmp.Name(), path); err != nil {
 		return fmt.Errorf("pii: %w", err)
 	}
 	return nil

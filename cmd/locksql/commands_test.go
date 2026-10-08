@@ -16,6 +16,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/console"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
+	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -163,8 +164,8 @@ func startConsole(t *testing.T, dir, profile string) *scriptIO {
 	}
 	sio := &scriptIO{}
 	s, err := console.NewServer(console.ServerConfig{
-		Policy: config.NewPolicy(p, []string{"app.users.email"}, nil),
-		Root:   dir, StateDir: state, ApprovedKey: config.ApprovedKey(dir, profile),
+		Policy:    config.NewPolicy(p, []string{"app.users.email"}, nil),
+		RulesPath: filepath.Join(dir, pii.RulesFile), StateDir: state, ApprovedKey: config.ApprovedKey(dir, profile),
 		Session: fakeSession{}, DBUser: p.User, Databases: []string{"app"},
 		Audit: log, IO: sio, Version: "test",
 	})
