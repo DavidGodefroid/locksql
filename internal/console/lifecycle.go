@@ -173,7 +173,7 @@ func Run(ctx context.Context, o Options) error {
 	}
 
 	// 5. Version and privilege audit.
-	o.IO.Println(fmt.Sprintf("connected: %s %s", sess.Flavor(), sess.ServerVersion()))
+	o.IO.Println(fmt.Sprintf("connected: %s %s", sess.Flavor(), safeText(sess.ServerVersion(), false)))
 	if err := st.privileges(ctx, sess); err != nil {
 		closeSess()
 		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
@@ -186,7 +186,7 @@ func Run(ctx context.Context, o Options) error {
 		closeSess()
 		return fmt.Errorf("console: listing databases: %s", secrets.Sanitize(err))
 	}
-	o.IO.Println("databases: " + strings.Join(dbs, ", "))
+	o.IO.Println("databases: " + safeText(strings.Join(dbs, ", "), false))
 
 	// 7. PII first-run proposal.
 	approved, err = st.piiBootstrap(ctx, sess, dbs, piiRoot, o.StateDir, key, approved)
@@ -238,15 +238,17 @@ func Run(ctx context.Context, o Options) error {
 	return serveErr
 }
 
+// where is the profile's host (and port) or SQLite path, escaped for the
+// terminal.
 func (st *starter) where() string {
 	p := st.profile
 	if p.Engine == config.EngineSQLite {
-		return p.Path
+		return safeText(p.Path, false)
 	}
 	if p.Port != 0 {
-		return fmt.Sprintf("%s:%d", p.Host, p.Port)
+		return safeText(fmt.Sprintf("%s:%d", p.Host, p.Port), false)
 	}
-	return p.Host
+	return safeText(p.Host, false)
 }
 
 // startPolicy compares the current policy with the approved one (spec §4).
@@ -445,7 +447,7 @@ func (st *starter) privileges(ctx context.Context, sess engine.Session) error {
 	}
 	st.io.Println(red + "the account can do more than tier " + p.Tier.String() + " needs:" + reset)
 	for _, w := range warns {
-		st.io.Println(red + "  - " + w + reset)
+		st.io.Println(red + "  - " + safeText(w, false) + reset)
 	}
 	if p.Production {
 		return fmt.Errorf("console: refused: the account has privileges beyond tier %s on a production profile; use a %s-only account", p.Tier, p.Tier)
@@ -474,7 +476,7 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 	for _, db := range scan {
 		c, err := sess.Columns(ctx, db)
 		if err != nil {
-			st.io.Println("PII scan of " + db + " skipped: " + secrets.Sanitize(err))
+			st.io.Println("PII scan of " + safeText(db, false) + " skipped: " + safeText(secrets.Sanitize(err), false))
 			continue
 		}
 		cols = append(cols, c...)

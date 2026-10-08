@@ -185,6 +185,11 @@ func TestLoadInlineErrors(t *testing.T) {
 		{"bad name", "[profiles.\"a/b\"]\nengine=\"mysql\"\nhost=\"h\"\n", "name"},
 		{"unknown key", "[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\nmax_row=5\n", "max_row"},
 		{"bad toml", "[profiles.a\n", "invalid TOML at line "},
+		{"control in host", "[profiles.a]\nengine=\"mysql\"\nhost=\"db\\u001b[2K\"\n", "control"},
+		{"bidi in database", "[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\ndatabase=\"a\\u202eb\"\n", "control"},
+		{"control in sqlite path", "[profiles.a]\nengine=\"sqlite\"\npath=\"a\\u0007.db\"\n", "control"},
+		{"production named y", "[profiles.y]\nengine=\"mysql\"\nhost=\"h\"\nproduction=true\n", "production"},
+		{"production named yes", "[profiles.YES]\nengine=\"mysql\"\nhost=\"h\"\nproduction=true\n", "production"},
 		{"type mismatch", "[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\nport=\"x\"\n", "line 4 (last key \"profiles.a.port\")"},
 	}
 	for _, c := range cases {

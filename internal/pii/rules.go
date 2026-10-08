@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 )
@@ -147,13 +149,22 @@ func (r Rules) Matches(db, table, column string) bool {
 // a rule: some Mask pattern has that column segment (whatever its db and
 // table) and no Allow pattern exempts the name everywhere ("*.*.name"). It
 // is the conservative test used when a result column has no origin.
+//
+// Servers resolve identifiers with their own collation (MySQL compares
+// column names by collation weight, so "fírstname" and "fİrstname" name the
+// column firstname), which no Go case folding reproduces. A name with a
+// non-ASCII character therefore matches as soon as any Mask pattern exists,
+// and a non-ASCII character of a pattern matches any character.
 func (r Rules) MatchesName(column string) bool {
-	masked := false
+	if len(r.Mask) == 0 {
+		return false
+	}
+	masked := !isASCII(column)
 	for _, p := range r.Mask {
-		if segMatch(lastSeg(p), column) {
-			masked = true
+		if masked {
 			break
 		}
+		masked = looseSegMatch(lastSeg(p), column)
 	}
 	if !masked {
 		return false
@@ -179,21 +190,60 @@ func anyMatch(patterns []string, seg [3]string) bool {
 
 func lastSeg(p string) string { return p[strings.LastIndexByte(p, '.')+1:] }
 
-func segMatch(pat, name string) bool { return pat == "*" || strings.EqualFold(pat, name) }
+// segMatch compares a pattern segment with a name the way the SQL lexer
+// folds identifiers (see fold), so that the alias check and the masking
+// agree on which names are equal.
+func segMatch(pat, name string) bool { return pat == "*" || fold(pat) == fold(name) }
+
+// looseSegMatch is segMatch where a non-ASCII character of the pattern
+// matches any one character of the name.
+func looseSegMatch(pat, name string) bool {
+	if segMatch(pat, name) {
+		return true
+	}
+	pr, nr := []rune(fold(pat)), []rune(fold(name))
+	if len(pr) != len(nr) {
+		return false
+	}
+	for i := range pr {
+		if pr[i] != nr[i] && pr[i] < utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
 
 // parsePattern validates "db.table.column": three non-empty segments, each
-// '*' or a name without '*', '.' or blanks.
+// '*' or a name without '*', '.', quotes, blanks, control characters or
+// format characters (bidi controls, zero-width marks). Patterns are shown to
+// the human in review diffs, where such characters could hide text.
 func parsePattern(p string) (string, error) {
 	segs := strings.Split(p, ".")
 	if len(segs) != 3 {
 		return "", fmt.Errorf("pii rule %q: want db.table.column ('*' allowed per segment)", p)
 	}
 	for _, s := range segs {
-		if s == "" || (s != "*" && strings.ContainsAny(s, "* \t\r\n\"'`")) {
+		if s == "" || (s != "*" && strings.ContainsAny(s, "*\"'`")) || strings.IndexFunc(s, unsafeRune) >= 0 {
 			return "", fmt.Errorf("pii rule %q: each segment is '*' or a plain name", p)
 		}
 	}
 	return p, nil
+}
+
+// unsafeRune reports a character that a plain name never holds and that
+// could alter or hide text on a terminal: controls, spaces of any kind and
+// format characters.
+func unsafeRune(r rune) bool {
+	return r == utf8.RuneError || unicode.IsControl(r) || unicode.IsSpace(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
 }
 
 func canonical(patterns []string) []string {

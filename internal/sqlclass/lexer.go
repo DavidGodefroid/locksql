@@ -67,9 +67,16 @@ func fold(s string) string {
 
 // Lex splits sql into tokens using the quoting rules of the dialect. It
 // refuses (with a *Refusal) comments, variables, assignments, bind parameters,
-// backslashes outside PostgreSQL E” strings, unterminated quotes and
-// unbalanced parentheses.
+// backslashes outside PostgreSQL E” strings, unterminated quotes,
+// unbalanced parentheses and control characters other than blanks
+// (\t \n \v \f \r): SQLite stops reading a statement at a NUL, so what
+// runs could differ from what was classified and approved.
 func Lex(d Dialect, sql string) ([]Token, error) {
+	for i := 0; i < len(sql); i++ {
+		if c := sql[i]; (c < 0x20 && !isSpace(c)) || c == 0x7f {
+			return nil, refuse("control characters (other than tabs and line breaks) are not allowed")
+		}
+	}
 	l := lexer{d: d, s: sql}
 	return l.run()
 }
@@ -143,7 +150,8 @@ func (l *lexer) run() ([]Token, error) {
 		case c == '?' && l.d != Postgres:
 			// In PostgreSQL '?' is a jsonb operator.
 			return nil, refuse("bind parameters (?) are not allowed")
-		case c == ':' && l.d == SQLite && isIdentStart(l.peek(1)):
+		case c == ':' && l.d == SQLite && isIdentChar(l.peek(1)):
+			// SQLite reads ":name" and ":1" alike as a bind parameter.
 			return nil, refuse("bind parameters (:name) are not allowed")
 		case c == '$' && l.d == Postgres:
 			if err := l.dollar(); err != nil {

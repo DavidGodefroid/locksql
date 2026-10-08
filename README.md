@@ -103,7 +103,10 @@ only guide the agent; the console's checks are the guarantee.
   origin column, and value detectors (email, phone, IBAN, card, opt-in
   national ids) mask the rest. Only base-table origins count: columns read
   through a view, or (on MariaDB and MySQL) a derived table or CTE, are
-  matched by name, and aliasing a masked column is refused.
+  matched by name, and aliasing a masked column is refused. A view that
+  renames a masked column (`firstname AS contact`) needs its own rule for the
+  new name. Without an origin, a non-ASCII column name is masked whenever any
+  rule exists, since the server may resolve it to a masked column.
 - **The AI tightens, the human loosens.** Agents may add mask rules and
   request changes. A config edit that loosens the policy (higher tier, larger
   limits, new host, removed PII rule, ...) only takes effect after you

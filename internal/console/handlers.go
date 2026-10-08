@@ -287,20 +287,13 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 			// MariaDB may run a constant subquery while planning).
 			return s.refuse(req.ID, db, st.SQL, class, "", "EXPLAIN failed: "+s.errText(err, st.SQL, false))
 		}
-		v := weight.Assess(ep, s.profile.Limits, s.profile.Production)
-		pl.level, pl.summary, pl.reasons = v.Level.String(), v.Summary, v.Reasons
-		if v.Level == weight.Refuse {
-			reason := "weight check: " + strings.Join(v.Reasons, "; ")
-			if len(v.Reasons) == 0 {
-				reason = "weight check: " + v.Summary
-			}
+		pl.explain = &ep
+		if reason, refused := s.assess(pl); refused {
 			return s.refuse(req.ID, db, st.SQL, class, pl.level, reason)
 		}
 	} else {
 		pl.summary = "no EXPLAIN for " + strings.ToUpper(st.Kind)
-	}
-	if s.refused != "" {
-		pl.reasons = append(pl.reasons, "a policy change in the config files was refused by the human; the last approved policy applies")
+		s.noteRefused(pl)
 	}
 
 	s.prunePlans()
@@ -310,6 +303,27 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		PlanID: pl.id, Profile: s.profile.Name, Host: s.host(), DB: db, SQL: st.SQL,
 		Class: class, Verdict: pl.level, Summary: pl.summary, Reasons: pl.reasons, Unmask: pl.unmask,
 	})
+}
+
+// assess sets the plan's weight verdict under the limits in force. It
+// reports the refusal reason when the verdict is REFUSE.
+func (s *Server) assess(pl *plan) (string, bool) {
+	v := weight.Assess(*pl.explain, s.profile.Limits, s.profile.Production)
+	pl.level, pl.summary, pl.reasons = v.Level.String(), v.Summary, v.Reasons
+	s.noteRefused(pl)
+	if v.Level != weight.Refuse {
+		return "", false
+	}
+	if len(v.Reasons) == 0 {
+		return "weight check: " + v.Summary, true
+	}
+	return "weight check: " + strings.Join(v.Reasons, "; "), true
+}
+
+func (s *Server) noteRefused(pl *plan) {
+	if s.refused != "" {
+		pl.reasons = append(pl.reasons, "a policy change in the config files was refused by the human; the last approved policy applies")
+	}
 }
 
 // capSQL keeps refused statements in the audit log within a sane size.
@@ -366,11 +380,19 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		return errResp(req.ID, ipc.CodeNoSuchPlan, "no such plan: it is unknown, already used or expired; plan the query again")
 	}
 	class := pl.st.Class.String()
-	rec := audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask}
 	if int(pl.st.Class) > int(s.profile.Tier) {
 		return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, fmt.Sprintf(
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
 	}
+	// The limits may have changed since query.plan (a tightening is applied
+	// at once): the verdict shown and enforced is the one under the policy
+	// in force now.
+	if pl.explain != nil {
+		if reason, refused := s.assess(pl); refused {
+			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, reason)
+		}
+	}
+	rec := audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask}
 	sess, r := s.session(ctx, req.ID)
 	if r != nil {
 		return *r
@@ -527,7 +549,14 @@ func (s *Server) piiAdd(req ipc.Request) ipc.Response {
 	if err := s.adopt(next, "tightened"); err != nil {
 		return errResp(req.ID, ipc.CodeInternal, err.Error())
 	}
-	s.println("PII rule added by a client: mask " + pattern)
+	if s.pending != nil {
+		// The pending loosening was read before this rule reached the file:
+		// applying it as is from :review would drop the rule.
+		p := *s.pending
+		p = config.NewPolicy(p.Profile, append(append([]string(nil), p.PIIMask...), pattern), p.PIIAllow)
+		s.pending = &p
+	}
+	s.println("PII rule added by a client: mask " + safeText(pattern, false))
 	return okResp(req.ID, ipc.PIIListResult{Mask: nonNil(s.rules.Mask), Allow: nonNil(s.rules.Allow)})
 }
 

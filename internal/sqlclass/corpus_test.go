@@ -119,6 +119,15 @@ var commonCorpus = []corpusCase{
 	{sql: "FROBNICATE t", wantErr: "cannot be classified"},
 	{sql: "(SELECT 1) LIMIT 1", wantErr: "cannot be classified"},
 	{sql: "1", wantErr: "cannot be classified"},
+
+	// Refused: control characters. SQLite stops reading at a NUL, so the
+	// statement it runs could lose its WHERE clause or its LIMIT.
+	{sql: "DELETE FROM t\x00 WHERE id = 1", wantErr: "control character"},
+	{sql: "SELECT * FROM big\x00 LIMIT 10", wantErr: "control character"},
+	{sql: "SELECT 'a\x00b' FROM t LIMIT 1", wantErr: "control character"},
+	{sql: "SELECT id FROM t\x1b LIMIT 1", wantErr: "control character"},
+	{sql: "SELECT id FROM t\x7f LIMIT 1", wantErr: "control character"},
+	{sql: "SELECT id\tFROM t\r\nWHERE id = 1\fLIMIT 1", wantClass: Read},
 }
 
 // dialectCorpus holds the dialect-specific cases.
@@ -352,6 +361,8 @@ var dialectCorpus = map[Dialect][]corpusCase{
 		{sql: "SELECT (a := 1) LIMIT 1", wantErr: "assignment"},
 	},
 	SQLite: {
+		{sql: "SELECT :1 FROM t LIMIT 1", wantErr: "bind parameters"},
+		{sql: "SELECT id FROM t WHERE a = :1a LIMIT 1", wantErr: "bind parameters"},
 		{sql: "SELECT [order] FROM t LIMIT 1", wantClass: Read},
 		{sql: "SELECT [delete], `update`, \"drop\" FROM t LIMIT 1", wantClass: Read},
 		{sql: "SELECT [unterminated FROM t LIMIT 1", wantErr: "unterminated"},

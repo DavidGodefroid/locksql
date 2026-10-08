@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 )
@@ -299,6 +301,17 @@ func embedsPassword(s string) bool {
 	return strings.Contains(s[:at], ":")
 }
 
+// approvalWords are answers too common to serve as the name typed to approve
+// a production statement.
+var approvalWords = map[string]bool{"y": true, "yes": true, "n": true, "no": true, "ok": true}
+
+// unsafeRune reports a character that could alter or hide text on a
+// terminal: a control character (C0, DEL, C1), an invalid byte or a format
+// character such as a bidi override.
+func unsafeRune(r rune) bool {
+	return r == utf8.RuneError || unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+}
+
 func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) (Profile, error) {
 	if len(name) > maxNameSize || !profileNameRe.MatchString(name) {
 		return Profile{}, fmt.Errorf("invalid profile name %q: use letters, digits, '_', '-' or '.', starting with a letter or digit", name)
@@ -310,6 +323,16 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		if embedsPassword(f.val) {
 			return Profile{}, errf("%s looks like a DSN with an embedded password; locksql never reads secrets from config files", f.key)
 		}
+		// These values are shown to the human in approval screens and
+		// policy diffs, where terminal escapes could hide a change.
+		if strings.IndexFunc(f.val, unsafeRune) >= 0 {
+			return Profile{}, errf("%s holds a control or formatting character", f.key)
+		}
+	}
+	if r.Production && (len(name) < 2 || approvalWords[strings.ToLower(name)]) {
+		// Production statements are approved by typing the profile name,
+		// which must not be an everyday answer such as "y".
+		return Profile{}, errf("a production profile needs a name of 2 characters or more that is not y, yes, n, no or ok")
 	}
 
 	p := Profile{

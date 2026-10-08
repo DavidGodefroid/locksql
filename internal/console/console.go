@@ -106,6 +106,7 @@ type plan struct {
 	reasons []string
 	unmask  bool
 	created time.Time
+	explain *engine.Plan // the EXPLAIN result, assessed again when the plan runs
 }
 
 // Server serves client requests one at a time against one session. It is

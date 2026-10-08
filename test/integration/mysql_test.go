@@ -322,6 +322,11 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		}
 	})
 
+	t.Run("no leak through unicode names, stars or union heads", func(t *testing.T) {
+		s := connectMySQL(t, m, srv, "ro", config.TierRead, 5*time.Second)
+		assertNoLeak(t, s, sqlclass.MySQL, pii.Rules{Mask: []string{"app.big.email"}}, leakQueries(sqlclass.MySQL))
+	})
+
 	t.Run("tls when the server offers it", func(t *testing.T) {
 		s := connectMySQL(t, m, srv, "ro", config.TierRead, 5*time.Second)
 		r := mustRun(t, s, "SHOW SESSION STATUS LIKE 'Ssl_cipher'")

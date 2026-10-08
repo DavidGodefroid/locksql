@@ -28,7 +28,7 @@ func (s *Server) screen(pl *plan) {
 	}
 	s.println("")
 	s.println(fmt.Sprintf("%s━━ %s ━━ %s / %s ━━ user %s ━━ tier %s%s",
-		bold, strings.ToUpper(s.profile.Name), s.host(), safeText(db, false), safeText(s.cfg.DBUser, false), s.profile.Tier, reset))
+		bold, strings.ToUpper(s.profile.Name), safeText(s.host(), false), safeText(db, false), safeText(s.cfg.DBUser, false), s.profile.Tier, reset))
 	for _, line := range strings.Split(safeText(pl.st.SQL, true), "\n") {
 		s.println(line)
 	}
@@ -85,7 +85,7 @@ func (s *Server) Command(ctx context.Context, line string) {
 	case ":status":
 		st := s.status()
 		s.println(fmt.Sprintf("profile %s · %s %s · tier %s · production %t · databases %s",
-			st.Profile, st.Engine, st.Host, st.Tier, st.Production, strings.Join(st.Databases, ", ")))
+			st.Profile, st.Engine, safeText(st.Host, false), st.Tier, st.Production, safeText(strings.Join(st.Databases, ", "), false)))
 		l := st.Limits
 		s.println(fmt.Sprintf("limits: timeout %s · warn %d · refuse %d · max_rows %d · max_cell_chars %d · max_output_bytes %d",
 			l.StatementTimeout, l.ExplainRowsWarn, l.ExplainRowsRefuse, l.MaxRows, l.MaxCellChars, l.MaxOutputBytes))
@@ -226,10 +226,13 @@ func (s *Server) adopt(p config.Policy, decision string) error {
 	return nil
 }
 
-// formatChanges renders a policy diff, loosenings in red.
+// formatChanges renders a policy diff, loosenings in red. Every value is
+// escaped: a pattern or a host could otherwise carry terminal escapes that
+// hide a loosening from the human.
 func formatChanges(changes []config.Change) []string {
 	var out []string
 	for _, c := range changes {
+		c.Field, c.Old, c.New = safeText(c.Field, false), safeText(c.Old, false), safeText(c.New, false)
 		var line string
 		switch {
 		case c.Old == "":
@@ -260,15 +263,15 @@ func describePolicy(p config.Policy) []string {
 	}
 	l := pr.Limits
 	lines := []string{
-		fmt.Sprintf("  engine %s · %s · database %q · user %q", pr.Engine, where, pr.Database, pr.User),
-		fmt.Sprintf("  tier %s · production %t · credentials %s", pr.Tier, pr.Production, pr.Credentials),
+		fmt.Sprintf("  engine %s · %s · database %q · user %q", safeText(pr.Engine, false), safeText(where, false), pr.Database, pr.User),
+		fmt.Sprintf("  tier %s · production %t · credentials %s", pr.Tier, pr.Production, safeText(pr.Credentials, false)),
 		fmt.Sprintf("  limits: timeout %s · warn %d · refuse %d · max_rows %d · max_cell_chars %d · max_output_bytes %d",
 			l.StatementTimeout, l.ExplainRowsWarn, l.ExplainRowsRefuse, l.MaxRows, l.MaxCellChars, l.MaxOutputBytes),
-		"  detectors: " + strings.Join(pr.Detectors, ", "),
+		"  detectors: " + safeText(strings.Join(pr.Detectors, ", "), false),
 		fmt.Sprintf("  PII rules: %d mask, %d allow", len(p.PIIMask), len(p.PIIAllow)),
 	}
 	for _, a := range p.PIIAllow {
-		lines = append(lines, red+"  allow "+a+reset)
+		lines = append(lines, red+"  allow "+safeText(a, false)+reset)
 	}
 	return lines
 }

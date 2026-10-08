@@ -26,7 +26,10 @@ func maskText(s string) string {
 //
 // A column is masked whole when its origin matches a rule. Engines report
 // an origin only when the catalog confirms it is a base-table column; a
-// view, a derived table or a CTE alias never counts. When origin is false
+// view, a derived table or a CTE alias never counts. A view column is
+// therefore masked only by its own name: a view that renames a rule column
+// (CREATE VIEW v AS SELECT firstname AS contact ...) needs a rule for that
+// name (*.*.contact or db.v.contact). When origin is false
 // (the session reports no origins), or a column has none (an expression, a
 // UNION, an untrusted origin the engine blanked), the column
 // label is matched by name instead, see Rules.MatchesName; the console must
@@ -292,6 +295,7 @@ var notAlias = map[string]bool{
 
 type selectItem struct {
 	label string // output label when known ("" for an expression)
+	star  bool   // "*" or "x.*": it expands to an unknown number of columns
 }
 
 func (a *aliasCheck) run() error {
@@ -302,6 +306,9 @@ func (a *aliasCheck) run() error {
 	if err := a.valuesAndFromCalls(); err != nil {
 		return err
 	}
+	// heads maps each SELECT to the select list of the first arm of its
+	// UNION/INTERSECT/EXCEPT chain (its own list for a first arm), whose
+	// labels the whole chain's output carries.
 	heads := map[int][]selectItem{}
 	for i := range a.toks {
 		if a.isWord(i, "TABLE") && a.name(i+1) != "" {
@@ -314,35 +321,78 @@ func (a *aliasCheck) run() error {
 		if !a.isWord(i, "SELECT") {
 			continue
 		}
-		depth := a.toks[i].Depth
-		later, parenthesised := a.laterArm(i)
+		later, op := a.laterArm(i)
 		var head []selectItem
-		if later && !parenthesised {
-			head = heads[depth]
+		if later {
+			// An unknown head (a VALUES or TABLE first arm) stays nil, and
+			// refuses every matched column of this arm.
+			if prev := a.prevArmSelect(op); prev >= 0 {
+				head = heads[prev]
+			}
 		}
 		items, err := a.selectList(i, later, head)
 		if err != nil {
 			return err
 		}
-		if !later {
-			heads[depth] = items
+		if later {
+			heads[i] = head
+		} else {
+			heads[i] = items
 		}
 	}
 	return nil
 }
 
+// prevArmSelect returns the SELECT that starts the arm before the set
+// operator at op, or -1 when that arm is not a SELECT. A parenthesised arm
+// is searched inside its parentheses.
+func (a *aliasCheck) prevArmSelect(op int) int {
+	k := op - 1
+	if a.isPunct(k, ")") && a.match[k] >= 0 {
+		return a.firstSelectIn(a.match[k])
+	}
+	depth := a.toks[op].Depth
+	for ; k >= 0; k-- {
+		t := a.toks[k]
+		switch {
+		case t.Depth < depth || a.isPunct(k, "(") && t.Depth == depth:
+			return -1 // the start of the enclosing level
+		case a.isPunct(k, ")") && a.match[k] >= 0:
+			k = a.match[k]
+		case t.Depth == depth && a.isWord(k, "SELECT"):
+			return k
+		}
+	}
+	return -1
+}
+
+// firstSelectIn returns a SELECT at the level opened by the parenthesis at
+// o (any arm of a chain there shares the chain's head), looking into a
+// leading nested parenthesis when that level has none, or -1.
+func (a *aliasCheck) firstSelectIn(o int) int {
+	depth := a.toks[o].Depth
+	for k := o + 1; k < a.match[o]; k++ {
+		if a.toks[k].Depth == depth && a.isWord(k, "SELECT") {
+			return k
+		}
+	}
+	if a.isPunct(o+1, "(") && a.match[o+1] >= 0 {
+		return a.firstSelectIn(o + 1)
+	}
+	return -1
+}
+
 // laterArm reports whether the SELECT at i follows UNION/INTERSECT/EXCEPT,
-// and whether it is wrapped in parentheses.
-func (a *aliasCheck) laterArm(i int) (later, parenthesised bool) {
+// possibly through parentheses, and returns the index of that operator.
+func (a *aliasCheck) laterArm(i int) (later bool, op int) {
 	j := i - 1
 	for a.isPunct(j, "(") {
-		parenthesised = true
 		j--
 	}
 	if a.isWord(j, "ALL", "DISTINCT") {
 		j--
 	}
-	return a.isWord(j, "UNION", "INTERSECT", "EXCEPT", "MINUS"), parenthesised
+	return a.isWord(j, "UNION", "INTERSECT", "EXCEPT", "MINUS"), j
 }
 
 // selectList checks the select list opened by the SELECT at i.
@@ -362,7 +412,7 @@ func (a *aliasCheck) selectList(i int, later bool, head []selectItem) ([]selectI
 			(a.toks[k].Depth == depth && a.toks[k].Kind == sqlclass.TokWord && listEnd[a.toks[k].Text])
 		if end || (a.isPunct(k, ",") && a.toks[k].Depth == depth) {
 			if k > start {
-				it, err := a.item(i, start, k, len(items), later, head)
+				it, err := a.item(i, start, k, items, later, head)
 				if err != nil {
 					return nil, err
 				}
@@ -389,14 +439,19 @@ func (a *aliasCheck) plainRef(s, e int) bool {
 	return true
 }
 
-func (a *aliasCheck) item(sel, s, e, pos int, later bool, head []selectItem) (selectItem, error) {
-	if later && a.isStar(e-1) && (e-s == 1 || a.plainRef(s, e-2)) {
+func (a *aliasCheck) item(sel, s, e int, prev []selectItem, later bool, head []selectItem) (selectItem, error) {
+	pos := len(prev)
+	star := a.isStar(e-1) && (e-s == 1 || a.plainRef(s, e-2))
+	if star && !later {
+		return selectItem{star: true}, nil
+	}
+	if star {
 		// A star in a later arm puts its sources' columns, PII included,
 		// under the head's labels, which no rule may match.
 		if e-s == 1 && a.armBearing(sel) || e-s > 1 && a.rows[a.name(e-3)] {
 			return selectItem{}, refusal("a later UNION/INTERSECT/EXCEPT arm selects * from a table that may hold PII columns, under the first arm's labels")
 		}
-		return selectItem{}, nil
+		return selectItem{star: true}, nil
 	}
 	exprEnd, alias := e, ""
 	switch {
@@ -419,7 +474,9 @@ func (a *aliasCheck) item(sel, s, e, pos int, later bool, head []selectItem) (se
 			return selectItem{label: label}, nil
 		}
 		if later {
-			if pos < len(head) && head[pos].label == ref {
+			// A star before this position, in the head or in this arm,
+			// moves the real output position by an unknown amount.
+			if pos < len(head) && head[pos].label == ref && !hasStar(head[:pos+1]) && !hasStar(prev) {
 				return selectItem{label: label}, nil
 			}
 			return selectItem{}, refusal("PII column %s appears in a later UNION/INTERSECT/EXCEPT arm under another column's label", strings.ToLower(ref))
@@ -435,6 +492,15 @@ func (a *aliasCheck) item(sel, s, e, pos int, later bool, head []selectItem) (se
 		}
 	}
 	return selectItem{label: alias}, nil
+}
+
+func hasStar(items []selectItem) bool {
+	for _, it := range items {
+		if it.star {
+			return true
+		}
+	}
+	return false
 }
 
 // insideCount reports whether token j sits inside a COUNT(...) call.
@@ -521,11 +587,20 @@ func (a *aliasCheck) isStar(k int) bool {
 }
 
 // armBearing reports whether the FROM clause of the SELECT at i names a
-// source in a.rows, one whose rows may carry a rule-matched column.
+// source in a.rows, one whose rows may carry a rule-matched column, or holds
+// a parenthesised item (aliased or not) with a SELECT, a TABLE, a VALUES
+// list or such a name inside.
 func (a *aliasCheck) armBearing(i int) bool {
 	depth := a.toks[i].Depth
 	from := false
 	for k := i + 1; k < len(a.toks) && a.toks[k].Depth >= depth; k++ {
+		if from && a.isPunct(k, "(") && a.toks[k].Depth == depth+1 && a.match[k] > k {
+			for j := k + 1; j < a.match[k]; j++ {
+				if a.isWord(j, "SELECT", "TABLE", "VALUES") || a.rows[a.name(j)] {
+					return true
+				}
+			}
+		}
 		if a.toks[k].Depth > depth {
 			continue
 		}
