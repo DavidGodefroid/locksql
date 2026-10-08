@@ -21,7 +21,8 @@ directory. Both talk to the same console.
 1. **Target.** Prefer a non-production profile unless the question is about real production data.
    Find the database and table from the code first.
 2. **Console?** `locksql_status` (or `locksql status --profile P`). If no console runs (CLI exit
-   code 2), tell the user: *"Run `locksql` in a separate terminal, then tell
+   code 2), pass on the command the status gives (`locksql` outside a project, the exact
+   `locksql console ... --project DIR` inside one): *"Run it in a separate terminal, then tell
    me."* and stop. Never start one yourself. Once it runs, status lists the databases and limits.
 3. **Schema, if needed.** `locksql_list_tables` / `locksql_describe` (CLI `tables`, `describe`).
    These need no approval and show which columns are masked.

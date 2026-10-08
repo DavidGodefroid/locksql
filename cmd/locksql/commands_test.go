@@ -268,7 +268,7 @@ func TestStatusWithoutProfileListsEveryProfile(t *testing.T) {
 		Start   string            `json:"start"`
 	}
 	decodeJSON(t, o.stdout, &list)
-	if len(list) != 2 || list[0].Profile != "prod" || list[0].Running || list[0].Start != "locksql console --profile prod" ||
+	if len(list) != 2 || list[0].Profile != "prod" || list[0].Running || list[0].Start != "locksql console --profile prod --project "+dir ||
 		list[1].Profile != "uat" || !list[1].Running || list[1].Status == nil {
 		t.Fatalf("status list = %+v", list)
 	}
@@ -474,7 +474,8 @@ func TestNoConsoleExitTwoWithHint(t *testing.T) {
 		if o.code != exitNoConsole {
 			t.Fatalf("%v: exit %d, want 2 (stderr %q)", args, o.code, o.stderr)
 		}
-		if !strings.Contains(o.stderr, "locksql console --profile uat\n") {
+		// dir is a project: the hint names it.
+		if !strings.Contains(o.stderr, "locksql console --profile uat --project "+dir+"\n") {
 			t.Fatalf("%v: stderr lacks the start command: %q", args, o.stderr)
 		}
 	}
@@ -487,7 +488,7 @@ func TestNoConsoleExitTwoWithHint(t *testing.T) {
 		} `json:"error"`
 	}
 	decodeJSON(t, o.stdout, &e)
-	if e.Error.Kind != "no_console" || e.Error.Start != "locksql console --profile uat" {
+	if e.Error.Kind != "no_console" || e.Error.Start != "locksql console --profile uat --project "+dir {
 		t.Fatalf("error = %+v", e)
 	}
 }

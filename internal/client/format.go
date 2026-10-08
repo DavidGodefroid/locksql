@@ -252,7 +252,7 @@ type ErrorInfo struct {
 func DescribeError(err error) ErrorInfo {
 	var nc *NoConsoleError
 	if errors.As(err, &nc) {
-		return ErrorInfo{Kind: "no_console", Message: nc.Error(), Start: StartCommand(nc.Profile)}
+		return ErrorInfo{Kind: "no_console", Message: nc.Error(), Start: nc.Command()}
 	}
 	var re *ipc.RPCError
 	if errors.As(err, &re) {

@@ -18,6 +18,7 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -40,13 +41,28 @@ var ErrConsoleClosed = errors.New("the console closed the connection")
 // NoConsoleError reports a missing console and how to start it.
 type NoConsoleError struct {
 	Profile string
+	// Project is the project root of the client's directory, "" outside
+	// any project. The console must serve the same project.
+	Project string
 	Socket  string
 	Err     error
 }
 
 func (e *NoConsoleError) Error() string {
-	return fmt.Sprintf("no locksql console is running for profile %s: ask the user to run `locksql` (or the exact command below) in a separate terminal:\n  %s",
-		e.Profile, StartCommand(e.Profile))
+	return fmt.Sprintf("no locksql console is running for profile %s: %s", e.Profile, e.Hint())
+}
+
+// Command is the exact command that starts the missing console.
+func (e *NoConsoleError) Command() string { return StartCommand(e.Profile, e.Project) }
+
+// Hint tells the agent what to ask of the user. Outside a project a bare
+// `locksql` serves the user config; inside one, only a console started on
+// that project serves the agent, so the hint names it.
+func (e *NoConsoleError) Hint() string {
+	if e.Project != "" {
+		return fmt.Sprintf("ask the user to run this command in a separate terminal (the console must serve the project %s):\n  %s", e.Project, e.Command())
+	}
+	return "ask the user to run `locksql` (or the exact command below) in a separate terminal:\n  " + e.Command()
 }
 
 // Is makes errors.Is(err, ErrNoConsole) true.
@@ -54,8 +70,29 @@ func (e *NoConsoleError) Is(target error) bool { return target == ErrNoConsole }
 
 func (e *NoConsoleError) Unwrap() error { return e.Err }
 
-// StartCommand is the exact command that starts the console for profile.
-func StartCommand(profile string) string { return "locksql console --profile " + profile }
+// StartCommand is the exact command that starts the console for profile
+// (left out when empty) on project (left out when "": the user config).
+func StartCommand(profile, project string) string {
+	c := "locksql console"
+	if profile != "" {
+		c += " --profile " + ShellQuote(profile)
+	}
+	if project != "" {
+		c += " --project " + ShellQuote(project)
+	}
+	return c
+}
+
+// ShellQuote quotes s for a POSIX shell when it holds anything beyond
+// letters, digits and ./_-+:,@%=.
+func ShellQuote(s string) string {
+	if s != "" && strings.IndexFunc(s, func(r rune) bool {
+		return !(r < 128 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("./_-+:,@%=", r)))
+	}) < 0 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
 
 // SocketPath is the console socket of profile for the project of cwd. The
 // console computes the same path: in the shared socket directory when the
@@ -107,7 +144,8 @@ func Dial(cwd, profile string) (*Client, error) {
 	conn, err := dialUnix(path)
 	if err != nil {
 		if noListener(err) {
-			return nil, &NoConsoleError{Profile: profile, Socket: path, Err: err}
+			root, _ := config.FindProjectRoot(cwd)
+			return nil, &NoConsoleError{Profile: profile, Project: root, Socket: path, Err: err}
 		}
 		return nil, fmt.Errorf("client: connecting to the console: %w", err)
 	}
