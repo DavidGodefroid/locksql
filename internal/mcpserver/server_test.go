@@ -500,3 +500,11 @@ func TestExactCellKeepsLargeIntegersExact(t *testing.T) {
 		t.Fatal("exactRows(nil) is nil")
 	}
 }
+
+func TestInstructionsCarryAgentRules(t *testing.T) {
+	for _, want := range []string{"never start one yourself", "Never edit the locksql config", "psql", "k-anonymity", "tok_"} {
+		if !strings.Contains(instructions, want) {
+			t.Errorf("instructions lack %q", want)
+		}
+	}
+}
