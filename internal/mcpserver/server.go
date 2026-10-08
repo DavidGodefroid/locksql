@@ -376,7 +376,7 @@ func (t *tools) status(ctx context.Context, _ *mcp.CallToolRequest, in StatusIn)
 		client.FormatProfiles(w, out.Profiles)
 		for _, p := range out.Profiles {
 			if !p.Running {
-				fmt.Fprintf(w, "\nNo console runs for profile %s. Ask the user to start it in a terminal, from this project:\n  %s\n", p.Profile, p.Start)
+				fmt.Fprintf(w, "\nNo console runs for profile %s. Ask the user to run `locksql` (or the exact command below) in a separate terminal:\n  %s\n", p.Profile, p.Start)
 			}
 		}
 	}), out, nil

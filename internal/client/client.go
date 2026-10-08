@@ -28,7 +28,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/sysconf"
 )
 
-// ErrNoConsole means no console listens for the profile in this project.
+// ErrNoConsole means no console listens for the profile.
 // Errors that match it are *NoConsoleError values carrying the command the
 // human must run.
 var ErrNoConsole = errors.New("no console is running")
@@ -45,7 +45,7 @@ type NoConsoleError struct {
 }
 
 func (e *NoConsoleError) Error() string {
-	return fmt.Sprintf("no console is running for profile %s in this project; ask the human to start it in a terminal, from this project:\n  %s",
+	return fmt.Sprintf("no locksql console is running for profile %s: ask the user to run `locksql` (or the exact command below) in a separate terminal:\n  %s",
 		e.Profile, StartCommand(e.Profile))
 }
 

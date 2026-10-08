@@ -574,7 +574,4 @@ const cursorNotes = `Enable the "locksql" server in Cursor's MCP settings if Cur
 
 // NextSteps tells the human how to finish the set-up; print it once after
 // the notes of every agent.
-const NextSteps = `Next: define a profile in .locksql/config.toml, then run
-  locksql console --profile <name>
-in a separate terminal and keep it open while the agent works.
-`
+const NextSteps = "Next: run `locksql` in a separate terminal and keep it open while the agent works (it adds a database if none is configured).\n"
