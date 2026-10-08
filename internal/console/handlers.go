@@ -119,6 +119,16 @@ func (s *Server) status() ipc.StatusResult {
 
 // session returns the live session, reconnecting after a lost connection.
 func (s *Server) session(ctx context.Context, id int64) (engine.Session, *ipc.Response) {
+	if ttl := s.profile.CredentialsTTL; s.sess != nil && ttl > 0 && s.now().Sub(s.connected) >= ttl {
+		// A short-lived secret (a vault lease) has expired: close the
+		// connection and ask for a fresh one.
+		s.println(fmt.Sprintf("credentials_ttl (%s) reached: the connection is closed and the secret asked again", ttl))
+		_ = s.sess.Close()
+		s.sess = nil
+		if s.cfg.Reconnect == nil {
+			s.End("credentials expired")
+		}
+	}
 	if s.sess != nil {
 		return s.sess, nil
 	}
@@ -127,6 +137,7 @@ func (s *Server) session(ctx context.Context, id int64) (engine.Session, *ipc.Re
 		sess, err := s.cfg.Reconnect(ctx, s.profile) // the policy in force now, not the start-up one
 		if err == nil {
 			s.sess = sess
+			s.connected = s.now()
 			return sess, nil
 		}
 		s.println("reconnect failed: " + secrets.Sanitize(err))
@@ -257,9 +268,18 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		return *r
 	}
 	auditSQL := capSQL(p.SQL)
-	st, err := sqlclass.Classify(s.dialect, p.SQL, s.profile.Limits.MaxRows)
+	inner, explain := splitExplain(s.dialect, p.SQL)
+	st, err := sqlclass.Classify(s.dialect, inner, s.profile.Limits.MaxRows)
 	if err != nil {
 		return s.refuse(req.ID, db, auditSQL, "", "", err.Error())
+	}
+	if st.Class == sqlclass.Read && st.Kind != "select" {
+		return s.refuse(req.ID, db, auditSQL, "read", "", fmt.Sprintf(
+			"%s is not allowed: only SELECT, WITH ... SELECT and EXPLAIN SELECT are (use the catalog commands to list and describe tables)",
+			strings.ToUpper(st.Kind)))
+	}
+	if explain && st.Class != sqlclass.Read {
+		return s.refuse(req.ID, db, auditSQL, st.Class.String(), "", "only EXPLAIN SELECT is allowed")
 	}
 	class := st.Class.String()
 	if int(st.Class) > int(s.profile.Tier) {
@@ -270,7 +290,7 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	if r != nil {
 		return *r
 	}
-	if !p.Unmask {
+	if !p.Unmask && st.Class != sqlclass.Read {
 		// Before the run: a write's RETURNING list or a data-modifying
 		// CTE must not move PII under another label, since refusing its
 		// result afterwards would not undo the write.
@@ -280,19 +300,20 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	}
 
 	pl := &plan{db: db, st: st, unmask: p.Unmask, created: s.now(), level: weight.OK.String()}
-	if st.Class == sqlclass.Read && st.Kind == "select" {
-		ep, err := sess.Explain(ctx, db, st.SQL)
+	if st.Class == sqlclass.Read {
+		// The read path: the statement is parsed in full and every column
+		// resolved before anything runs.
+		full := strings.TrimSpace(p.SQL)
+		reason, refused, err := s.readPlan(ctx, sess, pl, full)
 		if err != nil {
-			if errors.Is(err, engine.ErrConnLost) {
-				return s.failed(req.ID, "explain", err)
-			}
-			// Before approval: redacted even for an unmask plan (MySQL and
-			// MariaDB may run a constant subquery while planning).
-			return s.refuse(req.ID, db, st.SQL, class, "", "EXPLAIN failed: "+s.errText(err, st.SQL, false))
+			return s.failed(req.ID, "plan", err)
 		}
-		pl.explain = &ep
+		if refused {
+			return s.refuse(req.ID, db, auditSQL, class, "", reason)
+		}
+		pl.st.SQL = strings.TrimSuffix(full, ";")
 		if reason, refused := s.assess(pl); refused {
-			return s.refuse(req.ID, db, st.SQL, class, pl.level, reason)
+			return s.refuse(req.ID, db, pl.st.SQL, class, pl.level, reason)
 		}
 	} else {
 		pl.summary = "no EXPLAIN for " + strings.ToUpper(st.Kind)
@@ -302,9 +323,10 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	s.prunePlans()
 	pl.id = newID()
 	s.plans[pl.id] = pl
+	summary, reasons := clientSummary(pl)
 	return okResp(req.ID, ipc.PlanResult{
-		PlanID: pl.id, Profile: s.profile.Name, Host: s.host(), DB: db, SQL: st.SQL,
-		Class: class, Verdict: pl.level, Summary: pl.summary, Reasons: pl.reasons, Unmask: pl.unmask,
+		PlanID: pl.id, Profile: s.profile.Name, Host: s.host(), DB: db, SQL: pl.st.SQL,
+		Class: class, Verdict: pl.level, Summary: summary, Reasons: reasons, Unmask: pl.unmask,
 	})
 }
 
@@ -427,7 +449,28 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		defer cancel()
 	}
 	start := time.Now()
-	res, err := sess.Run(rctx, pl.db, pl.st, s.profile.Limits.MaxRows)
+	// Success or failure, the answer leaves on the next quantum.
+	defer s.level(ctx, start)
+	if reason, err := s.kCheck(rctx, sess, pl); err != nil || reason != "" {
+		if err != nil {
+			rec.Error = s.errText(err, pl.st.SQL, false)
+			s.audit(rec)
+			return s.failed(req.ID, "k-anonymity check", err)
+		}
+		return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, reason+" (approved, but not run)")
+	}
+	var res engine.Result
+	var err error
+	switch {
+	case pl.isExplain:
+		res = explainResult(pl.explain)
+	case pl.an != nil:
+		st := pl.st
+		st.SQL = pl.runSQL
+		res, err = sess.Run(rctx, pl.db, st, s.profile.Limits.MaxRows)
+	default:
+		res, err = sess.Run(rctx, pl.db, pl.st, s.profile.Limits.MaxRows)
+	}
 	rec.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
 		// The audit log never holds row data, even for an unmask run.
@@ -437,9 +480,18 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		if errors.Is(err, engine.ErrConnLost) {
 			return s.failed(req.ID, "statement failed", err)
 		}
-		return errResp(req.ID, ipc.CodeInternal, "statement failed: "+s.errText(err, pl.st.SQL, pl.unmask))
+		if errors.Is(rctx.Err(), context.DeadlineExceeded) {
+			return errResp(req.ID, ipc.CodeInternal, "statement timed out (limits.statement_timeout)")
+		}
+		// Never the server's message: it can quote values.
+		return errResp(req.ID, ipc.CodeInternal, genericFailure)
 	}
-	if !pl.unmask {
+	if !pl.unmask && pl.an != nil {
+		if err := s.maskRead(&res, pl, sess); err != nil {
+			s.println("result dropped: " + err.Error())
+			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, "the result could not be masked with certainty and was dropped: "+err.Error())
+		}
+	} else if !pl.unmask {
 		origin := sess.OriginColumns()
 		if pii.NeedsAliasCheck(res, origin) {
 			if err := pii.ResultAliasViolation(pl.st, s.rules, s.dialect, res.Columns); err != nil {
@@ -454,7 +506,6 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		s.audit(rec)
 		return errResp(req.ID, ipc.CodeInternal, "render: "+rec.Error)
 	}
-	out.DurationMS = rec.DurationMS
 	rec.Rows, rec.Affected, rec.Truncated = int64(len(out.Rows)), res.Affected, out.Truncated
 	s.audit(rec)
 	if len(res.Columns) == 0 {

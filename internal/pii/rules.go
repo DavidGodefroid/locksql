@@ -273,6 +273,13 @@ func (r Rules) MatchesName(column string) bool {
 	return true
 }
 
+// Covered reports whether a mask or an allow pattern names the column: the
+// human already decided about it.
+func (r Rules) Covered(db, table, column string) bool {
+	seg := [3]string{db, table, column}
+	return anyMatch(r.Mask, seg) || anyMatch(r.Allow, seg)
+}
+
 func anyMatch(patterns []string, seg [3]string) bool {
 	for _, p := range patterns {
 		s := strings.Split(p, ".")

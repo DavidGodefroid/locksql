@@ -28,9 +28,13 @@ func TestWriteReturningPIIRefusedBeforeRun(t *testing.T) {
 	// A plain RETURNING of the rule column is allowed: it is masked by name.
 	h.plan(t, "UPDATE users SET note = 'x' WHERE id = 1 RETURNING id, email", false)
 
-	// A read is checked once it ran, when a column came back without an
-	// origin: a nested * over a PII source is refused and its rows dropped.
+	// A read resolves a nested * over a PII source to that source and masks
+	// it, whatever label or origin the engine reports.
 	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "x"}}, Rows: [][]any{{"Alice"}}}
 	pr := h.plan(t, "WITH c AS (SELECT email FROM users) SELECT (SELECT * FROM c LIMIT 1) AS x LIMIT 5", false)
-	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeRefused)
+	var rr ipc.RunResult
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	if got := rr.Rows[0][0]; got != "A***(5)" {
+		t.Errorf("nested PII source not masked: %v", got)
+	}
 }

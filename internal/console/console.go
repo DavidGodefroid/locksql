@@ -21,6 +21,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
+	"github.com/DavidGodefroid/locksql/internal/sqlast"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -94,6 +95,9 @@ type ServerConfig struct {
 	// profile in force at that time. Nil means a lost connection ends the
 	// console.
 	Reconnect func(ctx context.Context, p config.Profile) (engine.Session, error)
+	// Quantum levels the response time of query.run (ResponseQuantum in
+	// the real console, 0 to disable).
+	Quantum time.Duration
 }
 
 // plan is a one-shot plan awaiting query.run.
@@ -107,6 +111,12 @@ type plan struct {
 	unmask  bool
 	created time.Time
 	explain *engine.Plan // the EXPLAIN result, assessed again when the plan runs
+	// an is the analysis of a read statement (nil for other classes);
+	// runSQL is the statement that runs (token values substituted) and
+	// isExplain marks an EXPLAIN SELECT, answered with the plan.
+	an        *sqlast.Analysis
+	runSQL    string
+	isExplain bool
 }
 
 // Server serves client requests one at a time against one session. It is
@@ -124,6 +134,16 @@ type Server struct {
 	plans    map[string]*plan
 	started  time.Time
 	lastSeen time.Time
+
+	// tokens is the session's token table (mask mode hash); its key dies
+	// with the console.
+	tokens *pii.Tokens
+	// catalogCache holds the column catalog per database for the analyser.
+	catalogCache map[string][]engine.ColumnInfo
+	// quantum levels response times (ResponseQuantum; 0 in tests).
+	quantum time.Duration
+	// connected is when the current connection was opened (credentials_ttl).
+	connected time.Time
 
 	// pending is a loosening policy read from the files that awaits :review.
 	pending *config.Policy
@@ -147,12 +167,13 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}}
+	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, tokens: pii.NewTokens(), quantum: cfg.Quantum}
 	if err := s.apply(cfg.Policy); err != nil {
 		return nil, err
 	}
 	s.started = s.now()
 	s.lastSeen = s.started
+	s.connected = s.started
 	if s.autoApprove() {
 		s.println("--skip-permissions: statements allowed by the tier and the weight check run without a prompt")
 	}
@@ -171,7 +192,7 @@ func (s *Server) apply(p config.Policy) error {
 	}
 	s.approved = p
 	s.profile = p.Profile
-	s.rules = pii.Rules{Mask: append([]string(nil), p.PIIMask...), Allow: append([]string(nil), p.PIIAllow...)}
+	s.rules = pii.Rules{Mask: append([]string(nil), p.PIIMask...), Allow: append([]string(nil), p.PIIAllow...), Modes: p.PIIModes}
 	s.detectors = ds
 	s.dialect = d
 	return nil

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -211,7 +212,7 @@ func Run(ctx context.Context, o Options) error {
 		Policy: approved, Root: piiRoot, StateDir: o.StateDir, ApprovedKey: key,
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Now: o.Now,
 		SkipPermissions: o.SkipPermissions, Version: o.Version, LoadPolicy: loadPolicy,
-		Reconnect: st.reconnect,
+		Reconnect: st.reconnect, Quantum: ResponseQuantum,
 	})
 	if err != nil {
 		ln.Close()
@@ -462,12 +463,13 @@ func (st *starter) privileges(ctx context.Context, sess engine.Session) error {
 	return nil
 }
 
-// piiBootstrap proposes column rules from the schema when the project has
-// no pii.toml yet, and returns the policy including the accepted rules.
+// piiBootstrap scans the schema at every start and proposes mask rules for
+// the columns that look like personal data and that no rule names yet
+// (neither a mask nor an allow rule). It returns the policy including the
+// accepted rules, which only tighten it.
 func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []string, root, stateDir, key string, ap config.Policy) (config.Policy, error) {
-	if _, err := os.Stat(filepath.Join(root, pii.RulesFile)); !errors.Is(err, fs.ErrNotExist) {
-		return ap, nil
-	}
+	_, statErr := os.Stat(filepath.Join(root, pii.RulesFile))
+	firstRun := errors.Is(statErr, fs.ErrNotExist)
 	scan := dbs
 	if st.profile.Database != "" {
 		scan = []string{st.profile.Database}
@@ -481,12 +483,26 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 		}
 		cols = append(cols, c...)
 	}
-	proposals := pii.Propose(cols)
-	rules := pii.Rules{Mask: slices.Clone(ap.PIIMask), Allow: slices.Clone(ap.PIIAllow)}
+	rules := pii.Rules{Mask: slices.Clone(ap.PIIMask), Allow: slices.Clone(ap.PIIAllow), Modes: maps.Clone(ap.PIIModes)}
+	var proposals []string
+	for _, pat := range pii.Propose(cols) {
+		seg := strings.SplitN(pat, ".", 3)
+		if len(seg) == 3 && rules.Covered(seg[0], seg[1], seg[2]) {
+			continue
+		}
+		proposals = append(proposals, pat)
+	}
+	if !firstRun && len(proposals) == 0 {
+		return ap, nil
+	}
 	if len(proposals) == 0 {
 		st.io.Println("PII: no personal-data columns found in the schema")
 	} else {
-		st.io.Println(bold + "PII: these columns look like personal data and would be masked:" + reset)
+		if firstRun {
+			st.io.Println(bold + "PII: these columns look like personal data and would be masked:" + reset)
+		} else {
+			st.io.Println(bold + "PII scan: these columns look like personal data and no rule names them yet:" + reset)
+		}
 		groups := map[string][]string{}
 		var order []string
 		for _, pat := range proposals {
@@ -523,11 +539,33 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 			st.io.Println("PII: no rules added; add them later with locksql pii add")
 		}
 	}
-	// Write the file even when empty, so that the proposal runs once.
-	if err := pii.SaveRules(root, rules); err != nil {
-		return ap, err
+	next := config.NewPolicy(ap.Profile, rules.Mask, rules.Allow).WithModes(rules.Modes)
+	switch {
+	case firstRun:
+		// Write the file even when empty, so that the first-run proposal
+		// runs once.
+		if err := pii.SaveRules(root, rules); err != nil {
+			return ap, err
+		}
+	case config.Fingerprint(next) != config.Fingerprint(ap):
+		// Add the accepted rules to the file as it is on disk, so that
+		// unconfirmed edits are neither lost nor applied.
+		onDisk, err := pii.LoadRules(root)
+		if err != nil {
+			return ap, err
+		}
+		for _, pat := range rules.Mask {
+			if !slices.Contains(ap.PIIMask, pat) {
+				if err := onDisk.Add(pat); err != nil {
+					return ap, err
+				}
+			}
+		}
+		if err := pii.SaveRules(root, onDisk); err != nil {
+			return ap, err
+		}
 	}
-	next := config.NewPolicy(ap.Profile, rules.Mask, rules.Allow)
+	next = config.NewPolicy(ap.Profile, rules.Mask, rules.Allow).WithModes(rules.Modes)
 	if config.Fingerprint(next) != config.Fingerprint(ap) {
 		if err := config.SaveApproved(stateDir, key, next); err != nil {
 			return ap, err

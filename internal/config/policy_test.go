@@ -234,3 +234,51 @@ func TestStateDir(t *testing.T) {
 		}
 	}
 }
+
+func TestDiffModesAndNewLimits(t *testing.T) {
+	p := Profile{Name: "uat", Engine: EngineSQLite, Path: "/x", Limits: DefaultLimits(false)}
+	a := NewPolicy(p, []string{"app.users.email"}, nil)
+	field := func(changes []Change, f string) *Change {
+		for i := range changes {
+			if changes[i].Field == f {
+				return &changes[i]
+			}
+		}
+		return nil
+	}
+	b := a.WithModes(map[string]string{"app.users.email": "redact"})
+	if c := field(Diff(a, b), "pii.mode"); c == nil || c.Loosens {
+		t.Errorf("partial → redact: %+v", c)
+	}
+	c := b.WithModes(map[string]string{"app.users.email": "hash"})
+	if ch := field(Diff(b, c), "pii.mode"); ch == nil || !ch.Loosens {
+		t.Errorf("redact → hash: %+v", ch)
+	}
+	if Fingerprint(a) != Fingerprint(a.WithModes(map[string]string{"app.users.email": "partial"})) {
+		t.Error("the default mode changes the fingerprint")
+	}
+	lower := a
+	lower.Profile.Limits.KAnonymity = 2
+	if ch := field(Diff(a, lower), "limits.k_anonymity"); ch == nil || !ch.Loosens {
+		t.Errorf("k 5 → 2: %+v", ch)
+	}
+	if ch := field(Diff(lower, a), "limits.k_anonymity"); ch == nil || ch.Loosens {
+		t.Errorf("k 2 → 5: %+v", ch)
+	}
+	ttl := a
+	ttl.Profile.CredentialsTTL = 20 * 60e9
+	if ch := field(Diff(a, ttl), "credentials_ttl"); ch == nil || ch.Loosens {
+		t.Errorf("ttl none → 20m: %+v", ch)
+	}
+	if ch := field(Diff(ttl, a), "credentials_ttl"); ch == nil || !ch.Loosens {
+		t.Errorf("ttl 20m → none: %+v", ch)
+	}
+	cost := a
+	cost.Profile.Limits.ExplainCostRefuse = 1000
+	if ch := field(Diff(a, cost), "limits.explain_cost_refuse"); ch == nil || ch.Loosens {
+		t.Errorf("cost off → 1000: %+v", ch)
+	}
+	if ch := field(Diff(cost, a), "limits.explain_cost_refuse"); ch == nil || !ch.Loosens {
+		t.Errorf("cost 1000 → off: %+v", ch)
+	}
+}

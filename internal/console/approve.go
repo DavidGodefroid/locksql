@@ -29,7 +29,7 @@ func (s *Server) screen(pl *plan) {
 	s.println("")
 	s.println(fmt.Sprintf("%s━━ %s ━━ %s / %s ━━ user %s ━━ tier %s%s",
 		bold, strings.ToUpper(s.profile.Name), safeText(s.host(), false), safeText(db, false), safeText(s.cfg.DBUser, false), s.profile.Tier, reset))
-	for _, line := range strings.Split(safeText(pl.st.SQL, true), "\n") {
+	for _, line := range strings.Split(s.highlight(pl), "\n") {
 		s.println(line)
 	}
 	class := strings.ToUpper(pl.st.Class.String())
@@ -44,12 +44,102 @@ func (s *Server) screen(pl *plan) {
 	for _, r := range pl.reasons {
 		s.println("  - " + safeText(r, false))
 	}
+	if pl.an != nil {
+		s.readDetails(pl)
+	}
 	if pl.unmask {
 		s.println(red + "PII: UNMASKED" + reset)
 	} else {
 		s.println(fmt.Sprintf("PII: masked (%d column rules; detectors: %s)",
 			len(s.rules.Mask), strings.Join(s.profile.Detectors, ", ")))
 	}
+}
+
+// readDetails explains a read plan to the human: what it reads, which PII
+// columns it touches and where, how each output is masked, the k-anonymity
+// counts that run first and the token values substituted.
+func (s *Server) readDetails(pl *plan) {
+	an := pl.an
+	if pl.isExplain {
+		s.println(bold + "EXPLAIN only: the statement does not run; the plan is returned" + reset)
+	}
+	if len(an.Relations) > 0 {
+		s.println("reads: " + safeText(strings.Join(an.Relations, ", "), false))
+	}
+	if pl.st.Limit >= 0 {
+		s.println(fmt.Sprintf("returns at most %d rows", min(pl.st.Limit, s.profile.Limits.MaxRows)))
+	}
+	if len(an.Uses) > 0 {
+		var order []string
+		where := map[string][]string{}
+		for _, u := range an.Uses {
+			k := u.Source.Table + "." + u.Source.Column
+			if _, ok := where[k]; !ok {
+				order = append(order, k)
+			}
+			where[k] = append(where[k], u.Clause)
+		}
+		var parts []string
+		for _, k := range order {
+			parts = append(parts, k+" ("+strings.Join(where[k], ", ")+")")
+		}
+		s.println(red + "PII columns touched: " + safeText(strings.Join(parts, "; "), false) + reset)
+	}
+	if !pl.unmask {
+		var masks []string
+		for i, o := range an.Outputs {
+			if o.Mask == "" {
+				continue
+			}
+			name := strings.ToLower(o.Label)
+			if name == "" {
+				name = fmt.Sprintf("#%d", i+1)
+			}
+			masks = append(masks, name+" → "+o.Mask)
+		}
+		if len(masks) > 0 {
+			s.println("masked outputs: " + safeText(strings.Join(masks, ", "), false))
+		}
+		if k := s.profile.Limits.KAnonymity; k > 1 {
+			for _, c := range an.KChecks {
+				s.println(fmt.Sprintf("k-anonymity check (k=%d) runs first: %s", k, safeText(c.SQL, false)))
+			}
+		}
+		if n := len(an.Replacements); n > 0 {
+			s.println(fmt.Sprintf("%d token(s) stand for values from earlier results: the console substitutes them in the statement that runs", n))
+		}
+		if an.PIIFilter {
+			s.println("row estimates are hidden from the agent: the statement filters on a PII column")
+		}
+	}
+}
+
+// highlight is the statement for the screen, escaped, with the names of
+// the PII columns it touches in red.
+func (s *Server) highlight(pl *plan) string {
+	sql := pl.st.SQL
+	if pl.an == nil || len(pl.an.Uses) == 0 {
+		return safeText(sql, true)
+	}
+	names := map[string]bool{}
+	for _, u := range pl.an.Uses {
+		names[fold(u.Source.Column)] = true
+	}
+	toks, err := sqlclass.Lex(s.dialect, sql)
+	if err != nil {
+		return safeText(sql, true)
+	}
+	var b strings.Builder
+	pos := 0
+	for _, t := range toks {
+		if (t.Kind == sqlclass.TokWord || t.Kind == sqlclass.TokQuotedIdent) && names[t.Name()] && t.Pos >= pos {
+			b.WriteString(safeText(sql[pos:t.Pos], true))
+			b.WriteString(red + safeText(sql[t.Pos:t.End], false) + reset)
+			pos = t.End
+		}
+	}
+	b.WriteString(safeText(sql[pos:], true))
+	return b.String()
 }
 
 // safeText escapes control, C1 and bidirectional formatting characters so

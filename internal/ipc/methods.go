@@ -83,12 +83,13 @@ type RunParams struct {
 
 // RunResult is a capped, masked result. Text is the rendered TSV.
 type RunResult struct {
-	Columns    []string `json:"columns"`
-	Rows       [][]any  `json:"rows"`
-	Truncated  bool     `json:"truncated"`
-	Affected   int64    `json:"affected,omitempty"`
-	DurationMS int64    `json:"duration_ms"`
-	Text       string   `json:"text,omitempty"`
+	Columns   []string `json:"columns"`
+	Rows      [][]any  `json:"rows"`
+	Truncated bool     `json:"truncated"`
+	Affected  int64    `json:"affected,omitempty"`
+	// DurationMS is no longer filled: timings stay on the console.
+	DurationMS int64  `json:"duration_ms,omitempty"`
+	Text       string `json:"text,omitempty"`
 }
 
 // StatusResult describes the console session.

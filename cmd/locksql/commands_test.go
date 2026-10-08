@@ -42,7 +42,12 @@ func (fakeSession) Describe(_ context.Context, db, table string) (engine.TableIn
 		Indexes: []engine.IndexDesc{{Name: "PRIMARY", Columns: []string{"id"}, Unique: true, Primary: true}},
 	}, nil
 }
-func (fakeSession) Columns(context.Context, string) ([]engine.ColumnInfo, error) { return nil, nil }
+func (fakeSession) Columns(_ context.Context, db string) ([]engine.ColumnInfo, error) {
+	return []engine.ColumnInfo{
+		{DB: db, Table: "users", Column: "id", Type: "int"},
+		{DB: db, Table: "users", Column: "email", Type: "varchar(100)"},
+	}, nil
+}
 func (fakeSession) Explain(context.Context, string, string) (engine.Plan, error) {
 	return engine.Plan{Root: engine.PlanNode{Detail: "QUERY", EstRows: -1, Children: []engine.PlanNode{
 		{Table: "users", Access: engine.AccessLookup, EstRows: 1},
@@ -373,7 +378,7 @@ func TestPlanRefusedAndRunDenied(t *testing.T) {
 		t.Fatalf("error = %+v", e)
 	}
 
-	o = cli(t, dir, "", "plan", "--profile", "uat", "--json", "SELECT id FROM users WHERE id = 1 LIMIT 1")
+	o = cli(t, dir, "", "plan", "--profile", "uat", "--json", "SELECT id, email FROM users WHERE id = 1 LIMIT 1")
 	var pl ipc.PlanResult
 	decodeJSON(t, o.stdout, &pl)
 	sio.answer("n")
@@ -383,7 +388,7 @@ func TestPlanRefusedAndRunDenied(t *testing.T) {
 func TestRunWaitsForTheHuman(t *testing.T) {
 	dir := project(t, uatConfig)
 	sio := startConsole(t, dir, "uat")
-	o := cli(t, dir, "", "plan", "--profile", "uat", "--json", "SELECT id FROM users WHERE id = 1 LIMIT 1")
+	o := cli(t, dir, "", "plan", "--profile", "uat", "--json", "SELECT id, email FROM users WHERE id = 1 LIMIT 1")
 	var pl ipc.PlanResult
 	decodeJSON(t, o.stdout, &pl)
 	sio.mu.Lock()

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -34,6 +35,8 @@ type fakeSession struct {
 	catalog  int
 	extra    []string // ExtraPrivileges warnings
 	closed   bool
+	// count answers the k-anonymity row counts (nil: the default result).
+	count *engine.Result
 }
 
 func (f *fakeSession) ServerVersion() string { return "11.4.0-MariaDB" }
@@ -55,8 +58,15 @@ func (f *fakeSession) Describe(_ context.Context, db, table string) (engine.Tabl
 	f.catalog++
 	return engine.TableInfo{DB: db, Table: table, Columns: []engine.ColumnDesc{{Name: "id", Type: "int"}}, EstRows: 3}, nil
 }
-func (f *fakeSession) Columns(context.Context, string) ([]engine.ColumnInfo, error) {
-	return nil, nil
+func (f *fakeSession) Columns(_ context.Context, db string) ([]engine.ColumnInfo, error) {
+	var out []engine.ColumnInfo
+	for _, c := range []struct{ t, c string }{
+		{"users", "id"}, {"users", "email"}, {"users", "note"}, {"users", "status"},
+		{"orders", "id"}, {"orders", "user_id"}, {"orders", "total"},
+	} {
+		out = append(out, engine.ColumnInfo{DB: db, Table: c.t, Column: c.c, Type: "text"})
+	}
+	return out, nil
 }
 func (f *fakeSession) Explain(_ context.Context, _ string, sql string) (engine.Plan, error) {
 	f.mu.Lock()
@@ -70,6 +80,9 @@ func (f *fakeSession) Run(_ context.Context, _ string, st sqlclass.Statement, _ 
 	f.runs = append(f.runs, st.SQL)
 	if f.runErr != nil {
 		return engine.Result{}, f.runErr
+	}
+	if f.count != nil && strings.Contains(st.SQL, "COUNT(*)") {
+		return *f.count, nil
 	}
 	// Hand out a deep copy: masking works in place.
 	res := f.result
@@ -149,6 +162,9 @@ func (f *fakeIO) promptCount() int {
 	defer f.mu.Unlock()
 	return len(f.prompts)
 }
+
+// ansi matches terminal colour sequences.
+var ansi = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 func (f *fakeIO) output() string {
 	f.mu.Lock()
@@ -331,8 +347,9 @@ func TestApprovedRunReturnsMaskedRows(t *testing.T) {
 	if !strings.Contains(prompt, "[y/N]") {
 		t.Errorf("prompt %q", prompt)
 	}
-	screen := h.io.output()
-	for _, want := range []string{"UAT", "db.uat.example.com", "alice", "tier read", selectUsers, "verdict OK", "PII: masked"} {
+	screen := ansi.ReplaceAllString(h.io.output(), "")
+	for _, want := range []string{"UAT", "db.uat.example.com", "alice", "tier read", selectUsers, "verdict OK", "PII: masked",
+		"reads: app.users", "PII columns touched: users.email (select)", "masked outputs: email → partial", "returns at most 10 rows"} {
 		if !strings.Contains(screen, want) {
 			t.Errorf("approval screen lacks %q:\n%s", want, screen)
 		}
@@ -499,19 +516,27 @@ func TestUnknownDatabaseRefused(t *testing.T) {
 	wantCode(t, h.call(t, ipc.MethodCatalogList, ipc.TablesParams{DB: "nope"}), ipc.CodeRefused)
 }
 
-func TestAliasFallbackWithoutOrigins(t *testing.T) {
+// An alias no longer hides a PII column: the analyser resolves it to its
+// source, with or without engine-reported origins.
+func TestAliasMaskedByProvenance(t *testing.T) {
+	for _, origin := range []bool{false, true} {
+		h := newHarness(t, uatProfile())
+		h.sess.origin = origin
+		h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "x"}}, Rows: [][]any{{"alice@example.com"}}}
+		pr := h.plan(t, "SELECT x FROM (SELECT email AS x FROM users) s LIMIT 1", false)
+		h.io.answers = []string{"y"}
+		var rr ipc.RunResult
+		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+		if got := rr.Rows[0][0]; got != "a***(17)" {
+			t.Errorf("origin=%v: aliased PII column not masked: %v", origin, got)
+		}
+	}
+	// A label the analysis did not expect drops the result.
 	h := newHarness(t, uatProfile())
-	h.sess.origin = false
-	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT email AS x FROM users LIMIT 1"})
-	wantCode(t, resp, ipc.CodeRefused)
-
-	// A result column without an origin triggers the check at run time.
-	h.sess.origin = true
-	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "x"}}, Rows: [][]any{{"alice@example.com"}}}
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{"alice@example.com"}}}
 	pr := h.plan(t, "SELECT email AS x FROM users LIMIT 1", false)
 	h.io.answers = []string{"y"}
-	resp = h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
-	wantCode(t, resp, ipc.CodeRefused)
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeRefused)
 }
 
 func TestPIIAddWritesFile(t *testing.T) {
@@ -801,25 +826,24 @@ func TestClientGoneDuringApproval(t *testing.T) {
 // A server error can quote a row value (a failed cast in WHERE): with
 // masking on, it must reach neither the client nor the audit log.
 func TestRunErrorTextIsRedacted(t *testing.T) {
+	// EXTRACTVALUE is outside the function allowlist.
 	h := newHarness(t, uatProfile())
-	h.sess.runErr = errors.New(`mariadb: error 1105 (HY000): XPATH syntax error: '~zed.secret@example.com'`)
-	pr := h.plan(t, "SELECT 1 FROM users WHERE EXTRACTVALUE(1, CONCAT(0x7e, email)) LIMIT 1", false)
-	h.io.answers = []string{"y"}
-	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
-	wantCode(t, resp, ipc.CodeInternal)
-	if strings.Contains(resp.Error.Message, "zed.secret") || !strings.Contains(resp.Error.Message, "1105") {
-		t.Errorf("client message: %q", resp.Error.Message)
+	wantCode(t, h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app",
+		SQL: "SELECT 1 FROM users WHERE EXTRACTVALUE(1, CONCAT(0x7e, email)) LIMIT 1"}), ipc.CodeRefused)
+
+	// A server message never reaches the client, masked or not; the console
+	// and the audit log keep a redacted copy.
+	for _, unmask := range []bool{false, true} {
+		h.sess.runErr = errors.New(`mariadb: error 1105 (HY000): XPATH syntax error: '~zed.secret@example.com'`)
+		pr := h.plan(t, "SELECT id FROM users WHERE id = 1 LIMIT 1", unmask)
+		h.io.answers = []string{"y"}
+		resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+		wantCode(t, resp, ipc.CodeInternal)
+		if strings.Contains(resp.Error.Message, "zed.secret") || strings.Contains(resp.Error.Message, "1105") {
+			t.Errorf("unmask=%v: client message: %q", unmask, resp.Error.Message)
+		}
 	}
 	if strings.Contains(h.auditLog(t), "zed.secret") || strings.Contains(h.io.output(), "zed.secret") {
 		t.Errorf("value in audit log or console:\n%s\n%s", h.auditLog(t), h.io.output())
-	}
-
-	// With unmask the human approved seeing values: the message is kept.
-	h.sess.runErr = errors.New(`mariadb: error 1105 (HY000): XPATH syntax error: '~zed.secret@example.com'`)
-	pr = h.plan(t, "SELECT 1 FROM users WHERE EXTRACTVALUE(1, CONCAT(0x7e, email)) LIMIT 1", true)
-	h.io.answers = []string{"y"}
-	resp = h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
-	if resp.Error == nil || !strings.Contains(resp.Error.Message, "zed.secret") {
-		t.Errorf("unmasked message: %+v", resp.Error)
 	}
 }
