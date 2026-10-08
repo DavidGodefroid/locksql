@@ -134,6 +134,12 @@ var forbiddenFuncs = newSet(
 	"LO_TRUNCATE", "LO_WRITE", "LOREAD", "LOWRITE", "LO_CLOSE",
 	// PostgreSQL: functions that run SQL passed as a string, out of the classifier's sight.
 	"QUERY_TO_XML", "QUERY_TO_XMLSCHEMA", "QUERY_TO_XML_AND_XMLSCHEMA", "TS_STAT",
+	// PostgreSQL: functions that read whole tables, schemas or databases
+	// named by a string, out of the classifier's (and the PII check's) sight.
+	"TABLE_TO_XML", "TABLE_TO_XMLSCHEMA", "TABLE_TO_XML_AND_XMLSCHEMA",
+	"SCHEMA_TO_XML", "SCHEMA_TO_XMLSCHEMA", "SCHEMA_TO_XML_AND_XMLSCHEMA",
+	"DATABASE_TO_XML", "DATABASE_TO_XMLSCHEMA", "DATABASE_TO_XML_AND_XMLSCHEMA",
+	"CURSOR_TO_XML", "CURSOR_TO_XMLSCHEMA",
 	// PostgreSQL: session tampering.
 	"SET_CONFIG",
 	// PostgreSQL: server and backend control.
@@ -327,7 +333,9 @@ func isForbiddenFunc(name string) bool {
 // FOR or KEY belongs to a locking clause or ON DUPLICATE KEY UPDATE, and
 // REPLACE modifies data only as REPLACE INTO. INSERT, UPDATE and MERGE are
 // non-reserved in PostgreSQL, so they can also be column names: see
-// usedAsName. DELETE is reserved everywhere and always counts.
+// usedAsName. DELETE is non-reserved in PostgreSQL too ("SELECT x AS
+// delete"): it counts as a name after AS or ".", or when usedAsName says so and it
+// is not followed by FROM, which a DELETE statement may be.
 func dataModifying(toks []Token) string {
 	for k, t := range toks {
 		if k == 0 || t.Kind != TokWord {
@@ -344,7 +352,9 @@ func dataModifying(toks []Token) string {
 				return strings.ToLower(t.Text)
 			}
 		case "DELETE":
-			return "delete"
+			if prev != "AS" && prev != "." && !(usedAsName(toks, k) && next != "FROM") {
+				return "delete"
+			}
 		case "UPDATE":
 			if prev != "FOR" && prev != "KEY" && !usedAsName(toks, k) {
 				return "update"

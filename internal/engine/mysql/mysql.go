@@ -180,7 +180,7 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 			if c != nil {
 				c.Close()
 			}
-			return nil, errClearText
+			return nil, guard.why
 		}
 	}
 	if err != nil {
@@ -197,36 +197,99 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 // on an unencrypted TCP connection.
 var errClearText = errors.New("the server asks for the password in clear text (mysql_clear_password) on an unencrypted connection; refused: use a server with TLS, an SSH tunnel or a Unix socket")
 
+// errPublicKey refuses a server that asks for the password encrypted with
+// an RSA key it sends itself, on an unencrypted TCP connection.
+var errPublicKey = errors.New("the server asks for the password encrypted with a public key it sends itself (caching_sha2_password full authentication or sha256_password) on an unencrypted connection; refused, since an attacker who removed TLS could send its own key: use a server with TLS, an SSH tunnel or a Unix socket")
+
 // clearTextMarker is the name of the plugin that sends the password as is.
 var clearTextMarker = []byte(gomysql.AUTH_CLEAR_PASSWORD)
 
 // clearTextGuard wraps an unencrypted TCP connection during the handshake.
-// go-mysql honours a server's auth switch to mysql_clear_password and then
-// writes the raw password, so an active attacker who strips TLS could read
-// it. The guard fails the read that brings the plugin name, before the
-// driver can answer.
+// An active attacker who strips TLS can ask go-mysql for the password in
+// three ways: an auth switch to mysql_clear_password (the raw password), and
+// an auth switch to sha256_password or a caching_sha2_password full
+// authentication (the password encrypted with an RSA key the "server"
+// sends, which the attacker holds). The guard reads the handshake packets
+// and fails the read that brings such a request, before the driver can
+// answer: an auth switch to either plugin, and any auth-more-data packet
+// other than the caching_sha2_password fast-auth success. It stops looking
+// at the first OK or ERR packet, which ends the authentication.
 type clearTextGuard struct {
 	net.Conn
 	armed   atomic.Bool
 	refused atomic.Bool
 	tail    []byte
+	pkt     []byte // bytes of the packets not yet complete
+	npkt    int    // packets seen
+	authed  bool   // an OK or ERR packet ended the authentication
+	why     error
 }
 
 func (g *clearTextGuard) Read(b []byte) (int, error) {
 	n, err := g.Conn.Read(b)
 	if n > 0 && g.armed.Load() {
 		buf := append(g.tail, b[:n]...)
-		if bytes.Contains(buf, clearTextMarker) {
-			g.refused.Store(true)
-			g.Conn.Close()
-			return 0, errClearText
+		if !g.authed && bytes.Contains(buf, clearTextMarker) {
+			return g.refuse(errClearText)
 		}
 		if keep := len(clearTextMarker) - 1; len(buf) > keep {
 			buf = buf[len(buf)-keep:]
 		}
 		g.tail = append(g.tail[:0], buf...)
+		if why := g.inspect(b[:n]); why != nil {
+			return g.refuse(why)
+		}
 	}
 	return n, err
+}
+
+func (g *clearTextGuard) refuse(why error) (int, error) {
+	g.why = why
+	g.refused.Store(true)
+	g.Conn.Close()
+	return 0, why
+}
+
+// inspect feeds the handshake packets read so far and returns the reason to
+// refuse, if any.
+func (g *clearTextGuard) inspect(b []byte) error {
+	if g.authed {
+		return nil
+	}
+	g.pkt = append(g.pkt, b...)
+	for len(g.pkt) >= 4 {
+		size := int(g.pkt[0]) | int(g.pkt[1])<<8 | int(g.pkt[2])<<16
+		if len(g.pkt) < 4+size {
+			return nil
+		}
+		payload := g.pkt[4 : 4+size]
+		g.npkt++
+		if g.npkt > 1 && size > 0 { // the first packet is the server greeting
+			switch payload[0] {
+			case 0x00, 0xff: // OK, ERR: authentication is over
+				g.authed = true
+				g.pkt = nil
+				return nil
+			case 0xfe: // auth switch
+				name := payload[1:]
+				if i := bytes.IndexByte(name, 0); i >= 0 {
+					name = name[:i]
+				}
+				switch string(name) {
+				case gomysql.AUTH_CLEAR_PASSWORD:
+					return errClearText
+				case gomysql.AUTH_SHA256_PASSWORD:
+					return errPublicKey
+				}
+			case 0x01: // auth more data: only the fast-auth success is safe
+				if !(size == 2 && payload[1] == gomysql.CACHE_SHA2_FAST_AUTH) {
+					return errPublicKey
+				}
+			}
+		}
+		g.pkt = g.pkt[4+size:]
+	}
+	return nil
 }
 
 // noServerTLS reports whether a handshake failed because the server does

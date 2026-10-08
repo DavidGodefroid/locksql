@@ -202,7 +202,18 @@ iteration, and it is deliberately narrow:
   PostgreSQL's `sslmode=prefer`: encrypted when the server offers TLS, plain
   otherwise, and the certificate is not verified, so an active attacker on the
   path can intercept or downgrade the connection. A plain TCP connection is
-  reported as a warning. Use an SSH tunnel (`ssh -L`) for remote servers.
+  reported as a warning. This mode gives no protection against such an
+  attacker, the password included: over the unverified TLS connection the
+  attacker can ask for it in clear (MySQL and MariaDB `mysql_clear_password`
+  or a `caching_sha2_password` full authentication), and PostgreSQL sends
+  it in clear to a server that asks for cleartext authentication, with or
+  without TLS. On a plain MySQL/MariaDB TCP connection locksql refuses the
+  authentications that would hand the password over (clear text, or RSA
+  encryption with a key the server sends: `sha256_password` and a
+  `caching_sha2_password` full authentication), so a MySQL 8 account on a
+  server without TLS can log in only while the server's authentication cache
+  holds it. Use an SSH tunnel (`ssh -L`) or a Unix socket for remote
+  servers.
 - One console per profile and project, one request at a time. No remote or
   shared consoles, no data export.
 

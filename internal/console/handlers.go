@@ -270,8 +270,11 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	if r != nil {
 		return *r
 	}
-	if !p.Unmask && !sess.OriginColumns() {
-		if err := pii.AliasViolation(st, s.rules, s.dialect); err != nil {
+	if !p.Unmask {
+		// Before the run: a write's RETURNING list or a data-modifying
+		// CTE must not move PII under another label, since refusing its
+		// result afterwards would not undo the write.
+		if err := pii.PlanCheck(st, s.rules, s.dialect, sess.OriginColumns()); err != nil {
 			return s.refuse(req.ID, db, st.SQL, class, "", err.Error())
 		}
 	}

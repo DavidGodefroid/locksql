@@ -65,6 +65,9 @@ func MaskResult(res *engine.Result, r Rules, ds []Detector, origin bool) {
 // AliasViolation before its rows may be shown: the session reports no
 // origins, or some result column came back without one.
 func NeedsAliasCheck(res engine.Result, origin bool) bool {
+	if len(res.Columns) == 0 {
+		return false // no rows to show
+	}
 	if !origin {
 		return true
 	}
@@ -157,16 +160,93 @@ const valueChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 // matched column, since it may be a view over a rule table.
 // COUNT(...) is allowed. The
 // error is a *sqlclass.Refusal that explains how to write the query.
+//
+// A statement that is not a plain READ select is checked the same way when
+// it may return rows: a RETURNING list counts as a select list, and a
+// statement led by SELECT, WITH, VALUES or TABLE that the classifier made
+// WRITE (a data-modifying CTE) is checked whole. Other statements (SHOW,
+// DESCRIBE, PRAGMA, a write without RETURNING, DDL) pass.
 func AliasViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
-	if st.Class != sqlclass.Read || st.Kind != "select" || len(r.Mask) == 0 {
+	if len(r.Mask) == 0 || st.Class == sqlclass.Read && st.Kind != "select" {
 		return nil
 	}
 	toks, err := sqlclass.Lex(d, st.SQL)
 	if err != nil {
 		return err
 	}
+	if st.Class != sqlclass.Read && !mayReturnRows(toks) {
+		return nil
+	}
 	a := newAliasCheck(toks, r, d)
 	return a.run()
+}
+
+// mayReturnRows reports whether a statement other than a plain READ select
+// may return rows: it has a RETURNING list, or it is led by a read keyword
+// (a WITH whose CTE modifies data, then selects).
+func mayReturnRows(toks []sqlclass.Token) bool {
+	if len(toks) == 0 {
+		return false
+	}
+	if t := toks[0]; t.Kind == sqlclass.TokWord && (t.Text == "SELECT" || t.Text == "WITH" || t.Text == "VALUES" || t.Text == "TABLE") {
+		return true
+	}
+	for _, t := range toks {
+		if t.Kind == sqlclass.TokWord && t.Text == "RETURNING" {
+			return true
+		}
+	}
+	return false
+}
+
+// PlanCheck is the PII check a statement must pass before it runs, unless
+// it is an unmask run: StatsViolation, then AliasViolation for a statement
+// that is not a plain READ select (it runs before the write, whose result
+// may carry no origin) or when the session reports no origins. A plain
+// READ select on an origin-reporting session is checked after it runs,
+// only when some result column has no origin (see NeedsAliasCheck).
+func PlanCheck(st sqlclass.Statement, r Rules, d sqlclass.Dialect, origin bool) error {
+	if err := StatsViolation(st, r, d); err != nil {
+		return err
+	}
+	if !origin || st.Class != sqlclass.Read || st.Kind != "select" {
+		return AliasViolation(st, r, d)
+	}
+	return nil
+}
+
+// statsRelations hold planner statistics: sample values of table columns
+// (most common values, histogram bounds, min/max) under labels and origins
+// that no rule matches.
+var statsRelations = map[string]bool{
+	// PostgreSQL.
+	"PG_STATS": true, "PG_STATISTIC": true, "PG_STATS_EXT": true, "PG_STATS_EXT_EXPRS": true,
+	"PG_STATISTIC_EXT_DATA": true,
+	// MariaDB (ANALYZE ... PERSISTENT) and MySQL 8 histograms.
+	"COLUMN_STATS": true, "COLUMN_STATISTICS": true,
+	// SQLite (ANALYZE with SQLITE_ENABLE_STAT3/4).
+	"SQLITE_STAT3": true, "SQLITE_STAT4": true,
+}
+
+// StatsViolation refuses, while mask rules exist, a statement that names a
+// planner statistics relation (pg_stats, pg_statistic, mysql.column_stats,
+// information_schema.COLUMN_STATISTICS, sqlite_stat4, ...): they hold real
+// values of the columns, rule columns included, which no rule can match.
+func StatsViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
+	if len(r.Mask) == 0 {
+		return nil
+	}
+	toks, err := sqlclass.Lex(d, st.SQL)
+	if err != nil {
+		return err
+	}
+	a := &aliasCheck{toks: toks, d: d}
+	for i := range toks {
+		if n := a.name(i); statsRelations[n] {
+			return &sqlclass.Refusal{Reason: fmt.Sprintf("%s holds sample values of table columns, PII columns included, that could not be masked; it cannot be read while PII mask rules exist", strings.ToLower(n))}
+		}
+	}
+	return nil
 }
 
 type aliasCheck struct {
@@ -318,6 +398,13 @@ func (a *aliasCheck) run() error {
 				return refusal("a later UNION/INTERSECT/EXCEPT arm is TABLE %s, which puts all its columns, PII included, under the first arm's labels", strings.ToLower(a.name(i+1)))
 			}
 		}
+		if a.isWord(i, "RETURNING") {
+			// A RETURNING list is a select list of its own.
+			if _, err := a.selectList(i, false, nil); err != nil {
+				return err
+			}
+			continue
+		}
 		if !a.isWord(i, "SELECT") {
 			continue
 		}
@@ -403,6 +490,9 @@ func (a *aliasCheck) selectList(i int, later bool, head []selectItem) ([]selectI
 		k++
 	}
 	if a.isWord(k, "ON") && a.isPunct(k+1, "(") && a.match[k+1] > 0 { // PostgreSQL DISTINCT ON (...)
+		k = a.match[k+1] + 1
+	}
+	if a.isWord(i, "RETURNING") && a.isWord(k, "WITH") && a.isPunct(k+1, "(") && a.match[k+1] > 0 { // PostgreSQL RETURNING WITH (OLD AS o)
 		k = a.match[k+1] + 1
 	}
 	var items []selectItem
@@ -491,12 +581,68 @@ func (a *aliasCheck) item(sel, s, e int, prev []selectItem, later bool, head []s
 			return selectItem{}, refusal("PII column %s is used inside an expression", strings.ToLower(a.name(j)))
 		}
 	}
+	if err := a.nestedRows(s, e, "an expression"); err != nil {
+		return selectItem{}, err
+	}
 	return selectItem{label: alias}, nil
 }
 
 func hasStar(items []selectItem) bool {
 	for _, it := range items {
 		if it.star {
+			return true
+		}
+	}
+	return false
+}
+
+// nestedRows refuses, in [s, e), a subquery that returns whole rows of a
+// source that may hold a rule-matched column: "TABLE x", or a "*" / "x.*"
+// select-list star over such a source ("(SELECT * FROM c LIMIT 1)",
+// "ARRAY(TABLE c)"). The PII column is never named, and its values come
+// out under the label of the enclosing expression, with no origin. A star
+// inside EXISTS(...) or COUNT(...) only yields a boolean or a count.
+func (a *aliasCheck) nestedRows(s, e int, where string) error {
+	for k := s; k < e; k++ {
+		if a.insideCount(k) || a.insideExists(k) {
+			continue
+		}
+		if a.isWord(k, "TABLE") && a.name(k+1) != "" {
+			return refusal("TABLE %s is used in %s, which puts its columns, PII included, under another label", strings.ToLower(a.name(k+1)), where)
+		}
+		if !a.isStar(k) {
+			continue
+		}
+		bearing := false
+		if a.isPunct(k-1, ".") {
+			bearing = a.rows[a.name(k-2)]
+		} else if sel := a.starSelect(k); sel >= 0 {
+			bearing = a.armBearing(sel)
+		} else {
+			bearing = true
+		}
+		if bearing {
+			return refusal("a subquery selects * in %s, which puts its columns, PII included, under another label", where)
+		}
+	}
+	return nil
+}
+
+// starSelect returns the SELECT whose list holds the star at k, or -1.
+func (a *aliasCheck) starSelect(k int) int {
+	depth := a.toks[k].Depth
+	for j := k - 1; j >= 0 && a.toks[j].Depth >= depth; j-- {
+		if a.toks[j].Depth == depth && a.isWord(j, "SELECT") {
+			return j
+		}
+	}
+	return -1
+}
+
+// insideExists reports whether token j sits inside an EXISTS(...) call.
+func (a *aliasCheck) insideExists(j int) bool {
+	for o := a.encl[j]; o >= 0; o = a.encl[o] {
+		if a.isWord(o-1, "EXISTS") {
 			return true
 		}
 	}
@@ -582,7 +728,7 @@ func (a *aliasCheck) isStar(k int) bool {
 		return false
 	}
 	p := k - 1
-	return a.isWord(p, "SELECT") || a.isPunct(p, ",") || a.isPunct(p, ".") ||
+	return a.isWord(p, "SELECT", "RETURNING") || a.isPunct(p, ",") || a.isPunct(p, ".") ||
 		p >= 0 && a.toks[p].Kind == sqlclass.TokWord && selectModifiers[a.toks[p].Text]
 }
 
@@ -714,6 +860,18 @@ func (a *aliasCheck) rowSources() map[string]bool {
 			g := &group{}
 			groups = append(groups, g)
 			cur[t.Depth] = g
+		case t.Kind == sqlclass.TokWord && (t.Text == "UPDATE" || t.Text == "INTO" || t.Text == "USING"):
+			// The target of UPDATE, INSERT INTO or MERGE INTO, and a
+			// DELETE or MERGE USING list: a RETURNING list may use their
+			// whole rows. (An ON DUPLICATE KEY UPDATE list or a JOIN
+			// USING list adds names too: a false match only refuses more.)
+			clause[t.Depth] = "FROM"
+			g := &group{}
+			groups = append(groups, g)
+			cur[t.Depth] = g
+		case t.Kind == sqlclass.TokWord && (t.Text == "SET" || t.Text == "RETURNING" || t.Text == "DEFAULT"):
+			clause[t.Depth] = t.Text
+			cur[t.Depth] = nil
 		case t.Kind == sqlclass.TokWord && clauseWords[t.Text]:
 			clause[t.Depth] = t.Text
 			cur[t.Depth] = nil
@@ -737,6 +895,21 @@ func (a *aliasCheck) rowSources() map[string]bool {
 		}
 	}
 	rows := map[string]bool{}
+	for j := range a.toks {
+		if !a.isWord(j, "RETURNING") {
+			continue
+		}
+		// PostgreSQL 18: RETURNING old / new, renamed by RETURNING WITH
+		// (OLD AS o, NEW AS n).
+		rows["OLD"], rows["NEW"] = true, true
+		if a.isWord(j+1, "WITH") && a.isPunct(j+2, "(") && a.match[j+2] > j+2 {
+			for k := j + 3; k < a.match[j+2]; k++ {
+				if n := a.name(k); n != "" {
+					rows[n] = true
+				}
+			}
+		}
+	}
 	for _, g := range groups {
 		// A named relation bears even when no rule names its table: it may
 		// be a view over one, and a view has no origin.
@@ -829,6 +1002,9 @@ func (a *aliasCheck) valuesAndFromCalls() error {
 // PII-bearing source used as a value (a PostgreSQL whole-row reference),
 // except where it names a table of a nested FROM clause.
 func (a *aliasCheck) spanLeak(s, e int, clause []string, where string) error {
+	if err := a.nestedRows(s, e, where); err != nil {
+		return err
+	}
 	for k := s; k < e; k++ {
 		if a.matched(k) && !a.insideCount(k) {
 			return refusal("PII column %s is used in %s", strings.ToLower(a.name(k)), where)

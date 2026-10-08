@@ -261,6 +261,11 @@ func testPostgresServer(t *testing.T, version string, srv Server) {
 		assertNoLeak(t, s, sqlclass.Postgres, pii.Rules{Mask: []string{"public.big.email"}}, leakQueries(sqlclass.Postgres))
 	})
 
+	t.Run("no leak through rows returned by a write", func(t *testing.T) {
+		s := connectPG(t, srv, "rw", config.TierWrite, 5*time.Second)
+		assertNoLeak(t, s, sqlclass.Postgres, pii.Rules{Mask: []string{"public.big.email"}}, writeLeakQueries(sqlclass.Postgres))
+	})
+
 	t.Run("origins follow a rename by another session", func(t *testing.T) {
 		admin := connectPG(t, srv, "postgres", config.TierAdmin, 5*time.Second)
 		ddl := func(q string) {

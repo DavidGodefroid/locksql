@@ -138,9 +138,10 @@ func connConfig(p config.Profile, secret []byte) (*pgx.ConnConfig, error) {
 		kv("dbname", db),
 		kv("passfile", ""),
 		// prefer, as libpq's default: TLS when the server offers it. An
-		// active attacker can strip it (SCRAM still protects the password,
-		// not the queries and results); a profile setting to require TLS
-		// is a follow-up, the spec has none.
+		// active attacker can strip it, read the queries and results, and
+		// ask for the password in clear (AuthenticationCleartextPassword,
+		// which pgx honours); a profile setting to require verified TLS is
+		// a follow-up, the spec has none.
 		"sslmode=prefer",
 	}
 	cfg, err := pgx.ParseConfig(strings.Join(settings, " "))
