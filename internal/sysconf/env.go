@@ -13,7 +13,6 @@ const (
 	DisplayX11     = "x11"
 	DisplayTTY     = "tty"    // no graphical session (a text console or SSH)
 	DisplayQuartz  = "quartz" // macOS
-	DisplayWindows = "windows"
 	DisplayUnknown = "unknown"
 )
 
@@ -32,11 +31,8 @@ var getenv = os.Getenv
 // read the keyboard and the screen of every other client, and send them
 // synthetic input; Wayland isolates clients from each other.
 func DetectDisplay() Display {
-	switch runtime.GOOS {
-	case "darwin":
+	if runtime.GOOS == "darwin" {
 		return Display{Kind: DisplayQuartz, Detail: "macOS"}
-	case "windows":
-		return Display{Kind: DisplayWindows, Detail: "Windows"}
 	}
 	st := strings.ToLower(getenv("XDG_SESSION_TYPE"))
 	wl, x := getenv("WAYLAND_DISPLAY"), getenv("DISPLAY")

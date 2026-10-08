@@ -9,8 +9,7 @@ import (
 )
 
 // Cred is what the kernel says about the process at the other end of a
-// socket. PID is -1 when the platform does not report it; on Windows UID is
-// -1 too (no peer credentials).
+// socket. PID is -1 when the platform does not report it.
 type Cred struct {
 	UID, GID, PID int
 }
@@ -19,8 +18,7 @@ type Cred struct {
 var ErrAlreadyRunning = errors.New("ipc: a console is already running for this profile")
 
 // Listen opens the console socket at path. The parent directory is made
-// private (0700 and owned by the user on Unix; the user's ACL under
-// %LOCALAPPDATA% on Windows) and the socket is 0600 on Unix. A socket left
+// private (0700 and owned by the user) and the socket is 0600. A socket left
 // by a dead console is replaced; one with a live console gives
 // ErrAlreadyRunning; any other kind of file at path is left alone and
 // refused. Closing the listener removes the socket.

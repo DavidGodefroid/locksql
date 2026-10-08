@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -49,9 +48,6 @@ func TestOpenPathAndModes(t *testing.T) {
 	if err := l.Write(Record{Event: EventLogin, Profile: "uat"}); err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GOOS == "windows" {
-		return
-	}
 	fi, err := os.Stat(want)
 	if err != nil {
 		t.Fatal(err)
@@ -69,9 +65,6 @@ func TestOpenPathAndModes(t *testing.T) {
 }
 
 func TestOpenTightensLooseFile(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix permissions")
-	}
 	dir := t.TempDir()
 	p := filepath.Join(dir, "locksql", "audit.log")
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

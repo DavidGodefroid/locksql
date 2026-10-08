@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -124,11 +123,7 @@ production = true
 // at a short temp dir through LOCKSQL_RUNTIME_DIR.
 func project(t *testing.T, cfg string) string {
 	t.Helper()
-	base := ""
-	if runtime.GOOS != "windows" {
-		base = "/tmp"
-	}
-	rd, err := os.MkdirTemp(base, "lscmd")
+	rd, err := os.MkdirTemp("/tmp", "lscmd")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -14,8 +13,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/config"
 )
 
-// sandbox returns a fresh project root and points HOME and the XDG and
-// Windows user directories at an empty temporary home, which the test
+// sandbox returns a fresh project root and points HOME and the XDG user directories at an empty temporary home, which the test
 // checks is still empty at the end.
 func sandbox(t *testing.T) string {
 	t.Helper()
@@ -409,9 +407,6 @@ func TestUnknownAgent(t *testing.T) {
 }
 
 func TestSymlinkOutsideProjectRefused(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlinks need privileges on Windows")
-	}
 	root := sandbox(t)
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(root, ".claude")); err != nil {
@@ -426,9 +421,6 @@ func TestSymlinkOutsideProjectRefused(t *testing.T) {
 }
 
 func TestSymlinkInsideProjectFollowed(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlinks need privileges on Windows")
-	}
 	root := sandbox(t)
 	writeFile(t, root, "CLAUDE.md", "# Notes\n")
 	if err := os.Symlink("CLAUDE.md", filepath.Join(root, "AGENTS.md")); err != nil {

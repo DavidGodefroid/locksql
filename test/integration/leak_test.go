@@ -26,7 +26,9 @@ func (y yesIO) Println(string) {}
 func (y yesIO) Ask(context.Context, string, time.Duration) (string, bool) {
 	return "y", true
 }
-func (y yesIO) AskSecret(context.Context, string) ([]byte, error) { return nil, errors.New("no secret") }
+func (y yesIO) AskSecret(context.Context, string) ([]byte, error) {
+	return nil, errors.New("no secret")
+}
 
 // assertNoLeak runs each query through a console server, the way a client
 // would (plan, approval, run, mask), and fails when an e-mail value of big

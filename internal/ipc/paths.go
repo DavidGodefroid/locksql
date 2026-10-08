@@ -1,5 +1,5 @@
 // Package ipc is the console's local transport: a Unix domain socket in a
-// directory private to the user (on Linux, macOS and Windows 10 1803+),
+// directory private to the user (on Linux and macOS),
 // newline-delimited JSON-RPC 2.0 framing capped at 1 MiB, and a peer check.
 package ipc
 
@@ -16,7 +16,7 @@ import (
 )
 
 // maxSocketPath is the longest socket path the OS accepts: sizeof(sun_path)
-// minus the terminating NUL (104 on macOS, 108 on Linux and Windows).
+// minus the terminating NUL (104 on macOS, 108 on Linux).
 var maxSocketPath = func() int {
 	if runtime.GOOS == "darwin" {
 		return 103
@@ -35,11 +35,9 @@ func checkName(what, s string) error {
 
 // SocketPath returns the console socket of a project and profile:
 // <runtime dir>/locksql/<project-hash>-<profile>.sock, where the runtime
-// dir is $LOCKSQL_RUNTIME_DIR when set, else $XDG_RUNTIME_DIR (Linux),
-// $TMPDIR (macOS) or, on Windows,
-// %LOCALAPPDATA% with the path %LOCALAPPDATA%\locksql\run\... When
-// $XDG_RUNTIME_DIR or $TMPDIR is unusable the directory is
-// <temp>/locksql-<uid>. A name that would exceed the OS socket path limit
+// dir is $LOCKSQL_RUNTIME_DIR when set, else $XDG_RUNTIME_DIR (Linux) or
+// $TMPDIR (macOS). When $XDG_RUNTIME_DIR or $TMPDIR is unusable the
+// directory is <temp>/locksql-<uid>. A name that would exceed the OS socket path limit
 // is replaced by <project-hash>-~<sha256(profile)[:16]>.sock, which is still
 // stable, so the client and the console agree on it.
 func SocketPath(projectHash, profile string) (string, error) {
@@ -95,16 +93,6 @@ func runtimeDir() (string, error) {
 		return filepath.Join(d, "locksql"), nil
 	}
 	switch runtime.GOOS {
-	case "windows":
-		base := os.Getenv("LOCALAPPDATA")
-		if base == "" || !filepath.IsAbs(base) {
-			d, err := os.UserCacheDir() // %LocalAppData% on Windows
-			if err != nil {
-				return "", fmt.Errorf("ipc: no local app data dir: %w", err)
-			}
-			base = d
-		}
-		return filepath.Join(base, "locksql", "run"), nil
 	case "darwin":
 		if d := os.Getenv("TMPDIR"); d != "" && filepath.IsAbs(d) && d != "/tmp" && d != "/tmp/" {
 			return filepath.Join(d, "locksql"), nil

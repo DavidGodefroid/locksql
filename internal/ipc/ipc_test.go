@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -17,11 +16,7 @@ import (
 // are limited to about 104 bytes and t.TempDir() can be long on macOS.
 func shortDir(t *testing.T) string {
 	t.Helper()
-	base := ""
-	if runtime.GOOS != "windows" {
-		base = "/tmp"
-	}
-	d, err := os.MkdirTemp(base, "lsipc")
+	d, err := os.MkdirTemp("/tmp", "lsipc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,9 +84,6 @@ func TestListenDialRoundTrip(t *testing.T) {
 }
 
 func TestListenModes(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix permissions")
-	}
 	path := sockPath(t)
 	// A pre-existing, too open directory is tightened.
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -119,9 +111,6 @@ func TestListenModes(t *testing.T) {
 }
 
 func TestListenRefusesSymlinkDir(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix only")
-	}
 	d := shortDir(t)
 	target := filepath.Join(d, "elsewhere")
 	if err := os.Mkdir(target, 0o700); err != nil {
@@ -266,9 +255,6 @@ func TestPeerAllowedRejectsNonUnix(t *testing.T) {
 }
 
 func TestListenShared(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no shared sockets on Windows")
-	}
 	base, err := os.MkdirTemp("", "lsh")
 	if err != nil {
 		t.Fatal(err)

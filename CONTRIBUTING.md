@@ -75,10 +75,10 @@ Never point a test at a real or remote database.
 
 Releases are built by GoReleaser (`.goreleaser.yaml`) when a `v*` tag is
 pushed: `.github/workflows/release.yml` runs the unit tests, then builds
-linux, darwin and windows on amd64 and arm64, signs `checksums.txt` with
-cosign (keyless), attaches an SBOM per archive and updates the Homebrew tap
-and the Scoop bucket. To check the configuration locally without signing or
-publishing (needs `goreleaser`, and `syft` for the SBOMs):
+linux and darwin on amd64 and arm64, signs `checksums.txt` with cosign
+(keyless), attaches an SBOM per archive and updates the Homebrew tap. To
+check the configuration locally without signing or publishing (needs
+`goreleaser`, and `syft` for the SBOMs):
 
 ```sh
 goreleaser check

@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -21,11 +20,7 @@ import (
 // runtimeDir points the socket paths at a short private temp dir.
 func runtimeDir(t *testing.T) string {
 	t.Helper()
-	base := ""
-	if runtime.GOOS != "windows" {
-		base = "/tmp"
-	}
-	d, err := os.MkdirTemp(base, "lscl")
+	d, err := os.MkdirTemp("/tmp", "lscl")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,9 +115,6 @@ func TestDialWithoutConsoleIsErrNoConsole(t *testing.T) {
 }
 
 func TestDialStaleSocketIsErrNoConsole(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix socket files are not left behind the same way on windows")
-	}
 	runtimeDir(t)
 	cwd := t.TempDir()
 	path, err := ipc.SocketPath(config.ProjectKey(cwd), "uat")

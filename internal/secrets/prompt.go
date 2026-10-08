@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"runtime"
 
 	"golang.org/x/term"
 )
@@ -16,28 +15,15 @@ var ErrNoTerminal = errors.New("secrets: no terminal to prompt for the password"
 // ErrInterrupted means the human pressed Ctrl-C at the prompt.
 var ErrInterrupted = errors.New("secrets: password prompt interrupted")
 
-// openTerminal opens the controlling terminal: /dev/tty on Unix, the
-// console input and output buffers on Windows. Using the terminal rather
+// openTerminal opens the controlling terminal, /dev/tty. Using the terminal rather
 // than stdin/stdout keeps the prompt on the human's screen even when the
 // standard streams are redirected.
 func openTerminal() (in, out *os.File, err error) {
-	if runtime.GOOS == "windows" {
-		in, err = os.OpenFile("CONIN$", os.O_RDWR, 0)
-		if err != nil {
-			return nil, nil, ErrNoTerminal
-		}
-		out, err = os.OpenFile("CONOUT$", os.O_WRONLY, 0)
-		if err != nil {
-			in.Close()
-			return nil, nil, ErrNoTerminal
-		}
-	} else {
-		in, err = os.OpenFile("/dev/tty", os.O_RDWR, 0)
-		if err != nil {
-			return nil, nil, ErrNoTerminal
-		}
-		out = in
+	in, err = os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return nil, nil, ErrNoTerminal
 	}
+	out = in
 	if !term.IsTerminal(int(in.Fd())) {
 		closeTerminal(in, out)
 		return nil, nil, ErrNoTerminal

@@ -137,8 +137,6 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 	switch d.goos {
 	case "linux", "darwin":
 		add(checkOK, "operating system", d.goos, "")
-	case "windows":
-		add(checkWarn, "operating system", "windows: no peer credentials on Unix sockets and no separated mode", "use Linux or macOS for the strongest setup")
 	default:
 		add(checkFail, "operating system", d.goos+" is not supported", "use Linux or macOS")
 	}

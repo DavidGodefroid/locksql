@@ -14,7 +14,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"runtime"
 	"sync"
 	"time"
 
@@ -368,13 +367,12 @@ func (s *Server) accept(ctx context.Context, ln net.Listener, jobs chan<- job, w
 }
 
 // peerAllowed applies the peer check: the configured one, or the console's
-// own account (on Windows, which has no peer credentials, the socket
-// directory's ACL is the check).
+// own account.
 func (s *Server) peerAllowed(c ipc.Cred) bool {
 	if s.cfg.PeerAllowed != nil {
 		return s.cfg.PeerAllowed(c)
 	}
-	return c.UID == os.Getuid() || c.UID == -1 && runtime.GOOS == "windows"
+	return c.UID == os.Getuid()
 }
 
 // maxQueued bounds the requests a client may pipeline behind the one being

@@ -134,7 +134,7 @@ func checkConsole(conn net.Conn) error {
 	if err != nil {
 		return fmt.Errorf("client: %w", err)
 	}
-	if cred.UID != want && cred.UID != -1 {
+	if cred.UID != want {
 		return fmt.Errorf("client: the socket is served by uid %d, not by the console account %q", cred.UID, sys.ServiceUser)
 	}
 	return nil
@@ -144,7 +144,7 @@ func checkConsole(conn net.Conn) error {
 // socket file, or a socket left by a console that died.
 func noListener(err error) bool {
 	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) ||
-		errors.Is(err, syscall.ENOTDIR) || refusedOS(err)
+		errors.Is(err, syscall.ENOTDIR)
 }
 
 // Profile is the profile this client talks to.

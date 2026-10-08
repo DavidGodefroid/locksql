@@ -14,17 +14,12 @@ func TestSocketPath(t *testing.T) {
 		t.Setenv("XDG_RUNTIME_DIR", base)
 	case "darwin":
 		t.Setenv("TMPDIR", base)
-	case "windows":
-		t.Setenv("LOCALAPPDATA", base)
 	}
 	p, err := SocketPath("abcd1234", "uat")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := filepath.Join(base, "locksql", "abcd1234-uat.sock")
-	if runtime.GOOS == "windows" {
-		want = filepath.Join(base, "locksql", "run", "abcd1234-uat.sock")
-	}
 	if p != want {
 		t.Fatalf("SocketPath = %q, want %q", p, want)
 	}

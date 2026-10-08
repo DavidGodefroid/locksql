@@ -187,7 +187,7 @@ func TestApprovedRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 {
+	if st.Mode().Perm() != 0o600 {
 		t.Errorf("mode = %v, want 0600", st.Mode().Perm())
 	}
 	got, err := LoadApproved(state, key)

@@ -31,8 +31,8 @@ func TestLoadAbsent(t *testing.T) {
 }
 
 func TestLoadRefusesFileNotOwnedByRoot(t *testing.T) {
-	if runtime.GOOS == "windows" || os.Getuid() == 0 {
-		t.Skip("needs a non-root Unix account")
+	if os.Getuid() == 0 {
+		t.Skip("needs a non-root account")
 	}
 	withFile(t, "")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "owned by root") {

@@ -1,5 +1,3 @@
-//go:build unix && !linux
-
 package console
 
 import "golang.org/x/sys/unix"

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"time"
 )
@@ -80,10 +79,8 @@ func Open(stateDir string) (*Log, error) {
 	if err := f.Close(); err != nil {
 		return nil, fmt.Errorf("audit: %w", err)
 	}
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(dir, 0o700); err != nil {
-			return nil, fmt.Errorf("audit: %w", err)
-		}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("audit: %w", err)
 	}
 	return l, nil
 }
@@ -93,21 +90,19 @@ func (l *Log) open() (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("audit: %w", err)
 	}
-	if runtime.GOOS != "windows" {
-		fi, err := f.Stat()
-		if err != nil {
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("audit: %w", err)
+	}
+	if !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("audit: %s is not a regular file", l.path)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		if err := f.Chmod(0o600); err != nil {
 			f.Close()
 			return nil, fmt.Errorf("audit: %w", err)
-		}
-		if !fi.Mode().IsRegular() {
-			f.Close()
-			return nil, fmt.Errorf("audit: %s is not a regular file", l.path)
-		}
-		if fi.Mode().Perm() != 0o600 {
-			if err := f.Chmod(0o600); err != nil {
-				f.Close()
-				return nil, fmt.Errorf("audit: %w", err)
-			}
 		}
 	}
 	return f, nil

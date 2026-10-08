@@ -280,7 +280,7 @@ func SaveApproved(stateDir, key string, p Policy) error {
 			_ = os.Remove(tmpName)
 		}
 	}()
-	if err := tmp.Chmod(0o600); err != nil && runtime.GOOS != "windows" {
+	if err := tmp.Chmod(0o600); err != nil {
 		return fmt.Errorf("config: approved policy: %w", err)
 	}
 	if _, err := tmp.Write(append(b, '\n')); err != nil {
@@ -301,15 +301,10 @@ func SaveApproved(stateDir, key string, p Policy) error {
 
 // StateDir returns the user state directory (without the locksql suffix):
 // $XDG_STATE_HOME or ~/.local/state on Linux and other Unix systems,
-// os.UserConfigDir() on macOS, and %LOCALAPPDATA% on Windows.
+// and os.UserConfigDir() on macOS.
 func StateDir() (string, error) {
 	switch runtime.GOOS {
 	case "darwin":
-		return os.UserConfigDir()
-	case "windows":
-		if d := os.Getenv("LOCALAPPDATA"); d != "" {
-			return d, nil
-		}
 		return os.UserConfigDir()
 	default:
 		if d := os.Getenv("XDG_STATE_HOME"); d != "" && filepath.IsAbs(d) {
