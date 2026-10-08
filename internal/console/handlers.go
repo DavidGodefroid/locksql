@@ -442,7 +442,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	if !pl.unmask {
 		origin := sess.OriginColumns()
 		if pii.NeedsAliasCheck(res, origin) {
-			if err := pii.AliasViolation(pl.st, s.rules, s.dialect); err != nil {
+			if err := pii.ResultAliasViolation(pl.st, s.rules, s.dialect, res.Columns); err != nil {
 				return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, err.Error()+" (the result was dropped)")
 			}
 		}

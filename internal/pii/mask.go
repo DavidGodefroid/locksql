@@ -62,8 +62,9 @@ func MaskResult(res *engine.Result, r Rules, ds []Detector, origin bool) {
 }
 
 // NeedsAliasCheck reports whether the statement behind res must pass
-// AliasViolation before its rows may be shown: the session reports no
-// origins, or some result column came back without one.
+// AliasViolation (ResultAliasViolation, given res.Columns) before its rows
+// may be shown: the session reports no origins, or some result column came
+// back without one.
 func NeedsAliasCheck(res engine.Result, origin bool) bool {
 	if len(res.Columns) == 0 {
 		return false // no rows to show
@@ -166,7 +167,30 @@ const valueChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 // statement led by SELECT, WITH, VALUES or TABLE that the classifier made
 // WRITE (a data-modifying CTE) is checked whole. Other statements (SHOW,
 // DESCRIBE, PRAGMA, a write without RETURNING, DDL) pass.
+//
+// On PostgreSQL, "rel.f" may be the call f(rel) on the whole row of rel
+// when rel has no column f (attribute notation: b.row_to_json, t.name,
+// big.record_out). Since a statement alone cannot tell such a call from a
+// column, a qualified reference "rel.x" to a FROM-clause relation is refused
+// wherever its value may reach the result (select lists, RETURNING, VALUES,
+// FROM-clause function arguments), see attrCall. ResultAliasViolation
+// accepts a plain qualified item of the outer select list whose result
+// column carries an origin, which proves it is a base-table column.
+//
+// A write that returns rows (RETURNING, or a data-modifying CTE) must not
+// write a rule-matched column's values into a column it returns: a
+// rule-matched column, a whole row or a star over a source that may hold
+// one is refused anywhere its value may be written (SET values, the select
+// list or VALUES of an INSERT source), see writtenValues.
 func AliasViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
+	return ResultAliasViolation(st, r, d, nil)
+}
+
+// ResultAliasViolation is AliasViolation once the statement has run, with
+// the result columns it returned: a plain qualified PostgreSQL item of the
+// outer select list ("SELECT b.id, ...") is accepted when its result column
+// has an origin. With cols nil, every such item is refused.
+func ResultAliasViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect, cols []engine.ResultColumn) error {
 	if len(r.Mask) == 0 || st.Class == sqlclass.Read && st.Kind != "select" {
 		return nil
 	}
@@ -178,6 +202,8 @@ func AliasViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
 		return nil
 	}
 	a := newAliasCheck(toks, r, d)
+	a.cols = cols
+	a.write = st.Class != sqlclass.Read
 	return a.run()
 }
 
@@ -256,6 +282,14 @@ type aliasCheck struct {
 	match []int           // index of the matching parenthesis, -1 for other tokens
 	encl  []int           // index of the innermost enclosing '(' of each token, -1 at top level
 	rows  map[string]bool // FROM-clause names whose whole row may carry a PII column
+	// clause is the clause word in force at each token (see clauses).
+	clause []string
+	// cols are the result columns of the statement once run, nil before.
+	cols []engine.ResultColumn
+	// output is the SELECT or RETURNING whose list labels the result, -1
+	// when unknown.
+	output int
+	write  bool // the statement is not a plain read
 }
 
 func newAliasCheck(toks []sqlclass.Token, r Rules, d sqlclass.Dialect) *aliasCheck {
@@ -380,6 +414,13 @@ type selectItem struct {
 
 func (a *aliasCheck) run() error {
 	a.rows = a.rowSources()
+	a.clause = a.clauses()
+	a.output = a.outputList()
+	if a.write {
+		if err := a.writtenValues(); err != nil {
+			return err
+		}
+	}
 	if err := a.columnLists(); err != nil {
 		return err
 	}
@@ -552,6 +593,9 @@ func (a *aliasCheck) item(sel, s, e int, prev []selectItem, later bool, head []s
 		exprEnd, alias = e-1, a.aliasName(e-1)
 	}
 	if err := a.wholeRow(s, exprEnd); err != nil {
+		return selectItem{}, err
+	}
+	if err := a.attrCalls(s, e, a.provenColumn(sel, s, exprEnd, prev), "a select list"); err != nil {
 		return selectItem{}, err
 	}
 	if a.plainRef(s, exprEnd) {
@@ -1009,6 +1053,9 @@ func (a *aliasCheck) spanLeak(s, e int, clause []string, where string) error {
 		if a.matched(k) && !a.insideCount(k) {
 			return refusal("PII column %s is used in %s", strings.ToLower(a.name(k)), where)
 		}
+		if err := a.attrCall(k, where); err != nil {
+			return err
+		}
 		n := a.name(k)
 		if a.d != sqlclass.Postgres || n == "" || !a.rows[n] || a.insideCount(k) ||
 			clause[k] == "FROM" || clause[k] == "JOIN" ||
@@ -1020,7 +1067,8 @@ func (a *aliasCheck) spanLeak(s, e int, clause []string, where string) error {
 	return nil
 }
 
-// clauses returns, for each token, the clause word (see clauseWords) in
+// clauses returns, for each token, the clause word (see clauseWords, plus
+// RETURNING and SET) in
 // force at its parenthesis level; a parenthesis carries the clause of the
 // level it sits in, and a new level starts with none.
 func (a *aliasCheck) clauses() []string {
@@ -1034,10 +1082,208 @@ func (a *aliasCheck) clauses() []string {
 			continue
 		case a.isPunct(j, ")"):
 			delete(cur, t.Depth+1)
-		case t.Kind == sqlclass.TokWord && clauseWords[t.Text]:
+		case t.Kind == sqlclass.TokWord && (clauseWords[t.Text] || t.Text == "RETURNING" || t.Text == "SET"):
 			cur[t.Depth] = t.Text
 		}
 		out[j] = cur[t.Depth]
 	}
 	return out
+}
+
+// outputList returns the index of the list that labels the result: a
+// top-level RETURNING, else the first top-level SELECT; -1 when there is
+// neither (a parenthesised query, VALUES, TABLE).
+func (a *aliasCheck) outputList() int {
+	sel := -1
+	for i, t := range a.toks {
+		if t.Depth != 0 {
+			continue
+		}
+		if a.isWord(i, "RETURNING") {
+			return i
+		}
+		if sel < 0 && a.isWord(i, "SELECT") {
+			sel = i
+		}
+	}
+	return sel
+}
+
+// provenColumn reports whether the item [s, e) of the list opened at sel,
+// after the items prev, is a plain qualified reference whose result column
+// came back with an origin: then it is a base-table column, not a function
+// called on a whole row.
+func (a *aliasCheck) provenColumn(sel, s, e int, prev []selectItem) bool {
+	return sel == a.output && a.cols != nil && e-s >= 3 && a.plainRef(s, e) &&
+		!hasStar(prev) && len(prev) < len(a.cols) && a.cols[len(prev)].HasOrigin()
+}
+
+// valueClause reports whether token k sits where a value may reach the
+// result: a select or RETURNING list, a VALUES list, a SET list, or a new
+// parenthesis level (an expression, function arguments).
+func (a *aliasCheck) valueClause(k int) bool {
+	switch a.clause[k] {
+	case "", "SELECT", "VALUES", "RETURNING", "SET":
+		return true
+	}
+	return false
+}
+
+// attrCalls refuses a PostgreSQL qualified reference that may be a whole-row
+// function call (see attrCall) in a value position of [s, e), unless the
+// item is proven to be a base-table column.
+func (a *aliasCheck) attrCalls(s, e int, proven bool, where string) error {
+	if proven {
+		return nil
+	}
+	for k := s; k < e; k++ {
+		if !a.valueClause(k) {
+			continue
+		}
+		if err := a.attrCall(k, where); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// attrCall refuses, on PostgreSQL, "rel.x" at token k where rel names a
+// relation whose rows may hold a PII column (see rowSources) and x ends the
+// reference: when rel has no column x, PostgreSQL reads it as the call x(rel)
+// on the whole row (b.row_to_json, big.record_out, t.name, t.text), whose
+// value has no origin and a label no rule matches. The statement alone cannot
+// tell it from a column.
+func (a *aliasCheck) attrCall(k int, where string) error {
+	if a.d != sqlclass.Postgres || a.insideCount(k) {
+		return nil
+	}
+	n := a.name(k)
+	if n == "" || !a.rows[n] || !a.isPunct(k+1, ".") {
+		return nil
+	}
+	x := a.name(k + 2)
+	if x == "" || a.isPunct(k+3, ".") || a.isPunct(k+3, "(") {
+		return nil
+	}
+	ln, lx := strings.ToLower(n), strings.ToLower(x)
+	return &sqlclass.Refusal{Reason: fmt.Sprintf("%s.%s is used in %s without a proven origin; PostgreSQL reads it as %s(%s), a function called on the whole row, when %s has no column %s, and the PII columns of that row could not be masked."+
+		" Use the unqualified column name (SELECT %s FROM ...), or select it as a plain item so that its origin can be checked",
+		ln, lx, where, lx, ln, ln, lx, lx)}
+}
+
+// writeClauses switch the clause of a level in writtenValues.
+var writeClauses = map[string]bool{
+	"SELECT": true, "VALUES": true, "SET": true, "TABLE": true,
+	"FROM": true, "JOIN": true, "WHERE": true, "ON": true, "USING": true, "GROUP": true, "HAVING": true,
+	"ORDER": true, "LIMIT": true, "OFFSET": true, "FETCH": true, "WINDOW": true, "QUALIFY": true, "FOR": true,
+	"INTO": true, "RETURNING": true, "UPDATE": true, "INSERT": true, "DELETE": true, "MERGE": true,
+	"REPLACE": true, "WITH": true, "UNION": true, "INTERSECT": true, "EXCEPT": true, "MINUS": true,
+	"CONFLICT": true,
+}
+
+// writeValueClauses are the clauses whose values a write may store: select
+// lists and VALUES of an INSERT source, TABLE, and SET lists (an ON
+// DUPLICATE KEY UPDATE list counts as SET). Every other clause reads,
+// filters, names the target or is the RETURNING list, checked as a select
+// list.
+var writeValueClauses = map[string]bool{"": true, "SELECT": true, "VALUES": true, "SET": true, "TABLE": true}
+
+// writeFilters are clauses whose nested levels only filter or name
+// conflict targets: no value under them reaches a written column.
+var writeFilters = map[string]bool{"WHERE": true, "ON": true, "HAVING": true, "CONFLICT": true}
+
+// writtenValues refuses, in a write that may return rows, a value derived
+// from a PII column where the write may store it (SET values, the select
+// list, VALUES or TABLE of an INSERT source, MERGE actions): a rule-matched
+// column, a star or TABLE over a source that may hold one, or a PostgreSQL
+// whole-row reference. Stored in a column no rule names, it would come back
+// through RETURNING with a trusted origin and no mask. Target column lists
+// and SET targets are not values.
+func (a *aliasCheck) writtenValues() error {
+	writes := false
+	for i := range a.toks {
+		if a.isWord(i, "INSERT", "UPDATE", "MERGE", "REPLACE") {
+			writes = true
+		}
+	}
+	if !writes {
+		return nil
+	}
+	type level struct {
+		clause string
+		filter bool // opened under a filter clause
+	}
+	levels := map[int]*level{}
+	get := func(d int) *level {
+		if levels[d] == nil {
+			levels[d] = &level{}
+		}
+		return levels[d]
+	}
+	const where = "the values of a write that returns rows"
+	for k := 0; k < len(a.toks); k++ {
+		t := a.toks[k]
+		if a.isPunct(k, "(") {
+			outer := get(t.Depth - 1)
+			m := a.match[k]
+			// Target column lists: INSERT INTO t (a, b), MERGE ... INSERT
+			// (a, b), SET (a, b) = (...).
+			if m > k && a.namesOnly(k+1, m) && (outer.clause == "INTO" || outer.clause == "INSERT" ||
+				outer.clause == "SET" && a.isPunct(m+1, "=")) {
+				k = m
+				continue
+			}
+			levels[t.Depth] = &level{filter: outer.filter || writeFilters[outer.clause]}
+			continue
+		}
+		if t.Kind == sqlclass.TokWord && writeClauses[t.Text] {
+			c := t.Text
+			if c == "UPDATE" && a.isWord(k-1, "KEY") { // ON DUPLICATE KEY UPDATE
+				c = "SET"
+			}
+			get(t.Depth).clause = c
+		}
+		l := get(t.Depth)
+		if l.filter || !writeValueClauses[l.clause] {
+			continue
+		}
+		if err := a.nestedRows(k, k+1, where); err != nil {
+			return err
+		}
+		if a.setTarget(k) {
+			continue
+		}
+		if a.matched(k) && !a.insideCount(k) {
+			return &sqlclass.Refusal{Reason: fmt.Sprintf("a write that returns rows stores values of PII column %s, which could come back unmasked through RETURNING under the name of the column written;"+
+				" run the write without RETURNING, or do not copy PII columns", strings.ToLower(a.name(k)))}
+		}
+		if a.d != sqlclass.Postgres {
+			continue
+		}
+		if a.isPunct(k+1, ".") && a.setTarget(k+2) {
+			continue
+		}
+		if err := a.attrCall(k, where); err != nil {
+			return err
+		}
+		if n := a.name(k); n != "" && a.rows[n] && !a.insideCount(k) &&
+			!a.isPunct(k-1, ".") && !a.isPunct(k+1, ".") && !a.isPunct(k+1, "(") {
+			return refusal("the whole row of %s is used in %s", strings.ToLower(n), where)
+		}
+	}
+	return nil
+}
+
+// setTarget reports whether token k names the column a SET list assigns:
+// [qualifier .] name followed by '=', after SET, ',' or (ON DUPLICATE KEY)
+// UPDATE.
+func (a *aliasCheck) setTarget(k int) bool {
+	if a.name(k) == "" || !a.isPunct(k+1, "=") {
+		return false
+	}
+	j := k
+	for a.isPunct(j-1, ".") && a.name(j-2) != "" {
+		j -= 2
+	}
+	return a.isWord(j-1, "SET", "UPDATE") || a.isPunct(j-1, ",")
 }

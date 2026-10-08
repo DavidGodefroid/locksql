@@ -127,7 +127,9 @@ func TestAliasViolation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Classify(%q): %v", c.sql, err)
 		}
-		err = AliasViolation(st, r, c.d)
+		// Every column came back with an origin: a qualified PostgreSQL
+		// item is a real column (see TestAttributeNotationRound4).
+		err = ResultAliasViolation(st, r, c.d, originCols(8))
 		if (err != nil) != c.bad {
 			t.Errorf("AliasViolation(%q) = %v, want violation %v", c.sql, err, c.bad)
 		}
@@ -218,7 +220,7 @@ func TestAliasViolationWholeRow(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Classify(%q): %v", c.sql, err)
 		}
-		err = AliasViolation(st, r, sqlclass.Postgres)
+		err = ResultAliasViolation(st, r, sqlclass.Postgres, originCols(8))
 		if (err != nil) != c.bad {
 			t.Errorf("AliasViolation(%q) = %v, want violation %v", c.sql, err, c.bad)
 		}

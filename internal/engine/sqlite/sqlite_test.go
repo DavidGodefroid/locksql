@@ -294,14 +294,14 @@ func TestRunReportsOrigins(t *testing.T) {
 	s := connect(t, setupDB(t), config.TierRead)
 	ctx := context.Background()
 
-	r, err := s.Run(ctx, "main", classify(t, "SELECT b.email AS x, b.email || '' AS y, e.email FROM big b JOIN emails e ON e.id = b.id LIMIT 1"), 10)
+	r, err := s.Run(ctx, "main", classify(t, "SELECT b.email AS x, b.email || '' AS y, i.label FROM big b JOIN items i ON i.id = b.id LIMIT 1"), 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []engine.ResultColumn{
 		{Label: "x", OriginDB: "main", OriginTable: "big", OriginColumn: "email"},
 		{Label: "y"},
-		{Label: "email", OriginDB: "main", OriginTable: "big", OriginColumn: "email"},
+		{Label: "label", OriginDB: "main", OriginTable: "items", OriginColumn: "label"},
 	}
 	if !reflect.DeepEqual(r.Columns, want) {
 		t.Fatalf("columns = %+v", r.Columns)

@@ -131,7 +131,8 @@ func (s *session) Flavor() engine.Flavor { return engine.FlavorSQLite }
 
 // OriginColumns is true: the driver reports sqlite3_column_{database,table,
 // origin}_name. Run leaves the origin empty for compound selects, where
-// SQLite reports only the first arm.
+// SQLite reports only one arm, and for statements that name a view (see
+// readsView).
 func (s *session) OriginColumns() bool { return true }
 
 // ExtraPrivileges warns, on tier read, when the OS user can write the file:
@@ -206,6 +207,62 @@ func isCompound(toks []sqlclass.Token) bool {
 	return false
 }
 
+// readsView reports whether a name of the statement is a view of any
+// attached schema. SQLite resolves origins through views, but for a view
+// whose body is compound it reports one arm only, while the values come
+// from every arm; and a view may rename a column. Origins are therefore
+// trusted only for statements that name no view: a view's columns are then
+// masked by name and checked by pii.AliasViolation, as on the other
+// engines. A name matching a view in any role (column, alias) counts: a
+// false match only drops origins.
+func (s *session) readsView(ctx context.Context, toks []sqlclass.Token) (bool, error) {
+	names := map[string]bool{}
+	for _, t := range toks {
+		if n := t.Name(); n != "" {
+			names[n] = true
+		}
+	}
+	rows, err := s.conn.QueryContext(ctx, "SELECT name FROM pragma_database_list")
+	if err != nil {
+		return false, err
+	}
+	schemas, err := collect(rows)
+	if err != nil {
+		return false, err
+	}
+	for _, db := range schemas {
+		master := `"` + strings.ReplaceAll(db, `"`, `""`) + `".sqlite_master`
+		rows, err := s.conn.QueryContext(ctx, "SELECT name FROM "+master+" WHERE type = 'view'")
+		if err != nil {
+			return false, err
+		}
+		views, err := collect(rows)
+		if err != nil {
+			return false, err
+		}
+		for _, v := range views {
+			if names[strings.ToUpper(strings.ToLower(v))] {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// collect reads a single text column and closes rows.
+func collect(rows *sql.Rows) ([]string, error) {
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 // Run executes one classified statement. Reads stream at most maxRows rows;
 // write classes run in a transaction that rolls back on error.
 func (s *session) Run(ctx context.Context, db string, st sqlclass.Statement, maxRows int) (engine.Result, error) {
@@ -222,7 +279,15 @@ func (s *session) Run(ctx context.Context, db string, st sqlclass.Statement, max
 	ctx, cancel := s.withTimeout(ctx)
 	defer cancel()
 	if st.Class == sqlclass.Read {
-		return s.query(ctx, st.SQL, !isCompound(toks), maxRows)
+		withOrigins := !isCompound(toks)
+		if withOrigins {
+			view, err := s.readsView(ctx, toks)
+			if err != nil {
+				return engine.Result{}, wrap(ctx, err)
+			}
+			withOrigins = !view
+		}
+		return s.query(ctx, st.SQL, withOrigins, maxRows)
 	}
 	return s.exec(ctx, st)
 }

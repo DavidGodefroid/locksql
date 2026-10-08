@@ -30,7 +30,7 @@ func assertNoLeak(t *testing.T, s engine.Session, d sqlclass.Dialect, rules pii.
 		if err != nil {
 			continue
 		}
-		if pii.NeedsAliasCheck(r, s.OriginColumns()) && pii.AliasViolation(st, rules, d) != nil {
+		if pii.NeedsAliasCheck(r, s.OriginColumns()) && pii.ResultAliasViolation(st, rules, d, r.Columns) != nil {
 			continue
 		}
 		pii.MaskResult(&r, rules, nil, s.OriginColumns())
@@ -78,6 +78,13 @@ func leakQueries(d sqlclass.Dialect) []string {
 			"WITH c AS (SELECT email FROM big WHERE id < 3) SELECT label FROM small UNION SELECT (TABLE c LIMIT 1) LIMIT 5",
 			"SELECT table_to_xml('big', true, false, '')::text LIMIT 5",
 			"SELECT most_common_vals::text, histogram_bounds::text FROM pg_stats WHERE tablename = 'big' AND attname = 'email' LIMIT 5",
+			// Round 4: attribute notation, rel.f is f(rel) on the whole row.
+			"SELECT b.row_to_json FROM big b LIMIT 2",
+			"SELECT big.record_out::text AS r FROM big LIMIT 2",
+			"SELECT b.text FROM big b LIMIT 2",
+			"SELECT b.id, b.name FROM big b LIMIT 2",
+			"SELECT upper(b.text) AS u FROM big b LIMIT 2",
+			"SELECT x.key, x.value FROM big b, json_each_text(b.row_to_json) x LIMIT 4",
 		)
 	}
 	return q
@@ -91,11 +98,18 @@ func writeLeakQueries(d sqlclass.Dialect) []string {
 		return []string{
 			"INSERT INTO big (status, email) VALUES ('t', 'ins1@example.com') RETURNING concat(email, '') AS x",
 			"DELETE FROM big WHERE email = 'ins1@example.com' RETURNING concat(email, '') AS x",
+			// Round 4.
+			"INSERT INTO small (id, label) SELECT 3000 + id, email FROM big WHERE id < 3 RETURNING label",
 		}
 	case sqlclass.Postgres:
 		return []string{
 			"UPDATE big SET status = status WHERE id < 3 RETURNING lower(email)",
 			"WITH d AS (DELETE FROM small WHERE false RETURNING 1) SELECT lower(email) AS x FROM big LIMIT 3",
+			// Round 4.
+			"UPDATE big SET id = id WHERE id < 3 RETURNING big.row_to_json",
+			"INSERT INTO small (id, label) SELECT 1000 + id, substr(email, 1, 20) FROM big WHERE id < 3 RETURNING label",
+			"UPDATE small SET label = (SELECT substr(email, 1, 20) FROM big WHERE big.id = small.id - 1000) WHERE id > 1000 RETURNING label",
+			"WITH i AS (INSERT INTO small (id, label) SELECT 2000 + id, substr(email, 1, 20) FROM big WHERE id < 3 RETURNING label) SELECT label FROM i LIMIT 5",
 		}
 	}
 	return nil

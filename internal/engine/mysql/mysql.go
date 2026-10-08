@@ -201,6 +201,13 @@ var errClearText = errors.New("the server asks for the password in clear text (m
 // an RSA key it sends itself, on an unencrypted TCP connection.
 var errPublicKey = errors.New("the server asks for the password encrypted with a public key it sends itself (caching_sha2_password full authentication or sha256_password) on an unencrypted connection; refused, since an attacker who removed TLS could send its own key: use a server with TLS, an SSH tunnel or a Unix socket")
 
+// errHugePacket refuses a handshake packet of the maximum size, which the
+// guard cannot frame the way the driver does.
+var errHugePacket = errors.New("the server sent an oversized handshake packet on an unencrypted connection; refused")
+
+// maxPacket is the payload size that makes a packet continue in the next.
+const maxPacket = 0xffffff
+
 // clearTextMarker is the name of the plugin that sends the password as is.
 var clearTextMarker = []byte(gomysql.AUTH_CLEAR_PASSWORD)
 
@@ -213,7 +220,9 @@ var clearTextMarker = []byte(gomysql.AUTH_CLEAR_PASSWORD)
 // and fails the read that brings such a request, before the driver can
 // answer: an auth switch to either plugin, and any auth-more-data packet
 // other than the caching_sha2_password fast-auth success. It stops looking
-// at the first OK or ERR packet, which ends the authentication.
+// at the first OK or ERR packet, which ends the authentication. A packet of
+// the maximum size (0xffffff bytes), which the driver would join with the
+// next one, is refused outright.
 type clearTextGuard struct {
 	net.Conn
 	armed   atomic.Bool
@@ -259,6 +268,13 @@ func (g *clearTextGuard) inspect(b []byte) error {
 	g.pkt = append(g.pkt, b...)
 	for len(g.pkt) >= 4 {
 		size := int(g.pkt[0]) | int(g.pkt[1])<<8 | int(g.pkt[2])<<16
+		if size == maxPacket {
+			// go-mysql joins such a packet with the next ones into one
+			// logical packet, which per-packet framing would misread (a
+			// continuation starting with 0x00 looks like an OK). No
+			// legitimate handshake packet comes near this size.
+			return errHugePacket
+		}
 		if len(g.pkt) < 4+size {
 			return nil
 		}
@@ -749,8 +765,12 @@ func originsTrustable(q string) bool {
 
 // trustOrigins blanks every origin that does not name a column of a base
 // table: all of them when the statement's shape makes them untrusted (see
-// originsTrustable), otherwise those whose table the catalog does not list
-// as a base table with that column (a view, a temporary table). Masking then
+// originsTrustable) or its FROM clause cannot be read (see fromNames),
+// otherwise those whose table is not a relation the statement names, is also
+// one of its table aliases, or is not listed by the catalog as a base table
+// with that column (a view, a temporary table). MariaDB reports a merged
+// view's column read through an alias under the alias (FROM v AS small gives
+// app.small.label), which may name a real base-table column. Masking then
 // matches such a column by name and refuses renamed uses (pii.AliasViolation).
 // It runs in the statement's own transaction; if the catalog cannot be read,
 // every origin is blanked. Called with mu held.
@@ -766,6 +786,10 @@ func (s *session) trustOrigins(q string, cols []engine.ResultColumn) {
 		return
 	}
 	trusted := originsTrustable(q)
+	rels, aliases, ok := fromNames(q)
+	if !ok {
+		trusted = false
+	}
 	for t := range tables {
 		if !trusted {
 			break
@@ -781,11 +805,109 @@ func (s *session) trustOrigins(q string, cols []engine.ResultColumn) {
 		if !c.HasOrigin() {
 			continue
 		}
-		if trusted && tables[table{c.OriginDB, c.OriginTable}][strings.ToLower(c.OriginColumn)] {
+		org := foldName(c.OriginTable)
+		if trusted && rels[org] && !aliases[org] && tables[table{c.OriginDB, c.OriginTable}][strings.ToLower(c.OriginColumn)] {
 			continue
 		}
 		cols[i].OriginDB, cols[i].OriginTable, cols[i].OriginColumn = "", "", ""
 	}
+}
+
+// foldName folds a table name for comparison with lexer names.
+func foldName(s string) string { return strings.ToUpper(strings.ToLower(s)) }
+
+// fromNotAlias are words that, after a relation of a FROM clause, do not
+// name an alias.
+var fromNotAlias = map[string]bool{
+	"ON": true, "USING": true, "JOIN": true, "INNER": true, "LEFT": true, "RIGHT": true, "CROSS": true,
+	"NATURAL": true, "STRAIGHT_JOIN": true, "FULL": true, "OUTER": true, "USE": true, "FORCE": true,
+	"IGNORE": true, "PARTITION": true, "WHERE": true, "GROUP": true, "HAVING": true, "ORDER": true,
+	"LIMIT": true, "WINDOW": true, "FOR": true, "LOCK": true, "INTO": true, "UNION": true,
+	"PROCEDURE": true, "AS": true, "OFFSET": true, "FETCH": true,
+}
+
+// fromEnd ends the FROM clause of a single SELECT.
+var fromEnd = map[string]bool{
+	"WHERE": true, "GROUP": true, "HAVING": true, "ORDER": true, "LIMIT": true, "WINDOW": true,
+	"FOR": true, "LOCK": true, "INTO": true, "UNION": true, "PROCEDURE": true, "OFFSET": true, "FETCH": true,
+}
+
+// fromNames reads the top-level FROM clause of a single SELECT: the folded
+// names of the relations it reads (the last part of db.table) and of the
+// table aliases it gives them. ok is false when the clause cannot be read
+// that simply (a parenthesised item, a statement that does not lex), and
+// then no origin is trusted.
+func fromNames(q string) (rels, aliases map[string]bool, ok bool) {
+	toks, err := sqlclass.Lex(sqlclass.MySQL, q)
+	if err != nil {
+		return nil, nil, false
+	}
+	rels, aliases = map[string]bool{}, map[string]bool{}
+	name := func(i int) string {
+		if i >= len(toks) {
+			return ""
+		}
+		t := toks[i]
+		if t.Kind == sqlclass.TokString && len(t.Text) >= 2 && t.Text[0] == '"' { // ANSI_QUOTES
+			return foldName(strings.ReplaceAll(t.Text[1:len(t.Text)-1], `""`, `"`))
+		}
+		return t.Name()
+	}
+	isWord := func(i int, w string) bool {
+		return i < len(toks) && toks[i].Kind == sqlclass.TokWord && toks[i].Text == w
+	}
+	isPunct := func(i int, p string) bool {
+		return i < len(toks) && toks[i].Kind == sqlclass.TokPunct && toks[i].Text == p
+	}
+	inFrom := false
+	for i := 0; i < len(toks); i++ {
+		t := toks[i]
+		if t.Depth != 0 {
+			continue
+		}
+		if t.Kind == sqlclass.TokWord && fromEnd[t.Text] {
+			inFrom = false
+			continue
+		}
+		start := isWord(i, "FROM") || isWord(i, "JOIN") || isWord(i, "STRAIGHT_JOIN") || inFrom && isPunct(i, ",")
+		if !start {
+			continue
+		}
+		inFrom = true
+		j := i + 1
+		if isPunct(j, "(") {
+			return nil, nil, false // a derived table or a parenthesised join
+		}
+		n := name(j)
+		if n == "" {
+			return nil, nil, false
+		}
+		for isPunct(j+1, ".") && name(j+2) != "" {
+			j += 2
+			n = name(j)
+		}
+		if isWord(j+1, "DUAL") || n == "DUAL" {
+			continue
+		}
+		rels[n] = true
+		j++
+		if isWord(j, "PARTITION") && isPunct(j+1, "(") {
+			for j < len(toks) && !(isPunct(j, ")") && toks[j].Depth == 0) {
+				j++
+			}
+			j++
+		}
+		if isWord(j, "AS") {
+			j++
+		}
+		if a := name(j); a != "" && !(toks[j].Kind == sqlclass.TokWord && fromNotAlias[toks[j].Text]) {
+			aliases[a] = true
+		} else if j < len(toks) && toks[j].Kind == sqlclass.TokString && len(toks[j].Text) >= 2 {
+			aliases[foldName(toks[j].Text[1:len(toks[j].Text)-1])] = true // a string alias
+		}
+		i = j - 1
+	}
+	return rels, aliases, true
 }
 
 // baseColumns returns the lower-cased column names of db.name when the

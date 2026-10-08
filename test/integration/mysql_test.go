@@ -322,6 +322,37 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		}
 	})
 
+	t.Run("an alias on a view gives no origin", func(t *testing.T) {
+		admin := connectMySQL(t, m, srv, "rw", config.TierDDL, 5*time.Second)
+		ddl := func(q string) {
+			t.Helper()
+			if _, err := admin.Run(ctx, "app", sqlclass.Statement{Class: sqlclass.DDL, Kind: "ddl", SQL: q, Limit: -1}, 0); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+		}
+		ddl("CREATE VIEW v_def AS SELECT id, email AS label FROM big")
+		ddl("CREATE ALGORITHM = MERGE VIEW v_merge AS SELECT id, email AS label FROM big")
+		t.Cleanup(func() { ddl("DROP VIEW IF EXISTS v_def, v_merge") })
+		s := connectMySQL(t, m, srv, "ro", config.TierRead, 5*time.Second)
+		rules := pii.Rules{Mask: []string{"app.big.email", "app.v_def.label", "app.v_merge.label"}}
+		// MariaDB reports a merged view column read through an alias as
+		// app.<alias>.<view column>, which names a real column of small.
+		assertNoLeak(t, s, sqlclass.MySQL, rules, []string{
+			"SELECT small.label FROM v_def AS small ORDER BY id LIMIT 5",
+			"SELECT small.label FROM v_merge small ORDER BY id LIMIT 5",
+			"SELECT label FROM v_merge AS small ORDER BY id LIMIT 5",
+		})
+		r := mustRun(t, s, "SELECT small.label FROM v_def AS small ORDER BY id LIMIT 5")
+		if c := r.Columns[0]; c.HasOrigin() {
+			t.Errorf("view through alias origin = %+v", c)
+		}
+		// A base table read through an alias keeps its origin.
+		r = mustRun(t, s, "SELECT s.label FROM small AS s ORDER BY id LIMIT 1")
+		if c := r.Columns[0]; c.OriginTable != "small" || c.OriginColumn != "label" {
+			t.Errorf("base column through alias origin = %+v", c)
+		}
+	})
+
 	t.Run("no leak through unicode names, stars or union heads", func(t *testing.T) {
 		s := connectMySQL(t, m, srv, "ro", config.TierRead, 5*time.Second)
 		assertNoLeak(t, s, sqlclass.MySQL, pii.Rules{Mask: []string{"app.big.email"}}, leakQueries(sqlclass.MySQL))
