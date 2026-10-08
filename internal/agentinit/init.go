@@ -19,7 +19,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 )
@@ -165,6 +168,14 @@ func apply(b base, steps []func(base) (change, error), dry bool, run func(string
 		if c.content != nil || c.exec != nil {
 			pending = true
 		}
+		if c.content != nil && !b.contained {
+			// The user scope writes into the human's own dotfiles: never
+			// replace a file of another account, which a rename in a
+			// writable directory would do.
+			if err := writable(c.target, b.display(c.rel)); err != nil {
+				return nil, false, err
+			}
+		}
 		changes = append(changes, c)
 	}
 	if dry {
@@ -212,12 +223,25 @@ func apply(b base, steps []func(base) (change, error), dry bool, run func(string
 	return made(), pending, nil
 }
 
-// firstLine returns the first non-empty line of out, trimmed to 200 bytes.
+// ansiRe matches terminal escape sequences (CSI and OSC).
+var ansiRe = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-_])`)
+
+// firstLine returns the first non-empty line of out, without escape
+// sequences or control characters, cut to at most 200 bytes on a rune
+// boundary. It relays another program's output to the human's terminal.
 func firstLine(out []byte) string {
-	for _, l := range strings.Split(string(out), "\n") {
+	clean := ansiRe.ReplaceAllString(strings.ToValidUTF8(string(out), ""), "")
+	for _, l := range strings.Split(clean, "\n") {
+		l = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+				return -1
+			}
+			return r
+		}, l)
 		if l = strings.TrimSpace(l); l != "" {
-			if len(l) > 200 {
-				l = l[:200]
+			for len(l) > 200 {
+				_, size := utf8.DecodeLastRuneInString(l)
+				l = l[:len(l)-size]
 			}
 			return l
 		}

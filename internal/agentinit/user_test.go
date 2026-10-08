@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 )
@@ -266,7 +267,7 @@ func TestSystemRunTimesOut(t *testing.T) {
 	if _, err := exec.LookPath("sleep"); err != nil {
 		t.Skip("no sleep command")
 	}
-	_, err := runWithTimeout(50*time.Millisecond)("sleep", "5")
+	_, err := runWithTimeout(50*time.Millisecond, time.Second)("sleep", "5")
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("err = %v", err)
 	}
@@ -303,5 +304,113 @@ func TestAssignsPrefix(t *testing.T) {
 		if got := assignsPrefix([]byte(doc), "mcp_servers.locksql"); got != want {
 			t.Errorf("%q: got %v", doc, got)
 		}
+	}
+}
+
+// A wired Claude (user MCP entry and skill) is left alone: a permission the
+// human removed is not added back.
+func TestClaudeWiredKeepsRemovedPermission(t *testing.T) {
+	e, calls := fakeEnv(t, "claude")
+	os.WriteFile(filepath.Join(e.Home, ".claude.json"), []byte(`{"mcpServers":{"locksql":{}}}`), 0o600)
+	skill := filepath.Join(e.Home, ".claude", "skills", "locksql", "SKILL.md")
+	os.MkdirAll(filepath.Dir(skill), 0o755)
+	os.WriteFile(skill, []byte("my own skill\n"), 0o644)
+	st := filepath.Join(e.Home, ".claude", "settings.json")
+	own := `{"permissions":{"allow":["mcp__locksql__locksql_status"]}}`
+	os.WriteFile(st, []byte(own), 0o644)
+	if p, err := PendingUser(e, "claude"); err != nil || p {
+		t.Fatalf("pending=%v err=%v", p, err)
+	}
+	res, err := InitUser(e, "claude")
+	if err != nil || len(res.Actions) != 0 {
+		t.Fatalf("InitUser on a wired claude: %+v %v", res, err)
+	}
+	if b, _ := os.ReadFile(st); string(b) != own {
+		t.Fatalf("settings.json rewritten:\n%s", b)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("ran %v", *calls)
+	}
+	// Without the skill, Claude is wired again, permissions included.
+	os.Remove(skill)
+	if p, _ := PendingUser(e, "claude"); !p {
+		t.Fatal("not pending without the skill")
+	}
+	if _, err := InitUser(e, "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(st); !strings.Contains(string(b), "mcp__locksql__locksql_plan") {
+		t.Fatalf("permissions not merged on a wiring run:\n%s", b)
+	}
+}
+
+func TestInitUserRefusesReadOnlyFile(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can write a 0444 file")
+	}
+	e, _ := fakeEnv(t, "codex")
+	cfg := filepath.Join(e.Home, ".codex", "config.toml")
+	os.MkdirAll(filepath.Dir(cfg), 0o755)
+	own := "model = \"o3\"\n"
+	os.WriteFile(cfg, []byte(own), 0o444)
+	_, err := InitUser(e, "codex")
+	if err == nil || !strings.Contains(err.Error(), "~/.codex/config.toml") || !strings.Contains(err.Error(), "by hand") {
+		t.Fatalf("err = %v", err)
+	}
+	if b, _ := os.ReadFile(cfg); string(b) != own {
+		t.Fatalf("read-only file replaced:\n%s", b)
+	}
+	if _, err := os.Stat(filepath.Join(e.Home, ".codex", "AGENTS.md")); err == nil {
+		t.Fatal("AGENTS.md written despite the refusal")
+	}
+	// An unchanged read-only file is fine.
+	os.Chmod(cfg, 0o644)
+	if _, err := InitUser(e, "codex"); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(cfg, 0o444)
+	if p, err := PendingUser(e, "codex"); err != nil || p {
+		t.Fatalf("wired codex with a read-only config: pending=%v err=%v", p, err)
+	}
+}
+
+func TestInitUserRefusesReadOnlyDirectory(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can write a 0555 directory")
+	}
+	e, _ := fakeEnv(t, "gemini")
+	dir := filepath.Join(e.Home, ".gemini")
+	os.MkdirAll(dir, 0o555)
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	_, err := InitUser(e, "gemini")
+	if err == nil || !strings.Contains(err.Error(), "~/.gemini/settings.json") || !strings.Contains(err.Error(), "not writable") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("bare system error: %v", err)
+	}
+}
+
+func TestFirstLineSanitises(t *testing.T) {
+	got := firstLine([]byte("\n\x1b[31mError:\x1b[0m bad\x07 thing\r\nmore"))
+	if got != "Error: bad thing" {
+		t.Fatalf("firstLine = %q", got)
+	}
+	long := strings.Repeat("é", 150) // 300 bytes
+	got = firstLine([]byte(long))
+	if len(got) > 200 || !utf8.ValidString(got) {
+		t.Fatalf("cut: %d bytes, valid %v", len(got), utf8.ValidString(got))
+	}
+}
+
+func TestSystemRunBoundWithGrandchild(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	start := time.Now()
+	// The grandchild keeps the output pipe open after sh is killed.
+	_, err := runWithTimeout(50*time.Millisecond, 100*time.Millisecond)("sh", "-c", "sleep 10 & sleep 10")
+	if err == nil || time.Since(start) > 5*time.Second {
+		t.Fatalf("err = %v after %s", err, time.Since(start))
 	}
 }

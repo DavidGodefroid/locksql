@@ -39,7 +39,7 @@ func SystemEnv() (Env, error) {
 	}
 	return Env{
 		Home: home, Getenv: os.Getenv, LookPath: exec.LookPath,
-		Run: runWithTimeout(commandTimeout),
+		Run: runWithTimeout(commandTimeout, commandWaitDelay),
 	}, nil
 }
 
@@ -47,13 +47,19 @@ func SystemEnv() (Env, error) {
 // never blocks locksql.
 const commandTimeout = 30 * time.Second
 
+// commandWaitDelay bounds the wait for the output pipe once the command is
+// killed or has exited: a grandchild can hold it open.
+const commandWaitDelay = 2 * time.Second
+
 // runWithTimeout runs a command and returns its combined output, killing it
-// after d.
-func runWithTimeout(d time.Duration) func(string, ...string) ([]byte, error) {
+// after d and giving up on its output wait later.
+func runWithTimeout(d, wait time.Duration) func(string, ...string) ([]byte, error) {
 	return func(n string, a ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), d)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, n, a...).CombinedOutput()
+		cmd := exec.CommandContext(ctx, n, a...)
+		cmd.WaitDelay = wait
+		out, err := cmd.CombinedOutput()
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return out, fmt.Errorf("%s timed out after %s", n, d)
 		}
@@ -154,8 +160,24 @@ func (e Env) groups(agent string) ([]group, error) {
 	return nil, fmt.Errorf("unknown agent %q (want one of %s)", agent, strings.Join(Agents(), ", "))
 }
 
+// wired reports whether agent counts as wired without looking at its
+// other steps. Claude Code is wired once its user MCP entry and the skill
+// exist: the permissions are merged only on a run that wires it, so an
+// entry the human removed from permissions.allow stays removed.
+func (e Env) wired(agent string) bool {
+	if agent != "claude" {
+		return false
+	}
+	skill := filepath.Join(e.dir("CLAUDE_CONFIG_DIR", ".claude"), "skills", "locksql", "SKILL.md")
+	_, err := os.Stat(skill)
+	return err == nil && e.claudeUserMCP()
+}
+
 // InitUser wires agent for the current account, in every project.
 func InitUser(e Env, agent string) (Result, error) {
+	if e.wired(agent) {
+		return Result{}, nil
+	}
 	gs, err := e.groups(agent)
 	if err != nil {
 		return Result{}, err
@@ -173,6 +195,9 @@ func InitUser(e Env, agent string) (Result, error) {
 
 // PendingUser reports whether InitUser would write or run anything.
 func PendingUser(e Env, agent string) (bool, error) {
+	if e.wired(agent) {
+		return false, nil
+	}
 	gs, err := e.groups(agent)
 	if err != nil {
 		return false, err
