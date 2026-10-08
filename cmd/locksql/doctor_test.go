@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -165,7 +166,11 @@ func TestInstallPrint(t *testing.T) {
 	if o.code != 0 {
 		t.Fatalf("exit %d: %s", o.code, o.stderr)
 	}
-	for _, want := range []string{"useradd", "locksql-clients", "/etc/locksql/system.toml", "x11          = \"refuse\"", "0710"} {
+	adduser := "useradd"
+	if runtime.GOOS == "darwin" {
+		adduser = "sysadminctl"
+	}
+	for _, want := range []string{adduser, "locksql-clients", "/etc/locksql/system.toml", "x11          = \"refuse\"", "0710"} {
 		if !strings.Contains(o.stdout, want) {
 			t.Errorf("install script lacks %q", want)
 		}
