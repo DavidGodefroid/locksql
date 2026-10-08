@@ -60,8 +60,12 @@ nfpms:
     contents:
       - src: LICENSE
         dst: /usr/share/doc/locksql/LICENSE
+        file_info:
+          mode: 0644
       - src: NOTICE
         dst: /usr/share/doc/locksql/NOTICE
+        file_info:
+          mode: 0644
 
 checksum:
   name_template: checksums.txt
