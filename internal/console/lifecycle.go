@@ -25,6 +25,10 @@ import (
 // ErrConfig marks usage and configuration errors (exit code 3).
 var ErrConfig = errors.New("configuration error")
 
+// errPrivilegeAudit marks a reconnection stopped by the privilege audit:
+// the console ends, as it would have at start-up.
+var errPrivilegeAudit = errors.New("privilege audit")
+
 // connectTimeout bounds one connection attempt.
 const connectTimeout = 30 * time.Second
 
@@ -207,7 +211,7 @@ func Run(ctx context.Context, o Options) error {
 		Policy: approved, Root: piiRoot, StateDir: o.StateDir, ApprovedKey: key,
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Now: o.Now,
 		SkipPermissions: o.SkipPermissions, Version: o.Version, LoadPolicy: loadPolicy,
-		Reconnect: func(ctx context.Context) (engine.Session, error) { return st.connect(ctx, false) },
+		Reconnect: st.reconnect,
 	})
 	if err != nil {
 		ln.Close()
@@ -383,6 +387,23 @@ func (st *starter) offerSave(ctx context.Context, secret []byte, prompt string) 
 		return
 	}
 	st.io.Println("saved in the OS keychain")
+}
+
+// reconnect opens a new session after a lost connection and runs the
+// privilege audit again, with the start-up rules: the account behind the
+// secret may not be the one audited at start-up, and its grants may have
+// changed. A failed audit closes the session and wraps errPrivilegeAudit.
+func (st *starter) reconnect(ctx context.Context) (engine.Session, error) {
+	sess, err := st.connect(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := st.privileges(ctx, sess); err != nil {
+		_ = sess.Close()
+		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: "reconnect: " + err.Error()})
+		return nil, fmt.Errorf("%w: %v", errPrivilegeAudit, err)
+	}
+	return sess, nil
 }
 
 // privileges runs the privilege audit for the tier: refused on production,

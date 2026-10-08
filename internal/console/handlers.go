@@ -130,6 +130,9 @@ func (s *Server) session(ctx context.Context, id int64) (engine.Session, *ipc.Re
 			return sess, nil
 		}
 		s.println("reconnect failed: " + secrets.Sanitize(err))
+		if errors.Is(err, errPrivilegeAudit) {
+			s.End("privilege audit failed after reconnect")
+		}
 	}
 	r := errResp(id, ipc.CodeConnLost, "the database connection is lost; the human must restart the console")
 	return nil, &r
@@ -361,6 +364,14 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	} else {
 		if r := s.approve(ctx, req.ID, pl, rec); r != nil {
 			return *r
+		}
+		// The prompt may have waited: check the TTL again, so that an
+		// approval landing after it runs nothing.
+		if s.now().Sub(pl.created) > PlanTTL {
+			rec.Event, rec.Decision = audit.EventTimeout, "expired"
+			s.audit(rec)
+			s.println("plan expired while waiting for approval: not run")
+			return errResp(req.ID, ipc.CodeNoSuchPlan, "the plan expired while waiting for approval; plan the query again")
 		}
 		rec.Event, rec.Decision = audit.EventApproved, "approved"
 	}

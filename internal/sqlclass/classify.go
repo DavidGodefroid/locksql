@@ -129,6 +129,9 @@ var forbiddenFuncs = newSet(
 	// PostgreSQL: server file access.
 	"PG_READ_FILE", "PG_READ_BINARY_FILE", "PG_STAT_FILE", "LO_IMPORT", "LO_EXPORT",
 	"PG_FILE_WRITE", "PG_FILE_RENAME", "PG_FILE_UNLINK", "PG_LOGDIR_LS",
+	// PostgreSQL: large objects, which write (or read) outside the classifier's sight.
+	"LO_UNLINK", "LO_CREATE", "LO_CREAT", "LO_OPEN", "LO_PUT", "LO_GET", "LO_FROM_BYTEA",
+	"LO_TRUNCATE", "LO_WRITE", "LOREAD", "LOWRITE", "LO_CLOSE",
 	// PostgreSQL: functions that run SQL passed as a string, out of the classifier's sight.
 	"QUERY_TO_XML", "QUERY_TO_XMLSCHEMA", "QUERY_TO_XML_AND_XMLSCHEMA", "TS_STAT",
 	// PostgreSQL: session tampering.

@@ -32,13 +32,15 @@ type fakeSession struct {
 	explains []string
 	runs     []string
 	catalog  int
+	extra    []string // ExtraPrivileges warnings
+	closed   bool
 }
 
 func (f *fakeSession) ServerVersion() string { return "11.4.0-MariaDB" }
 func (f *fakeSession) Flavor() engine.Flavor { return engine.FlavorMariaDB }
 func (f *fakeSession) OriginColumns() bool   { return f.origin }
 func (f *fakeSession) ExtraPrivileges(context.Context, config.Tier) ([]string, error) {
-	return nil, nil
+	return f.extra, nil
 }
 func (f *fakeSession) Databases(context.Context) ([]string, error) { return f.dbs, nil }
 func (f *fakeSession) Tables(context.Context, string) ([]string, error) {
@@ -78,7 +80,12 @@ func (f *fakeSession) Run(_ context.Context, _ string, st sqlclass.Statement, _ 
 	return res, nil
 }
 func (f *fakeSession) Ping(context.Context) error { return nil }
-func (f *fakeSession) Close() error               { return nil }
+func (f *fakeSession) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closed = true
+	return nil
+}
 
 func (f *fakeSession) runCount() int {
 	f.mu.Lock()
@@ -96,6 +103,8 @@ type fakeIO struct {
 	// block makes Ask wait for its context to end.
 	block   bool
 	blocked chan struct{}
+	// onAsk, when set, runs before each scripted answer (e.g. to let time pass).
+	onAsk func()
 }
 
 func (f *fakeIO) Println(s string) {
@@ -120,6 +129,9 @@ func (f *fakeIO) Ask(ctx context.Context, prompt string, _ time.Duration) (strin
 		return "", false
 	}
 	defer f.mu.Unlock()
+	if f.onAsk != nil {
+		f.onAsk()
+	}
 	if f.timeout || len(f.answers) == 0 {
 		return "", false
 	}
@@ -362,6 +374,27 @@ func TestPlanIsOneShotAndExpires(t *testing.T) {
 	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: "nope"}), ipc.CodeNoSuchPlan)
 	if n := h.sess.runCount(); n != 1 {
 		t.Fatalf("runs = %d, want 1", n)
+	}
+}
+
+// TestPlanExpiringDuringApprovalDoesNotRun: the TTL is checked again once
+// the human answers, so an approval that lands after it runs nothing.
+func TestPlanExpiringDuringApprovalDoesNotRun(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	pr := h.plan(t, selectUsers, false)
+	h.now = h.now.Add(PlanTTL - time.Second)
+	h.io.onAsk = func() { h.now = h.now.Add(2 * time.Second) }
+	h.io.answers = []string{"y"}
+	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	wantCode(t, resp, ipc.CodeNoSuchPlan)
+	if !strings.Contains(resp.Error.Message, "expired") {
+		t.Errorf("message: %q", resp.Error.Message)
+	}
+	if n := h.sess.runCount(); n != 0 {
+		t.Fatalf("expired plan ran %d times", n)
+	}
+	if log := h.auditLog(t); !strings.Contains(log, `"decision":"expired"`) || strings.Contains(log, `"event":"approved"`) {
+		t.Errorf("audit log:\n%s", log)
 	}
 }
 
