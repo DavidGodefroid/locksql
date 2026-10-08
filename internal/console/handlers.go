@@ -114,6 +114,7 @@ func (s *Server) status() ipc.StatusResult {
 		Limits:          s.profile.Limits,
 		IdleTimeoutInS:  int(IdleTimeout / time.Second),
 		SessionEndsInS:  int(left / time.Second),
+		Health:          s.cfg.Health,
 	}
 }
 

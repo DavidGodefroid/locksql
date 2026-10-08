@@ -106,6 +106,8 @@ type ServerConfig struct {
 	// PeerAllowed decides which clients are served, from the kernel's
 	// credentials of the peer. Nil serves the console's own account only.
 	PeerAllowed func(ipc.Cred) bool
+	// Health is reported in status for locksql doctor.
+	Health *ipc.Health
 }
 
 // plan is a one-shot plan awaiting query.run.

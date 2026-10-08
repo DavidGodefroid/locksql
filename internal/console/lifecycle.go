@@ -18,6 +18,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
+	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/secrets"
 )
@@ -39,6 +40,8 @@ type starter struct {
 	log     *audit.Log
 	profile config.Profile
 	user    string
+	// privWarns are the start-up privilege audit's findings.
+	privWarns []string
 }
 
 func (st *starter) audit(rec audit.Record) {
@@ -194,6 +197,17 @@ func Run(ctx context.Context, o Options) error {
 		return fmt.Errorf("console: listing databases: %s", secrets.Sanitize(err))
 	}
 	o.IO.Println("databases: " + safeText(strings.Join(dbs, ", "), false))
+	health := &ipc.Health{Separated: iso.sys != nil, Display: iso.display.Kind, Privileges: nonNil(st.privWarns),
+		ReadOnly: p.Tier == config.TierRead}
+	probeDB := p.Database
+	if probeDB == "" && len(dbs) > 0 {
+		probeDB = dbs[0]
+	}
+	if _, err := sess.Explain(ctx, probeDB, "SELECT 1"); err == nil {
+		health.ExplainOK = true
+	} else {
+		o.IO.Println(red + "warning: EXPLAIN does not work on this server: " + safeText(secrets.Sanitize(err), false) + reset)
+	}
 
 	// 7. PII first-run proposal.
 	approved, err = st.piiBootstrap(ctx, sess, dbs, piiRoot, o.StateDir, key, approved)
@@ -218,7 +232,7 @@ func Run(ctx context.Context, o Options) error {
 		Policy: approved, Root: piiRoot, StateDir: o.StateDir, ApprovedKey: key,
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Now: o.Now,
 		SkipPermissions: o.SkipPermissions, Version: o.Version, LoadPolicy: loadPolicy,
-		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(),
+		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health,
 	})
 	if err != nil {
 		ln.Close()
@@ -448,6 +462,7 @@ func (st *starter) privileges(ctx context.Context, sess engine.Session) error {
 	if err != nil {
 		warns = append(warns, "privilege audit failed: "+secrets.Sanitize(err))
 	}
+	st.privWarns = warns
 	if len(warns) == 0 {
 		st.io.Println("privileges: nothing beyond tier " + p.Tier.String())
 		return nil

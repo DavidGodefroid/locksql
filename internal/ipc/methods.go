@@ -105,6 +105,23 @@ type StatusResult struct {
 	Limits          config.Limits `json:"limits"`
 	IdleTimeoutInS  int           `json:"idle_timeout_in_s"`
 	SessionEndsInS  int           `json:"session_ends_in_s"`
+	// Health is what the console found at start-up, for locksql doctor.
+	Health *Health `json:"health,omitempty"`
+}
+
+// Health is the console's own diagnosis of its setup.
+type Health struct {
+	// Separated is set when the console runs as a dedicated account,
+	// apart from the agent (sysconf).
+	Separated bool   `json:"separated"`
+	Display   string `json:"display"`
+	// Privileges are the privilege audit's findings: what the database
+	// account can do beyond the profile tier.
+	Privileges []string `json:"privileges"`
+	// ExplainOK reports that EXPLAIN works on the server.
+	ExplainOK bool `json:"explain_ok"`
+	// ReadOnly reports that the session is read-only on the server.
+	ReadOnly bool `json:"read_only"`
 }
 
 // TablesParams lists the tables of a database (catalog.list).

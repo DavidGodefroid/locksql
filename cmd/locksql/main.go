@@ -25,6 +25,8 @@ Human commands:
   console  --profile P [--project DIR] [--skip-permissions]
                                               run the approval console
   forget   --profile P                        remove the keychain secret
+  install  [--client USER] [--print]          separate the console from the agent (sudo)
+  doctor   [--profile P]                      check that this machine is safe-ready
   init     claude|codex|cursor|gemini [...]   write agent integration files
 
 Client commands:
@@ -85,6 +87,10 @@ func runEnv(e env, args []string) int {
 		return runMCP(e, args[1:])
 	case "init":
 		return runInit(e, args[1:])
+	case "install":
+		return runInstall(e, args[1:])
+	case "doctor":
+		return runDoctor(e, args[1:])
 	case "pii":
 		return runPII(e, args[1:])
 	case "tables", "describe", "plan", "run", "request", "logout":
