@@ -63,7 +63,7 @@ its command is on `PATH` or its home directory exists.
 
 | Agent | Detected by | Written | Wired when |
 |---|---|---|---|
-| Claude Code | `claude` on `PATH` | user MCP server `locksql` (`claude mcp add --scope user locksql -- locksql mcp`); `~/.claude/skills/locksql/SKILL.md`; the read-only tool list merged into `permissions.allow` of `~/.claude/settings.json` | `mcpServers.locksql` exists at the top level of `~/.claude.json`, and the skill exists |
+| Claude Code | `claude` on `PATH` | user MCP server `locksql` (`claude mcp add --scope user locksql -- locksql mcp`); `~/.claude/skills/locksql/SKILL.md`; the read-only tool list merged into `permissions.allow` of `~/.claude/settings.json` | `mcpServers.locksql` exists at the top level of `~/.claude.json`, the skill exists, and the locksql entries are in `permissions.allow` of `~/.claude/settings.json` (a missing one is added again) |
 | Codex | `codex` on `PATH` or `~/.codex/` | `[mcp_servers.locksql]` (`command`, `args`, `tool_timeout_sec = 600`) appended to `~/.codex/config.toml`; locksql section in `~/.codex/AGENTS.md` | the table exists and the section marker is present |
 | Gemini CLI | `gemini` on `PATH` or `~/.gemini/` | `mcpServers.locksql` in `~/.gemini/settings.json`; locksql section in `~/.gemini/GEMINI.md` | the entry exists and the marker is present |
 | Cursor | `cursor` or `cursor-agent` on `PATH`, or `~/.cursor/` | `mcpServers.locksql` in `~/.cursor/mcp.json` | the entry exists |
@@ -71,7 +71,8 @@ its command is on `PATH` or its home directory exists.
 - locksql only reads `~/.claude.json` (a state file Claude Code owns); the
   server is added through the `claude` command.
 - `$CLAUDE_CONFIG_DIR` replaces `~/.claude` (and the `.claude.json` file is
-  read from it) when set; `$CODEX_HOME` replaces `~/.codex`.
+  read from it) and `$CODEX_HOME` replaces `~/.codex`, each only when set to
+  an absolute path. The paths in "To undo" follow these variables.
 - Cursor has no global rules file: the MCP server's own instructions carry
   the rules.
 - Symlinked files (dotfiles) are followed.
@@ -94,6 +95,11 @@ To undo:
 - Gemini CLI: delete `mcpServers.locksql` from `~/.gemini/settings.json` and
   the marked block in `~/.gemini/GEMINI.md`.
 - Cursor: delete `mcpServers.locksql` from `~/.cursor/mcp.json`.
+
+There is no opt-out: every later bare `locksql`, and every `locksql console`
+without `--profile`, wires installed agents again, so an entry you removed
+comes back. `locksql console --profile P` never wires agents; use it to keep
+an agent unwired.
 
 `locksql init` with no agent name does the same detection, but for the
 project files described below.
