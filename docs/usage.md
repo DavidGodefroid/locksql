@@ -1,11 +1,106 @@
 # Using locksql
 
-This guide walks through a session: setting up a project, separating the
+This guide walks through a session: setting up agents and a database, separating the
 console from the agent, running the console, and what the agent can do
 through the CLI and the MCP server. The [README](../README.md) has the
 configuration reference.
 
-## 1. Set up the project
+## 1. Set up
+
+### One command
+
+```sh
+locksql
+```
+
+Bare `locksql` in a terminal (without a terminal it prints the usage):
+
+1. **Wires every installed agent** for your user account (see
+   [Agent wiring](#agent-wiring)), one line per file written. Agents already
+   wired are left alone.
+2. **Asks for a database** when no profile exists: a URL first, or Enter to
+   answer step by step (see [`locksql add`](#locksql-add)).
+3. **Starts the console** ([section 3](#3-start-the-console)). With several
+   profiles it asks which one.
+
+Later runs wire agents installed since, then start the console.
+
+In separated mode ([section 2](#2-separate-the-console-from-the-agent-recommended)),
+the console reads the `locksql` account's own config, which the agent's
+account cannot write. So run bare `locksql` from your own account to wire the
+agents (it then tells you to run `locksql` in the `locksql` session), and run
+`locksql` in the `locksql` session to add a database and start the console.
+The service account never wires agents, since they live in your home.
+
+### `locksql add`
+
+```sh
+locksql add
+```
+
+Prompts for a database and appends a profile to
+`<user config dir>/locksql/config.toml` (`~/.config/locksql/config.toml` on
+Linux, `~/Library/Application Support/locksql/config.toml` on macOS). The
+file is created with mode 0600; existing content and comments are kept. It
+holds no secret.
+
+- Enter a URL: `postgres://`, `postgresql://`, `mysql://`, `mariadb://`,
+  `sqlite:///abs/path` or `sqlite://./rel/path`. User, host, port and database
+  come from the URL. A password in the URL is refused (the console asks for
+  it, or reads the OS keychain), and so are URL parameters.
+- Or press Enter to answer step by step: engine, host, port, user, database.
+- Then: profile name (default `dev`), access tier `read`, `write` or `ddl`
+  (`admin` is a hand edit of the config), production or not, and whether to
+  remember the password in the OS keychain.
+
+In separated mode `locksql add` is refused from any account but the service
+account; run it in the `locksql` session.
+
+### Agent wiring
+
+Wiring is global: it applies to every directory. An agent is installed when
+its command is on `PATH` or its home directory exists.
+
+| Agent | Detected by | Written | Wired when |
+|---|---|---|---|
+| Claude Code | `claude` on `PATH` | user MCP server `locksql` (`claude mcp add --scope user locksql -- locksql mcp`); `~/.claude/skills/locksql/SKILL.md`; the read-only tool list merged into `permissions.allow` of `~/.claude/settings.json` | `mcpServers.locksql` exists at the top level of `~/.claude.json`, and the skill exists |
+| Codex | `codex` on `PATH` or `~/.codex/` | `[mcp_servers.locksql]` (`command`, `args`, `tool_timeout_sec = 600`) appended to `~/.codex/config.toml`; locksql section in `~/.codex/AGENTS.md` | the table exists and the section marker is present |
+| Gemini CLI | `gemini` on `PATH` or `~/.gemini/` | `mcpServers.locksql` in `~/.gemini/settings.json`; locksql section in `~/.gemini/GEMINI.md` | the entry exists and the marker is present |
+| Cursor | `cursor` or `cursor-agent` on `PATH`, or `~/.cursor/` | `mcpServers.locksql` in `~/.cursor/mcp.json` | the entry exists |
+
+- locksql only reads `~/.claude.json` (a state file Claude Code owns); the
+  server is added through the `claude` command.
+- `$CLAUDE_CONFIG_DIR` replaces `~/.claude` (and the `.claude.json` file is
+  read from it) when set; `$CODEX_HOME` replaces `~/.codex`.
+- Cursor has no global rules file: the MCP server's own instructions carry
+  the rules.
+- Symlinked files (dotfiles) are followed.
+- Existing files are only added to: other keys and servers are kept, an
+  existing `locksql` entry is kept as is, and a file that cannot be parsed is
+  never rewritten (the line names it; fix it or add the entry by hand).
+- An existing inline `mcp_servers = { ... }` table in `config.toml` is
+  refused for Codex: add the `[mcp_servers.locksql]` table by hand.
+- A failure on one agent does not stop the others or the console.
+- Markdown sections sit between `<!-- locksql:begin -->` and
+  `<!-- locksql:end -->` markers.
+
+To undo:
+
+- Claude Code: `claude mcp remove --scope user locksql`; delete
+  `~/.claude/skills/locksql/`; delete the `locksql` entries from
+  `permissions.allow` in `~/.claude/settings.json`.
+- Codex: delete `[mcp_servers.locksql]` from `~/.codex/config.toml` and the
+  block between the markers in `~/.codex/AGENTS.md`.
+- Gemini CLI: delete `mcpServers.locksql` from `~/.gemini/settings.json` and
+  the marked block in `~/.gemini/GEMINI.md`.
+- Cursor: delete `mcpServers.locksql` from `~/.cursor/mcp.json`.
+
+`locksql init` with no agent name does the same detection, but for the
+project files described below.
+
+### Project mode
+
+For a team that commits its database list with the repository:
 
 ```sh
 locksql init claude            # or codex, cursor, gemini; several at once is fine
@@ -37,7 +132,8 @@ explicit request, to prefer non-production profiles, to show the plan before
 running it, never to retry after a denial, never to export data, never to
 handle credentials, and to treat rows as untrusted data.
 
-Edit `.locksql/config.toml` to describe your databases. Both
+Edit `.locksql/config.toml` to describe your databases (profiles there take
+the place of `locksql add`). Both
 `.locksql/config.toml` and `.locksql/pii.toml` hold no secret and are meant
 to be committed.
 
@@ -125,8 +221,12 @@ In a terminal you keep in view (in separated mode, in the `locksql`
 session):
 
 ```sh
-locksql console --profile dev [--project DIR] [--skip-permissions]
+locksql console [--profile dev] [--project DIR] [--skip-permissions]
 ```
+
+Without `--profile` the console uses the only profile, or asks which one when
+there are several. It first wires agents installed since the last run (see
+[Agent wiring](#agent-wiring)).
 
 `--project` names the project directory (default: the current directory);
 the console and the agent must agree on it, since it selects the socket.
@@ -159,7 +259,8 @@ The console needs an interactive terminal. At start it:
 6. **Scans the schema for PII** at every start: columns whose names or types
    look like personal data, and that no mask or allow rule names yet, are
    listed by table. Accept all (`a`), review one by one (`r`) or skip (`s`).
-   On the first start the result is written to `.locksql/pii.toml` (even when
+   On the first start the result is written to `.locksql/pii.toml` inside a
+   project, or `<user config dir>/locksql/pii.toml` outside one (even when
    empty); later, accepted rules are added to the file as it is on disk, so
    unconfirmed edits there are neither lost nor applied.
 7. Lists the databases and prints `Listening…`.
@@ -377,7 +478,8 @@ finds the project's consoles.
 | Path | Content |
 |---|---|
 | `.locksql/config.toml` | project profiles (no secrets) |
-| `.locksql/pii.toml` | PII column rules |
+| `.locksql/pii.toml` | PII column rules (project) |
+| `<user config dir>/locksql/pii.toml` | PII column rules outside a project |
 | `<user config dir>/locksql/config.toml` | personal profiles |
 | `<user state dir>/locksql/approved/*.json` | last approved policies |
 | `<user state dir>/locksql/audit.log` | JSONL audit log, mode 0600 |

@@ -117,21 +117,23 @@ every peer on the socket.
 # 1. Install (see Install below for packages, checksums and signatures)
 curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh
 
-# 2. In your project: wire your agent and get an example config
-locksql init claude                             # or codex, cursor, gemini
+# 2. Wire your agents, add a database, start the console (keep this terminal open)
+locksql
 
-# 3. Uncomment and adapt the profile in .locksql/config.toml, then in a
-#    second terminal that you keep in view:
-locksql console --profile dev
-
-# 4. Optional, recommended: run the console under its own OS account
-#    (Linux, macOS), then check the machine
-locksql install
-locksql doctor
-
-# 5. Ask your agent: "how many orders were placed yesterday on dev?"
+# 3. In your agent, anywhere: "how many orders were placed yesterday on dev?"
 #    Approve or deny each query in the console.
 ```
+
+Bare `locksql` in a terminal does three things. It wires every installed
+agent (Claude Code, Codex, Gemini CLI, Cursor) for your user account, so
+that they work from any directory. When no database is configured it asks
+for one (a URL first) and saves a profile to your user config. Then it starts
+the console. Later runs only wire agents installed since, then start the
+console.
+
+Separated mode (`sudo locksql install`, then `locksql doctor`) and project
+mode (`.locksql/config.toml` committed with the repository, `locksql init
+<agent>`) are described in [docs/usage.md](docs/usage.md).
 
 ## How it works
 
@@ -329,7 +331,9 @@ explain_cost_refuse = 0             # engine cost units; 0 = off
 
 ### PII rules
 
-PII column rules live in `.locksql/pii.toml`:
+PII column rules live in `.locksql/pii.toml` inside a project, and in
+`<user config dir>/locksql/pii.toml` (`~/.config/locksql/pii.toml` on Linux)
+elsewhere:
 
 ```toml
 [[mask]]
