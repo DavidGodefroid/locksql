@@ -81,12 +81,21 @@ func ProjectRoot(cwd string) string {
 	}
 }
 
-// change is one planned file write.
+// base is where a set of steps writes: a root directory, whether every
+// path must stay inside it, and how a relative path is shown to the human.
+type base struct {
+	root      string
+	contained bool
+	display   func(rel string) string
+}
+
+// change is one planned file write, or one command to run.
 type change struct {
 	rel     string
 	target  string // resolved absolute path
 	content []byte // nil when nothing is written
 	mode    fs.FileMode
+	exec    []string // a command apply runs after the file writes, instead of writing a file
 	action  Action
 }
 
@@ -94,26 +103,26 @@ type change struct {
 // Every change is computed and checked before the first write, so an
 // invalid existing file or an escaping symlink leaves the project untouched.
 func Init(root, agent string) (Result, error) {
-	var steps []func(string) (change, error)
+	var steps []func(base) (change, error)
 	var notes string
 	switch agent {
 	case "claude":
-		steps = []func(string) (change, error){
+		steps = []func(base) (change, error){
 			mcpEntry(".mcp.json", map[string]any{"type": "stdio", "command": "locksql", "args": []string{"mcp"}}),
 			fileIfAbsent(".claude/skills/locksql/SKILL.md", "templates/skill.md"),
 		}
 		notes = claudeNotes
 	case "codex":
-		steps = []func(string) (change, error){section("AGENTS.md")}
+		steps = []func(base) (change, error){section("AGENTS.md")}
 		notes = codexNotes
 	case "cursor":
-		steps = []func(string) (change, error){
+		steps = []func(base) (change, error){
 			mcpEntry(".cursor/mcp.json", map[string]any{"command": "locksql", "args": []string{"mcp"}}),
 			cursorRuleFile(".cursor/rules/locksql.mdc"),
 		}
 		notes = cursorNotes
 	case "gemini":
-		steps = []func(string) (change, error){
+		steps = []func(base) (change, error){
 			// Gemini CLI's timeout is in milliseconds; it must cover the
 			// console's 5 minute approval timeout.
 			mcpEntry(".gemini/settings.json", map[string]any{"command": "locksql", "args": []string{"mcp"}, "timeout": 600000}),
@@ -132,31 +141,95 @@ func Init(root, agent string) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("project root: %w", err)
 	}
+	b := base{root: realRoot, contained: true, display: func(r string) string { return r }}
+	acts, _, err := apply(b, steps, false, nil)
+	if err != nil && acts == nil { // a step failed: nothing was written
+		return Result{}, err
+	}
+	return Result{Root: root, Actions: acts, Notes: notes}, err
+}
+
+// apply computes every change of steps, then, unless dry, writes the files
+// and runs the commands, in that order. It returns the actions and whether
+// anything would be (or was) written or run. A step error leaves everything
+// untouched; after a write or command error, the actions of the changes
+// already made are returned with it.
+func apply(b base, steps []func(base) (change, error), dry bool, run func(string, ...string) ([]byte, error)) ([]Action, bool, error) {
 	changes := make([]change, 0, len(steps))
+	pending := false
 	for _, step := range steps {
-		c, err := step(realRoot)
+		c, err := step(b)
 		if err != nil {
-			return Result{}, err
+			return nil, false, err
+		}
+		if c.content != nil || c.exec != nil {
+			pending = true
 		}
 		changes = append(changes, c)
 	}
+	if dry {
+		acts := make([]Action, 0, len(changes))
+		for _, c := range changes {
+			acts = append(acts, c.action)
+		}
+		return acts, pending, nil
+	}
 
-	res := Result{Root: root, Notes: notes}
-	for _, c := range changes {
-		if c.content != nil {
-			if err := writeAtomic(c.target, c.content, c.mode); err != nil {
-				return res, fmt.Errorf("%s: %w", c.rel, err)
+	done := make([]bool, len(changes))
+	made := func() []Action {
+		acts := []Action{}
+		for i, c := range changes {
+			if done[i] {
+				acts = append(acts, c.action)
 			}
 		}
-		res.Actions = append(res.Actions, c.action)
+		return acts
 	}
-	return res, nil
+	for i, c := range changes {
+		if c.exec != nil {
+			continue
+		}
+		if c.content != nil {
+			if err := writeAtomic(c.target, c.content, c.mode); err != nil {
+				return made(), pending, fmt.Errorf("%s: %w", b.display(c.rel), err)
+			}
+		}
+		done[i] = true
+	}
+	for i, c := range changes {
+		if c.exec == nil {
+			continue
+		}
+		if out, err := run(c.exec[0], c.exec[1:]...); err != nil {
+			msg := firstLine(out)
+			if msg == "" {
+				msg = err.Error()
+			}
+			return made(), pending, fmt.Errorf("%s failed: %s", strings.Join(c.exec[:min(3, len(c.exec))], " "), msg)
+		}
+		done[i] = true
+	}
+	return made(), pending, nil
 }
 
-// resolve maps rel to an absolute path under root, following symlinks of
-// every existing component, and refuses a path that leaves root.
-func resolve(root, rel string) (string, error) {
-	p := filepath.Join(root, filepath.FromSlash(rel))
+// firstLine returns the first non-empty line of out, trimmed to 200 bytes.
+func firstLine(out []byte) string {
+	for _, l := range strings.Split(string(out), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			if len(l) > 200 {
+				l = l[:200]
+			}
+			return l
+		}
+	}
+	return ""
+}
+
+// resolve maps rel to an absolute path under b.root, following symlinks of
+// every existing component. When b is contained, a path that leaves the
+// root is refused.
+func resolve(b base, rel string) (string, error) {
+	p := filepath.Join(b.root, filepath.FromSlash(rel))
 	existing, rest := p, ""
 	for {
 		if _, err := os.Lstat(existing); err == nil {
@@ -176,7 +249,10 @@ func resolve(root, rel string) (string, error) {
 		return "", fmt.Errorf("%s: %w", rel, err)
 	}
 	target := filepath.Join(real, rest)
-	r, err := filepath.Rel(root, target)
+	if !b.contained {
+		return target, nil
+	}
+	r, err := filepath.Rel(b.root, target)
 	if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) || filepath.IsAbs(r) {
 		return "", fmt.Errorf("%s: resolves outside the project (%s); refusing to write there", rel, target)
 	}
@@ -184,8 +260,8 @@ func resolve(root, rel string) (string, error) {
 }
 
 // read resolves rel and returns its content, or nil when it does not exist.
-func read(root, rel string) (target string, data []byte, mode fs.FileMode, exists bool, err error) {
-	target, err = resolve(root, rel)
+func read(b base, rel string) (target string, data []byte, mode fs.FileMode, exists bool, err error) {
+	target, err = resolve(b, rel)
 	if err != nil {
 		return "", nil, 0, false, err
 	}
@@ -216,24 +292,24 @@ func template(name string) []byte {
 
 // fileIfAbsent creates rel from a template. An existing file is unchanged
 // when it already matches, and kept otherwise.
-func fileIfAbsent(rel, tmpl string) func(string) (change, error) {
-	return func(root string) (change, error) {
-		return plainFile(root, rel, template(tmpl))
+func fileIfAbsent(rel, tmpl string) func(base) (change, error) {
+	return func(b base) (change, error) {
+		return plainFile(b, rel, template(tmpl))
 	}
 }
 
-func cursorRuleFile(rel string) func(string) (change, error) {
-	return func(root string) (change, error) {
-		return plainFile(root, rel, []byte(cursorRule()))
+func cursorRuleFile(rel string) func(base) (change, error) {
+	return func(b base) (change, error) {
+		return plainFile(b, rel, []byte(cursorRule()))
 	}
 }
 
-func plainFile(root, rel string, want []byte) (change, error) {
-	target, data, mode, exists, err := read(root, rel)
+func plainFile(b base, rel string, want []byte) (change, error) {
+	target, data, mode, exists, err := read(b, rel)
 	if err != nil {
 		return change{}, err
 	}
-	c := change{rel: rel, target: target, mode: mode, action: Action{Path: rel}}
+	c := change{rel: rel, target: target, mode: mode, action: Action{Path: b.display(rel)}}
 	switch {
 	case !exists:
 		c.content, c.action.Status = want, StatusCreated
@@ -254,13 +330,13 @@ func cursorRule() string {
 
 // configIfAbsent creates the commented example project config. Any existing
 // config is the human's and is left alone.
-func configIfAbsent(rel string) func(string) (change, error) {
-	return func(root string) (change, error) {
-		target, _, mode, exists, err := read(root, rel)
+func configIfAbsent(rel string) func(base) (change, error) {
+	return func(b base) (change, error) {
+		target, _, mode, exists, err := read(b, rel)
 		if err != nil {
 			return change{}, err
 		}
-		c := change{rel: rel, target: target, mode: mode, action: Action{Path: rel, Status: StatusUnchanged}}
+		c := change{rel: rel, target: target, mode: mode, action: Action{Path: b.display(rel), Status: StatusUnchanged}}
 		if !exists {
 			c.content, c.action.Status = template("templates/config.toml"), StatusCreated
 		}
@@ -270,14 +346,14 @@ func configIfAbsent(rel string) func(string) (change, error) {
 
 // section appends the shared instructions to a Markdown file, once,
 // between markers.
-func section(rel string) func(string) (change, error) {
-	return func(root string) (change, error) {
-		target, data, mode, exists, err := read(root, rel)
+func section(rel string) func(base) (change, error) {
+	return func(b base) (change, error) {
+		target, data, mode, exists, err := read(b, rel)
 		if err != nil {
 			return change{}, err
 		}
 		block := sectionBegin + "\n" + string(template("templates/agents.md")) + sectionEnd + "\n"
-		c := change{rel: rel, target: target, mode: mode, action: Action{Path: rel}}
+		c := change{rel: rel, target: target, mode: mode, action: Action{Path: b.display(rel)}}
 		switch {
 		case !exists || len(bytes.TrimSpace(data)) == 0:
 			c.content, c.action.Status = []byte(block), StatusCreated
@@ -299,13 +375,13 @@ func section(rel string) func(string) (change, error) {
 
 // mcpEntry merges mcpServers.locksql into a JSON MCP config, keeping every
 // other key in its place. An existing locksql entry is never replaced.
-func mcpEntry(rel string, entry map[string]any) func(string) (change, error) {
-	return func(root string) (change, error) {
-		target, data, mode, exists, err := read(root, rel)
+func mcpEntry(rel string, entry map[string]any) func(base) (change, error) {
+	return func(b base) (change, error) {
+		target, data, mode, exists, err := read(b, rel)
 		if err != nil {
 			return change{}, err
 		}
-		c := change{rel: rel, target: target, mode: mode, action: Action{Path: rel}}
+		c := change{rel: rel, target: target, mode: mode, action: Action{Path: b.display(rel)}}
 		entryJSON, err := json.Marshal(entry)
 		if err != nil {
 			return change{}, err
@@ -313,13 +389,13 @@ func mcpEntry(rel string, entry map[string]any) func(string) (change, error) {
 		var top orderedObject
 		if exists && len(bytes.TrimSpace(data)) > 0 {
 			if err := json.Unmarshal(data, &top); err != nil {
-				return change{}, fmt.Errorf("%s: not a JSON object (%v); fix it or add the locksql server by hand", rel, err)
+				return change{}, fmt.Errorf("%s: not a JSON object (%v); fix it or add the locksql server by hand", b.display(rel), err)
 			}
 		}
 		var servers orderedObject
 		if raw, ok := top.get("mcpServers"); ok && string(bytes.TrimSpace(raw)) != "null" {
 			if err := json.Unmarshal(raw, &servers); err != nil {
-				return change{}, fmt.Errorf("%s: mcpServers is not a JSON object; fix it or add the locksql server by hand", rel)
+				return change{}, fmt.Errorf("%s: mcpServers is not a JSON object; fix it or add the locksql server by hand", b.display(rel))
 			}
 		}
 		if cur, ok := servers.get("locksql"); ok {
