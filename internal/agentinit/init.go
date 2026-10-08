@@ -43,7 +43,7 @@ const (
 
 // Action reports what Init did to one file.
 type Action struct {
-	Path   string // slash-separated, relative to the project root
+	Path   string // slash-separated, relative to the project root (or ~/... in the user scope)
 	Status string
 	Detail string // why a file was kept, when it was
 }
