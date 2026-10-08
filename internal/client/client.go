@@ -25,6 +25,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
+	"github.com/DavidGodefroid/locksql/internal/sysconf"
 )
 
 // ErrNoConsole means no console listens for the profile in this project.
@@ -57,8 +58,17 @@ func (e *NoConsoleError) Unwrap() error { return e.Err }
 func StartCommand(profile string) string { return "locksql console --profile " + profile }
 
 // SocketPath is the console socket of profile for the project of cwd. The
-// console computes the same path.
+// console computes the same path: in the shared socket directory when the
+// machine separates the console from the agent (sysconf), in the user's
+// runtime directory otherwise.
 func SocketPath(cwd, profile string) (string, error) {
+	sys, err := sysconf.Load()
+	if err != nil {
+		return "", err
+	}
+	if sys != nil {
+		return ipc.SharedSocketPath(sys.SocketDir, config.ProjectKey(cwd), profile)
+	}
 	return ipc.SocketPath(config.ProjectKey(cwd), profile)
 }
 
@@ -101,7 +111,33 @@ func Dial(cwd, profile string) (*Client, error) {
 		}
 		return nil, fmt.Errorf("client: connecting to the console: %w", err)
 	}
+	if err := checkConsole(conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
 	return &Client{profile: profile, conn: conn, r: bufio.NewReader(conn)}, nil
+}
+
+// checkConsole verifies, in a separated setup, that the process behind the
+// socket runs as the console account: the kernel reports the server's
+// credentials to the client too.
+func checkConsole(conn net.Conn) error {
+	sys, err := sysconf.Load()
+	if err != nil || sys == nil {
+		return err
+	}
+	want, err := sys.ServiceUID()
+	if err != nil {
+		return err
+	}
+	cred, err := ipc.PeerCred(conn)
+	if err != nil {
+		return fmt.Errorf("client: %w", err)
+	}
+	if cred.UID != want && cred.UID != -1 {
+		return fmt.Errorf("client: the socket is served by uid %d, not by the console account %q", cred.UID, sys.ServiceUser)
+	}
+	return nil
 }
 
 // noListener reports a dial error meaning nobody listens at the path: no

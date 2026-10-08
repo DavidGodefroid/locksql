@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -65,6 +67,9 @@ type Options struct {
 	StateDir string
 	// Version is the console version reported to clients.
 	Version string
+	// TTY is the console's terminal device (nil when unknown): its owner
+	// must be the console's account in a separated setup.
+	TTY *os.File
 }
 
 // ServerConfig holds what a Server needs once the start-up sequence is
@@ -98,6 +103,9 @@ type ServerConfig struct {
 	// Quantum levels the response time of query.run (ResponseQuantum in
 	// the real console, 0 to disable).
 	Quantum time.Duration
+	// PeerAllowed decides which clients are served, from the kernel's
+	// credentials of the peer. Nil serves the console's own account only.
+	PeerAllowed func(ipc.Cred) bool
 }
 
 // plan is a one-shot plan awaiting query.run.
@@ -344,16 +352,27 @@ func (s *Server) accept(ctx context.Context, ln net.Listener, jobs chan<- job, w
 			}
 			continue
 		}
-		if ok, err := ipc.PeerAllowed(c); !ok || err != nil {
+		cred, err := ipc.PeerCred(c)
+		if err != nil || !s.peerAllowed(cred) {
 			c.Close()
 			continue
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			serveConn(ctx, c, jobs, inflight)
+			serveConn(withPeer(ctx, cred), c, jobs, inflight)
 		}()
 	}
+}
+
+// peerAllowed applies the peer check: the configured one, or the console's
+// own account (on Windows, which has no peer credentials, the socket
+// directory's ACL is the check).
+func (s *Server) peerAllowed(c ipc.Cred) bool {
+	if s.cfg.PeerAllowed != nil {
+		return s.cfg.PeerAllowed(c)
+	}
+	return c.UID == os.Getuid() || c.UID == -1 && runtime.GOOS == "windows"
 }
 
 // maxQueued bounds the requests a client may pipeline behind the one being

@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+// Cred is what the kernel says about the process at the other end of a
+// socket. PID is -1 when the platform does not report it; on Windows UID is
+// -1 too (no peer credentials).
+type Cred struct {
+	UID, GID, PID int
+}
+
 // ErrAlreadyRunning means a live console already listens on the socket.
 var ErrAlreadyRunning = errors.New("ipc: a console is already running for this profile")
 

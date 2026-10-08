@@ -13,3 +13,11 @@ func PeerAllowed(c net.Conn) (bool, error) {
 	}
 	return true, nil
 }
+
+// PeerCred has no kernel record to read on Windows: UID is -1.
+func PeerCred(c net.Conn) (Cred, error) {
+	if _, err := unixConn(c); err != nil {
+		return Cred{}, err
+	}
+	return Cred{UID: -1, GID: -1, PID: -1}, nil
+}

@@ -423,7 +423,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		return *r
 	}
 
-	s.screen(pl)
+	s.screen(ctx, pl)
 	if s.autoApprove() && !pl.unmask {
 		rec.Event, rec.Decision = audit.EventAuto, "auto"
 		s.println("auto-approved (--skip-permissions)")

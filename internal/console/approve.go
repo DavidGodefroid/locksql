@@ -21,7 +21,7 @@ const (
 )
 
 // screen prints the approval screen of a plan (spec §6).
-func (s *Server) screen(pl *plan) {
+func (s *Server) screen(ctx context.Context, pl *plan) {
 	db := pl.db
 	if db == "" {
 		db = "(default)"
@@ -29,6 +29,9 @@ func (s *Server) screen(pl *plan) {
 	s.println("")
 	s.println(fmt.Sprintf("%s━━ %s ━━ %s / %s ━━ user %s ━━ tier %s%s",
 		bold, strings.ToUpper(s.profile.Name), safeText(s.host(), false), safeText(db, false), safeText(s.cfg.DBUser, false), s.profile.Tier, reset))
+	if who := peerText(ctx); who != "" {
+		s.println("requested by " + safeText(who, false))
+	}
 	for _, line := range strings.Split(s.highlight(pl), "\n") {
 		s.println(line)
 	}

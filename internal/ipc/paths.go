@@ -53,6 +53,25 @@ func SocketPath(projectHash, profile string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return socketIn(dir, projectHash, profile)
+}
+
+// SharedSocketPath is SocketPath in the shared socket directory of a
+// separated setup.
+func SharedSocketPath(dir, projectHash, profile string) (string, error) {
+	if err := checkName("project hash", projectHash); err != nil {
+		return "", err
+	}
+	if err := checkName("profile", profile); err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("ipc: shared socket dir %q is not absolute", dir)
+	}
+	return socketIn(dir, projectHash, profile)
+}
+
+func socketIn(dir, projectHash, profile string) (string, error) {
 	p := filepath.Join(dir, projectHash+"-"+profile+".sock")
 	if len(p) <= maxSocketPath {
 		return p, nil

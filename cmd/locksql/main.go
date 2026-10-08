@@ -22,7 +22,8 @@ var version = "dev"
 const usageText = `usage: locksql <command> [arguments]
 
 Human commands:
-  console  --profile P [--skip-permissions]   run the approval console
+  console  --profile P [--project DIR] [--skip-permissions]
+                                              run the approval console
   forget   --profile P                        remove the keychain secret
   init     claude|codex|cursor|gemini [...]   write agent integration files
 

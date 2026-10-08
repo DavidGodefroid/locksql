@@ -18,7 +18,6 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
-	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/secrets"
 )
@@ -136,6 +135,13 @@ func Run(ctx context.Context, o Options) error {
 	p = approved.Profile
 	st.profile = p
 
+	// Separation from the agent, before any secret is asked for.
+	iso, err := checkIsolation(o.IO, realIsolationEnv(o.TTY), p)
+	if err != nil {
+		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
+		return err
+	}
+
 	// 2. Production banner and typed profile name.
 	if p.Production {
 		o.IO.Println(red + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + reset)
@@ -197,12 +203,12 @@ func Run(ctx context.Context, o Options) error {
 	}
 
 	// 8. Socket.
-	path, err := ipc.SocketPath(config.ProjectKey(o.Cwd), p.Name)
+	path, err := iso.socketPath(config.ProjectKey(o.Cwd), p.Name)
 	if err != nil {
 		closeSess()
 		return err
 	}
-	ln, err := ipc.Listen(path)
+	ln, err := iso.listen(path)
 	if err != nil {
 		closeSess()
 		return err
@@ -212,7 +218,7 @@ func Run(ctx context.Context, o Options) error {
 		Policy: approved, Root: piiRoot, StateDir: o.StateDir, ApprovedKey: key,
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Now: o.Now,
 		SkipPermissions: o.SkipPermissions, Version: o.Version, LoadPolicy: loadPolicy,
-		Reconnect: st.reconnect, Quantum: ResponseQuantum,
+		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(),
 	})
 	if err != nil {
 		ln.Close()

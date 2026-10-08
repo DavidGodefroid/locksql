@@ -264,3 +264,52 @@ func TestPeerAllowedRejectsNonUnix(t *testing.T) {
 		t.Fatalf("PeerAllowed(pipe) = %v, %v", ok, err)
 	}
 }
+
+func TestListenShared(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no shared sockets on Windows")
+	}
+	base, err := os.MkdirTemp("", "lsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(base)
+	dir := filepath.Join(base, "run")
+	if err := os.Mkdir(dir, 0o710); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o710); err != nil {
+		t.Fatal(err)
+	}
+	gid := os.Getgid()
+	path := filepath.Join(dir, "x.sock")
+	ln, err := ListenShared(path, gid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o660 {
+		t.Errorf("socket mode %04o, want 0660", fi.Mode().Perm())
+	}
+	ln.Close()
+
+	for _, mode := range []os.FileMode{0o777, 0o711, 0o700} {
+		if err := os.Chmod(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+		if ln, err := ListenShared(path, gid); err == nil {
+			ln.Close()
+			t.Errorf("dir mode %04o accepted", mode)
+		}
+	}
+	if err := os.Chmod(dir, 0o710); err != nil {
+		t.Fatal(err)
+	}
+	if ln, err := ListenShared(path, gid+1); err == nil {
+		ln.Close()
+		t.Error("a dir of another group accepted")
+	}
+}

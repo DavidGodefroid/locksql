@@ -3,7 +3,9 @@
 package ipc
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 )
@@ -27,3 +29,8 @@ func privateDir(path string) error {
 }
 
 func restrictSocket(string) error { return nil }
+
+// ListenShared is not supported on Windows: there is no separated setup.
+func ListenShared(string, int) (net.Listener, error) {
+	return nil, errors.New("ipc: a shared console socket is not supported on Windows")
+}

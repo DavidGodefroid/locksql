@@ -4,6 +4,7 @@ package ipc
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -43,4 +44,53 @@ func restrictSocket(path string) error {
 		return fmt.Errorf("ipc: %w", err)
 	}
 	return nil
+}
+
+// ListenShared opens a console socket in the shared socket directory of a
+// separated setup (see package sysconf): the directory must already exist
+// (locksql install creates it), belong to the console's user and to the
+// client group gid, and give others no access; the socket is made
+// read-write for that group only (0660). The peer check still decides who
+// is served.
+func ListenShared(path string, gid int) (net.Listener, error) {
+	dir := filepath.Dir(path)
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return nil, fmt.Errorf("ipc: shared socket dir: %w (run locksql install)", err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	switch {
+	case !fi.IsDir():
+		return nil, fmt.Errorf("ipc: shared socket dir %s is not a directory", dir)
+	case !ok:
+		return nil, fmt.Errorf("ipc: cannot read the owner of %s", dir)
+	case int(st.Uid) != os.Getuid():
+		return nil, fmt.Errorf("ipc: shared socket dir %s is owned by uid %d, not by the console's user", dir, st.Uid)
+	case int(st.Gid) != gid:
+		return nil, fmt.Errorf("ipc: shared socket dir %s does not belong to the client group (gid %d)", dir, gid)
+	case fi.Mode().Perm()&0o027 != 0 || fi.Mode().Perm()&0o010 == 0:
+		return nil, fmt.Errorf("ipc: shared socket dir %s has mode %04o; want 0710 or 0750", dir, fi.Mode().Perm())
+	}
+	if err := clearStale(path); err != nil {
+		return nil, err
+	}
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		if alive(path) {
+			return nil, fmt.Errorf("%w (%s)", ErrAlreadyRunning, path)
+		}
+		return nil, fmt.Errorf("ipc: listen: %w", err)
+	}
+	if ul, ok := ln.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(true)
+	}
+	if err := os.Chown(path, -1, gid); err != nil {
+		ln.Close()
+		return nil, fmt.Errorf("ipc: %w", err)
+	}
+	if err := os.Chmod(path, 0o660); err != nil {
+		ln.Close()
+		return nil, fmt.Errorf("ipc: %w", err)
+	}
+	return ln, nil
 }
