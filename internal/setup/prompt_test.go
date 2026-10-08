@@ -60,3 +60,23 @@ func TestPromptAbortWritesNothing(t *testing.T) {
 		t.Fatalf("err = %v, want ErrAborted", err)
 	}
 }
+
+func TestPromptStepByStepRefusesSecretsInFreeText(t *testing.T) {
+	// engine, host (bad then ok), port, user (bad then ok), database (bad then ok), name, tier, production, keychain
+	s := &script{answers: []string{"", "1", "h:secret", "::1", "", "app:secret", "app", "d/b;secret", "db", "", "", "", ""}}
+	a, err := Prompt(context.Background(), s, "/", nil)
+	if err != nil || a.Host != "::1" || a.User != "app" || a.Database != "db" {
+		t.Fatalf("Prompt = %+v, %v", a, err)
+	}
+	if strings.Contains(strings.Join(s.out, "\n"), "secret") {
+		t.Fatal("answer echoed")
+	}
+}
+
+func TestPromptSQLiteRelativeAnswer(t *testing.T) {
+	s := &script{answers: []string{"", "4", "app.db", "", "", "", ""}}
+	a, err := Prompt(context.Background(), s, "/work", nil)
+	if err != nil || a.Path != "/work/app.db" {
+		t.Fatalf("Prompt = %+v, %v", a, err)
+	}
+}

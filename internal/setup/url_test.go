@@ -46,3 +46,18 @@ func TestParseURLRefusesWithoutEcho(t *testing.T) {
 		}
 	}
 }
+
+func TestParseURLSQLiteStrict(t *testing.T) {
+	for _, in := range []string{"sqlite://user:pw@host/x.db", "sqlite://localhost/x.db", "sqlite://x.db"} {
+		_, err := ParseURL(in, "/")
+		if err == nil {
+			t.Errorf("ParseURL(%q) accepted", in)
+		} else if strings.Contains(err.Error(), "pw") {
+			t.Errorf("error echoes input: %v", err)
+		}
+	}
+	got, err := ParseURL("SQLITE:///var/x.db", "/")
+	if err != nil || got.Path != "/var/x.db" {
+		t.Fatalf("ParseURL upper-case = %+v, %v", got, err)
+	}
+}

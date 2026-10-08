@@ -53,6 +53,9 @@ func Render(a Answers) []byte {
 // 0700 directory) when absent. The result is validated as a whole before
 // anything is written; existing content is kept byte for byte.
 func AppendProfile(path string, a Answers) error {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved // keep a symlinked config a symlink
+	}
 	old, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err

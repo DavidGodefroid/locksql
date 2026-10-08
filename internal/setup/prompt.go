@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // IO is the terminal the prompts use; *console.Terminal implements it.
@@ -43,7 +46,7 @@ func Prompt(ctx context.Context, io IO, cwd string, taken []string) (Answers, er
 			return Answers{}, err
 		}
 		if l == "" {
-			if a.Target, err = stepByStep(ask, cwd); err != nil {
+			if a.Target, err = stepByStep(io, ask, cwd); err != nil {
 				return Answers{}, err
 			}
 			break
@@ -124,7 +127,7 @@ func yesNo(ask func(string) (string, error), p string, def bool) (bool, error) {
 	}
 }
 
-func stepByStep(ask func(string) (string, error), cwd string) (Target, error) {
+func stepByStep(io IO, ask func(string) (string, error), cwd string) (Target, error) {
 	var t Target
 	for t.Engine == "" {
 		l, err := ask("Engine: 1) postgres 2) mysql 3) mariadb 4) sqlite\n> ")
@@ -144,6 +147,9 @@ func stepByStep(ask func(string) (string, error), cwd string) (Target, error) {
 				return Target{}, err
 			}
 			if l != "" {
+				if !filepath.IsAbs(l) && !strings.HasPrefix(l, "./") && !strings.HasPrefix(l, "../") {
+					l = "./" + l
+				}
 				if pt, err := ParseURL("sqlite://"+l, cwd); err == nil {
 					t.Path = pt.Path
 				}
@@ -152,11 +158,15 @@ func stepByStep(ask func(string) (string, error), cwd string) (Target, error) {
 		return t, nil
 	}
 	var err error
-	if t.Host, err = ask("Host [127.0.0.1]: "); err != nil {
-		return Target{}, err
-	}
-	if t.Host == "" {
-		t.Host = "127.0.0.1"
+	for t.Host == "" {
+		l, err := askChecked(io, ask, "Host [127.0.0.1]: ", "  a host is a name or an address, without '@', '/', ':' or spaces", validHost)
+		if err != nil {
+			return Target{}, err
+		}
+		t.Host = l
+		if t.Host == "" {
+			t.Host = "127.0.0.1"
+		}
 	}
 	for t.Port == 0 {
 		l, err := ask(fmt.Sprintf("Port [%d]: ", DefaultPort(t.Engine)))
@@ -169,11 +179,40 @@ func stepByStep(ask func(string) (string, error), cwd string) (Target, error) {
 			t.Port = n
 		}
 	}
-	if t.User, err = ask("User (empty: asked at console start): "); err != nil {
+	if t.User, err = askChecked(io, ask, "User (empty: asked at console start): ", "  a user name has no '@', ':', '/' or spaces", validUser); err != nil {
 		return Target{}, err
 	}
-	if t.Database, err = ask("Database (empty: chosen per query): "); err != nil {
+	if t.Database, err = askChecked(io, ask, "Database (empty: chosen per query): ", "  a database name has no '/', '@', ';' or spaces", validDatabase); err != nil {
 		return Target{}, err
 	}
 	return t, nil
+}
+
+// askChecked re-asks until ok accepts the answer. The hint never quotes it.
+func askChecked(io IO, ask func(string) (string, error), p, hint string, ok func(string) bool) (string, error) {
+	for {
+		l, err := ask(p)
+		if err != nil {
+			return "", err
+		}
+		if ok(l) {
+			return l, nil
+		}
+		io.Println(hint)
+	}
+}
+
+func validHost(s string) bool {
+	if strings.ContainsAny(s, "@/") || strings.IndexFunc(s, unicode.IsSpace) >= 0 {
+		return false
+	}
+	return !strings.Contains(s, ":") || net.ParseIP(s) != nil
+}
+
+func validUser(s string) bool {
+	return !strings.ContainsAny(s, "@:/") && strings.IndexFunc(s, unicode.IsSpace) < 0
+}
+
+func validDatabase(s string) bool {
+	return !strings.ContainsAny(s, "/@;") && strings.IndexFunc(s, unicode.IsSpace) < 0
 }

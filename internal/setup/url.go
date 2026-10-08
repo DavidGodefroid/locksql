@@ -37,8 +37,12 @@ func DefaultPort(engine string) int {
 // errors never quote the URL.
 func ParseURL(s, cwd string) (Target, error) {
 	s = strings.TrimSpace(s)
+	if i := strings.Index(s, "://"); i > 0 {
+		s = strings.ToLower(s[:i]) + s[i:]
+	}
 	if rest, ok := strings.CutPrefix(s, "sqlite://"); ok {
-		if rest == "" || strings.ContainsAny(rest, "?#") {
+		local := strings.HasPrefix(rest, "/") || strings.HasPrefix(rest, "./") || strings.HasPrefix(rest, "../")
+		if !local || strings.ContainsAny(rest, "?#@") {
 			return Target{}, errors.New("sqlite URL: want sqlite:///absolute/path or sqlite://./relative/path")
 		}
 		if !filepath.IsAbs(rest) {

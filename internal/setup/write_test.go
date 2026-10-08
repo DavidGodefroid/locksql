@@ -62,3 +62,24 @@ func TestAppendProfileRefusesInvalidAndDuplicate(t *testing.T) {
 		t.Fatal("file changed after a refused append")
 	}
 }
+
+func TestAppendProfileKeepsSymlink(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "dotfiles", "config.toml")
+	os.MkdirAll(filepath.Dir(target), 0o700)
+	os.WriteFile(target, []byte("[profiles.prod]\nengine = \"mysql\"\nhost = \"db\"\n"), 0o600)
+	link := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip(err)
+	}
+	a := Answers{Target: Target{Engine: "sqlite", Path: "/tmp/x.db"}, Name: "dev", Tier: "read"}
+	if err := AppendProfile(link, a); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Lstat(link); err != nil || st.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link replaced: %v %v", st, err)
+	}
+	cfg, err := config.LoadFrom(t.TempDir(), target)
+	if err != nil || len(cfg.Profiles) != 2 {
+		t.Fatalf("target: %+v %v", cfg, err)
+	}
+}
