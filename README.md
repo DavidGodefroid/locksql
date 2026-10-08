@@ -133,7 +133,8 @@ console.
 
 Separated mode (`sudo locksql install`, then `locksql doctor`) and project
 mode (`.locksql/config.toml` committed with the repository, `locksql init
-<agent>`) are described in [docs/usage.md](docs/usage.md).
+<agent>`) are described in [docs/usage.md](docs/usage.md). Separated mode
+always uses a project config, read by both accounts.
 
 ## How it works
 

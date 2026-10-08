@@ -26,11 +26,19 @@ Bare `locksql` in a terminal (without a terminal it prints the usage):
 Later runs wire agents installed since, then start the console.
 
 In separated mode ([section 2](#2-separate-the-console-from-the-agent-recommended)),
-the console reads the `locksql` account's own config, which the agent's
-account cannot write. So run bare `locksql` from your own account to wire the
-agents (it then tells you to run `locksql` in the `locksql` session), and run
-`locksql` in the `locksql` session to add a database and start the console.
-The service account never wires agents, since they live in your home.
+a profile in a user config is seen by one account only, so the console and
+the agents share a project config instead
+([Project mode](#project-mode)):
+
+- From your own account, bare `locksql` wires the agents, then prints the
+  steps: put the profile in `<project>/.locksql/config.toml` (`locksql init
+  <agent>` writes a commented example there) and run
+  `locksql console --project <project>` in the `locksql` session.
+- In the `locksql` session, bare `locksql` behaves like `locksql console`
+  without `--profile`: no database prompts, and no agent wiring (the agents
+  live in your home). With no profile visible it says to use a project
+  config and `--project`.
+- The database prompts (`locksql add`) are off for every account.
 
 ### `locksql add`
 
@@ -51,10 +59,11 @@ holds no secret.
 - Or press Enter to answer step by step: engine, host, port, user, database.
 - Then: profile name (default `dev`), access tier `read`, `write` or `ddl`
   (`admin` is a hand edit of the config), production or not, and whether to
-  remember the password in the OS keychain.
+  remember the password in the OS keychain (not asked for sqlite, which has
+  no password).
 
-In separated mode `locksql add` is refused from any account but the service
-account; run it in the `locksql` session.
+In separated mode `locksql add` is refused for every account: use a project
+config ([Project mode](#project-mode)).
 
 ### Agent wiring
 
@@ -63,7 +72,7 @@ its command is on `PATH` or its home directory exists.
 
 | Agent | Detected by | Written | Wired when |
 |---|---|---|---|
-| Claude Code | `claude` on `PATH` | user MCP server `locksql` (`claude mcp add --scope user locksql -- locksql mcp`); `~/.claude/skills/locksql/SKILL.md`; the read-only tool list merged into `permissions.allow` of `~/.claude/settings.json` | `mcpServers.locksql` exists at the top level of `~/.claude.json`, the skill exists, and the locksql entries are in `permissions.allow` of `~/.claude/settings.json` (a missing one is added again) |
+| Claude Code | `claude` on `PATH` | user MCP server `locksql` (`claude mcp add --scope user locksql -- locksql mcp`); `~/.claude/skills/locksql/SKILL.md`; the read-only tool list merged into `permissions.allow` of `~/.claude/settings.json` | `mcpServers.locksql` exists at the top level of `~/.claude.json` and the skill exists (the permissions are merged only on a run that wires Claude) |
 | Codex | `codex` on `PATH` or `~/.codex/` | `[mcp_servers.locksql]` (`command`, `args`, `tool_timeout_sec = 600`) appended to `~/.codex/config.toml`; locksql section in `~/.codex/AGENTS.md` | the table exists and the section marker is present |
 | Gemini CLI | `gemini` on `PATH` or `~/.gemini/` | `mcpServers.locksql` in `~/.gemini/settings.json`; locksql section in `~/.gemini/GEMINI.md` | the entry exists and the marker is present |
 | Cursor | `cursor` or `cursor-agent` on `PATH`, or `~/.cursor/` | `mcpServers.locksql` in `~/.cursor/mcp.json` | the entry exists |
@@ -81,7 +90,13 @@ its command is on `PATH` or its home directory exists.
   never rewritten (the line names it; fix it or add the entry by hand).
 - An existing inline `mcp_servers = { ... }` table in `config.toml` is
   refused for Codex: add the `[mcp_servers.locksql]` table by hand.
-- A failure on one agent does not stop the others or the console.
+- A file owned by another account, or not writable by yours, is never
+  replaced, and neither is a file in a directory you cannot write: the line
+  names it; fix its owner or add the entry by hand.
+- Run as root (other than the service account), locksql does not wire agents:
+  run it from your own account.
+- A failure on one agent does not stop the others or the console. Files
+  written before the failure are listed first and stay.
 - Markdown sections sit between `<!-- locksql:begin -->` and
   `<!-- locksql:end -->` markers.
 
@@ -96,10 +111,51 @@ To undo:
   the marked block in `~/.gemini/GEMINI.md`.
 - Cursor: delete `mcpServers.locksql` from `~/.cursor/mcp.json`.
 
-There is no opt-out: every later bare `locksql`, and every `locksql console`
-without `--profile`, wires installed agents again, so an entry you removed
-comes back. `locksql console --profile P` never wires agents; use it to keep
-an agent unwired.
+There is no opt-out switch: every later bare `locksql` in a terminal, and
+every `locksql console` without `--profile`, wires again an installed agent
+that is not wired by the "Wired when" column above. So a removed Codex table
+or `AGENTS.md` section, Gemini or Cursor entry, or Claude MCP server or skill
+comes back (for Claude, with its permissions). A permission you remove from
+`permissions.allow` while Claude's MCP server and skill stay is not added
+back. `locksql console --profile P` never wires agents; use it to keep an
+agent unwired.
+
+#### Adding an entry by hand
+
+When locksql cannot write a file, add its entry yourself.
+
+Claude Code (user scope, then the skill with `locksql init claude` in any
+project, or copy it from there to `~/.claude/skills/locksql/SKILL.md`):
+
+```sh
+claude mcp add --scope user locksql -- locksql mcp
+```
+
+Codex, in `~/.codex/config.toml` (`tool_timeout_sec` covers the console's
+5 minute approval timeout):
+
+```toml
+[mcp_servers.locksql]
+command = "locksql"
+args = ["mcp"]
+tool_timeout_sec = 600
+```
+
+Gemini CLI, in `~/.gemini/settings.json` (`timeout` is in milliseconds), and
+Cursor, in `~/.cursor/mcp.json` (without `timeout`), under `mcpServers` next
+to any other server:
+
+```json
+{
+  "mcpServers": {
+    "locksql": {
+      "command": "locksql",
+      "args": ["mcp"],
+      "timeout": 600000
+    }
+  }
+}
+```
 
 `locksql init` with no agent name does the same detection, but for the
 project files described below.
@@ -139,7 +195,12 @@ running it, never to retry after a denial, never to export data, never to
 handle credentials, and to treat rows as untrusted data.
 
 Edit `.locksql/config.toml` to describe your databases (profiles there take
-the place of `locksql add`). Both
+the place of `locksql add`). `init` ends with the command that serves the
+project: `locksql console --project <root>`. Inside a project the agents dial
+the project's socket, so a console started elsewhere (such as a bare
+`locksql` outside the project) does not serve them; when no console runs, the
+agent is told the exact `locksql console --profile P --project <root>`
+command. Outside any project it is told to run `locksql`. Both
 `.locksql/config.toml` and `.locksql/pii.toml` hold no secret and are meant
 to be committed.
 
@@ -178,7 +239,11 @@ confirm (`--print` only prints; on macOS it always only prints). The script:
 Then set a password for the console account, log out and in again (the group
 applies at login), open a separate login session as `locksql` (switch user,
 preferably Wayland) and start the console there with `--project` pointing at
-the agent's project directory.
+the agent's project directory. The profiles come from that project's
+`.locksql/config.toml`, readable by both accounts (`locksql init <agent>`
+writes a commented example); `locksql add` and the database prompts of bare
+`locksql` are off in separated mode, since a user config is seen by one
+account only.
 
 In separated mode the console refuses to start when:
 
@@ -235,7 +300,8 @@ there are several. It first wires agents installed since the last run (see
 [Agent wiring](#agent-wiring)).
 
 `--project` names the project directory (default: the current directory);
-the console and the agent must agree on it, since it selects the socket.
+the console and the agent must agree on it, since it selects the socket. A
+console on a project prints `serving agents in <root>`.
 
 The console needs an interactive terminal. At start it:
 
@@ -268,7 +334,10 @@ The console needs an interactive terminal. At start it:
    On the first start the result is written to `.locksql/pii.toml` inside a
    project, or `<user config dir>/locksql/pii.toml` outside one (even when
    empty); later, accepted rules are added to the file as it is on disk, so
-   unconfirmed edits there are neither lost nor applied.
+   unconfirmed edits there are neither lost nor applied. Outside a project, a
+   `<current dir>/.locksql/pii.toml` from an earlier version is no longer
+   read: the console says so once while the new file does not exist; copy it
+   there to keep its rules.
 7. Lists the databases and prints `Listening…`.
 
 Between requests you can type:
