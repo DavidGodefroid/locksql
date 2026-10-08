@@ -15,8 +15,6 @@ source (see [Build](#build)) until `v0.1.0` is out.
 ```sh
 # 1. Install (once releases are published; until then use go install)
 brew install davidgodefroid/tap/locksql        # macOS, Linux
-scoop bucket add locksql https://github.com/DavidGodefroid/scoop-bucket
-scoop install locksql                           # Windows
 go install github.com/DavidGodefroid/locksql/cmd/locksql@latest
 
 # 2. In your project: wire your agent and get an example config
@@ -26,7 +24,12 @@ locksql init claude                             # or codex, cursor, gemini
 #    second terminal that you keep in view:
 locksql console --profile dev
 
-# 4. Ask your agent: "how many orders were placed yesterday on dev?"
+# 4. Optional, recommended: run the console under its own OS account
+#    (Linux, macOS), then check the machine
+locksql install
+locksql doctor
+
+# 5. Ask your agent: "how many orders were placed yesterday on dev?"
 #    Approve or deny each query in the console.
 ```
 
@@ -48,21 +51,29 @@ Two processes in two terminals. Only the console holds the key.
 ```
 
 1. The agent submits SQL with `locksql plan` (or the `locksql_plan` MCP tool).
-   The console classifies it, runs `EXPLAIN`, weighs the plan and returns a
+   The console classifies it, parses and analyses a read down to the source
+   column of every output, runs `EXPLAIN`, weighs the plan and returns a
    one-shot plan id with a verdict (`OK`, `WARN` or `REFUSE`).
 2. The agent calls `locksql run PLAN_ID`. The console shows you the approval
    screen and waits:
 
    ```
    ━━ DEV ━━ 127.0.0.1 / app ━━ user alice ━━ tier read
-   SELECT id, status FROM orders WHERE customer_id = 88123 LIMIT 20
-   class READ · EXPLAIN: orders lookup ~3 · est. 3 rows examined · verdict OK
+   requested by uid 1000 (alice) · pid 48211 (claude)
+   SELECT id, email FROM customers WHERE country = 'BE' LIMIT 20
+   class READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
+   reads: app.customers
+   returns at most 20 rows
+   PII columns touched: customers.email (select)
+   masked outputs: email → partial
    PII: masked (4 column rules; detectors: email, phone, iban, card)
    Approve? [y/N]
    ```
 
-3. On approval the console runs the statement, masks PII, caps the output and
-   hands the rows back to the agent, framed as untrusted data.
+3. On approval the console runs its k-anonymity counts when the statement
+   filters, groups or aggregates PII, then the statement itself, masks PII,
+   caps the output and hands the rows back to the agent, framed as untrusted
+   data.
 
 Full walkthrough: [docs/usage.md](docs/usage.md).
 
@@ -75,8 +86,8 @@ Full walkthrough: [docs/usage.md](docs/usage.md).
 | `postgres` | 13+ (tested 13, 17) | `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY` + `BEGIN READ ONLY` | `statement_timeout` + cancel request | `EXPLAIN (FORMAT JSON, VERBOSE)` |
 | `sqlite` | 3 (pure Go, in-process) | `mode=ro` + `query_only` | interrupt on deadline | `EXPLAIN QUERY PLAN` + `sqlite_stat1` |
 
-All engines are pure Go: the binary is built with `CGO_ENABLED=0` for Linux,
-macOS and Windows on amd64 and arm64.
+All engines are pure Go: the binary is built with `CGO_ENABLED=0`. locksql
+supports Linux and macOS only, on amd64 and arm64.
 
 ## Safety model
 
@@ -86,27 +97,43 @@ only guide the agent; the console's checks are the guarantee.
 - **One key holder.** Credentials are typed at console start (no echo) or read
   from the OS keychain. They never appear in argv, environment, files, logs,
   the socket protocol or error messages. The console disables core dumps.
-- **Human approval.** Every statement is shown and approved in the console.
-  On a production profile you type the profile name, not `y`. Pending
-  keystrokes are flushed before each prompt, so type-ahead never approves. No
-  answer within 5 minutes means denied.
+  `credentials_ttl` makes it ask again after a set time (vault leases).
+- **OS separation.** `locksql install` creates a `locksql` console account
+  and a `locksql-clients` group: the console runs as that account in its own
+  login session, the agent's account only reaches its socket, and the kernel
+  checks every peer. Without it (same-user mode) the console warns that the
+  agent's account could read or type into its terminal.
+- **Human approval.** Every statement is shown and approved in the console
+  terminal; no socket method can approve. On a production profile you type the
+  profile name, not `y`. Pending keystrokes are flushed before each prompt, so
+  type-ahead never approves. No answer within 5 minutes means denied.
 - **Fail closed.** A dialect-aware classifier refuses anything it cannot
   classify with certainty: several statements, comments, variables, bind
-  parameters, file and OS access, sleeps and locks, session tampering.
+  parameters, file and OS access, sleeps and locks, session tampering. Reads
+  are limited to `SELECT`, `WITH ... SELECT` and `EXPLAIN SELECT`, parsed in
+  full: unknown syntax, functions outside an allowlist and system schemas
+  are refused.
 - **Tiers.** `read < write < ddl < admin`; the default is `read`. Tier `read`
   is also enforced server side (read-only session and transaction).
 - **Weight check.** A READ statement must carry `LIMIT n` with `n <= max_rows`.
   The console runs `EXPLAIN` and refuses statements that would examine too
-  many rows; REFUSE cannot be overridden from the console.
-- **PII masking.** On first start the console proposes column rules from the
-  schema (multilingual names and types). Matching cells are masked by their
-  origin column, and value detectors (email, phone, IBAN, card, opt-in
-  national ids) mask the rest. Only base-table origins count: columns read
-  through a view, or (on MariaDB and MySQL) a derived table or CTE, are
-  matched by name, and aliasing a masked column is refused. A view that
-  renames a masked column (`firstname AS contact`) needs its own rule for the
-  new name. Without an origin, a non-ASCII column name is masked whenever any
-  rule exists, since the server may resolve it to a masked column.
+  many rows (or cost more than `explain_cost_refuse`); REFUSE cannot be
+  overridden from the console.
+- **PII masking.** At every start the console scans the schema and proposes
+  rules for columns that look like personal data (multilingual names and
+  types) and that no rule names yet. Every output column is resolved to its
+  source columns through aliases, functions, subqueries, CTEs, unions, joins
+  and `*`, and masked on that source, not on its label; the engine's origin
+  metadata is a second check, and a result whose columns do not match the
+  analysis is dropped. Value detectors (email, phone, IBAN, card, opt-in
+  national ids) mask the other cells. Mask modes: `partial`, `redact`,
+  `email`, `hash` (per-session tokens that keep joins and equality filters).
+- **PII usage.** PII columns may be selected, counted, joined with `=` and
+  filtered with `=`, `IN (literals)` or `IS NULL`. Expressions over them,
+  `LIKE`, ranges and `ORDER BY` are refused. A filter, grouping or aggregate on
+  PII must cover at least `k_anonymity` rows (default 5, production 10).
+- **Quiet failures.** Clients get a generic message, never the server's error
+  text, and no timings; `query.run` answers on a 250 ms quantum.
 - **The AI tightens, the human loosens.** Agents may add mask rules and
   request changes. A config edit that loosens the policy (higher tier, larger
   limits, new host, removed PII rule, ...) only takes effect after you
@@ -133,6 +160,7 @@ port        = 3306                  # default 3306, or 5432 for postgres
 user        = ""                    # empty: asked at console start
 database    = ""                    # empty: chosen per query (--db)
 credentials = "ask"                 # ask | keychain
+credentials_ttl = "20m"             # optional: ask for the secret again
 tier        = "read"                # read | write | ddl | admin
 production  = false
 detectors   = ["email", "phone", "iban", "card", "be_niss"]
@@ -144,6 +172,8 @@ explain_rows_refuse = 1000000
 max_rows            = 200
 max_cell_chars      = 200
 max_output_bytes    = 65536
+k_anonymity         = 5
+explain_cost_refuse = 0             # engine cost units; 0 = off
 ```
 
 | Key | Default | Notes |
@@ -154,6 +184,7 @@ max_output_bytes    = 65536
 | `user` | asked at start | |
 | `database` | none | the default database for queries |
 | `credentials` | `ask` | `keychain` offers to save the secret after the first successful login; `locksql forget --profile P` removes it |
+| `credentials_ttl` | none | a duration of at least `1m` (`"20m"`, `"1h"`): the connection is closed and the secret asked again once it is that old |
 | `tier` | `read` | highest statement class allowed |
 | `production` | `false` | stricter limits, typed approval, `--skip-permissions` ignored |
 | `detectors` | `email`, `phone`, `iban`, `card` | also `be_niss`, `fr_nir`, `nl_bsn`, `us_ssn`; `[]` disables them |
@@ -163,17 +194,35 @@ max_output_bytes    = 65536
 | `limits.max_rows` | 200 | upper bound for `LIMIT n` and for returned rows |
 | `limits.max_cell_chars` | 200 | longer cells are cut with `…` |
 | `limits.max_output_bytes` | 65 536 | output is cut with a marker |
+| `limits.k_anonymity` | 5 (production 10) | smallest row count a PII filter, a group or an aggregate of a PII column may cover; lowering it is a loosening |
+| `limits.explain_cost_refuse` | 0 (off) | refuse plans above this total cost, in the engine's own units; SQLite reports no cost and is not checked |
 
 PII column rules live in `.locksql/pii.toml`:
 
 ```toml
 [[mask]]
 column = "app.users.email"            # db.table.column, * per segment
+mode   = "email"                      # j***@example.com
 [[mask]]
-column = "*.*.recipient_reference"
+column = "app.users.customer_ref"
+mode   = "hash"                       # tok_... per console session
+[[mask]]
+column = "*.*.recipient_reference"    # mode "partial" by default: j***(12)
 [[allow]]                             # explicit exception: never mask
 column = "app.templates.name"
 ```
+
+| Mode | Output | Notes |
+|---|---|---|
+| `partial` (default) | `j***(12)` | first character and length |
+| `redact` | `<redacted>` | |
+| `email` | `j***@example.com` | first character and domain; other values as `partial` |
+| `hash` | `tok_` + 20 characters | keyed HMAC with a random key per console session: equal values give equal tokens, so the agent can join, group and count, and filter with `WHERE col = 'tok_...'` (the console substitutes the value in the statement that runs) |
+
+Only columns explicitly configured with `mode = "hash"` get tokens, and a
+token is accepted only against such a column. A column covered by several
+rules with different modes is redacted. Changing a mode is a loosening unless
+the new mode is `redact`.
 
 On PostgreSQL the first segment is the schema (`public.users.email`).
 
@@ -193,11 +242,13 @@ iteration, and it is deliberately narrow:
 
 ## Limitations
 
-- **Same-user malware is out of scope.** A process running as you can already
-  read your keychain session and drive your terminal.
-- **Windows peer check.** On Linux and macOS the console checks the uid of
-  every socket peer. On Windows it relies on the ACL of the socket directory
-  under `%LOCALAPPDATA%` only.
+- **Same-user mode is weaker.** Without `locksql install`, the agent runs as
+  the console's account and could read its terminal, type into it or read
+  its keychain session. Run `locksql doctor` to see what your machine allows.
+  Malware running as the console account is out of scope in both modes.
+- **k-anonymity is a query-set-size control.** It refuses a single query
+  whose PII filter covers fewer than `k` rows; it does not stop differencing
+  attacks that combine several approved queries.
 - **TLS is not configurable yet.** PostgreSQL, MariaDB and MySQL connect like
   PostgreSQL's `sslmode=prefer`: encrypted when the server offers TLS, plain
   otherwise, and the certificate is not verified, so an active attacker on the
@@ -234,7 +285,8 @@ boundary.
 - [docs/usage.md](docs/usage.md): console, client commands, MCP server, agent
   integration.
 - [docs/security-model.md](docs/security-model.md): threat model and
-  mitigations.
+  mitigations, and an upstream recommendation (PII encrypted at rest with a
+  blind index).
 - [SECURITY.md](SECURITY.md): reporting a vulnerability.
 - [CONTRIBUTING.md](CONTRIBUTING.md): building and testing.
 

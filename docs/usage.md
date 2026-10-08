@@ -1,8 +1,9 @@
 # Using locksql
 
-This guide walks through a session: setting up a project, running the
-console, and what the agent can do through the CLI and the MCP server. The
-[README](../README.md) has the configuration reference.
+This guide walks through a session: setting up a project, separating the
+console from the agent, running the console, and what the agent can do
+through the CLI and the MCP server. The [README](../README.md) has the
+configuration reference.
 
 ## 1. Set up the project
 
@@ -40,15 +41,100 @@ Edit `.locksql/config.toml` to describe your databases. Both
 `.locksql/config.toml` and `.locksql/pii.toml` hold no secret and are meant
 to be committed.
 
-## 2. Start the console
+## 2. Separate the console from the agent (recommended)
 
-In a terminal you keep in view:
+By default the console and the agent run as the same OS account (same-user
+mode). The console then prints a red warning: the agent's account could read
+its terminal or type into it, and read its keychain session. On Linux and
+macOS, `locksql install` sets up separated mode once:
 
 ```sh
-locksql console --profile dev [--skip-permissions]
+locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print]
 ```
 
+It prints the root script and, on Linux, runs it with `sudo` after you
+confirm (`--print` only prints; on macOS it always only prints). The script:
+
+| Creates | Detail |
+|---|---|
+| account `locksql` | the console account, with its own home (mode 0700) |
+| group `locksql-clients` | the agent's account (`--client`, default you or `$SUDO_USER`) is added to it |
+| `/usr/local/bin/locksql` | owned by root, so the agent cannot replace the binary the console runs |
+| `/etc/locksql/system.toml` | owned by root, mode 0644; a file owned or writable by anyone else is refused |
+| `/run/locksql` | socket directory, `locksql:locksql-clients`, mode 0710 (via `/etc/tmpfiles.d`; `/usr/local/var/run/locksql` on macOS) |
+
+`system.toml` keys:
+
+| Key | Default | Notes |
+|---|---|---|
+| `service_user` | `locksql` | the account the console must run as |
+| `client_group` | `locksql-clients` | members may connect to the console sockets |
+| `socket_dir` | `/run/locksql` | absolute; owned by `service_user` and `client_group`, mode 0710 or 0750 |
+| `allowed_uids` | none | uids allowed besides the group's members |
+| `x11` | `warn` (`install` writes `refuse`) | what the console does in an X11 session |
+
+Then set a password for the console account, log out and in again (the group
+applies at login), open a separate login session as `locksql` (switch user,
+preferably Wayland) and start the console there with `--project` pointing at
+the agent's project directory.
+
+In separated mode the console refuses to start when:
+
+- it does not run as `service_user`;
+- `service_user` is itself in `client_group` or `allowed_uids`;
+- it was started through `sudo` or `su` from another account's login session
+  (Linux `loginuid`);
+- its terminal belongs to another uid.
+
+It serves a peer only when the kernel reports (`SO_PEERCRED` on Linux,
+`LOCAL_PEERCRED` on macOS) the console's own uid, a member of
+`client_group` or an `allowed_uids` entry. The socket is mode 0660, group
+`client_group`. Clients in turn check that the socket is served by
+`service_user` and refuse it otherwise.
+
+An X11 session lets any X client read the keyboard and the screen of the
+others: the console refuses to start in one on a production profile or with
+`x11 = "refuse"`, and warns otherwise. Use Wayland or a text console.
+
+### `locksql doctor`
+
+```sh
+locksql doctor [--profile P]
+```
+
+Run it from both accounts. Each check prints ✅, ⚠️ or ❌, with a
+remediation under each one that is not ✅; the exit code is 1 when any check
+fails.
+
+| Check | Fails or warns when |
+|---|---|
+| operating system | not Linux or macOS |
+| graphical session | X11 |
+| separation | same-user mode; then also `dev.tty.legacy_tiocsti = 1` (TIOCSTI) and `kernel.yama.ptrace_scope = 0` |
+| system setup, console account | `system.toml` invalid or not root-owned; the console account missing or in the client group |
+| client access, privilege escalation | the agent's account is not in the client group, or can run `sudo` without a password |
+| separate session | the console account has no login session (Linux) |
+| socket directory | missing, wrong owner or group, or a mode other than 0710/0750 |
+| binary | the running binary can be changed by a non-root account (fails in separated mode) |
+| secret store | separated mode with a secret for the profile left in the agent's keychain; keychain unavailable |
+| console (per profile) | not running; then, from its `health`: not separated, an X11 display, database privileges beyond the tier, EXPLAIN failing |
+
+## 3. Start the console
+
+In a terminal you keep in view (in separated mode, in the `locksql`
+session):
+
+```sh
+locksql console --profile dev [--project DIR] [--skip-permissions]
+```
+
+`--project` names the project directory (default: the current directory);
+the console and the agent must agree on it, since it selects the socket.
+
 The console needs an interactive terminal. At start it:
+
+0. **Checks the isolation** described in [section 2](#2-separate-the-console-from-the-agent-recommended):
+   separated or same-user mode, the display, and in same-user mode TIOCSTI.
 
 1. **Checks the policy.** On the first start of a profile the whole effective
    policy (host, engine, database, tier, production, credentials mode, limits,
@@ -62,15 +148,20 @@ The console needs an interactive terminal. At start it:
    first successful login it offers `Save in OS keychain? [y/N]`. If the
    stored secret fails, it asks again and offers to replace it. Without a
    usable keychain (for example headless Linux without Secret Service) it
-   behaves like `ask`.
+   behaves like `ask`. In separated mode this is the console account's
+   keychain. With `credentials_ttl`, the connection is closed once it is that
+   old and the secret is asked again before the next request (suited to
+   short-lived secrets from a vault).
 4. **Connects** and prints the server flavour and version.
 5. **Audits privileges.** A tier `read` profile whose account can write is
    refused on production; on other profiles you get a red warning and must
    type `continue`. The session stays read-only either way.
-6. **Proposes PII rules** on the first start of a project: columns whose names
-   or types look like personal data are listed by table. Accept all (`a`),
-   review one by one (`r`) or skip (`s`). The result is written to
-   `.locksql/pii.toml` (even when empty, so the proposal runs once).
+6. **Scans the schema for PII** at every start: columns whose names or types
+   look like personal data, and that no mask or allow rule names yet, are
+   listed by table. Accept all (`a`), review one by one (`r`) or skip (`s`).
+   On the first start the result is written to `.locksql/pii.toml` (even when
+   empty); later, accepted rules are added to the file as it is on disk, so
+   unconfirmed edits there are neither lost nor applied.
 7. Lists the databases and prints `Listening…`.
 
 Between requests you can type:
@@ -89,29 +180,46 @@ the socket and is audited.
 
 ```
 ━━ DEV ━━ 127.0.0.1 / app ━━ user alice ━━ tier read
-SELECT id, status FROM orders WHERE customer_id = 88123 LIMIT 20
-class READ · EXPLAIN: orders lookup ~3 · est. 3 rows examined · verdict OK
+requested by uid 1000 (alice) · pid 48211 (claude)
+SELECT country, COUNT(*) FROM customers WHERE email = 'a@example.com' GROUP BY country LIMIT 20
+class READ · EXPLAIN: customers ref ~1 · est. 1 rows examined · verdict OK
+reads: app.customers
+returns at most 20 rows
+PII columns touched: customers.email (where)
+k-anonymity check (k=5) runs first: SELECT COUNT(*) FROM customers WHERE email = 'a@example.com'
+row estimates are hidden from the agent: the statement filters on a PII column
 PII: masked (4 column rules; detectors: email, phone, iban, card)
 Approve? [y/N]
 ```
 
-- Statement classes other than READ, a WARN verdict and `PII: UNMASKED` are
-  printed in red.
+- The screen names the requesting uid, pid and process (as the kernel reports
+  them), the relations read, the PII columns touched and in which clause
+  (highlighted in red in the SQL), each masked output and its mode, the
+  k-anonymity counts that run first, the number of token substitutions and
+  the row cap.
+- Statement classes other than READ, a WARN verdict, PII columns and
+  `PII: UNMASKED` are printed in red.
 - On a production profile you type the profile name instead of `y`.
 - Anything else, or no answer within 5 minutes, denies the query. A client
   that disconnects while waiting abandons the approval.
 - Pending keystrokes are discarded before each prompt.
 - Requests are served one at a time; other clients wait.
+- Only the console terminal approves; no socket method can.
+- After approval, the k-anonymity counts run first. If one covers fewer than
+  `k_anonymity` rows, the statement is refused without running.
 
 ### Policy changes
 
 The console watches the config and PII files while it runs.
 
-- A change that only tightens the policy (lower tier, smaller limits, a new
-  mask rule or detector) is applied at once.
+- A change that only tightens the policy (lower tier, smaller limits, a
+  larger `k_anonymity`, a new mask rule or detector, a mode changed to
+  `redact`) is applied at once.
 - A change that loosens it (higher tier, `production = true → false`, larger
-  limits, a new host, port, engine, user or database, `ask → keychain`, a
-  removed mask rule or detector, a new allow rule) waits for you. Plans are
+  limits, a smaller `k_anonymity`, a higher or removed `explain_cost_refuse`,
+  a longer or removed `credentials_ttl`, a new host, port, engine, user or
+  database, `ask → keychain`, a removed mask rule or detector, a mask mode
+  changed to anything but `redact`, a new allow rule) waits for you. Plans are
   refused with `policy_pending` until you run `:review` and answer
   `Apply these changes? [y/N]`.
 - If you refuse, the last approved policy stays in force.
@@ -121,7 +229,7 @@ The console watches the config and PII files while it runs.
 The approved policy is stored outside the repository, in
 `<user state dir>/locksql/approved/`.
 
-## 3. What the agent does
+## 4. What the agent does
 
 ### CLI
 
@@ -137,6 +245,7 @@ locksql run      --profile P PLAN_ID                          # waits for the hu
 locksql pii      list|add --profile P [DB.TABLE.COLUMN]
 locksql request  --profile P "tier=write" | "limits.max_rows=500" | "allow=app.t.c"
 locksql logout   --profile P
+locksql doctor   [--profile P]
 ```
 
 - `--profile` may be left out when exactly one profile is configured. Without
@@ -149,11 +258,21 @@ locksql logout   --profile P
   configuration error.
 - `run` has no client-side timeout. The console's approval timeout (5
   minutes) applies.
+- `status --json` includes a `health` object: `separated`, `display`,
+  `privileges` (what the database account can do beyond the tier),
+  `explain_ok` and `read_only`.
+- A failed statement gives a generic message
+  (`statement refused by the database (the details are shown on the
+  console)`), never the server's text; the details go to the console and,
+  redacted, to the audit log. No timings are returned, and `run` answers on
+  a 250 ms quantum, success or failure.
 - `tables` and `describe` are catalog reads: they run SQL built by the
   console, need no approval and are audited. `describe` also marks the
   masked columns.
 - `plan` validates the statement and runs `EXPLAIN` only. The plan id it
   returns is valid once, for 10 minutes. A REFUSE verdict gives no plan id.
+  When the statement filters on a PII column, the row estimates are hidden
+  from the agent.
 - `pii add` adds a mask rule at once, since it only tightens.
 - `request` queues a proposal that the human sees in `:review`. It never
   changes the policy; the human edits the config, and the console then asks
@@ -162,14 +281,49 @@ locksql logout   --profile P
 ### Writing statements that pass
 
 - One statement, no comments, no variables, no bind parameters.
+- Reads are `SELECT`, `WITH ... SELECT` or `EXPLAIN SELECT`. `SHOW`,
+  `DESCRIBE`, `PRAGMA`, `VALUES` and `TABLE` are refused: use `tables` and
+  `describe`.
 - A READ statement ends with a top-level `LIMIT n` (or PostgreSQL
-  `FETCH FIRST n ROWS ONLY`) with `n <= max_rows`. `SHOW` and `DESCRIBE` are
-  exempt. locksql never rewrites SQL: what you approve is what runs.
-- Refer to masked columns plainly (`SELECT email FROM users ...`). An alias or
-  an expression over a masked column (`email AS e`, `CONCAT(email, '')`) is
-  refused, so that masking cannot be sidestepped. `COUNT(email)` is fine.
-- Ask for unmasked values with `--unmask`: the approval screen shows
+  `FETCH FIRST n ROWS ONLY`) with `n <= max_rows`. locksql never rewrites
+  SQL: what you approve is what runs, except that a session token is
+  replaced by the value it stands for (shown on the approval screen).
+- The parser is fail-closed: syntax it does not know is refused. Functions
+  must be in the allowlist (`internal/sqlast/funcs.go`: common string,
+  numeric, date and JSON functions, aggregates and window functions;
+  schema-qualified functions are refused). System schemas and relations
+  (`information_schema`, `pg_catalog`, `mysql`, `performance_schema`, `sys`,
+  SQLite internals) are refused. Every table and column must resolve
+  against the catalog.
+- Every output column is traced to its source columns, so an alias, a CTE or
+  a subquery does not hide a PII column: `SELECT e FROM (SELECT email AS e
+  FROM users) t LIMIT 5` is masked like `email`.
+
+PII columns (columns under a mask rule) may be used as follows:
+
+| Allowed | Refused |
+|---|---|
+| plain in the select list (masked, also through aliases, CTEs, unions, `*`) | any expression or function over them, anywhere (`LOWER(email)`, `email \|\| ''`) |
+| `COUNT(col)` (not masked); `MIN`/`MAX` (masked in the column's mode); other aggregates (redacted) | `LIKE`, ranges (`<`, `BETWEEN`) and other comparisons |
+| `JOIN ... ON a.col = b.col` | constant comparisons in `JOIN ... ON` (put them in `WHERE`) |
+| `WHERE col = 'literal'`, `col IN ('a', 'b')`, `col IS NULL` | `ORDER BY`, window `PARTITION BY` and `ORDER BY`, `FILTER`, `DISTINCT ON` |
+| `GROUP BY col` | `GROUP BY` an expression of it; PII filters in correlated subqueries or recursive CTEs |
+
+- A filter, grouping or aggregate on a PII column triggers k-anonymity
+  checks: before the statement runs, the console runs `COUNT` queries built
+  from the statement's own `FROM`, `WHERE`, `GROUP BY` and `HAVING` text
+  (shown on the approval screen). Fewer than `k_anonymity` rows in the
+  filter, or in the smallest group, refuses the statement.
+- `EXPLAIN` of a statement that filters, groups or aggregates PII is refused.
+- With mode `hash`, filter on a token from an earlier result:
+  `WHERE customer_ref = 'tok_...'` or `IN ('tok_...', ...)`. A token is valid
+  only in the console session that issued it and only against a column
+  masked as `hash`; an unknown token is refused.
+- Ask for unmasked values with `--unmask`: the PII usage rules and the
+  k-anonymity checks no longer apply, the approval screen shows
   `PII: UNMASKED` in red, and it is never auto-approved.
+- At tiers above `read`, a write's `RETURNING` list (or a data-modifying CTE)
+  must not alias or transform a masked column.
 
 ### MCP server
 
@@ -199,16 +353,21 @@ finds the project's consoles.
 - When no console runs, every tool answers with the exact
   `locksql console --profile P` command the human must start.
 
-## 4. Output
+## 5. Output
 
 - TSV by default, JSON with `--json` or through MCP.
 - Caps: `max_rows` rows, `max_cell_chars` per cell (cut with `…`) and
   `max_output_bytes` in total (cut with a marker).
 - Control and bidirectional characters are escaped. NULL prints as `NULL`.
-- Masked values keep their first character and length: `a***(17)`. Masked
-  binary cells become `<masked bytes:N>`.
+- Masked cells follow the rule's mode: `partial` keeps the first character
+  and the length (`a***(17)`), `redact` gives `<redacted>`, `email` keeps the
+  first character and the domain (`a***@example.com`), `hash` gives a
+  per-session token (`tok_...`). Masked binary cells in `partial` mode
+  become `<masked bytes:N>`.
+- A result whose column count or labels differ from the analysis is dropped,
+  since masking by position could hit the wrong column.
 
-## 5. Files and environment
+## 6. Files and environment
 
 | Path | Content |
 |---|---|
@@ -217,14 +376,16 @@ finds the project's consoles.
 | `<user config dir>/locksql/config.toml` | personal profiles |
 | `<user state dir>/locksql/approved/*.json` | last approved policies |
 | `<user state dir>/locksql/audit.log` | JSONL audit log, mode 0600 |
-| `<runtime dir>/<project-hash>-<profile>.sock` | console socket |
+| `<runtime dir>/<project-hash>-<profile>.sock` | console socket (same-user mode) |
+| `/etc/locksql/system.toml` | separated mode setup (root-owned) |
+| `<socket_dir>/<project-hash>-<profile>.sock` | console socket (separated mode), mode 0660 |
 
-- User config dir: `os.UserConfigDir()` (`~/.config`, `~/Library/Application
-  Support`, `%AppData%`).
+- User config dir: `os.UserConfigDir()` (`~/.config` on Linux,
+  `~/Library/Application Support` on macOS).
 - User state dir: `$XDG_STATE_HOME` or `~/.local/state` on Linux,
-  `~/Library/Application Support` on macOS, `%LOCALAPPDATA%` on Windows.
+  `~/Library/Application Support` on macOS.
 - Runtime dir: `$XDG_RUNTIME_DIR/locksql` on Linux, `$TMPDIR/locksql` on
-  macOS, `%LOCALAPPDATA%\locksql\run` on Windows; `/tmp/locksql-<uid>`
+  macOS; `/tmp/locksql-<uid>`
   (owned by you, mode 0700) when `$XDG_RUNTIME_DIR` or `$TMPDIR` is unset.
 - `LOCKSQL_RUNTIME_DIR`: when set to an absolute path, the console sockets live
   in `$LOCKSQL_RUNTIME_DIR/locksql/` instead. The console and its clients must

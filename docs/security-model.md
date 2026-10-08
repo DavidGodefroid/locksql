@@ -12,9 +12,23 @@ weaknesses as described in [SECURITY.md](../SECURITY.md).
 - **The human** runs `locksql console` in a terminal and is trusted.
 - **The agent** (and anything that can steer it, such as text stored in the
   database or in files it reads) is *not* trusted. It runs the client
-  commands and the MCP server as the same OS user as the console.
+  commands and the MCP server.
 - **Other local users** are not trusted.
-- **Same-user malware** is out of scope (see [Out of scope](#out-of-scope)).
+
+locksql supports Linux and macOS only. Where the agent runs depends on the
+mode:
+
+| Mode | Console runs as | Agent runs as | Boundary |
+|---|---|---|---|
+| Separated (`locksql install`, `/etc/locksql/system.toml`) | the `locksql` account, in its own login session | its own account, member of `locksql-clients` | the kernel: separate uids, peer credentials on the socket, a root-owned binary and system file |
+| Same-user (no `system.toml`) | the human's account | the same account | process separation only; the console prints a warning at start |
+
+In separated mode the agent's account is assumed to have no password-less
+`sudo` (`locksql doctor` fails otherwise) and no other way to become
+`locksql` or root. In same-user mode a process of the agent's account can
+read the console's terminal, type into it where the kernel allows
+(TIOCSTI, ptrace) and read the keychain session: see
+[Out of scope and limitations](#out-of-scope-and-limitations).
 
 ## Principles
 
@@ -27,8 +41,8 @@ weaknesses as described in [SECURITY.md](../SECURITY.md).
    console.
 4. **Fail closed.** What cannot be classified with certainty is refused.
 5. **Defence in depth.** Server-side read-only and timeouts, a client-side
-   classifier, a privilege audit, an EXPLAIN gate, result caps, then human
-   approval.
+   classifier, a full parse and column analysis of reads, a privilege audit,
+   an EXPLAIN gate, k-anonymity counts, result caps, then human approval.
 6. **Results are data, not instructions.**
 
 ## Threats and mitigations
@@ -37,21 +51,36 @@ weaknesses as described in [SECURITY.md](../SECURITY.md).
 |---|---|
 | The agent runs a query the human did not approve | The console is the only connection holder. `query.run` needs a one-shot plan id (valid 10 minutes) and an explicit approval, or `--skip-permissions` outside production. |
 | The agent loosens its own policy | The socket protocol has no method that loosens policy. Config and PII file edits are detected by a policy fingerprint diff; a loosening is held until the human confirms it. The approved policy is stored outside the repository. |
-| Credential leak | Secrets exist only in console memory or the OS keychain. They never go through argv, environment, files, logs, the socket or error messages (errors are sanitised). Config keys named like secrets and DSNs with passwords are refused. Core dumps are disabled (`RLIMIT_CORE=0`, and `PR_SET_DUMPABLE=0` on Linux). |
-| Statement smuggling | The classifier refuses several statements, comments, variables, bind parameters and unbalanced quotes, and classifies by keywords outside literals per dialect. Multi-statements are off in every driver; PostgreSQL uses the extended protocol only. Tier `read` is also enforced by a read-only session and transaction on the server. |
-| Dangerous functions and statements | File and OS access, engine escape hatches (`ATTACH`, `load_extension`, `dblink`), SQLite raw storage tables (`sqlite_dbpage`, `dbstat`), sleeps, benchmarks, advisory locks, `FOR UPDATE`, session tampering (`SET ROLE`, `set_config`, guarded `SET` targets) and statements carrying credentials are refused at every tier. |
-| Server overload | READ statements need `LIMIT n <= max_rows`; `EXPLAIN` estimates the rows examined and refuses heavy plans; a server-side timeout plus a client-side cancel; one request at a time. |
-| PII exposure | Column rules proposed from the schema; masking by origin column, with a name-based fallback; aliases and expressions over masked columns are refused; value detectors with checksums; unmasking is per query, shown in red and never auto-approved. |
+| Credential leak | Secrets exist only in console memory or the OS keychain (the console account's, in separated mode). They never go through argv, environment, files, logs, the socket or error messages (errors are sanitised). Config keys named like secrets and DSNs with passwords are refused. Core dumps are disabled (`RLIMIT_CORE=0`, and `PR_SET_DUMPABLE=0` on Linux). `credentials_ttl` bounds how long one secret stays in use. `doctor` flags a secret left in the agent's keychain. |
+| Statement smuggling | The classifier refuses several statements, comments, variables, bind parameters and unbalanced quotes, and classifies by keywords outside literals per dialect. Reads are limited to `SELECT`, `WITH ... SELECT` and `EXPLAIN SELECT` and parsed in full by a fail-closed parser: unknown syntax is refused. Multi-statements are off in every driver; PostgreSQL uses the extended protocol only. Tier `read` is also enforced by a read-only session and transaction on the server. |
+| Dangerous functions and statements | Reads may call only allowlisted functions (`internal/sqlast/funcs.go`); schema-qualified (possibly user-defined) functions and system schemas and relations are refused. At every tier: file and OS access, engine escape hatches (`ATTACH`, `load_extension`, `dblink`), SQLite raw storage tables (`sqlite_dbpage`, `dbstat`), sleeps, benchmarks, advisory locks, `FOR UPDATE`, session tampering (`SET ROLE`, `set_config`, guarded `SET` targets) and statements carrying credentials are refused. |
+| Server overload | READ statements need `LIMIT n <= max_rows`; `EXPLAIN` estimates the rows examined and refuses heavy plans, and `explain_cost_refuse` caps the engine's total cost (not on SQLite); k-anonymity counts are weighed too; a server-side timeout plus a client-side cancel; one request at a time. |
+| PII exposure | Column rules proposed from the schema at every start; per-rule mask modes; value detectors with checksums; unmasking is per query, shown in red and never auto-approved. |
+| Alias or expression bypass | Every output column of a read is resolved to its base source columns through aliases, functions, subqueries, CTEs (recursive ones by fixpoint), set operations, joins and `*`, and masked on that source, not on its label. Expressions and functions over PII columns are refused; aggregates other than `COUNT`, `MIN` and `MAX` are redacted. The result's column count and labels must match the analysis or the result is dropped; the engine's origin metadata is a second check. |
+| Predicate oracles | A PII column may only be compared for equality with a literal (`=`, `IN (literals)`, `IS NULL`) in `WHERE`/`HAVING`, or joined with `=` to another plain column. `LIKE`, ranges, functions over it, `ORDER BY`, window `PARTITION BY`/`ORDER BY`, `FILTER`, `DISTINCT ON` and constant comparisons in `JOIN ... ON` are refused, so a query cannot compare it character by character with generated values. |
+| Inference through aggregates and filters | A filter, grouping or aggregate on a PII column runs console-built `COUNT` queries (from the statement's own `FROM`, `WHERE`, `GROUP BY` and `HAVING`, shown on the approval screen) after approval and before the statement; fewer than `k_anonymity` rows (default 5, production 10) refuses it. Row estimates are hidden from the agent and `EXPLAIN` is refused for such statements, since the planner's figures would answer the same question. |
+| Timing and error channels | Clients get a generic failure message, never the server's text (shown on the console, redacted in the audit log). No timings are returned, and `query.run` answers on a 250 ms quantum, success or failure. |
+| Hash-mode tokens | Tokens are a keyed HMAC with a random key per console session: equal values give equal tokens within a session and nothing across sessions; no order, prefix or length leaks. A token is substituted only when compared with a column configured as `hash`; an unknown token, or one from another session, is refused. |
 | Prompt injection through data | Rows are framed as untrusted data in every output; the generated agent instructions say so; control and bidirectional characters are escaped in client output and on the console screen, so data cannot spoof the approval prompt. |
-| Type-ahead approval | Pending input is flushed before each prompt (`tcflush` on Unix, `FlushConsoleInputBuffer` on Windows). |
+| Type-ahead approval | Pending input is flushed before each prompt (`tcflush`). |
+| The agent mimics the human | In separated mode the console refuses to start as any account but `service_user`, when that account may also connect as a client, when started through `sudo`/`su` from another login session (`loginuid`), or when its terminal belongs to another uid. An X11 session, where any client can read and inject input, is refused on production profiles and with `x11 = "refuse"`, and warned about otherwise. The binary and `system.toml` are root-owned; `doctor` fails on password-less `sudo` for the agent's account. |
+| Approval spoofing through the socket | Approval comes only from the console terminal; no socket method approves, and no socket method loosens policy. The approval screen names the requesting uid, pid and process as the kernel reports them. |
 | A client stuck or killed during an approval | The approval is abandoned or times out after 5 minutes; the socket keeps serving. |
-| Another local user | The socket lives in a private directory (mode 0700, owner checked; user ACL under `%LOCALAPPDATA%` on Windows). On Linux and macOS each peer's uid must match the console's. |
+| A fake console | In separated mode clients check through peer credentials that the socket is served by `service_user`, and the socket directory is owned by it. |
+| Another local user | Same-user mode: the socket lives in a private directory (mode 0700, owner checked), and each peer's uid must match the console's. Separated mode: the socket directory is `service_user:client_group` mode 0710, the socket 0660, and each peer is checked with `SO_PEERCRED` (Linux) or `LOCAL_PEERCRED` (macOS): the console's own uid, a member of `client_group` or an `allowed_uids` entry. |
 
 ## Approval
 
 - The approval screen shows the profile, host, database, user, tier, the
-  exact SQL, its class, the EXPLAIN summary and verdict, and the PII state.
-- locksql never rewrites SQL: what the human approves is what runs.
+  requesting uid, pid and process, the exact SQL with the PII columns it
+  touches highlighted, its class, the EXPLAIN summary and verdict, the
+  relations read, the PII columns touched and in which clause, the masked
+  outputs and their modes, the k-anonymity counts, the token
+  substitutions, the row cap and the PII state.
+- Approval comes only from the console terminal.
+- locksql never rewrites SQL: what the human approves is what runs, except
+  that session tokens are replaced by their values (announced on the
+  screen).
 - Production profiles need the profile name typed, not `y`.
 - REFUSE verdicts cannot be overridden from the console; the human has to
   raise the limits, which is itself a confirmed loosening.
@@ -71,11 +100,15 @@ Records contain the SQL and metadata, never secrets and never row data.
 
 ## Out of scope and limitations
 
-- **Same-user malware.** A process running as the same OS user can read the
-  user's keychain session, attach to the console process where the OS
-  allows it, or type into the terminal. locksql does not defend against it.
-- **Windows peer check.** Windows has no peer credential check for Unix
-  sockets; locksql relies on the socket directory's ACL.
+- **Same-user mode is weaker.** Without `locksql install`, the agent runs as
+  the console's account: it can read the user's keychain session, attach to
+  the console process where the OS allows it (`kernel.yama.ptrace_scope =
+  0`), or type into the terminal (`dev.tty.legacy_tiocsti = 1`). The console
+  warns at start and `doctor` reports these settings, but locksql does not
+  defend against it.
+- **The console account.** Malware running as `locksql` or as root, and an
+  agent account that can become either, are out of scope. So is an X11
+  session on a non-production profile with `x11 = "warn"`.
 - **Transport security.** TLS to the database is not configurable yet.
   PostgreSQL, MariaDB and MySQL connect like PostgreSQL's `sslmode=prefer`:
   encrypted when the server offers TLS, plain otherwise, and the certificate
@@ -88,34 +121,28 @@ Records contain the SQL and metadata, never secrets and never row data.
 - **Write tiers.** Above tier `read`, the human's approval is the gate. The
   classifier assigns the class shown on the screen, but the server does not
   restrict what an approved write statement does within the account's
-  privileges.
+  privileges. The column analysis covers reads; a write's `RETURNING` list
+  or a data-modifying CTE may not alias or transform a masked column.
 - **Masking is best effort.** Column rules depend on the rules being right,
-  and value detectors catch common formats only. A server error can echo a
-  value the statement choked on (a failed cast in a WHERE clause); with
-  masking on, locksql redacts the quoted part of such messages and runs the
-  detectors over the rest, but an unquoted value they cannot recognise gets
-  through. Use a database account that
+  and value detectors catch common formats only. Use a database account that
   cannot read what the agent must never see.
-- **Known limitation: inference through predicates.** Masking protects the
-  values a query *returns*, not what can be *inferred* from them. A rule
-  column may be used in `WHERE`, `JOIN ... ON` or `HAVING`, so a query can
-  compare it, character by character, with values it generates (a
-  position × character table joined on `substr(email, n, 1) = ch`) and
-  return the matching positions and characters under columns no rule
-  covers: the full value can be rebuilt in a single read query. locksql
-  does not detect such predicate oracles today. Refusing rule columns in
-  predicates (or in functions and comparisons with non-constant operands
-  there) would also block ordinary filters such as
-  `WHERE email = 'x@example.com'`; how far to restrict them is a design
-  decision still pending. Until then, treat masking as protection against
-  accidental exposure, not against an agent deliberately extracting a
-  column it can filter on.
+- **k-anonymity is a query-set-size control.** It refuses a single query
+  whose PII filter, group or aggregate covers fewer than `k` rows. It does
+  not stop differencing attacks: two approved queries whose sets differ by
+  one row (all customers of a city, then the same minus one email) still
+  reveal that row's other columns. The approval screen shows each PII filter
+  so the human can spot such sequences; `--unmask` queries skip the check.
+- **Equality still leaks equality.** A filter `WHERE email = 'x@example.com'`
+  tells the agent whether that value exists among at least `k` rows, and a
+  `hash` token tells it which rows share a value. That is the purpose of
+  these features.
 - **Relations that project another relation.** A view, a materialized view
-  or a foreign table that renames a rule column, and a classic-inheritance
-  table (`INHERITS`) read through a parent or a child the rule does not
-  name, are masked by column name only. Give such a column its own rule.
-  A PostgreSQL partition is resolved to the root of its partition tree, so
-  a rule on the partitioned table covers its partitions.
+  or a foreign table is masked by column name only: a view that renames a
+  rule column (`firstname AS contact`) needs its own rule for the new name.
+  The same holds for a classic-inheritance table (`INHERITS`) read through a
+  parent or a child the rule does not name. A PostgreSQL partition is
+  resolved to the root of its partition tree, so a rule on the partitioned
+  table covers its partitions.
 - **Copies at higher tiers.** A write (`INSERT ... SELECT`, `UPDATE ...
   SET`, `MERGE`) that copies a rule column into another column is refused,
   with or without `RETURNING`. DDL such as `CREATE TABLE ... AS SELECT` is
@@ -123,3 +150,14 @@ Records contain the SQL and metadata, never secrets and never row data.
   gate.
 - **Catalog metadata** (database, table, column and index names) is returned
   without approval.
+
+## Upstream recommendation
+
+locksql masks what leaves the database; the database still holds plaintext,
+and any other client of it (a backup, a replica, a reporting tool) sees it.
+Where you control the schema, store personal data encrypted at rest with a
+blind index: the application encrypts the value with a key the database
+never holds, and stores next to it a keyed HMAC of the normalised value for
+equality lookups and joins. The database then holds no plaintext to leak.
+locksql's `hash` mode applies the same idea to query results: a keyed HMAC
+that keeps equality and hides everything else.
