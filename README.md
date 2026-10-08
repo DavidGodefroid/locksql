@@ -35,8 +35,7 @@ statement, masks personal data and waits for **your** approval. The agent
 never sees a credential and never opens a connection.
 
 > [!NOTE]
-> **Pre-release.** No tagged release yet: build from source (see [Build](#build))
-> until `v0.1.0` is out.
+> **Pre-release** (`v0.1.x`). See [Install](#install).
 
 ## Why locksql?
 
@@ -115,9 +114,8 @@ every peer on the socket.
 ## Quick start
 
 ```sh
-# 1. Install (once releases are published; until then use go install)
-brew install davidgodefroid/tap/locksql        # macOS, Linux
-go install github.com/DavidGodefroid/locksql/cmd/locksql@latest
+# 1. Install (see Install below for packages, checksums and signatures)
+curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh
 
 # 2. In your project: wire your agent and get an example config
 locksql init claude                             # or codex, cursor, gemini
@@ -410,6 +408,52 @@ iteration, and it is deliberately narrow:
 | 🛡️ [docs/security-model.md](docs/security-model.md) | threat model and mitigations, and an upstream recommendation (PII encrypted at rest with a blind index) |
 | 🚨 [SECURITY.md](SECURITY.md) | reporting a vulnerability |
 | 🧑‍💻 [CONTRIBUTING.md](CONTRIBUTING.md) | building and testing |
+
+## Install
+
+Every release ships a static binary for Linux and macOS (amd64, arm64),
+Linux packages, a `checksums.txt` and its cosign signature. No Go toolchain is
+needed.
+
+**Script (Linux, macOS).** Downloads the archive for your OS and architecture,
+checks it against `checksums.txt` (and the signature when `cosign` is on
+PATH), then installs `/usr/local/bin/locksql`, with `sudo` if needed:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh
+less install.sh                     # read it first
+sh install.sh                       # LOCKSQL_VERSION=v0.1.0 to pin a version
+```
+
+`LOCKSQL_INSTALL_DIR=~/.local/bin` installs without `sudo`, but the binary is
+then owned by your account and `locksql doctor` warns: in separated mode, the
+console must run a binary the agent cannot replace (`sudo locksql install`
+copies it to `/usr/local/bin`).
+
+**Debian, Ubuntu, Fedora, RHEL, Alpine.** Download the package from the
+[releases page](https://github.com/DavidGodefroid/locksql/releases), then:
+
+```sh
+sudo apt install ./locksql_<version>_linux_amd64.deb     # Debian, Ubuntu
+sudo dnf install ./locksql_<version>_linux_amd64.rpm     # Fedora, RHEL
+sudo apk add --allow-untrusted ./locksql_<version>_linux_amd64.apk   # Alpine
+```
+
+**By hand.** Download `locksql_<version>_<os>_<arch>.tar.gz`, `checksums.txt`
+and `checksums.txt.sigstore.json`, then:
+
+```sh
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/DavidGodefroid/locksql/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+sha256sum --ignore-missing -c checksums.txt   # macOS: shasum -a 256 --ignore-missing -c checksums.txt
+tar -xzf locksql_<version>_<os>_<arch>.tar.gz locksql
+sudo install -m 0755 locksql /usr/local/bin/locksql
+```
+
+**From source.** `go install github.com/DavidGodefroid/locksql/cmd/locksql@latest`
+(Go 1.26 or later).
 
 ## Build
 

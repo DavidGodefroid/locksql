@@ -5,8 +5,7 @@
 #   goreleaser release --snapshot --clean --skip=sign
 #
 # A tag v* pushed to GitHub runs .github/workflows/release.yml, which needs
-# cosign and syft on PATH and the secret HOMEBREW_TAP_GITHUB_TOKEN (a
-# fine-grained token with contents:write on DavidGodefroid/homebrew-tap).
+# cosign and syft on PATH.
 version: 2
 
 project_name: locksql
@@ -42,6 +41,27 @@ archives:
       - SECURITY.md
       - docs/usage.md
       - docs/security-model.md
+
+# Linux packages, attached to the release and covered by checksums.txt. The
+# binary lands in /usr/bin, owned by root, which is what `locksql doctor`
+# expects.
+nfpms:
+  - id: packages
+    ids: [locksql]
+    package_name: locksql
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [deb, rpm, apk]
+    bindir: /usr/bin
+    vendor: David Godefroid
+    maintainer: David Godefroid <noreply@github.com>
+    homepage: https://github.com/DavidGodefroid/locksql
+    description: Human-gated database access for AI agents
+    license: Apache-2.0
+    contents:
+      - src: LICENSE
+        dst: /usr/share/doc/locksql/LICENSE
+      - src: NOTICE
+        dst: /usr/share/doc/locksql/NOTICE
 
 checksum:
   name_template: checksums.txt
@@ -85,30 +105,3 @@ release:
     name: locksql
   prerelease: auto
   draft: false
-
-# Homebrew: a cask in DavidGodefroid/homebrew-tap (the "brews" formula pipe is
-# deprecated in GoReleaser v2). Pre-releases are not published.
-homebrew_casks:
-  - name: locksql
-    ids: [locksql]
-    binaries: [locksql]
-    repository:
-      owner: DavidGodefroid
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Casks
-    homepage: https://github.com/DavidGodefroid/locksql
-    description: Human-gated database access for AI agents
-    license: Apache-2.0
-    commit_author:
-      name: David Godefroid
-      email: noreply@github.com
-    commit_msg_template: "locksql {{ .Tag }}"
-    skip_upload: auto
-    hooks:
-      post:
-        # The binaries are not notarised: drop the quarantine attribute.
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/locksql"]
-          end
