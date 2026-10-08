@@ -80,8 +80,6 @@ func TestPlanCheckRound3(t *testing.T) {
 	}
 	allowed := []dsql{
 		{sqlclass.Postgres, "UPDATE big SET status = 'x' WHERE id < 3 RETURNING id, email"},
-		{sqlclass.Postgres, "UPDATE big SET status = upper(email) WHERE id < 3"},
-		{sqlclass.Postgres, "INSERT INTO small (id, label) SELECT id, upper(email) FROM big"},
 		{sqlclass.Postgres, "DELETE FROM big WHERE email LIKE '%x' RETURNING id"},
 		{sqlclass.Postgres, "SELECT id FROM t WHERE EXISTS (SELECT * FROM users) LIMIT 5"},
 		{sqlclass.Postgres, "SELECT count(*) FROM users LIMIT 5"},

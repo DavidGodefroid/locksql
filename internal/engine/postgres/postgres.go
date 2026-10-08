@@ -237,7 +237,8 @@ func (s *session) Flavor() engine.Flavor { return engine.FlavorPostgres }
 
 // OriginColumns is true: the protocol reports each column's table OID and
 // attribute number, resolved through pg_attribute. Only base-table columns
-// keep an origin (see originKinds); a view's columns get none.
+// keep an origin, a partition's mapped to its root (see originRel); a view's
+// or a foreign table's columns get none.
 func (s *session) OriginColumns() bool { return true }
 
 func (s *session) Ping(ctx context.Context) error {

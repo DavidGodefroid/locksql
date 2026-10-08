@@ -165,8 +165,9 @@ const valueChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 // A statement that is not a plain READ select is checked the same way when
 // it may return rows: a RETURNING list counts as a select list, and a
 // statement led by SELECT, WITH, VALUES or TABLE that the classifier made
-// WRITE (a data-modifying CTE) is checked whole. Other statements (SHOW,
-// DESCRIBE, PRAGMA, a write without RETURNING, DDL) pass.
+// WRITE (a data-modifying CTE) is checked whole. A write without RETURNING
+// is only checked by writtenValues. Other statements (SHOW, DESCRIBE,
+// PRAGMA, DDL) pass.
 //
 // On PostgreSQL, "rel.f" may be the call f(rel) on the whole row of rel
 // when rel has no column f (attribute notation: b.row_to_json, t.name,
@@ -177,11 +178,11 @@ const valueChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 // accepts a plain qualified item of the outer select list whose result
 // column carries an origin, which proves it is a base-table column.
 //
-// A write that returns rows (RETURNING, or a data-modifying CTE) must not
-// write a rule-matched column's values into a column it returns: a
-// rule-matched column, a whole row or a star over a source that may hold
-// one is refused anywhere its value may be written (SET values, the select
-// list or VALUES of an INSERT source), see writtenValues.
+// A write, with or without RETURNING, must not copy a rule-matched
+// column's values into another column: a rule-matched column, a whole row
+// or a star over a source that may hold one is refused anywhere its value
+// may be written (SET values, the select list or VALUES of an INSERT
+// source), see writtenValues.
 func AliasViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
 	return ResultAliasViolation(st, r, d, nil)
 }
@@ -199,7 +200,12 @@ func ResultAliasViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect, co
 		return err
 	}
 	if st.Class != sqlclass.Read && !mayReturnRows(toks) {
-		return nil
+		// Nothing comes back, but a copy of a rule column would come
+		// back unmasked from the next read of the column written.
+		a := newAliasCheck(toks, r, d)
+		a.write = true
+		a.prepare()
+		return a.writtenValues()
 	}
 	a := newAliasCheck(toks, r, d)
 	a.cols = cols
@@ -412,10 +418,16 @@ type selectItem struct {
 	star  bool   // "*" or "x.*": it expands to an unknown number of columns
 }
 
-func (a *aliasCheck) run() error {
+// prepare computes the row sources, clauses and output list of the
+// statement.
+func (a *aliasCheck) prepare() {
 	a.rows = a.rowSources()
 	a.clause = a.clauses()
 	a.output = a.outputList()
+}
+
+func (a *aliasCheck) run() error {
+	a.prepare()
 	if a.write {
 		if err := a.writtenValues(); err != nil {
 			return err
@@ -1192,13 +1204,16 @@ var writeValueClauses = map[string]bool{"": true, "SELECT": true, "VALUES": true
 // conflict targets: no value under them reaches a written column.
 var writeFilters = map[string]bool{"WHERE": true, "ON": true, "HAVING": true, "CONFLICT": true}
 
-// writtenValues refuses, in a write that may return rows, a value derived
-// from a PII column where the write may store it (SET values, the select
-// list, VALUES or TABLE of an INSERT source, MERGE actions): a rule-matched
-// column, a star or TABLE over a source that may hold one, or a PostgreSQL
-// whole-row reference. Stored in a column no rule names, it would come back
-// through RETURNING with a trusted origin and no mask. Target column lists
-// and SET targets are not values.
+// writtenValues refuses, in a write, a value derived from a PII column
+// where the write may store it (SET values, the select list, VALUES or
+// TABLE of an INSERT source, MERGE actions): a rule-matched column, a star
+// or TABLE over a source that may hold one, or a PostgreSQL whole-row
+// reference. Stored in a column no rule names, it would come back through
+// RETURNING, or from the next plain read of that column, with a trusted
+// origin and no mask. This holds even when the target is itself a rule
+// column: rules match targets by name only, and the column written may be
+// one no rule's origin covers. Target column lists and SET targets are not
+// values.
 func (a *aliasCheck) writtenValues() error {
 	writes := false
 	for i := range a.toks {
@@ -1220,7 +1235,7 @@ func (a *aliasCheck) writtenValues() error {
 		}
 		return levels[d]
 	}
-	const where = "the values of a write that returns rows"
+	const where = "the values a write stores"
 	for k := 0; k < len(a.toks); k++ {
 		t := a.toks[k]
 		if a.isPunct(k, "(") {
@@ -1254,8 +1269,8 @@ func (a *aliasCheck) writtenValues() error {
 			continue
 		}
 		if a.matched(k) && !a.insideCount(k) {
-			return &sqlclass.Refusal{Reason: fmt.Sprintf("a write that returns rows stores values of PII column %s, which could come back unmasked through RETURNING under the name of the column written;"+
-				" run the write without RETURNING, or do not copy PII columns", strings.ToLower(a.name(k)))}
+			return &sqlclass.Refusal{Reason: fmt.Sprintf("this write stores values of PII column %s, which could come back unmasked under the name of the column written (through RETURNING or a later read);"+
+				" do not copy PII columns, or run the write as an unmasked query", strings.ToLower(a.name(k)))}
 		}
 		if a.d != sqlclass.Postgres {
 			continue

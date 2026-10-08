@@ -39,7 +39,7 @@ weaknesses as described in [SECURITY.md](../SECURITY.md).
 | The agent loosens its own policy | The socket protocol has no method that loosens policy. Config and PII file edits are detected by a policy fingerprint diff; a loosening is held until the human confirms it. The approved policy is stored outside the repository. |
 | Credential leak | Secrets exist only in console memory or the OS keychain. They never go through argv, environment, files, logs, the socket or error messages (errors are sanitised). Config keys named like secrets and DSNs with passwords are refused. Core dumps are disabled (`RLIMIT_CORE=0`, and `PR_SET_DUMPABLE=0` on Linux). |
 | Statement smuggling | The classifier refuses several statements, comments, variables, bind parameters and unbalanced quotes, and classifies by keywords outside literals per dialect. Multi-statements are off in every driver; PostgreSQL uses the extended protocol only. Tier `read` is also enforced by a read-only session and transaction on the server. |
-| Dangerous functions and statements | File and OS access, engine escape hatches (`ATTACH`, `load_extension`, `dblink`), sleeps, benchmarks, advisory locks, `FOR UPDATE`, session tampering (`SET ROLE`, `set_config`, guarded `SET` targets) and statements carrying credentials are refused at every tier. |
+| Dangerous functions and statements | File and OS access, engine escape hatches (`ATTACH`, `load_extension`, `dblink`), SQLite raw storage tables (`sqlite_dbpage`, `dbstat`), sleeps, benchmarks, advisory locks, `FOR UPDATE`, session tampering (`SET ROLE`, `set_config`, guarded `SET` targets) and statements carrying credentials are refused at every tier. |
 | Server overload | READ statements need `LIMIT n <= max_rows`; `EXPLAIN` estimates the rows examined and refuses heavy plans; a server-side timeout plus a client-side cancel; one request at a time. |
 | PII exposure | Column rules proposed from the schema; masking by origin column, with a name-based fallback; aliases and expressions over masked columns are refused; value detectors with checksums; unmasking is per query, shown in red and never auto-approved. |
 | Prompt injection through data | Rows are framed as untrusted data in every output; the generated agent instructions say so; control and bidirectional characters are escaped in client output and on the console screen, so data cannot spoof the approval prompt. |
@@ -96,5 +96,30 @@ Records contain the SQL and metadata, never secrets and never row data.
   detectors over the rest, but an unquoted value they cannot recognise gets
   through. Use a database account that
   cannot read what the agent must never see.
+- **Known limitation: inference through predicates.** Masking protects the
+  values a query *returns*, not what can be *inferred* from them. A rule
+  column may be used in `WHERE`, `JOIN ... ON` or `HAVING`, so a query can
+  compare it, character by character, with values it generates (a
+  position × character table joined on `substr(email, n, 1) = ch`) and
+  return the matching positions and characters under columns no rule
+  covers: the full value can be rebuilt in a single read query. locksql
+  does not detect such predicate oracles today. Refusing rule columns in
+  predicates (or in functions and comparisons with non-constant operands
+  there) would also block ordinary filters such as
+  `WHERE email = 'x@example.com'`; how far to restrict them is a design
+  decision still pending. Until then, treat masking as protection against
+  accidental exposure, not against an agent deliberately extracting a
+  column it can filter on.
+- **Relations that project another relation.** A view, a materialized view
+  or a foreign table that renames a rule column, and a classic-inheritance
+  table (`INHERITS`) read through a parent or a child the rule does not
+  name, are masked by column name only. Give such a column its own rule.
+  A PostgreSQL partition is resolved to the root of its partition tree, so
+  a rule on the partitioned table covers its partitions.
+- **Copies at higher tiers.** A write (`INSERT ... SELECT`, `UPDATE ...
+  SET`, `MERGE`) that copies a rule column into another column is refused,
+  with or without `RETURNING`. DDL such as `CREATE TABLE ... AS SELECT` is
+  not checked that way: at tier `ddl` and above the human's approval is the
+  gate.
 - **Catalog metadata** (database, table, column and index names) is returned
   without approval.

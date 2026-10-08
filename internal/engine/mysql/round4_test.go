@@ -97,6 +97,11 @@ func TestFromNames(t *testing.T) {
 		{"SELECT id FROM big PARTITION (p0) AS p USE INDEX (i) LIMIT 1", "BIG", "P", true},
 		{"SELECT 1 FROM DUAL", "", "", true},
 		{"SELECT id FROM (big JOIN small USING (id))", "", "", false},
+		// Round 5: MariaDB accepts FULL (it has no FULL JOIN) and WINDOW
+		// as unquoted aliases.
+		{"SELECT full.email FROM full AS f, v6 AS full LIMIT 5", "FULL V6", "F FULL", true},
+		{"SELECT full.email FROM full f JOIN v6 full LIMIT 5", "FULL V6", "F FULL", true},
+		{"SELECT window.email FROM window w, v6 window LIMIT 5", "WINDOW V6", "W WINDOW", true},
 	}
 	for _, c := range cases {
 		rels, aliases, ok := fromNames(c.q)

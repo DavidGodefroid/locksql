@@ -826,6 +826,13 @@ var fromNotAlias = map[string]bool{
 	"PROCEDURE": true, "AS": true, "OFFSET": true, "FETCH": true,
 }
 
+// fromMaybeAlias are fromNotAlias words that MariaDB still accepts as an
+// unquoted table alias (it has no FULL JOIN; WINDOW, OFFSET and FETCH are
+// not reserved in every version). After a relation they are recorded as an
+// alias as well: a base table of that name then gets no trusted origin,
+// which only makes masking fall back to the column name.
+var fromMaybeAlias = map[string]bool{"FULL": true, "WINDOW": true, "OFFSET": true, "FETCH": true}
+
 // fromEnd ends the FROM clause of a single SELECT.
 var fromEnd = map[string]bool{
 	"WHERE": true, "GROUP": true, "HAVING": true, "ORDER": true, "LIMIT": true, "WINDOW": true,
@@ -900,7 +907,7 @@ func fromNames(q string) (rels, aliases map[string]bool, ok bool) {
 		if isWord(j, "AS") {
 			j++
 		}
-		if a := name(j); a != "" && !(toks[j].Kind == sqlclass.TokWord && fromNotAlias[toks[j].Text]) {
+		if a := name(j); a != "" && !(toks[j].Kind == sqlclass.TokWord && fromNotAlias[toks[j].Text] && !fromMaybeAlias[toks[j].Text]) {
 			aliases[a] = true
 		} else if j < len(toks) && toks[j].Kind == sqlclass.TokString && len(toks[j].Text) >= 2 {
 			aliases[foldName(toks[j].Text[1:len(toks[j].Text)-1])] = true // a string alias

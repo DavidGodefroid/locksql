@@ -31,13 +31,29 @@ type origin struct {
 	schema, table, column string
 }
 
-// originKinds are the relations whose columns count as an origin: tables,
-// partitioned tables and foreign tables. A view or a materialized view
-// reports itself, not the table behind it, and may rename a PII column, so
-// its columns get no origin: masking then matches them by name and refuses
-// renamed uses (pii.AliasViolation). Derived tables and CTEs resolve to the
-// base table.
-const originKinds = `c.relkind IN ('r', 'p', 'f')`
+// originRel maps the relation p a result column comes from to the relation
+// c its origin names, and originKinds keeps only trusted origins:
+//
+//   - A partition (relispartition, at any level) maps to the root of its
+//     partition tree (pg_partition_root): the PII scan proposes rules on the
+//     root only, and a partition has the same column names as its root
+//     (attribute numbers may differ, so the partition's attname is used).
+//   - Tables and partitioned tables keep their own origin, unless they take
+//     part in classic inheritance (INHERITS): a parent's rows include its
+//     children's, and a child is a separate table a rule on the parent does
+//     not name, so their columns get no origin.
+//   - A view, a materialized view or a foreign table reports itself, not the
+//     relation behind it, and may rename a PII column (a foreign table's
+//     column_name option), so its columns get no origin.
+//
+// Columns without an origin are masked by name and checked by
+// pii.AliasViolation. Derived tables and CTEs resolve to the base table.
+const originRel = `JOIN pg_catalog.pg_class p ON p.oid = a.attrelid
+		JOIN pg_catalog.pg_class c ON c.oid = CASE WHEN p.relispartition
+			THEN pg_catalog.pg_partition_root(p.oid) ELSE p.oid END`
+
+const originKinds = `c.relkind IN ('r', 'p') AND (p.relispartition OR p.relkind = 'p' OR p.relkind = 'r'
+		AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhrelid = p.oid OR i.inhparent = p.oid))`
 
 // resolveOrigins fills in the origin of each result column from the table
 // OID and attribute number the server reported, with one catalog query per
@@ -61,7 +77,7 @@ func (s *session) resolveOrigins(ctx context.Context, dc *dbConn, cols []engine.
 		SELECT a.attrelid::int8, a.attnum::int8, n.nspname, c.relname, a.attname
 		FROM ROWS FROM (pg_catalog.unnest($1::int8[]), pg_catalog.unnest($2::int8[])) AS k(rel, att)
 		JOIN pg_catalog.pg_attribute a ON a.attrelid = k.rel::oid AND a.attnum = k.att::int2
-		JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+		`+originRel+`
 		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 		WHERE NOT a.attisdropped AND `+originKinds, rels, atts)
 	if err != nil {

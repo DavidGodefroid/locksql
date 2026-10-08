@@ -161,6 +161,24 @@ var forbiddenFuncPrefixes = []string{
 	"DBLINK",
 }
 
+// sqliteRawTables are SQLite eponymous virtual tables that expose the
+// database's raw pages, storage details or other statements' SQL
+// (sqlite_dbpage, dbstat, the recovery extension's sqlite_dbdata and
+// sqlite_dbptr, sqlite_stmt). Their values come back under labels no mask
+// rule can match, and sqlite_dbpage is writable, so they are refused in
+// every class. A quoted or string-literal spelling counts too: SQLite reads
+// 'name' as an identifier where a string is not allowed.
+var sqliteRawTables = newSet("SQLITE_DBPAGE", "DBSTAT", "SQLITE_DBDATA", "SQLITE_DBPTR", "SQLITE_STMT")
+
+// sqliteName is the name t may stand for in SQLite: Name, plus the body of a
+// single-quoted string.
+func sqliteName(t Token) string {
+	if t.Kind == TokString && len(t.Text) >= 2 && t.Text[0] == '\'' {
+		return fold(strings.ReplaceAll(t.Text[1:len(t.Text)-1], "''", "'"))
+	}
+	return t.Name()
+}
+
 // sequenceFuncs advance or set a sequence; they are refused in a READ statement.
 var sequenceFuncs = newSet("NEXTVAL", "SETVAL")
 
@@ -284,11 +302,15 @@ func Classify(d Dialect, sql string, maxRows int) (Statement, error) {
 	return st, nil
 }
 
-// checkForbidden refuses constructs that are never allowed: forbidden
-// function calls, INTO OUTFILE/DUMPFILE and SONAME (native code loading).
+// checkForbidden refuses constructs that are never allowed: SQLite raw
+// storage tables (sqliteRawTables), forbidden function calls, INTO
+// OUTFILE/DUMPFILE and SONAME (native code loading).
 // A MySQL "name"( counts as a call: with ANSI_QUOTES it is one.
 func checkForbidden(d Dialect, toks []Token) error {
 	for k, t := range toks {
+		if d == SQLite && sqliteRawTables.has(sqliteName(t)) {
+			return refusef("%s is not allowed (it exposes raw database pages or storage details)", strings.ToLower(sqliteName(t)))
+		}
 		name := t.nameIn(d)
 		if name == "" {
 			continue

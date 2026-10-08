@@ -99,7 +99,6 @@ func TestWriteCopiesRuleColumnRound4(t *testing.T) {
 		{sqlclass.Postgres, "INSERT INTO users (id, firstname) VALUES (1, 'x') RETURNING id"},
 		{sqlclass.Postgres, "UPDATE big SET status = 'x' WHERE email LIKE '%x' RETURNING id, email"},
 		{sqlclass.Postgres, "UPDATE small SET label = 'x' WHERE id IN (SELECT id FROM big WHERE email LIKE 'a%') RETURNING id"},
-		{sqlclass.Postgres, "INSERT INTO small (id, label) SELECT id, upper(email) FROM big"},
 		{sqlclass.Postgres, "DELETE FROM big WHERE email LIKE '%x' RETURNING id"},
 		{sqlclass.SQLite, "INSERT INTO small (id) VALUES (1) RETURNING id"},
 	}

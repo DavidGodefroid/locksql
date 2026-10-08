@@ -287,6 +287,66 @@ func testPostgresServer(t *testing.T, version string, srv Server) {
 		}
 	})
 
+	t.Run("partitions, inheritance and foreign tables", func(t *testing.T) {
+		admin := connectPG(t, srv, "postgres", config.TierAdmin, 30*time.Second)
+		ddl := func(q string) {
+			t.Helper()
+			if _, err := admin.Run(ctx, "app", sqlclass.Statement{Class: sqlclass.DDL, Kind: "ddl", SQL: q, Limit: -1}, 0); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+		}
+		t.Cleanup(func() {
+			ddl("DROP TABLE IF EXISTS pt, ip, ic, secret CASCADE")
+			ddl("DROP EXTENSION IF EXISTS postgres_fdw CASCADE")
+		})
+		// Partitions: one direct, one two levels down, one attached with
+		// another column order (different attribute numbers).
+		ddl("CREATE TABLE pt (id int, email text) PARTITION BY RANGE (id)")
+		ddl("CREATE TABLE pt_1 PARTITION OF pt FOR VALUES FROM (0) TO (100)")
+		ddl("CREATE TABLE pt_2 PARTITION OF pt FOR VALUES FROM (100) TO (200) PARTITION BY RANGE (id)")
+		ddl("CREATE TABLE pt_2a PARTITION OF pt_2 FOR VALUES FROM (100) TO (200)")
+		ddl("CREATE TABLE pt_3 (email text, id int)")
+		ddl("ALTER TABLE pt ATTACH PARTITION pt_3 FOR VALUES FROM (200) TO (300)")
+		ddl("INSERT INTO pt VALUES (1, 'p1@example.com'), (150, 'p2@example.com'), (250, 'p3@example.com')")
+		// Classic inheritance.
+		ddl("CREATE TABLE ip (id int, email text)")
+		ddl("CREATE TABLE ic () INHERITS (ip)")
+		ddl("INSERT INTO ic VALUES (1, 'i1@example.com')")
+		// A foreign table over a loopback server.
+		ddl("CREATE TABLE secret (id int, email text)")
+		ddl("INSERT INTO secret VALUES (1, 'f1@example.com')")
+		ddl("CREATE EXTENSION postgres_fdw")
+		ddl("CREATE SERVER loop FOREIGN DATA WRAPPER postgres_fdw OPTIONS (host 'localhost', dbname 'app')")
+		ddl("CREATE USER MAPPING FOR ro SERVER loop OPTIONS (user 'postgres', password_required 'false')")
+		ddl("CREATE FOREIGN TABLE ft (id int, email text) SERVER loop OPTIONS (table_name 'secret')")
+		ddl("GRANT SELECT ON pt, pt_1, pt_2, pt_2a, pt_3, ip, ic, secret, ft TO ro")
+
+		s := connectPG(t, srv, "ro", config.TierRead, 5*time.Second)
+		for _, rel := range []string{"pt_1", "pt_2", "pt_2a", "pt_3"} {
+			c := mustRun(t, s, "SELECT email FROM "+rel+" LIMIT 1").Columns[0]
+			if c.OriginDB != "public" || c.OriginTable != "pt" || c.OriginColumn != "email" {
+				t.Errorf("%s: origin = %+v, want the root public.pt.email", rel, c)
+			}
+		}
+		for _, rel := range []string{"ip", "ic", "ft"} {
+			if c := mustRun(t, s, "SELECT email FROM "+rel+" LIMIT 1").Columns[0]; c.HasOrigin() {
+				t.Errorf("%s: origin = %+v, want none", rel, c)
+			}
+		}
+		assertNoLeak(t, s, sqlclass.Postgres, pii.Rules{Mask: []string{"public.pt.email"}}, []string{
+			"SELECT email FROM pt_1 LIMIT 5", "SELECT email FROM pt_2a LIMIT 5", "SELECT id, email FROM pt_3 LIMIT 5",
+		})
+		assertNoLeak(t, s, sqlclass.Postgres, pii.Rules{Mask: []string{"public.ic.email"}}, []string{
+			"SELECT email FROM ip LIMIT 5", "SELECT email FROM ONLY ic LIMIT 5",
+		})
+		assertNoLeak(t, s, sqlclass.Postgres, pii.Rules{Mask: []string{"public.ip.email"}}, []string{
+			"SELECT email FROM ic LIMIT 5",
+		})
+		assertNoLeak(t, s, sqlclass.Postgres, pii.Rules{Mask: []string{"public.secret.email"}}, []string{
+			"SELECT email FROM ft LIMIT 5", "SELECT f.email FROM ft f LIMIT 5",
+		})
+	})
+
 	t.Run("multi-statements are rejected", func(t *testing.T) {
 		// The driver mode the engine uses (extended protocol) refuses a
 		// second statement on the server side.
