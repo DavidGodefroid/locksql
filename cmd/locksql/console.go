@@ -35,6 +35,9 @@ func runConsole(e env, args []string) int {
 	term := console.NewTerminal(os.Stdin, e.stdout)
 	name := *profile
 	if name == "" {
+		if code, failed := sysFail(e, " console"); failed {
+			return code
+		}
 		wireAgents(e)
 		pe := e
 		if *project != "" {
@@ -50,7 +53,11 @@ func runConsole(e env, args []string) int {
 			return onboardFail(e, err)
 		}
 		if name == "" {
-			fmt.Fprintln(e.stderr, "locksql console: no profile: run locksql to add one")
+			if separated, _ := isServiceAccount(e); separated {
+				fmt.Fprintf(e.stderr, "locksql console: no profile visible here; in separated mode, put the profile in the project's .locksql/config.toml and run: locksql console --project %s\n", projectDirHint(pe))
+			} else {
+				fmt.Fprintln(e.stderr, "locksql console: no profile: run locksql (or locksql add) to add one")
+			}
 			return exitUsage
 		}
 	}

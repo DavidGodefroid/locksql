@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
+	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/console"
 	"github.com/DavidGodefroid/locksql/internal/setup"
@@ -28,7 +29,8 @@ func sysConfig(e env) (*sysconf.Config, error) {
 
 // isServiceAccount reports whether separated mode is set up and whether
 // this process runs as its service account. A system config that does not
-// load counts as same-user mode here: the console reports it on start.
+// load counts as same-user mode here: callers that must not guess check
+// sysConfig first (see sysFail).
 func isServiceAccount(e env) (separated, service bool) {
 	sys, err := sysConfig(e)
 	if err != nil || sys == nil {
@@ -36,6 +38,24 @@ func isServiceAccount(e env) (separated, service bool) {
 	}
 	uid, err := sys.ServiceUID()
 	return true, err == nil && uid == os.Getuid()
+}
+
+// sysFail reports a system config that does not load, before any prompt or
+// wiring: without it, locksql cannot tell whether this is the service
+// account. It returns false when the config loads (or is absent).
+func sysFail(e env, name string) (int, bool) {
+	if _, err := sysConfig(e); err != nil {
+		fmt.Fprintf(e.stderr, "locksql%s: %v\n", name, err)
+		return exitUsage, true
+	}
+	return 0, false
+}
+
+func (e env) geteuid() int {
+	if e.euid != nil {
+		return e.euid()
+	}
+	return os.Geteuid()
 }
 
 // wireAgents wires every detected agent that is not wired yet, one line
@@ -49,6 +69,10 @@ func wireAgents(e env) {
 		return // the agents live in the other account's home
 	}
 	if e.agentEnv == nil {
+		return
+	}
+	if e.geteuid() == 0 {
+		fmt.Fprintln(e.stdout, "not wiring agents as root; run locksql from your own account")
 		return
 	}
 	ae, err := e.agentEnv()
@@ -72,11 +96,12 @@ func wireAgents(e env) {
 				paths = append(paths, act.Path)
 			}
 		}
-		switch {
-		case err != nil:
-			lines = append(lines, fmt.Sprintf("  %-7s  not wired: %v (see docs/usage.md, Agent wiring)", a, err))
-		case len(paths) > 0:
+		// Files written before a failure are listed first: they stay.
+		if len(paths) > 0 {
 			lines = append(lines, fmt.Sprintf("  %-7s  %s", a, strings.Join(paths, ", ")))
+		}
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("  %-7s  not wired: %v (see docs/usage.md, Agent wiring)", a, err))
 		}
 	}
 	if len(lines) == 0 {
@@ -142,25 +167,53 @@ func addProfile(e env, io setup.IO) (string, error) {
 	return a.Name, nil
 }
 
-// separatedHint is printed to an account other than the service account
-// in separated mode: only the service account can add a database to the
-// config the console reads.
-func separatedHint(e env) string {
+// projectDirHint names the project of cwd, or a placeholder outside one.
+func projectDirHint(e env) string {
+	if root, ok := config.FindProjectRoot(e.cwd); ok {
+		return client.ShellQuote(root)
+	}
+	return "DIR"
+}
+
+// separatedSteps is printed to an account other than the service account
+// in separated mode. The console reads the service account's user config,
+// which the agents' account cannot see: both sides share a project config
+// instead, and the console serves that project.
+func separatedSteps(e env) string {
 	account := sysconf.DefaultServiceUser
 	if sys, err := sysConfig(e); err == nil && sys != nil {
 		account = sys.ServiceUser
 	}
-	return fmt.Sprintf("Separated mode: run `locksql` in the locksql session (account %s) to add a database and start the console.", account)
+	dir := projectDirHint(e)
+	return fmt.Sprintf(`Separated mode: the console runs as %s and serves one project at a time.
+  1. Put the database profile in %s/.locksql/config.toml (`+"`locksql init <agent>`"+` writes a
+     commented example there).
+  2. In the locksql session (account %s), run:  locksql console --project %s
+Agents working in that project then reach the console.
+`, account, dir, account, dir)
 }
 
+// separatedNoAdd is why the database prompts are off in separated mode.
+const separatedNoAdd = "separated mode: a profile in the user config is seen by one account only; put it in the project's .locksql/config.toml (locksql init <agent> writes an example) and run locksql console --project DIR in the locksql session"
+
 // runOnboard is bare `locksql` in a terminal: wire the agents, add a
-// database when none is configured, start the console.
+// database when none is configured, start the console. In separated mode
+// a client account gets the project-mode steps, and the service account
+// the console without prompts.
 func runOnboard(e env) int {
-	wireAgents(e)
-	if separated, service := isServiceAccount(e); separated && !service {
-		fmt.Fprintln(e.stdout, "\n"+separatedHint(e))
+	if code, failed := sysFail(e, ""); failed {
+		return code
+	}
+	separated, service := isServiceAccount(e)
+	if separated && !service {
+		wireAgents(e)
+		fmt.Fprint(e.stdout, "\n"+separatedSteps(e))
 		return exitOK
 	}
+	if separated {
+		return runConsole(e, nil)
+	}
+	wireAgents(e)
 	term := console.NewTerminal(os.Stdin, e.stdout)
 	name, err := chooseProfile(e, term)
 	if err == nil && name == "" {
@@ -180,11 +233,14 @@ func runAdd(e env, args []string) int {
 	if len(args) > 0 {
 		return usageFail(e, "add", usage, "takes no arguments")
 	}
+	if code, failed := sysFail(e, " add"); failed {
+		return code
+	}
+	if separated, _ := isServiceAccount(e); separated {
+		return usageFail(e, "add", usage, separatedNoAdd)
+	}
 	if !e.tty {
 		return usageFail(e, "add", usage, "must run in a terminal: it asks questions")
-	}
-	if separated, service := isServiceAccount(e); separated && !service {
-		return usageFail(e, "add", usage, separatedHint(e))
 	}
 	if _, err := addProfile(e, console.NewTerminal(os.Stdin, e.stdout)); err != nil {
 		return onboardFail(e, err)

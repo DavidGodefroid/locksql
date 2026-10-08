@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"os/user"
@@ -226,5 +227,117 @@ func TestInitDetectsAgents(t *testing.T) {
 	e, out, _ = onboardEnv(t)
 	if code := runEnv(e, []string{"init"}); code != exitUsage || !strings.Contains(out.String(), "name at least one agent") {
 		t.Fatalf("none detected: code %d\n%s", code, out)
+	}
+}
+
+// separatedClient makes e a client account in separated mode.
+func separatedClient(e *env) {
+	e.sys = func() (*sysconf.Config, error) { return &sysconf.Config{ServiceUser: "locksql-nobody-xyz"}, nil }
+}
+
+// separatedService makes e the service account in separated mode.
+func separatedService(e *env) {
+	e.sys = func() (*sysconf.Config, error) {
+		u, _ := user.Current()
+		return &sysconf.Config{ServiceUser: u.Username}, nil
+	}
+}
+
+func TestSeparatedClientGetsProjectSteps(t *testing.T) {
+	e, out, _ := onboardEnv(t, "codex")
+	separatedClient(&e)
+	if code := runOnboard(e); code != exitOK {
+		t.Fatalf("code %d\n%s", code, out)
+	}
+	for _, want := range []string{"~/.codex/config.toml", ".locksql/config.toml", "locksql init", "locksql console --project"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out.String(), "add a database") {
+		t.Fatalf("still points at the user config:\n%s", out)
+	}
+}
+
+func TestSeparatedAddDisabledForEveryAccount(t *testing.T) {
+	for _, set := range []func(*env){separatedClient, separatedService} {
+		e, out, _ := onboardEnv(t)
+		set(&e)
+		if code := runEnv(e, []string{"add"}); code != exitUsage || !strings.Contains(out.String(), ".locksql/config.toml") {
+			t.Fatalf("code %d\n%s", code, out)
+		}
+		if _, err := os.Stat(userConfig(t)); err == nil {
+			t.Fatal("add wrote a profile in separated mode")
+		}
+	}
+}
+
+func TestSeparatedServiceBareIsConsoleWithoutPrompts(t *testing.T) {
+	e, out, home := onboardEnv(t, "codex")
+	separatedService(&e)
+	// No profile visible: no prompt (answerIO would fail the test), a
+	// pointer to the project config and --project.
+	if code := runOnboard(e); code != exitUsage {
+		t.Fatalf("code %d\n%s", code, out)
+	}
+	for _, want := range []string{".locksql/config.toml", "--project"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if _, err := os.Stat(userConfig(t)); err == nil {
+		t.Fatal("service account prompted and wrote a profile")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex")); err == nil {
+		t.Fatal("service account wired agents")
+	}
+}
+
+func TestSysconfErrorStopsEarly(t *testing.T) {
+	for _, args := range [][]string{nil, {"add"}, {"console"}} {
+		e, out, home := onboardEnv(t, "codex")
+		e.sys = func() (*sysconf.Config, error) {
+			return nil, errors.New("sysconf: /etc/locksql/system.toml: not owned by root")
+		}
+		var code int
+		if args == nil {
+			code = runOnboard(e)
+		} else {
+			code = runEnv(e, args)
+		}
+		if code != exitUsage || !strings.Contains(out.String(), "not owned by root") {
+			t.Fatalf("%v: code %d\n%s", args, code, out)
+		}
+		if entries, _ := os.ReadDir(home); len(entries) != 0 {
+			t.Fatalf("%v: wrote %v", args, entries)
+		}
+	}
+}
+
+func TestWireAgentsReportsPartialWritesBeforeError(t *testing.T) {
+	e, out, _ := onboardEnv(t, "claude")
+	orig := e.agentEnv
+	e.agentEnv = func() (agentinit.Env, error) {
+		ae, err := orig()
+		ae.Run = func(string, ...string) ([]byte, error) { return []byte("config locked"), errors.New("exit 1") }
+		return ae, err
+	}
+	wireAgents(e)
+	s := out.String()
+	i, j := strings.Index(s, "~/.claude/settings.json"), strings.Index(s, "not wired")
+	if i < 0 || j < 0 || i > j || !strings.Contains(s, "config locked") {
+		t.Fatalf("written paths not listed before the error:\n%s", s)
+	}
+}
+
+func TestWireAgentsSkippedAsRoot(t *testing.T) {
+	e, out, home := onboardEnv(t, "codex")
+	e.euid = func() int { return 0 }
+	wireAgents(e)
+	if !strings.Contains(out.String(), "not wiring agents as root") {
+		t.Fatalf("output:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex")); err == nil {
+		t.Fatal("wired as root")
 	}
 }

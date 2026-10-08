@@ -64,6 +64,24 @@ func rulesPathFor(projectRoot, userConfigPath string) string {
 	return filepath.Join(filepath.Dir(userConfigPath), filepath.Base(pii.RulesFile))
 }
 
+// legacyRulesNotice is one line when, outside a project, cwd holds a
+// .locksql/pii.toml (where rules lived before the user-dir file) and the
+// user-dir rules file does not exist yet; "" otherwise. Nothing is copied:
+// the human decides.
+func legacyRulesNotice(cwd, projectRoot, rulesPath string) string {
+	if projectRoot != "" {
+		return ""
+	}
+	old := filepath.Join(cwd, pii.RulesFile)
+	if st, err := os.Stat(old); err != nil || !st.Mode().IsRegular() {
+		return ""
+	}
+	if _, err := os.Stat(rulesPath); err == nil {
+		return ""
+	}
+	return fmt.Sprintf("note: %s is no longer read outside a project; PII rules now live in %s (copy it there to keep its rules)", old, rulesPath)
+}
+
 // Run is `locksql console`: the start-up sequence of spec §6, then the
 // request loop until Ctrl-C, logout, :quit or a timeout.
 func Run(ctx context.Context, o Options) error {
@@ -113,6 +131,9 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 	rulesPath := rulesPathFor(cfg.ProjectRoot, ucp)
+	if n := legacyRulesNotice(o.Cwd, cfg.ProjectRoot, rulesPath); n != "" {
+		o.IO.Println(safeText(n, false))
+	}
 	key := config.ApprovedKey(cfg.ProjectRoot, p.Name)
 	log, err := audit.Open(o.StateDir)
 	if err != nil {
@@ -252,6 +273,10 @@ func Run(ctx context.Context, o Options) error {
 	s.refused = refusedFP
 	s.audit(audit.Record{Event: audit.EventLogin, Decision: "ok"})
 	o.IO.Println("socket " + path)
+	if cfg.ProjectRoot != "" {
+		// Only agents working under this root dial this socket.
+		o.IO.Println("serving agents in " + safeText(cfg.ProjectRoot, false))
+	}
 	o.IO.Println("console commands: :review  :status  :quit · Ctrl-C ends the session")
 	s.println("Listening…")
 

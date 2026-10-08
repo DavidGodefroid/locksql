@@ -29,6 +29,8 @@ type env struct {
 	agentEnv func() (agentinit.Env, error)
 	// sys loads the separated-mode setup; nil means same-user mode.
 	sys func() (*sysconf.Config, error)
+	// euid is the effective user id; nil means os.Geteuid.
+	euid func() int
 }
 
 // usageError is a usage or configuration error (exit 3).

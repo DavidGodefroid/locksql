@@ -4,10 +4,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
+	"github.com/DavidGodefroid/locksql/internal/client"
 )
 
 // runInit is `locksql init [AGENT...]`: it writes the agent integration
@@ -73,6 +75,14 @@ func runInit(e env, args []string) int {
 	for _, n := range notes {
 		fmt.Fprint(e.stdout, n)
 	}
-	fmt.Fprint(e.stdout, agentinit.NextSteps)
+	fmt.Fprint(e.stdout, initNextSteps(root))
 	return exitOK
+}
+
+// initNextSteps tells the human how to finish a project set-up. The
+// project has a .locksql/config.toml now, so its agents dial the project's
+// socket key: only a console started on the project serves them.
+func initNextSteps(root string) string {
+	return fmt.Sprintf("Next: add the database profile to %s (or run `locksql add`),\nthen run this in a separate terminal and keep it open while the agent works:\n  %s\n",
+		filepath.Join(root, ".locksql", "config.toml"), client.StartCommand("", root))
 }
