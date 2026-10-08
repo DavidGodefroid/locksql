@@ -29,7 +29,14 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: go test
-        run: go test ./...
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./... 2>&1 | tee test.log || {
+            # Surface the failures as annotations, readable without the logs.
+            grep -E -- '--- FAIL|_test\.go:[0-9]+:|^FAIL|panic:' test.log | head -40 | sed 's/^/::error::/'
+            exit 1
+          }
 
   lint:
     name: lint (staticcheck, govulncheck, goreleaser check)
