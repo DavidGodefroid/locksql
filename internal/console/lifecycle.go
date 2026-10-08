@@ -55,6 +55,15 @@ func (st *starter) audit(rec audit.Record) {
 	}
 }
 
+// rulesPathFor is the PII rules file: in the project when there is one,
+// else next to the user config.
+func rulesPathFor(projectRoot, userConfigPath string) string {
+	if projectRoot != "" {
+		return filepath.Join(projectRoot, pii.RulesFile)
+	}
+	return filepath.Join(filepath.Dir(userConfigPath), filepath.Base(pii.RulesFile))
+}
+
 // Run is `locksql console`: the start-up sequence of spec §6, then the
 // request loop until Ctrl-C, logout, :quit or a timeout.
 func Run(ctx context.Context, o Options) error {
@@ -97,16 +106,13 @@ func Run(ctx context.Context, o Options) error {
 		sort.Strings(names)
 		return fmt.Errorf("%w: no profile %q (profiles: %s)", ErrConfig, o.Profile, strings.Join(names, ", "))
 	}
-	var rulesPath string
-	if cfg.ProjectRoot != "" {
-		rulesPath = filepath.Join(cfg.ProjectRoot, pii.RulesFile)
-	} else {
-		ucp, err := config.UserConfigPath()
-		if err != nil {
+	var ucp string
+	if cfg.ProjectRoot == "" {
+		if ucp, err = config.UserConfigPath(); err != nil {
 			return err
 		}
-		rulesPath = filepath.Join(filepath.Dir(ucp), "pii.toml")
 	}
+	rulesPath := rulesPathFor(cfg.ProjectRoot, ucp)
 	key := config.ApprovedKey(cfg.ProjectRoot, p.Name)
 	log, err := audit.Open(o.StateDir)
 	if err != nil {
