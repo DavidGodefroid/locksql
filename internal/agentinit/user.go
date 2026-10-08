@@ -5,13 +5,17 @@ package agentinit
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -35,8 +39,26 @@ func SystemEnv() (Env, error) {
 	}
 	return Env{
 		Home: home, Getenv: os.Getenv, LookPath: exec.LookPath,
-		Run: func(n string, a ...string) ([]byte, error) { return exec.Command(n, a...).CombinedOutput() },
+		Run: runWithTimeout(commandTimeout),
 	}, nil
+}
+
+// commandTimeout bounds every command SystemEnv runs, so a hung agent CLI
+// never blocks locksql.
+const commandTimeout = 30 * time.Second
+
+// runWithTimeout runs a command and returns its combined output, killing it
+// after d.
+func runWithTimeout(d time.Duration) func(string, ...string) ([]byte, error) {
+	return func(n string, a ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), d)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, n, a...).CombinedOutput()
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return out, fmt.Errorf("%s timed out after %s", n, d)
+		}
+		return out, err
+	}
 }
 
 // dir is the directory named by envVar when it is set and absolute, else
@@ -191,6 +213,14 @@ func tomlTable(rel, key, block string) func(base) (change, error) {
 		if s != "" {
 			s += "\n"
 		}
+		// The block can still clash with what is there, such as an inline
+		// mcp_servers table, which the TOML spec forbids extending (and Codex
+		// rejects) while BurntSushi/toml accepts it: never write a file Codex
+		// could not read.
+		var check map[string]any
+		if _, err := toml.Decode(s+block, &check); err != nil || assignsPrefix(data, key) {
+			return change{}, fmt.Errorf("%s: adding [mcp_servers.locksql] would not be valid TOML; fix it or add the locksql server by hand", b.display(rel))
+		}
 		c.content = []byte(s + block)
 		c.action.Status = StatusCreated
 		if exists {
@@ -198,6 +228,37 @@ func tomlTable(rel, key, block string) func(base) (change, error) {
 		}
 		return c, nil
 	}
+}
+
+// assignsPrefix reports whether a TOML document assigns a value, such as an
+// inline table, to a proper prefix of the dotted key, at the root (before
+// the first table header). Such a table cannot be extended by a
+// [key] header. A match inside a multi-line string errs on the side of
+// refusing.
+func assignsPrefix(doc []byte, key string) bool {
+	parts := strings.Split(key, ".")
+	var alts []string
+	for i := 1; i < len(parts); i++ {
+		var ps []string
+		for _, p := range parts[:i] {
+			q := regexp.QuoteMeta(p)
+			ps = append(ps, `(?:`+q+`|"`+q+`"|'`+q+`')`)
+		}
+		alts = append(alts, strings.Join(ps, `\s*\.\s*`))
+	}
+	if alts == nil {
+		return false
+	}
+	re := regexp.MustCompile(`^\s*(?:` + strings.Join(alts, "|") + `)\s*=`)
+	for _, line := range strings.Split(string(doc), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "[") {
+			return false
+		}
+		if re.MatchString(line) {
+			return true
+		}
+	}
+	return false
 }
 
 // jsonStrings adds the missing items to the string array at path in a JSON
@@ -261,11 +322,13 @@ func jsonStrings(rel string, path []string, items []string) func(base) (change, 
 }
 
 // claudeMCP registers the user-scope MCP server through Claude Code's own
-// CLI, which owns ~/.claude.json.
+// CLI, which owns .claude.json. Whether it is already there is read from
+// that file, never asked of the CLI: `claude mcp get` starts the server to
+// check it, and matches an entry of any scope.
 func claudeMCP(e Env) func(base) (change, error) {
 	return func(b base) (change, error) {
 		c := change{action: Action{Path: `user MCP server "locksql"`}}
-		if _, err := e.Run("claude", "mcp", "get", "locksql"); err == nil {
+		if e.claudeUserMCP() {
 			c.action.Status = StatusUnchanged
 			return c, nil
 		}
@@ -273,4 +336,27 @@ func claudeMCP(e Env) func(base) (change, error) {
 		c.action.Status = StatusCreated
 		return c, nil
 	}
+}
+
+// claudeUserMCP reports whether Claude Code's .claude.json holds a
+// user-scope locksql server: a top-level mcpServers.locksql key. Entries
+// under "projects" are other scopes. A missing or unparsable file counts as
+// not wired. The file is only read.
+func (e Env) claudeUserMCP() bool {
+	p := filepath.Join(e.Home, ".claude.json")
+	if v := e.Getenv("CLAUDE_CONFIG_DIR"); v != "" && filepath.IsAbs(v) {
+		p = filepath.Join(v, ".claude.json")
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return false
+	}
+	var cj struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if json.Unmarshal(data, &cj) != nil {
+		return false
+	}
+	_, ok := cj.MCPServers["locksql"]
+	return ok
 }

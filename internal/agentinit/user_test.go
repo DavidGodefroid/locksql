@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -17,7 +18,6 @@ func fakeEnv(t *testing.T, onPath ...string) (Env, *[][]string) {
 	t.Helper()
 	home := t.TempDir()
 	var calls [][]string
-	wired := false
 	e := Env{
 		Home:   home,
 		Getenv: func(k string) string { return map[string]string{}[k] },
@@ -29,11 +29,10 @@ func fakeEnv(t *testing.T, onPath ...string) (Env, *[][]string) {
 		},
 		Run: func(n string, a ...string) ([]byte, error) {
 			calls = append(calls, append([]string{n}, a...))
-			if len(a) >= 2 && a[0] == "mcp" && a[1] == "get" && !wired {
-				return []byte("not found"), errors.New("exit 1")
-			}
 			if len(a) >= 2 && a[0] == "mcp" && a[1] == "add" {
-				wired = true
+				// What Claude Code does: a top-level user-scope entry.
+				err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"locksql":{"type":"stdio","command":"locksql","args":["mcp"]}}}`), 0o600)
+				return nil, err
 			}
 			return nil, nil
 		},
@@ -120,6 +119,9 @@ func TestInitUserFollowsSymlink(t *testing.T) {
 	if _, err := InitUser(e, "gemini"); err != nil {
 		t.Fatal(err)
 	}
+	if st, err := os.Lstat(filepath.Join(e.Home, ".gemini", "settings.json")); err != nil || st.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlink replaced: %v", err)
+	}
 	b, _ := os.ReadFile(real)
 	if !strings.Contains(string(b), "\"theme\"") || !strings.Contains(string(b), "locksql") {
 		t.Fatalf("settings.json:\n%s", b)
@@ -150,8 +152,12 @@ func TestInitUserClaude(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(e.Home, ".claude", "skills", "locksql", "SKILL.md")); err != nil {
 		t.Fatal(err)
 	}
+	n := len(*calls)
 	if p, _ := PendingUser(e, "claude"); p {
 		t.Fatal("still pending")
+	}
+	if len(*calls) != n {
+		t.Fatalf("PendingUser ran %v", (*calls)[n:])
 	}
 }
 
@@ -165,10 +171,8 @@ func TestPendingUserWritesNothing(t *testing.T) {
 	if entries, _ := os.ReadDir(e.Home); len(entries) != 0 {
 		t.Fatalf("PendingUser wrote %v", entries)
 	}
-	for _, c := range *calls {
-		if slices.Contains(c, "add") {
-			t.Fatalf("PendingUser ran %v", c)
-		}
+	if len(*calls) != 0 {
+		t.Fatalf("PendingUser ran %v", *calls)
 	}
 }
 
@@ -186,5 +190,118 @@ func TestInitUserClaudeAddFails(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(e.Home, ".claude", "settings.json")); err != nil {
 		t.Fatalf("files are written before the command: %v", err)
+	}
+}
+
+func TestClaudeProjectEntryIsNotUserScope(t *testing.T) {
+	e, calls := fakeEnv(t, "claude")
+	cj := filepath.Join(e.Home, ".claude.json")
+	own := `{"projects":{"/x":{"mcpServers":{"locksql":{}}}}}`
+	os.WriteFile(cj, []byte(own), 0o600)
+	if p, err := PendingUser(e, "claude"); err != nil || !p {
+		t.Fatalf("pending=%v err=%v", p, err)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("PendingUser ran %v", *calls)
+	}
+	if b, _ := os.ReadFile(cj); string(b) != own {
+		t.Fatalf(".claude.json written:\n%s", b)
+	}
+}
+
+func TestClaudeJSONUnderClaudeConfigDir(t *testing.T) {
+	e, _ := fakeEnv(t, "claude")
+	cd := t.TempDir()
+	e.Getenv = func(k string) string {
+		if k == "CLAUDE_CONFIG_DIR" {
+			return cd
+		}
+		return ""
+	}
+	// The entry in the home directory is not the one Claude Code reads.
+	os.WriteFile(filepath.Join(e.Home, ".claude.json"), []byte(`{"mcpServers":{"locksql":{}}}`), 0o600)
+	os.WriteFile(filepath.Join(cd, "settings.json"), []byte(`{"permissions":{"allow":`+string(mustJSON(t, claudeAllow))+`}}`), 0o600)
+	os.MkdirAll(filepath.Join(cd, "skills", "locksql"), 0o755)
+	os.WriteFile(filepath.Join(cd, "skills", "locksql", "SKILL.md"), mustTemplateBytes(t, "templates/skill.md"), 0o644)
+	if p, _ := PendingUser(e, "claude"); !p {
+		t.Fatal("home .claude.json counted under CLAUDE_CONFIG_DIR")
+	}
+	os.WriteFile(filepath.Join(cd, ".claude.json"), []byte(`{"mcpServers":{"locksql":{}}}`), 0o600)
+	if p, err := PendingUser(e, "claude"); err != nil || p {
+		t.Fatalf("pending=%v err=%v", p, err)
+	}
+}
+
+func TestClaudeJSONUnparsableIsNotWired(t *testing.T) {
+	e, calls := fakeEnv(t, "claude")
+	cj := filepath.Join(e.Home, ".claude.json")
+	os.WriteFile(cj, []byte("{not json"), 0o600)
+	if p, err := PendingUser(e, "claude"); err != nil || !p {
+		t.Fatalf("pending=%v err=%v", p, err)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("PendingUser ran %v", *calls)
+	}
+}
+
+func TestInitUserCodexInlineMCPServers(t *testing.T) {
+	e, _ := fakeEnv(t, "codex")
+	cfg := filepath.Join(e.Home, ".codex", "config.toml")
+	os.MkdirAll(filepath.Dir(cfg), 0o755)
+	own := "mcp_servers = { other = { command = \"x\" } }\n"
+	os.WriteFile(cfg, []byte(own), 0o600)
+	_, err := InitUser(e, "codex")
+	if err == nil || !strings.Contains(err.Error(), "~/.codex/config.toml") {
+		t.Fatalf("err = %v", err)
+	}
+	if b, _ := os.ReadFile(cfg); string(b) != own {
+		t.Fatalf("config.toml rewritten:\n%s", b)
+	}
+	if _, err := os.Stat(filepath.Join(e.Home, ".codex", "AGENTS.md")); err == nil {
+		t.Fatal("AGENTS.md written despite the error")
+	}
+}
+
+func TestSystemRunTimesOut(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("no sleep command")
+	}
+	_, err := runWithTimeout(50*time.Millisecond)("sleep", "5")
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func mustTemplateBytes(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := templates.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestAssignsPrefix(t *testing.T) {
+	for doc, want := range map[string]bool{
+		"mcp_servers = { other = { command = \"x\" } }\n": true,
+		"  \"mcp_servers\" = {}\n":                        true,
+		"mcp_servers = 3\n":                               true,
+		"mcp_servers.other = { command = \"x\" }\n":       false,
+		"[mcp_servers.other]\ncommand = \"x\"\n":          false,
+		"[x]\nmcp_servers = {}\n":                         false,
+		"model = \"o3\"\n":                                false,
+	} {
+		if got := assignsPrefix([]byte(doc), "mcp_servers.locksql"); got != want {
+			t.Errorf("%q: got %v", doc, got)
+		}
 	}
 }
