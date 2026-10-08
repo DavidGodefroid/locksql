@@ -112,7 +112,9 @@ const guidance = "\n\nSafety rules: use locksql only when the user explicitly as
 // instructions are the server instructions shown to the model.
 const instructions = "locksql gives read access (or more, if the human's policy allows) to a database through a console the human runs in a terminal. " +
 	"Workflow: locksql_status, then locksql_list_tables / locksql_describe, then locksql_plan with one SQL statement, then locksql_run with the plan_id; " +
-	"the human approves each run in the console. A policy can only be changed by the human: locksql_request_change merely queues a proposal." + guidance
+	"the human approves each run in the console. A policy can only be changed by the human: locksql_request_change merely queues a proposal. " +
+	"Statements are parsed and every column resolved to its source: PII columns may be selected (masked), counted or aggregated, joined with = and filtered with =, IN or IS NULL against literals; " +
+	"filters, groups and aggregates on PII must cover at least k rows (k-anonymity). Columns masked as tokens return tok_... values that can be joined, grouped and filtered on within the console session." + guidance
 
 // Tool inputs.
 type (
@@ -131,7 +133,7 @@ type (
 	PlanIn struct {
 		Profile string `json:"profile,omitempty" jsonschema:"Profile name from the locksql config. Optional when the server was started with --profile or exactly one profile is configured."`
 		DB      string `json:"db,omitempty" jsonschema:"Database. Defaults to the profile's database."`
-		SQL     string `json:"sql" jsonschema:"Exactly one SQL statement. A SELECT needs a LIMIT. No bind parameters, no statement chaining."`
+		SQL     string `json:"sql" jsonschema:"Exactly one SELECT, WITH ... SELECT or EXPLAIN SELECT (or a write if the tier allows). A SELECT needs a LIMIT. PII columns only plainly, counted/aggregated, joined with = or filtered with =, IN or IS NULL against literals; tok_... tokens may be used in such filters. No bind parameters, no statement chaining."`
 		Unmask  bool   `json:"unmask,omitempty" jsonschema:"Ask the human to approve unmasked PII output. Only when the user explicitly needs the raw values."`
 	}
 	RunIn struct {

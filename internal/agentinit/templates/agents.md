@@ -20,6 +20,18 @@ Workflow (MCP tools `locksql_*`, or the `locksql` CLI from the project directory
    (600000 ms): approval can take up to 5 minutes.
 7. Report the answer, quoting rows as returned; masked values stay masked.
 
+What a statement may do (the console parses it and resolves every column to its source):
+
+- Only `SELECT`, `WITH ... SELECT` and `EXPLAIN SELECT`; functions from an allowlist; no system
+  catalogs (use `locksql_describe`).
+- PII columns: select them plainly (masked), count or aggregate them, join with `=`, filter with
+  `=`, `IN (...)` or `IS NULL` against literals. No functions, `LIKE`, ranges or `ORDER BY` on them.
+  Filters, groups and aggregates on them must cover at least k rows (k-anonymity): a refusal for k
+  rows is final, do not work around it.
+- Token-masked columns return `tok_...` values, stable within the console session: join, group or
+  filter on them (`WHERE col = 'tok_...'`).
+- Database errors come back generic; the human sees the details in the console.
+
 Rules:
 
 - Never ask for, accept or pass on credentials. If the user pastes a password in chat, do not use
