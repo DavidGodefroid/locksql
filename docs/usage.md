@@ -186,7 +186,8 @@ class READ · EXPLAIN: customers ref ~1 · est. 1 rows examined · verdict OK
 reads: app.customers
 returns at most 20 rows
 PII columns touched: customers.email (where)
-k-anonymity check (k=5) runs first: SELECT COUNT(*) FROM customers WHERE email = 'a@example.com'
+k-anonymity check (k=5) runs first: SELECT COUNT(*) FROM `app`.`customers` WHERE `app`.`customers`.`email` = 'a@example.com'
+k-anonymity check (k=5) runs first: SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM customers WHERE email = 'a@example.com' GROUP BY country) AS locksql_k
 row estimates are hidden from the agent: the statement filters on a PII column
 PII: masked (4 column rules; detectors: email, phone, iban, card)
 Approve? [y/N]
@@ -305,15 +306,19 @@ PII columns (columns under a mask rule) may be used as follows:
 |---|---|
 | plain in the select list (masked, also through aliases, CTEs, unions, `*`) | any expression or function over them, anywhere (`LOWER(email)`, `email \|\| ''`) |
 | `COUNT(col)` (not masked); `MIN`/`MAX` (masked in the column's mode); other aggregates (redacted) | `LIKE`, ranges (`<`, `BETWEEN`) and other comparisons |
-| `JOIN ... ON a.col = b.col` | constant comparisons in `JOIN ... ON` (put them in `WHERE`) |
-| `WHERE col = 'literal'`, `col IN ('a', 'b')`, `col IS NULL` | `ORDER BY`, window `PARTITION BY` and `ORDER BY`, `FILTER`, `DISTINCT ON` |
-| `GROUP BY col` | `GROUP BY` an expression of it; PII filters in correlated subqueries or recursive CTEs |
+| `JOIN ... ON a.col = b.col`, `col IN (SELECT ...)`, `USING`, `NATURAL` between two PII columns | a join or `IN (subquery)` with a column that has no mask rule (add a rule for it, or compare with literals); constant comparisons in `JOIN ... ON` (put them in `WHERE`) |
+| `WHERE col = 'literal'`, `col IN ('a', 'b')`, `col IS NULL`, combined with `AND` | `<>`, `!=`, `NOT IN`, `IS NOT NULL`, `IS DISTINCT FROM`; a PII condition under `NOT`, `OR` or `XOR`; a scalar subquery returning a PII value as an operand; constant filters on a column of a view |
+| `GROUP BY col` | `GROUP BY` an expression of it; `GROUP BY name` where `name` is both an input column and an alias for another value; PII filters in correlated subqueries, recursive CTEs or a `SELECT` without `FROM` |
+| | `ORDER BY`, window `PARTITION BY` and `ORDER BY`, `FILTER`, `DISTINCT ON` |
 
 - A filter, grouping or aggregate on a PII column triggers k-anonymity
-  checks: before the statement runs, the console runs `COUNT` queries built
-  from the statement's own `FROM`, `WHERE`, `GROUP BY` and `HAVING` text
-  (shown on the approval screen). Fewer than `k_anonymity` rows in the
-  filter, or in the smallest group, refuses the statement.
+  checks: before the statement runs, the console runs `COUNT` queries
+  (shown on the approval screen). Each constant filter on a PII column counts
+  the subjects of that column in its own base table
+  (`SELECT COUNT(*) FROM db.table WHERE db.table.col = 'literal'`), so a
+  join cannot multiply them; another count is built from the statement's own
+  `FROM`, `WHERE`, `GROUP BY` and `HAVING` text. Fewer than `k_anonymity`
+  rows in any count, or in the smallest group, refuses the statement.
 - `EXPLAIN` of a statement that filters, groups or aggregates PII is refused.
 - With mode `hash`, filter on a token from an earlier result:
   `WHERE customer_ref = 'tok_...'` or `IN ('tok_...', ...)`. A token is valid

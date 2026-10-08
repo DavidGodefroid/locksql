@@ -45,6 +45,10 @@ func TestKAnonymityRefusesSmallSets(t *testing.T) {
 			t.Errorf("statement ran despite the k-anonymity refusal: %q", r)
 		}
 	}
+	// The subjects of the PII column are counted in its own table first.
+	if want := "SELECT COUNT(*) FROM `app`.`users` WHERE `app`.`users`.`email` = 'alice@example.com'"; len(h.sess.runs) == 0 || h.sess.runs[0] != want {
+		t.Errorf("k-checks run %q, want first %q", h.sess.runs, want)
+	}
 
 	h.sess.count = countResult(int64(7))
 	pr = h.plan(t, q, false)

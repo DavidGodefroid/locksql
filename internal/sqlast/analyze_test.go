@@ -2,6 +2,7 @@ package sqlast
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -130,6 +131,19 @@ func TestPIIUsageRefused(t *testing.T) {
 		"SELECT (SELECT count(*) FROM users u WHERE u.email = 'x' AND u.id = o.user_id) FROM orders o LIMIT 1",
 		"WITH g(x) AS (SELECT 'a@b.c') SELECT u.id FROM users u JOIN g ON u.email = g.x LIMIT 1",
 		"EXPLAIN SELECT id FROM users WHERE email = 'x'",
+		// Joins with an unmasked column, literal-tainted partners.
+		"SELECT o.total FROM orders o JOIN users u ON u.email = o.email LIMIT 1",
+		"SELECT id FROM orders WHERE email IN (SELECT email FROM users) LIMIT 1",
+		"SELECT id FROM users JOIN orders USING (email) LIMIT 1",
+		"WITH g(x) AS (SELECT 'a@b.c' UNION SELECT name FROM users) SELECT u.id FROM users u, g WHERE u.email = g.x LIMIT 1",
+		"WITH g(x) AS (SELECT 'a@b.c' UNION SELECT email FROM contacts) SELECT u.id FROM users u, g WHERE u.email = g.x LIMIT 1",
+		"SELECT id FROM users WHERE email IN (SELECT 'a@b.c') LIMIT 1",
+		// Negations and disjunctions of PII atoms.
+		"SELECT id FROM users WHERE email IS NOT NULL LIMIT 1",
+		"SELECT id FROM users WHERE NOT (email IS NULL) LIMIT 1",
+		"SELECT id FROM users WHERE email IS NULL OR id = 1 LIMIT 1",
+		"SELECT c.id FROM contacts c JOIN users u ON u.email <> c.email LIMIT 1",
+		"SELECT c.id FROM contacts c JOIN users u ON u.email = c.email OR u.id = c.id LIMIT 1",
 		// Unknown names, metadata and functions outside the allowlist.
 		"SELECT nope FROM users LIMIT 1",
 		"SELECT id FROM nope LIMIT 1",
@@ -151,9 +165,11 @@ func TestPIIUsageRefused(t *testing.T) {
 func TestPIIUsageAllowed(t *testing.T) {
 	allowed := []string{
 		"SELECT id, email FROM users WHERE id = 3 LIMIT 1",
-		"SELECT o.total FROM orders o JOIN users u ON u.email = o.email LIMIT 1",
+		"SELECT c.id FROM contacts c JOIN users u ON u.email = c.email LIMIT 1",
 		"SELECT count(*) FROM users WHERE email IS NULL LIMIT 1",
-		"SELECT id FROM orders WHERE email IN (SELECT email FROM users) LIMIT 1",
+		"SELECT id FROM contacts WHERE email IN (SELECT email FROM users) LIMIT 1",
+		"SELECT id FROM users WHERE status = 'x' AND (email = 'a' AND id > 1) LIMIT 1",
+		"SELECT id FROM users WHERE id = 1 OR status = 'x' LIMIT 1",
 		"SELECT status, count(*) FROM users GROUP BY status ORDER BY count(*) DESC LIMIT 5",
 	}
 	for _, sql := range allowed {
@@ -165,23 +181,36 @@ func TestPIIUsageAllowed(t *testing.T) {
 
 func TestKAnonymityChecks(t *testing.T) {
 	cases := []struct {
-		sql     string
-		checks  []string
-		grouped bool
+		sql    string
+		checks []KCheck
 	}{
-		{"SELECT id FROM users WHERE email = 'a@b.c' LIMIT 1",
-			[]string{"SELECT COUNT(*) FROM users WHERE email = 'a@b.c'"}, false},
-		{"SELECT email, count(*) FROM users GROUP BY email LIMIT 5",
-			[]string{"SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM users GROUP BY email) AS locksql_k"}, true},
-		{"SELECT status, avg(salary) FROM users u WHERE status = 'x' GROUP BY 1 LIMIT 5",
-			[]string{"SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM users u WHERE status = 'x' GROUP BY status) AS locksql_k"}, true},
-		{"WITH c AS (SELECT * FROM users) SELECT count(*) FROM c WHERE email IN ('a', 'b') LIMIT 1",
-			[]string{"WITH c AS (SELECT * FROM users) SELECT COUNT(*) FROM c WHERE email IN ('a', 'b')"}, false},
-		{"SELECT id FROM contacts WHERE email = 'tok_known' LIMIT 1",
-			[]string{"SELECT COUNT(*) FROM contacts WHERE email = 'a@b.example'"}, false},
-		{"WITH g(x) AS (SELECT 'a@b.c' UNION SELECT name FROM users) SELECT u.id FROM users u, g WHERE u.email = g.x LIMIT 1",
-			[]string{"WITH g(x) AS (SELECT 'a@b.c' UNION SELECT name FROM users) SELECT COUNT(*) FROM users u, g WHERE u.email = g.x"}, false},
-		{"SELECT id FROM users WHERE id = 3 LIMIT 1", nil, false},
+		{"SELECT id FROM users WHERE email = 'a@b.c' LIMIT 1", []KCheck{
+			{SQL: `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" = 'a@b.c'`},
+			{SQL: "SELECT COUNT(*) FROM users WHERE email = 'a@b.c'"},
+		}},
+		{"SELECT email, count(*) FROM users GROUP BY email LIMIT 5", []KCheck{
+			{SQL: "SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM users GROUP BY email) AS locksql_k", Grouped: true},
+		}},
+		{"SELECT status, avg(salary) FROM users u WHERE status = 'x' GROUP BY 1 LIMIT 5", []KCheck{
+			{SQL: "SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM users u WHERE status = 'x' GROUP BY status) AS locksql_k", Grouped: true},
+		}},
+		{"WITH c AS (SELECT * FROM users) SELECT count(*) FROM c WHERE email IN ('a', 'b') LIMIT 1", []KCheck{
+			{SQL: `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" IN ('a', 'b')`},
+			{SQL: "WITH c AS (SELECT * FROM users) SELECT COUNT(*) FROM c WHERE email IN ('a', 'b')"},
+		}},
+		{"SELECT id FROM contacts WHERE email = 'tok_known' LIMIT 1", []KCheck{
+			{SQL: `SELECT COUNT(*) FROM "app"."contacts" WHERE "app"."contacts"."email" = 'a@b.example'`},
+			{SQL: "SELECT COUNT(*) FROM contacts WHERE email = 'a@b.example'"},
+		}},
+		// The subjects are counted in the column's own table, whatever the
+		// join multiplies.
+		{"SELECT o.id FROM users u JOIN orders o ON o.user_id = u.id WHERE u.email IS NULL AND u.salary IN (1, 2) LIMIT 1", []KCheck{
+			{SQL: `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" IS NULL`},
+			{SQL: `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."salary" IN (1, 2)`},
+			{SQL: "SELECT COUNT(*) FROM users u JOIN orders o ON o.user_id = u.id WHERE u.email IS NULL AND u.salary IN (1, 2)"},
+		}},
+		{"SELECT u.id FROM users u JOIN contacts c ON c.email = u.email LIMIT 1", nil},
+		{"SELECT id FROM users WHERE id = 3 LIMIT 1", nil},
 	}
 	for _, c := range cases {
 		a, err := analyze(t, sqlclass.Postgres, c.sql)
@@ -189,15 +218,24 @@ func TestKAnonymityChecks(t *testing.T) {
 			t.Errorf("%q: %v", c.sql, err)
 			continue
 		}
-		var got []string
-		for _, k := range a.KChecks {
-			got = append(got, k.SQL)
-			if k.Grouped != c.grouped {
-				t.Errorf("%q: grouped = %v", c.sql, k.Grouped)
-			}
+		if !slices.Equal(a.KChecks, c.checks) {
+			t.Errorf("%q:\n got %+v\nwant %+v", c.sql, a.KChecks, c.checks)
 		}
-		if strings.Join(got, "\n") != strings.Join(c.checks, "\n") {
-			t.Errorf("%q:\n got %q\nwant %q", c.sql, got, c.checks)
+	}
+}
+
+func TestKCheckQuoting(t *testing.T) {
+	for d, want := range map[sqlclass.Dialect]string{
+		sqlclass.Postgres: `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" = 'x'`,
+		sqlclass.SQLite:   `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" = 'x'`,
+		sqlclass.MySQL:    "SELECT COUNT(*) FROM `app`.`users` WHERE `app`.`users`.`email` = 'x'",
+	} {
+		a, err := analyze(t, d, "SELECT id FROM users WHERE email = 'x' LIMIT 1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(a.KChecks) == 0 || a.KChecks[0].SQL != want {
+			t.Errorf("%s: checks %+v, want first %q", d, a.KChecks, want)
 		}
 	}
 }
@@ -236,18 +274,18 @@ func TestUnmaskSkipsPIIRules(t *testing.T) {
 }
 
 func TestUsesAndRelations(t *testing.T) {
-	a, err := analyze(t, sqlclass.Postgres, "SELECT u.email FROM users u JOIN orders o ON o.email = u.email WHERE u.id = 1 LIMIT 1")
+	a, err := analyze(t, sqlclass.Postgres, "SELECT u.email FROM users u JOIN contacts c ON c.email = u.email WHERE u.id = 1 LIMIT 1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(a.Relations, ",") != "app.orders,app.users" {
+	if strings.Join(a.Relations, ",") != "app.contacts,app.users" {
 		t.Errorf("relations = %v", a.Relations)
 	}
 	var uses []string
 	for _, u := range a.Uses {
 		uses = append(uses, u.Source.Table+"."+u.Source.Column+"@"+u.Clause)
 	}
-	if strings.Join(uses, ",") != "users.email@join,users.email@select" {
+	if strings.Join(uses, ",") != "contacts.email@join,users.email@join,users.email@select" {
 		t.Errorf("uses = %v", uses)
 	}
 }

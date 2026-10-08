@@ -57,6 +57,9 @@ func assertNoLeak(t *testing.T, s engine.Session, d sqlclass.Dialect, rules pii.
 	for _, q := range queries {
 		resp := call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
 		if resp.Error != nil {
+			if strings.Contains(resp.Error.Message, "k-anonymity check of this statement cannot be planned") {
+				t.Errorf("%s: %s", q, resp.Error.Message) // a k-check the server rejects
+			}
 			continue // refused
 		}
 		var pr ipc.PlanResult
@@ -65,6 +68,9 @@ func assertNoLeak(t *testing.T, s engine.Session, d sqlclass.Dialect, rules pii.
 		}
 		resp = call(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
 		if resp.Error != nil {
+			if strings.Contains(resp.Error.Message, "k-anonymity check could not run") {
+				t.Errorf("%s: %s", q, resp.Error.Message)
+			}
 			if strings.Contains(resp.Error.Message, "@example.com") {
 				t.Errorf("%s: leaked in an error: %s", q, resp.Error.Message)
 			}
@@ -97,6 +103,11 @@ func leakQueries(d sqlclass.Dialect) []string {
 		"SELECT t.* FROM (SELECT b.* FROM big b) t LIMIT 3",
 		"SELECT (SELECT max(email) FROM big) AS m FROM small LIMIT 1",
 		"SELECT label FROM small UNION ALL SELECT email FROM big LIMIT 5",
+		// Constant PII filters: the subject counts (quoted, qualified by the
+		// catalog) must run on the server.
+		"SELECT id FROM big WHERE email = 'x@example.com' LIMIT 3",
+		"SELECT s.id FROM big b JOIN small s ON s.id = b.id WHERE b.email IN ('a@example.com', 'b@example.com') AND b.id > 0 LIMIT 3",
+		"SELECT count(*) FROM big WHERE email IS NULL LIMIT 1",
 		// Expressions and oracles over the PII column are refused.
 		"SELECT concat(email, '') AS x FROM big LIMIT 3",
 		"SELECT CASE WHEN email LIKE 'a%' THEN 1 ELSE 0 END AS f FROM big LIMIT 3",

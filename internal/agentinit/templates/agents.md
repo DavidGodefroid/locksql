@@ -24,8 +24,10 @@ What a statement may do (the console parses it and resolves every column to its 
 
 - Only `SELECT`, `WITH ... SELECT` and `EXPLAIN SELECT`; functions from an allowlist; no system
   catalogs (use `locksql_describe`).
-- PII columns: select them plainly (masked), count or aggregate them, join with `=`, filter with
-  `=`, `IN (...)` or `IS NULL` against literals. No functions, `LIKE`, ranges or `ORDER BY` on them.
+- PII columns: select them plainly (masked), count or aggregate them, join with `=` to another PII
+  column, filter with `=`, `IN (...)` or `IS NULL` against literals, combined with `AND`. No
+  functions, `LIKE`, ranges, negations (`<>`, `NOT IN`, `IS NOT NULL`, `NOT`/`OR`) or `ORDER BY` on
+  them.
   Filters, groups and aggregates on them must cover at least k rows (k-anonymity): a refusal for k
   rows is final, do not work around it.
 - Token-masked columns return `tok_...` values, stable within the console session: join, group or

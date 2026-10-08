@@ -46,9 +46,10 @@ an alias, a subquery or a CTE never hides a PII column.
   `locksql_describe`). Functions come from an allowlist; system catalogs and metadata functions are
   refused.
 - **PII columns** (the masked ones in `describe`): select them plainly (they come back masked), count
-  them, `MIN`/`MAX` or aggregate them, join on them with `=`, and filter them with `=`, `IN (...)` or
-  `IS NULL` against literals. Anything else is refused: no function or expression over them, no
-  `LIKE`, ranges, `ORDER BY` or window clauses on them.
+  them, `MIN`/`MAX` or aggregate them, join them with `=` to another PII column, and filter them with
+  `=`, `IN (...)` or `IS NULL` against literals, combined with `AND`. Anything else is refused: no
+  function or expression over them, no `LIKE`, ranges, `<>`, `NOT IN`, `IS NOT NULL`, no PII condition
+  under `NOT`/`OR`, no `ORDER BY` or window clauses on them.
 - A filter, `GROUP BY` or aggregate on a PII column must cover at least k rows (k-anonymity, k in
   `status` limits). A refusal for k rows is final: do not narrow or split the query around it.
 - Columns masked as tokens return `tok_...` values: the same value gives the same token within this

@@ -57,7 +57,7 @@ read the console's terminal, type into it where the kernel allows
 | Server overload | READ statements need `LIMIT n <= max_rows`; `EXPLAIN` estimates the rows examined and refuses heavy plans, and `explain_cost_refuse` caps the engine's total cost (not on SQLite); k-anonymity counts are weighed too; a server-side timeout plus a client-side cancel; one request at a time. |
 | PII exposure | Column rules proposed from the schema at every start; per-rule mask modes; value detectors with checksums; unmasking is per query, shown in red and never auto-approved. |
 | Alias or expression bypass | Every output column of a read is resolved to its base source columns through aliases, functions, subqueries, CTEs (recursive ones by fixpoint), set operations, joins and `*`, and masked on that source, not on its label. Expressions and functions over PII columns are refused; aggregates other than `COUNT`, `MIN` and `MAX` are redacted. The result's column count and labels must match the analysis or the result is dropped; the engine's origin metadata is a second check. |
-| Predicate oracles | A PII column may only be compared for equality with a literal (`=`, `IN (literals)`, `IS NULL`) in `WHERE`/`HAVING`, or joined with `=` to another plain column. `LIKE`, ranges, functions over it, `ORDER BY`, window `PARTITION BY`/`ORDER BY`, `FILTER`, `DISTINCT ON` and constant comparisons in `JOIN ... ON` are refused, so a query cannot compare it character by character with generated values. |
+| Predicate oracles | A PII column may only be compared for equality with a literal (`=`, `IN (literals)`, `IS NULL`) in `WHERE`/`HAVING`, or joined with `=` (also `IN (subquery)`, `USING`, `NATURAL`) to another PII column: a join with an unmasked column would copy its values where no mask applies. These atoms must be positive and reached through `AND` only: a PII atom under `NOT`, `OR` or `XOR`, and `<>`, `!=`, `NOT IN`, `IS NOT NULL`, `IS DISTINCT FROM` on a PII column, would select the complement of what the k-anonymity check counts and are refused. A scalar subquery returning a PII value cannot be a filter operand. `LIKE`, ranges, functions over it, `ORDER BY`, window `PARTITION BY`/`ORDER BY`, `FILTER`, `DISTINCT ON` and constant comparisons in `JOIN ... ON` are refused, so a query cannot compare it character by character with generated values. |
 | Inference through aggregates and filters | A filter, grouping or aggregate on a PII column runs console-built `COUNT` queries (from the statement's own `FROM`, `WHERE`, `GROUP BY` and `HAVING`, shown on the approval screen) after approval and before the statement; fewer than `k_anonymity` rows (default 5, production 10) refuses it. Row estimates are hidden from the agent and `EXPLAIN` is refused for such statements, since the planner's figures would answer the same question. |
 | Timing and error channels | Clients get a generic failure message, never the server's text (shown on the console, redacted in the audit log). No timings are returned, and `query.run` answers on a 250 ms quantum, success or failure. |
 | Hash-mode tokens | Tokens are a keyed HMAC with a random key per console session: equal values give equal tokens within a session and nothing across sessions; no order, prefix or length leaks. A token is substituted only when compared with a column configured as `hash`; an unknown token, or one from another session, is refused. |
@@ -127,7 +127,14 @@ Records contain the SQL and metadata, never secrets and never row data.
   and value detectors catch common formats only. Use a database account that
   cannot read what the agent must never see.
 - **k-anonymity is a query-set-size control.** It refuses a single query
-  whose PII filter, group or aggregate covers fewer than `k` rows. It does
+  whose PII filter, group or aggregate covers fewer than `k` rows. Each
+  constant PII filter is counted twice: the subjects of the column in its own
+  base table (a join cannot multiply them; a column of a view, which has no
+  base table to count in, cannot be filtered on), and the rows the
+  statement's own `FROM`/`WHERE` selects. A join still multiplies the second
+  count: `WHERE u.id = 3 AND u.salary IN (...)` joined with a large table
+  passes when at least `k` users earn one of those salaries, and tells the
+  agent that user 3 is among them. It does
   not stop differencing attacks: two approved queries whose sets differ by
   one row (all customers of a city, then the same minus one email) still
   reveal that row's other columns. The approval screen shows each PII filter
