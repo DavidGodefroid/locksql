@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
@@ -119,6 +120,9 @@ func (s *Server) review(ctx context.Context) {
 	for _, line := range formatChanges(config.Diff(s.approved, next)) {
 		s.println(line)
 	}
+	if s.cfg.SkipPermissions && s.profile.Production && !next.Profile.Production {
+		s.println(red + "--skip-permissions is set: once applied, statements run without a prompt" + reset)
+	}
 	ans, ok := s.cfg.IO.Ask(ctx, "Apply these changes? [y/N] ", ApprovalTimeout)
 	s.pending = nil
 	if !ok || strings.TrimSpace(ans) != "y" {
@@ -202,6 +206,18 @@ func (s *Server) adopt(p config.Policy, decision string) error {
 	}
 	s.audit(audit.Record{Event: audit.EventPolicy, Decision: decision})
 	n := p.Profile
+	if n.Production && !old.Production && s.sess != nil {
+		// The start-up privilege audit accepted extra grants with a typed
+		// "continue"; a production profile refuses them (spec §6 step 5).
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		warns, err := s.sess.ExtraPrivileges(ctx, n.Tier)
+		cancel()
+		if err != nil || len(warns) > 0 {
+			s.println(red + "the profile is now production and the account has privileges beyond tier " + n.Tier.String() + ": the session ends" + reset)
+			s.End("privilege audit failed after the profile became production")
+			return nil
+		}
+	}
 	if old.Engine != n.Engine || old.Host != n.Host || old.Port != n.Port || old.Path != n.Path ||
 		old.User != n.User || old.Database != n.Database {
 		s.println("connection settings changed: the session ends; start the console again")

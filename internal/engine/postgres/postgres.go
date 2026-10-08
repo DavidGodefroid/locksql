@@ -23,6 +23,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -82,6 +83,15 @@ type session struct {
 	major   int
 	tier    config.Tier
 	timeout time.Duration
+	plain   bool // TCP without TLS (sslmode=prefer fell back)
+}
+
+// Notices reports a TCP connection that is not encrypted.
+func (s *session) Notices() []string {
+	if s.plain {
+		return []string{"the connection is NOT encrypted: the server offers no TLS (use an SSH tunnel for a remote server)"}
+	}
+	return nil
 }
 
 // Connect opens the connection to the profile's database and applies the
@@ -101,6 +111,9 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (eng
 	}
 	s.defDB = dc.name
 	s.conns[dc.name] = dc
+	if _, tlsOn := dc.conn.PgConn().Conn().(*tls.Conn); !tlsOn && !strings.HasPrefix(p.Host, "/") {
+		s.plain = true
+	}
 	s.version = dc.conn.PgConn().ParameterStatus("server_version")
 	s.major, _ = strconv.Atoi(strings.SplitN(s.version, ".", 2)[0])
 	return s, nil

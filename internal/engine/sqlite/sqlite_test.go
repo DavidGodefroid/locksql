@@ -317,6 +317,44 @@ func TestRunReportsOrigins(t *testing.T) {
 	}
 }
 
+// Table-valued functions (json_each, json_tree, pragma_*) and virtual
+// tables report themselves as the origin; such an origin is no base-table
+// column and must be blanked, so that masking falls back to labels and the
+// alias check.
+func TestRunBlanksVirtualOrigins(t *testing.T) {
+	path := setupDB(t)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE VIRTUAL TABLE notes USING fts5(body)`); err != nil {
+		t.Skipf("no fts5: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO notes VALUES ('hello')`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s := connect(t, path, config.TierRead)
+	for _, q := range []string{
+		"SELECT value FROM big, json_each(json_array(big.email)) LIMIT 10",
+		"SELECT value FROM json_each(json_array((SELECT email FROM big LIMIT 1))) LIMIT 10",
+		"SELECT atom FROM json_tree(json_array((SELECT email FROM big LIMIT 1))) LIMIT 10",
+		"SELECT body FROM notes LIMIT 10",
+	} {
+		r, err := s.Run(context.Background(), "main", classify(t, q), 10)
+		if err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		if r.Columns[0].HasOrigin() {
+			t.Errorf("%s: origin %+v", q, r.Columns[0])
+		}
+	}
+	r, err := s.Run(context.Background(), "main", classify(t, "SELECT email FROM big LIMIT 1"), 10)
+	if err != nil || !r.Columns[0].HasOrigin() {
+		t.Fatalf("base table origin lost: %+v %v", r.Columns, err)
+	}
+}
+
 func TestDeadlineInterruptsQuery(t *testing.T) {
 	s := connect(t, setupDB(t), config.TierRead)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)

@@ -160,6 +160,13 @@ type Session interface {
 	Close() error
 }
 
+// Noticer is implemented by sessions with something the human must know
+// about the connection itself, such as a fallback to no encryption. The
+// console prints and audits each notice after connecting.
+type Noticer interface {
+	Notices() []string
+}
+
 // Engine opens sessions for one engine name. secret is the password, or nil
 // when the engine needs none; it is never stored past Connect.
 type Engine interface {

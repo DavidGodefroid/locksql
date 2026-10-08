@@ -159,14 +159,17 @@ func TestAliasViolationStar(t *testing.T) {
 		{sqlclass.Postgres, "SELECT id, note FROM t UNION ALL SELECT u.* FROM users u LIMIT 10", true},
 		{sqlclass.SQLite, "SELECT id, note FROM t UNION SELECT * FROM (SELECT * FROM users) d LIMIT 10", true},
 		{sqlclass.SQLite, "SELECT id FROM t UNION SELECT id FROM t2 UNION SELECT DISTINCT * FROM users LIMIT 10", true},
-		{sqlclass.MySQL, "SELECT id, note FROM t UNION ALL SELECT * FROM orders LIMIT 10", false},
-		{sqlclass.MySQL, "SELECT id, note FROM t UNION ALL SELECT o.* FROM orders o JOIN t ON t.id = o.id LIMIT 10", false},
+		// orders may be a view over users: a view has no origin.
+		{sqlclass.MySQL, "SELECT id, note FROM t UNION ALL SELECT * FROM orders LIMIT 10", true},
+		{sqlclass.MySQL, "SELECT id, note FROM t UNION ALL SELECT o.* FROM orders o JOIN t ON t.id = o.id LIMIT 10", true},
+		{sqlclass.Postgres, "SELECT id, note FROM t UNION ALL SELECT * FROM generate_series(1, 2) LIMIT 10", false},
 		{sqlclass.MySQL, "SELECT * FROM users UNION ALL SELECT id, COUNT(*) FROM orders GROUP BY id LIMIT 10", false},
 		// A CTE column list over a star renames whatever the star brings.
 		{sqlclass.SQLite, "WITH c(id, x) AS (SELECT * FROM users) SELECT x || '' FROM c LIMIT 10", true},
 		{sqlclass.Postgres, "WITH c(id, x) AS (SELECT u.* FROM users u) SELECT x FROM c LIMIT 10", true},
 		{sqlclass.MySQL, "WITH c(id, x) AS (SELECT * FROM users) SELECT CONCAT(x) FROM c LIMIT 10", true},
-		{sqlclass.MySQL, "WITH c(id, x) AS (SELECT * FROM orders) SELECT CONCAT(x) FROM c LIMIT 10", false},
+		{sqlclass.MySQL, "WITH c(id, x) AS (SELECT * FROM orders) SELECT CONCAT(x) FROM c LIMIT 10", true},
+		{sqlclass.Postgres, "WITH c(x) AS (TABLE users) SELECT x FROM c LIMIT 10", true},
 		{sqlclass.MySQL, "WITH c(id, n) AS (SELECT id, COUNT(*) FROM users GROUP BY id) SELECT n FROM c LIMIT 10", false},
 	}
 	for _, c := range cases {
@@ -202,8 +205,11 @@ func TestAliasViolationWholeRow(t *testing.T) {
 		{"SELECT public.users.* FROM public.users LIMIT 10", false},
 		{"SELECT u.email, u.id FROM users u LIMIT 10", false},
 		{"SELECT COUNT(u) FROM users u LIMIT 10", false},
-		{"SELECT o FROM orders o LIMIT 10", false},
-		{"SELECT row_to_json(o) FROM orders o JOIN users u ON u.id = o.uid LIMIT 10", false},
+		// orders may be a view over users.
+		{"SELECT o FROM orders o LIMIT 10", true},
+		{"SELECT row_to_json(o) FROM orders o JOIN users u ON u.id = o.uid LIMIT 10", true},
+		{"SELECT x FROM unnest(ARRAY[1, 2]) x LIMIT 10", false},
+		{"SELECT r FROM ROWS FROM (generate_series(1, 2)) r LIMIT 10", false},
 		{"SELECT g FROM generate_series(1, 3) g LIMIT 10", false},
 		{"SELECT u.id FROM users u WHERE u IS NOT NULL LIMIT 10", false},
 	}
@@ -247,5 +253,55 @@ func TestMaskResultCutsHugeCellsBeforeDetection(t *testing.T) {
 	}
 	if res.Rows[1][0] != "short" {
 		t.Errorf("short cell = %v", res.Rows[1][0])
+	}
+}
+
+// A rule-matched column reaches the output without a select-list item of
+// its own through a VALUES row, a FROM-clause function or a TABLE arm, and
+// a view over a rule table is a source like any other.
+func TestAliasViolationValuesFunctionsTable(t *testing.T) {
+	r := Rules{Mask: []string{"public.big.email", "app.big.email"}}
+	cases := []struct {
+		d   sqlclass.Dialect
+		sql string
+		bad bool
+	}{
+		{sqlclass.Postgres, "SELECT * FROM (VALUES ((SELECT email FROM big ORDER BY id LIMIT 1))) v LIMIT 2", true},
+		{sqlclass.Postgres, "SELECT * FROM unnest(ARRAY(SELECT email FROM big ORDER BY id LIMIT 2)) LIMIT 2", true},
+		{sqlclass.Postgres, "SELECT column1 FROM big b, LATERAL (VALUES (b.email)) v ORDER BY b.id LIMIT 2", true},
+		{sqlclass.Postgres, "SELECT * FROM ROWS FROM (lower((SELECT email FROM big ORDER BY id LIMIT 1))) LIMIT 2", true},
+		{sqlclass.Postgres, "SELECT x FROM big b, LATERAL unnest(ARRAY[b.email]) x ORDER BY b.id LIMIT 2", true},
+		{sqlclass.Postgres, "SELECT x FROM big b, lower(b.email) x ORDER BY b.id LIMIT 2", true},
+		{sqlclass.Postgres, "SELECT j FROM big b, LATERAL row_to_json(b) j LIMIT 2", true},
+		{sqlclass.Postgres, "SELECT 1 AS id, 'a' AS label UNION ALL VALUES (2, (SELECT email FROM big ORDER BY id LIMIT 1)) LIMIT 2", true},
+		{sqlclass.MySQL, "SELECT jt.v FROM big, JSON_TABLE(JSON_ARRAY(big.email), '$[*]' COLUMNS (v VARCHAR(100) PATH '$')) jt ORDER BY big.id LIMIT 2", true},
+		{sqlclass.MySQL, "SELECT * FROM (VALUES ROW((SELECT email FROM big ORDER BY id LIMIT 1))) v LIMIT 2", true},
+		{sqlclass.MySQL, "SELECT id, label FROM small UNION ALL VALUES ROW(9, (SELECT email FROM big ORDER BY id LIMIT 1)) LIMIT 5", true},
+		{sqlclass.SQLite, "SELECT value FROM json_each(json_array((SELECT email FROM big LIMIT 1))) LIMIT 10", true},
+		// TABLE in a later arm is a star.
+		{sqlclass.Postgres, "SELECT 0, 'x', 'y', now() UNION ALL TABLE big LIMIT 2", true},
+		{sqlclass.MySQL, "SELECT 0, 'x', 'y', NOW() UNION ALL TABLE big LIMIT 2", true},
+		{sqlclass.Postgres, "SELECT 0, 'x', 'y', now() UNION ALL (TABLE users) LIMIT 2", true},
+		{sqlclass.Postgres, "SELECT 0, 'x' INTERSECT TABLE big LIMIT 2", true},
+		// A view over a rule table is not provably free of PII.
+		{sqlclass.Postgres, "SELECT id, label FROM small UNION ALL SELECT * FROM v_big LIMIT 5", true},
+		{sqlclass.Postgres, "WITH c(id, x) AS (SELECT * FROM v_big) SELECT x FROM c LIMIT 5", true},
+		{sqlclass.Postgres, "SELECT row_to_json(v) FROM v_big v LIMIT 5", true},
+		// Still allowed.
+		{sqlclass.Postgres, "SELECT * FROM (VALUES (1, 'a'), (2, 'b')) v LIMIT 2", false},
+		{sqlclass.Postgres, "SELECT g FROM generate_series(1, 3) g, big b WHERE b.id = g LIMIT 10", false},
+		{sqlclass.Postgres, "SELECT email FROM big WHERE id IN (VALUES (1), (2)) LIMIT 10", false},
+		{sqlclass.MySQL, "SELECT email FROM big FORCE INDEX (email) LIMIT 10", false},
+		{sqlclass.Postgres, "SELECT email FROM big LIMIT 10", false},
+		{sqlclass.Postgres, "SELECT id, email FROM big UNION ALL SELECT id, email FROM v_big LIMIT 5", false},
+	}
+	for _, c := range cases {
+		st, err := sqlclass.Classify(c.d, c.sql, 0)
+		if err != nil {
+			t.Fatalf("Classify(%q): %v", c.sql, err)
+		}
+		if err = AliasViolation(st, r, c.d); (err != nil) != c.bad {
+			t.Errorf("%v: AliasViolation(%q) = %v, want violation %v", c.d, c.sql, err, c.bad)
+		}
 	}
 }

@@ -198,8 +198,8 @@ iteration, and it is deliberately narrow:
 - **TLS is not configurable yet.** PostgreSQL, MariaDB and MySQL connect like
   PostgreSQL's `sslmode=prefer`: encrypted when the server offers TLS, plain
   otherwise, and the certificate is not verified, so an active attacker on the
-  path can intercept or downgrade the connection. Use an SSH tunnel (`ssh -L`)
-  for remote servers.
+  path can intercept or downgrade the connection. A plain TCP connection is
+  reported as a warning. Use an SSH tunnel (`ssh -L`) for remote servers.
 - One console per profile and project, one request at a time. No remote or
   shared consoles, no data export.
 

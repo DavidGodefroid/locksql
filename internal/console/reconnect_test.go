@@ -2,9 +2,13 @@ package console
 
 import (
 	"context"
+	"net"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
@@ -33,7 +37,10 @@ func reconnectHarness(t *testing.T, p config.Profile, extra []string) (*harness,
 		sp := p // the server keeps the real engine (dialect); the starter connects through the fake
 		sp.Engine = fakeEngineName
 		st := &starter{io: c.IO, log: c.Audit, profile: sp, user: p.User}
-		c.Reconnect = st.reconnect
+		c.Reconnect = func(ctx context.Context, cur config.Profile) (engine.Session, error) {
+			cur.Engine = fakeEngineName
+			return st.reconnect(ctx, cur)
+		}
 	})
 	return h, next
 }
@@ -104,5 +111,108 @@ func TestReconnectCleanAccountNeedsNoPrompt(t *testing.T) {
 	h.ok(t, ipc.MethodCatalogList, ipc.TablesParams{DB: "app"}, nil)
 	if h.io.promptCount() != n || next.catalog != 1 {
 		t.Fatalf("prompts %d -> %d, catalog %d", n, h.io.promptCount(), next.catalog)
+	}
+}
+
+// A tightening applied after start-up (production turned on) must govern
+// the reconnect: extra privileges are then refused, not offered "continue".
+func TestReconnectUsesCurrentPolicy(t *testing.T) {
+	h, next := reconnectHarness(t, uatProfile(), []string{"INSERT on app.users"})
+	prod := uatProfile()
+	prod.Production = true
+	if err := h.s.adopt(config.NewPolicy(prod, []string{"app.users.email"}, nil), "tightened"); err != nil {
+		t.Fatal(err)
+	}
+	h.sess.runErr = engine.ErrConnLost
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"uat"}
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeConnLost)
+
+	n := h.io.promptCount()
+	wantCode(t, h.call(t, ipc.MethodCatalogList, ipc.TablesParams{DB: "app"}), ipc.CodeConnLost)
+	if reason, ended := h.s.Ended(); !ended || !strings.Contains(reason, "privilege audit") {
+		t.Fatalf("session not ended by the privilege audit: %q %v", reason, ended)
+	}
+	if h.io.promptCount() != n {
+		t.Errorf("production reconnect prompted: %q", h.io.prompts[n:])
+	}
+	if next.catalog != 0 {
+		t.Fatal("request served on a refused session")
+	}
+}
+
+func TestProductionTighteningReauditsLiveSession(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.sess.extra = []string{"INSERT on app.users"}
+	prod := uatProfile()
+	prod.Production = true
+	if err := h.s.adopt(config.NewPolicy(prod, []string{"app.users.email"}, nil), "tightened"); err != nil {
+		t.Fatal(err)
+	}
+	if reason, ended := h.s.Ended(); !ended || !strings.Contains(reason, "privilege audit") {
+		t.Fatalf("over-privileged live session kept on production: %q %v", reason, ended)
+	}
+}
+
+func TestReviewWarnsAboutSkipPermissions(t *testing.T) {
+	p := prodProfile()
+	h := newHarness(t, p, func(c *ServerConfig) { c.SkipPermissions = true })
+	next := p
+	next.Production = false
+	h.s.pending = new(config.Policy)
+	*h.s.pending = config.NewPolicy(next, []string{"app.users.email"}, nil)
+	h.io.answers = []string{"n"}
+	h.s.Command(context.Background(), ":review")
+	if !strings.Contains(h.io.output(), "without a prompt") {
+		t.Errorf("no warning:\n%s", h.io.output())
+	}
+}
+
+// A project profile shadowing an approved user-config profile of the same
+// name is shown as a diff against that approval, not only as a first start.
+func TestFirstStartShowsDiffAgainstUserApproval(t *testing.T) {
+	state := t.TempDir()
+	log, err := audit.Open(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io := &fakeIO{answers: []string{"n"}}
+	user := uatProfile()
+	if err := config.SaveApproved(state, config.ApprovedKey("", "uat"), config.NewPolicy(user, nil, nil)); err != nil {
+		t.Fatal(err)
+	}
+	shadow := user
+	shadow.Tier = config.TierAdmin
+	st := &starter{io: io, log: log, profile: shadow}
+	_, _, err = st.startPolicy(context.Background(), state, config.ApprovedKey(t.TempDir(), "uat"), config.NewPolicy(shadow, nil, nil))
+	if err == nil {
+		t.Fatal("refused first start accepted")
+	}
+	if out := io.output(); !strings.Contains(out, "differs from the user-config profile") || !strings.Contains(out, "(loosens)") {
+		t.Errorf("no diff shown:\n%s", out)
+	}
+}
+
+// A client that leaves while its request waits for the console (busy with
+// another client's approval) must not have that request served.
+func TestServeConnDropsRequestOfClientGoneBeforeHandoff(t *testing.T) {
+	srv, cli := net.Pipe()
+	jobs := make(chan job)
+	var inflight sync.WaitGroup
+	done := make(chan struct{})
+	go func() {
+		serveConn(context.Background(), srv, jobs, &inflight)
+		close(done)
+	}()
+	if err := ipc.WriteMsg(cli, ipc.Request{JSONRPC: "2.0", ID: 1, Method: ipc.MethodStatus}); err != nil {
+		t.Fatal(err)
+	}
+	cli.Close()
+	// Nobody serves jobs (the console is busy): serveConn must notice the
+	// client left and return without handing the request over.
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("serveConn still waits to hand over the request of a gone client")
 	}
 }

@@ -234,6 +234,9 @@ func (s *session) query(ctx context.Context, q string, withOrigins bool, maxRows
 		if info, err = s.columnInfo(q); err != nil {
 			return engine.Result{}, wrap(ctx, err)
 		}
+		if info, err = s.baseTablesOnly(ctx, info); err != nil {
+			return engine.Result{}, wrap(ctx, err)
+		}
 	}
 	rows, err := s.conn.QueryContext(ctx, q)
 	if err != nil {
@@ -278,6 +281,40 @@ func (s *session) query(ctx context.Context, q string, withOrigins bool, maxRows
 		return engine.Result{}, wrap(ctx, ctx.Err())
 	}
 	return res, nil
+}
+
+// baseTablesOnly blanks every origin whose table is not an ordinary table
+// of its schema: SQLite also names table-valued functions (json_each,
+// json_tree, pragma_*) and virtual tables as origins, and their values can
+// be anything, a rule-matched column included.
+func (s *session) baseTablesOnly(ctx context.Context, info []msqlite.ColumnInfo) ([]msqlite.ColumnInfo, error) {
+	real := map[[2]string]bool{}
+	for i, c := range info {
+		if c.TableName == "" {
+			continue
+		}
+		key := [2]string{c.DatabaseName, c.TableName}
+		ok, seen := real[key]
+		if !seen {
+			db := c.DatabaseName
+			if db == "" {
+				db = "main"
+			}
+			schema := `"` + strings.ReplaceAll(db, `"`, `""`) + `".sqlite_master`
+			var n int // a virtual table has rootpage 0
+			err := s.conn.QueryRowContext(ctx, "SELECT count(*) FROM "+schema+
+				" WHERE type = 'table' AND name = ? AND rootpage > 0", c.TableName).Scan(&n)
+			if err != nil {
+				return nil, err
+			}
+			ok = n == 1
+			real[key] = ok
+		}
+		if !ok {
+			info[i].DatabaseName, info[i].TableName, info[i].OriginName = "", "", ""
+		}
+	}
+	return info, nil
 }
 
 // columnInfo prepares q, without running it, to read each result column's

@@ -90,9 +90,10 @@ type ServerConfig struct {
 	// LoadPolicy re-reads the current policy from the config files. Nil
 	// disables CheckPolicy.
 	LoadPolicy func() (config.Policy, error)
-	// Reconnect opens a new session after a lost connection. Nil means a
-	// lost connection ends the console.
-	Reconnect func(ctx context.Context) (engine.Session, error)
+	// Reconnect opens a new session after a lost connection, under p, the
+	// profile in force at that time. Nil means a lost connection ends the
+	// console.
+	Reconnect func(ctx context.Context, p config.Profile) (engine.Session, error)
 }
 
 // plan is a one-shot plan awaiting query.run.
@@ -333,6 +334,10 @@ func (s *Server) accept(ctx context.Context, ln net.Listener, jobs chan<- job, w
 	}
 }
 
+// maxQueued bounds the requests a client may pipeline behind the one being
+// served.
+const maxQueued = 32
+
 type readResult struct {
 	req ipc.Request
 	err error
@@ -348,6 +353,8 @@ func serveConn(ctx context.Context, c net.Conn, jobs chan<- job, inflight *sync.
 	stop := context.AfterFunc(ctx, func() { c.Close() })
 	defer stop()
 	msgs := make(chan readResult, 1)
+	done := make(chan struct{}) // ends the reader when serveConn returns
+	defer close(done)
 	go func() {
 		r := bufio.NewReader(c)
 		for {
@@ -355,7 +362,7 @@ func serveConn(ctx context.Context, c net.Conn, jobs chan<- job, inflight *sync.
 			err := ipc.ReadMsg(r, &req)
 			select {
 			case msgs <- readResult{req, err}:
-			case <-ctx.Done():
+			case <-done:
 				return
 			}
 			if err != nil {
@@ -392,11 +399,29 @@ func serveConn(ctx context.Context, c net.Conn, jobs chan<- job, inflight *sync.
 		}
 		jctx, jcancel := context.WithCancel(ctx)
 		j := job{ctx: jctx, req: m.req, resp: make(chan ipc.Response, 1)}
-		select {
-		case jobs <- j:
-		case <-ctx.Done():
-			jcancel()
-			return
+		// While the job waits for the console (another client's approval
+		// may be pending), keep reading: a client that leaves meanwhile
+		// never gets its statement run.
+	handoff:
+		for {
+			select {
+			case jobs <- j:
+				break handoff
+			case m2 := <-msgs:
+				if m2.err != nil {
+					jcancel()
+					return
+				}
+				if len(queue) >= maxQueued {
+					jcancel()
+					_ = ipc.WriteMsg(c, errResp(m2.req.ID, ipc.CodeInvalidRequest, "too many pipelined requests"))
+					return
+				}
+				queue = append(queue, m2)
+			case <-ctx.Done():
+				jcancel()
+				return
+			}
 		}
 		var resp ipc.Response
 	wait:
@@ -408,6 +433,13 @@ func serveConn(ctx context.Context, c net.Conn, jobs chan<- job, inflight *sync.
 				if m2.err != nil {
 					// The client is gone: cancel the request, then still
 					// wait for the console to finish with it.
+					gone = true
+					jcancel()
+					continue
+				}
+				if len(queue) >= maxQueued {
+					// Too many pipelined requests: drop the client once
+					// the console is done with the current one.
 					gone = true
 					jcancel()
 					continue

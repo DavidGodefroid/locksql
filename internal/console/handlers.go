@@ -124,7 +124,7 @@ func (s *Server) session(ctx context.Context, id int64) (engine.Session, *ipc.Re
 	}
 	if s.cfg.Reconnect != nil {
 		s.println("reconnecting to the database…")
-		sess, err := s.cfg.Reconnect(ctx)
+		sess, err := s.cfg.Reconnect(ctx, s.profile) // the policy in force now, not the start-up one
 		if err == nil {
 			s.sess = sess
 			return sess, nil
@@ -153,6 +153,23 @@ func (s *Server) failed(id int64, what string, err error) ipc.Response {
 		return errResp(id, ipc.CodeConnLost, "the database connection was lost")
 	}
 	return errResp(id, ipc.CodeInternal, what+": "+secrets.Sanitize(err))
+}
+
+// masking reports whether the session masks anything at all.
+func (s *Server) masking() bool {
+	return len(s.rules.Mask) > 0 || len(s.detectors) > 0
+}
+
+// errText is the text of a statement error for the client, the console and
+// the audit log. With masking on, a value the server quotes in its message
+// (a failed cast in a WHERE clause) is redacted: it reaches no result row,
+// so neither the rules nor the detectors would mask it otherwise.
+func (s *Server) errText(err error, sql string, unmask bool) string {
+	msg := secrets.Sanitize(err)
+	if unmask || !s.masking() {
+		return msg
+	}
+	return pii.RedactMessage(msg, sql, s.detectors)
 }
 
 // checkDB resolves the database of a request: the given one, or the
@@ -266,7 +283,9 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 			if errors.Is(err, engine.ErrConnLost) {
 				return s.failed(req.ID, "explain", err)
 			}
-			return s.refuse(req.ID, db, st.SQL, class, "", "EXPLAIN failed: "+secrets.Sanitize(err))
+			// Before approval: redacted even for an unmask plan (MySQL and
+			// MariaDB may run a constant subquery while planning).
+			return s.refuse(req.ID, db, st.SQL, class, "", "EXPLAIN failed: "+s.errText(err, st.SQL, false))
 		}
 		v := weight.Assess(ep, s.profile.Limits, s.profile.Production)
 		pl.level, pl.summary, pl.reasons = v.Level.String(), v.Summary, v.Reasons
@@ -386,10 +405,14 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	res, err := sess.Run(rctx, pl.db, pl.st, s.profile.Limits.MaxRows)
 	rec.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
-		rec.Error = secrets.Sanitize(err)
+		// The audit log never holds row data, even for an unmask run.
+		rec.Error = s.errText(err, pl.st.SQL, false)
 		s.audit(rec)
 		s.println("failed: " + rec.Error)
-		return s.failed(req.ID, "statement failed", err)
+		if errors.Is(err, engine.ErrConnLost) {
+			return s.failed(req.ID, "statement failed", err)
+		}
+		return errResp(req.ID, ipc.CodeInternal, "statement failed: "+s.errText(err, pl.st.SQL, pl.unmask))
 	}
 	if !pl.unmask {
 		origin := sess.OriginColumns()

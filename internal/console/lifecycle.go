@@ -260,6 +260,20 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 		for _, line := range describePolicy(cur) {
 			io.Println(line)
 		}
+		// A project config can shadow a user-config profile of the same
+		// name, which moves the approval to a new key: show what differs
+		// from the policy the human approved under that name, loosenings in
+		// red.
+		if userKey := config.ApprovedKey("", cur.Profile.Name); userKey != key {
+			if prev, err := config.LoadApproved(stateDir, userKey); err == nil {
+				if changes := config.Diff(*prev, cur); len(changes) > 0 {
+					io.Println(bold + "This project's profile " + cur.Profile.Name + " differs from the user-config profile approved under that name:" + reset)
+					for _, line := range formatChanges(changes) {
+						io.Println(line)
+					}
+				}
+			}
+		}
 		ans, ok := io.Ask(ctx, "Apply these changes? [y/N] ", ApprovalTimeout)
 		if !ok || strings.TrimSpace(ans) != "y" {
 			st.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused"})
@@ -374,6 +388,12 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 	if err != nil {
 		return nil, fmt.Errorf("console: connect: %s", secrets.Sanitize(err, secret))
 	}
+	if n, ok := sess.(engine.Noticer); ok {
+		for _, msg := range n.Notices() {
+			st.io.Println(red + "warning: " + msg + reset)
+			st.audit(audit.Record{Event: audit.EventLogin, Decision: "notice", Error: msg})
+		}
+	}
 	return sess, nil
 }
 
@@ -393,7 +413,12 @@ func (st *starter) offerSave(ctx context.Context, secret []byte, prompt string) 
 // privilege audit again, with the start-up rules: the account behind the
 // secret may not be the one audited at start-up, and its grants may have
 // changed. A failed audit closes the session and wraps errPrivilegeAudit.
-func (st *starter) reconnect(ctx context.Context) (engine.Session, error) {
+//
+// p is the profile in force now: a tightening applied since start-up (such
+// as production turned on, or credentials from keychain to ask) governs the
+// new connection and its audit.
+func (st *starter) reconnect(ctx context.Context, p config.Profile) (engine.Session, error) {
+	st.profile = p
 	sess, err := st.connect(ctx, false)
 	if err != nil {
 		return nil, err

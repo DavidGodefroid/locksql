@@ -797,3 +797,29 @@ func TestClientGoneDuringApproval(t *testing.T) {
 		t.Fatal("Serve did not stop")
 	}
 }
+
+// A server error can quote a row value (a failed cast in WHERE): with
+// masking on, it must reach neither the client nor the audit log.
+func TestRunErrorTextIsRedacted(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.sess.runErr = errors.New(`mariadb: error 1105 (HY000): XPATH syntax error: '~zed.secret@example.com'`)
+	pr := h.plan(t, "SELECT 1 FROM users WHERE EXTRACTVALUE(1, CONCAT(0x7e, email)) LIMIT 1", false)
+	h.io.answers = []string{"y"}
+	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	wantCode(t, resp, ipc.CodeInternal)
+	if strings.Contains(resp.Error.Message, "zed.secret") || !strings.Contains(resp.Error.Message, "1105") {
+		t.Errorf("client message: %q", resp.Error.Message)
+	}
+	if strings.Contains(h.auditLog(t), "zed.secret") || strings.Contains(h.io.output(), "zed.secret") {
+		t.Errorf("value in audit log or console:\n%s\n%s", h.auditLog(t), h.io.output())
+	}
+
+	// With unmask the human approved seeing values: the message is kept.
+	h.sess.runErr = errors.New(`mariadb: error 1105 (HY000): XPATH syntax error: '~zed.secret@example.com'`)
+	pr = h.plan(t, "SELECT 1 FROM users WHERE EXTRACTVALUE(1, CONCAT(0x7e, email)) LIMIT 1", true)
+	h.io.answers = []string{"y"}
+	resp = h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "zed.secret") {
+		t.Errorf("unmasked message: %+v", resp.Error)
+	}
+}

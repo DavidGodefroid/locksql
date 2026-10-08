@@ -69,6 +69,8 @@ type session struct {
 	tier    config.Tier
 	timeout time.Duration
 	defDB   string
+	// plain is set when a TCP connection fell back to no TLS.
+	plain bool
 }
 
 // DriverOptions are the client options of every connection locksql opens:
@@ -114,12 +116,23 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (eng
 	s := &session{
 		conn: conn, connID: conn.GetConnectionID(), ctl: ctl, engine: p.Engine,
 		tier: p.Tier, timeout: p.Limits.StatementTimeout, defDB: p.Database,
+		plain: !useTLS && !strings.HasPrefix(p.Host, "/"),
 	}
 	if err := s.setup(); err != nil {
 		s.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// Notices reports a TCP connection that is not encrypted: the server
+// offers no TLS (or an attacker stripped it), so queries and results travel
+// in clear.
+func (s *session) Notices() []string {
+	if s.plain {
+		return []string{"the connection is NOT encrypted: the server offers no TLS (use an SSH tunnel for a remote server)"}
+	}
+	return nil
 }
 
 // dial connects with a deadline covering the TCP connect and the handshake
@@ -130,6 +143,7 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
+	var guard *clearTextGuard
 	dialer := func(ctx context.Context, network, address string) (net.Conn, error) {
 		nc, err := (&net.Dialer{Deadline: deadline}).DialContext(ctx, network, address)
 		if err != nil {
@@ -138,6 +152,11 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 		if err := nc.SetDeadline(deadline); err != nil {
 			nc.Close()
 			return nil, err
+		}
+		if !useTLS && network != "unix" {
+			guard = &clearTextGuard{Conn: nc}
+			guard.armed.Store(true)
+			return guard, nil
 		}
 		return nc, nil
 	}
@@ -155,6 +174,15 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 		})
 	}
 	c, err := client.ConnectWithDialer(ctx, "", addr, user, pw, db, dialer, opts...)
+	if guard != nil {
+		guard.armed.Store(false) // authenticated: later reads are row data
+		if guard.refused.Load() {
+			if c != nil {
+				c.Close()
+			}
+			return nil, errClearText
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +191,42 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 		return nil, err
 	}
 	return c, nil
+}
+
+// errClearText refuses a server that asks for the password in clear text
+// on an unencrypted TCP connection.
+var errClearText = errors.New("the server asks for the password in clear text (mysql_clear_password) on an unencrypted connection; refused: use a server with TLS, an SSH tunnel or a Unix socket")
+
+// clearTextMarker is the name of the plugin that sends the password as is.
+var clearTextMarker = []byte(gomysql.AUTH_CLEAR_PASSWORD)
+
+// clearTextGuard wraps an unencrypted TCP connection during the handshake.
+// go-mysql honours a server's auth switch to mysql_clear_password and then
+// writes the raw password, so an active attacker who strips TLS could read
+// it. The guard fails the read that brings the plugin name, before the
+// driver can answer.
+type clearTextGuard struct {
+	net.Conn
+	armed   atomic.Bool
+	refused atomic.Bool
+	tail    []byte
+}
+
+func (g *clearTextGuard) Read(b []byte) (int, error) {
+	n, err := g.Conn.Read(b)
+	if n > 0 && g.armed.Load() {
+		buf := append(g.tail, b[:n]...)
+		if bytes.Contains(buf, clearTextMarker) {
+			g.refused.Store(true)
+			g.Conn.Close()
+			return 0, errClearText
+		}
+		if keep := len(clearTextMarker) - 1; len(buf) > keep {
+			buf = buf[len(buf)-keep:]
+		}
+		g.tail = append(g.tail[:0], buf...)
+	}
+	return n, err
 }
 
 // noServerTLS reports whether a handshake failed because the server does

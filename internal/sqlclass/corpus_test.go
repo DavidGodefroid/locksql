@@ -261,6 +261,23 @@ var dialectCorpus = map[Dialect][]corpusCase{
 		{sql: "SELECT 1e3$$ $$, pg_sleep(1), 2$$ $$ LIMIT 1", wantErr: "PG_SLEEP"},
 		{sql: "SELECT 1$$x$$ LIMIT 1", wantClass: Read},
 		{sql: "SELECT 1$1 LIMIT 1", wantErr: "$n"},
+		// PostgreSQL 13/14 end a number at trailing letters, which then start
+		// an identifier that takes the '$': 1x0$$ is 1 and x0$$, no quote.
+		{sql: "SELECT 1x0$$, pg_sleep(3), 1x0$$ LIMIT 1", wantErr: "ambiguous"},
+		{sql: "SELECT 1x0$$; DELETE FROM t; SELECT 1x0$$ LIMIT 1", wantErr: "ambiguous"},
+		{sql: "SELECT 1.5x0$$, pg_sleep(3), 1.5x0$$ LIMIT 1", wantErr: "ambiguous"},
+		{sql: "SELECT 1e5x0$$, pg_sleep(3), 1e5x0$$ LIMIT 1", wantErr: "ambiguous"},
+		{sql: "SELECT 0x1F$$ $$ LIMIT 1", wantErr: "ambiguous"},
+		{sql: "SELECT 1e3$$ $$ LIMIT 1", wantClass: Read},
+		{sql: "SELECT 1e3 x, 1e+3, 1x LIMIT 1", wantClass: Read},
+		// Unicode escapes can spell any name: U&"pg_sl!0065ep" UESCAPE '!' is pg_sleep.
+		{sql: `SELECT U&"pg_sl!0065ep" UESCAPE '!' (3) LIMIT 1`, wantErr: "Unicode escapes"},
+		{sql: `SELECT U&"set_confi!0067" UESCAPE '!' ('statement_timeout','0',false) LIMIT 1`, wantErr: "Unicode escapes"},
+		{sql: `SET U&"statement_timeo!0075t" UESCAPE '!' = 0`, wantErr: "Unicode escapes"},
+		{sql: `SELECT u&"nextv!0061l" UESCAPE '!' ('s') LIMIT 1`, wantErr: "Unicode escapes"},
+		{sql: `SELECT 1U&"pg_sl!0065ep" UESCAPE '!' (3) LIMIT 1`, wantErr: "Unicode escapes"},
+		{sql: `SELECT U&'d!0061ta' UESCAPE '!' LIMIT 1`, wantErr: "Unicode escapes"},
+		{sql: `SELECT a & b, u & "c" FROM t LIMIT 1`, wantClass: Read},
 		{sql: "SELECT pg_read_file('x') LIMIT 1", wantErr: "PG_READ_FILE"},
 		{sql: "SELECT pg_read_binary_file('x') LIMIT 1", wantErr: "PG_READ_BINARY_FILE"},
 		{sql: "SELECT * FROM pg_ls_dir('.') LIMIT 1", wantErr: "PG_LS_DIR"},
@@ -338,6 +355,7 @@ var dialectCorpus = map[Dialect][]corpusCase{
 		{sql: "SELECT [order] FROM t LIMIT 1", wantClass: Read},
 		{sql: "SELECT [delete], `update`, \"drop\" FROM t LIMIT 1", wantClass: Read},
 		{sql: "SELECT [unterminated FROM t LIMIT 1", wantErr: "unterminated"},
+		{sql: "SELECT [a\\b] FROM t LIMIT 1", wantClass: Read}, // brackets have no escape
 		{sql: "SELECT id FROM t LIMIT 10, 20", wantClass: Read, wantKind: "select", wantLimit: 20},
 		{sql: "ATTACH 'x.db' AS y", wantErr: "ATTACH"},
 		{sql: "ATTACH DATABASE 'x.db' AS y", wantErr: "ATTACH"},

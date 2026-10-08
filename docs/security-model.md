@@ -77,15 +77,24 @@ Records contain the SQL and metadata, never secrets and never row data.
 - **Windows peer check.** Windows has no peer credential check for Unix
   sockets; locksql relies on the socket directory's ACL.
 - **Transport security.** TLS to the database is not configurable yet.
-  PostgreSQL uses `sslmode=prefer` without certificate verification;
-  MariaDB and MySQL connect without TLS. Use an SSH tunnel to reach remote
+  PostgreSQL, MariaDB and MySQL connect like PostgreSQL's `sslmode=prefer`:
+  encrypted when the server offers TLS, plain otherwise, and the certificate
+  is not verified. A plain TCP connection is reported on the console and in
+  the audit log (`"decision":"notice"`). MariaDB and MySQL refuse a server
+  that asks for the password in clear text (`mysql_clear_password`) on an
+  unencrypted connection. An active attacker on the path can still strip TLS
+  or intercept the unverified handshake. Use an SSH tunnel to reach remote
   servers.
 - **Write tiers.** Above tier `read`, the human's approval is the gate. The
   classifier assigns the class shown on the screen, but the server does not
   restrict what an approved write statement does within the account's
   privileges.
 - **Masking is best effort.** Column rules depend on the rules being right,
-  and value detectors catch common formats only. Use a database account that
+  and value detectors catch common formats only. A server error can echo a
+  value the statement choked on (a failed cast in a WHERE clause); with
+  masking on, locksql redacts the quoted part of such messages and runs the
+  detectors over the rest, but an unquoted value they cannot recognise gets
+  through. Use a database account that
   cannot read what the agent must never see.
 - **Catalog metadata** (database, table, column and index names) is returned
   without approval.

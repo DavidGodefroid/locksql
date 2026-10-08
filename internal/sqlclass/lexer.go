@@ -179,7 +179,9 @@ func (l *lexer) run() ([]Token, error) {
 			}
 			l.tokens[len(l.tokens)-1].Text = l.s[start:l.i]
 		case isDigit(c) || c == '.' && isDigit(l.peek(1)):
-			l.number()
+			if err := l.number(); err != nil {
+				return nil, err
+			}
 		case isIdentStart(c) || c == '$' && l.d == MySQL:
 			j := l.i
 			for j < len(l.s) && isIdentChar(l.s[j]) {
@@ -187,6 +189,12 @@ func (l *lexer) run() ([]Token, error) {
 			}
 			l.emit(TokWord, fold(l.s[l.i:j]))
 			l.i = j
+		case c == '&' && l.d == Postgres && l.i > 0 && (l.s[l.i-1] == 'U' || l.s[l.i-1] == 'u') &&
+			(l.peek(1) == '"' || l.peek(1) == '\''):
+			// U&"..." and U&'...' carry Unicode escapes, and UESCAPE can
+			// pick any escape character: U&"pg_sl!0065ep" UESCAPE '!' names
+			// pg_sleep. Refused rather than decoded.
+			return nil, refuse("Unicode escapes (U&\"...\" or U&'...') are not allowed")
 		default:
 			switch c {
 			case '(':
@@ -210,7 +218,8 @@ func (l *lexer) run() ([]Token, error) {
 // quoted lexes a quoted token from l.i (the opening quote) to the closing
 // quote. A doubled closing quote escapes itself. With backslashEscapes
 // (PostgreSQL E” strings) a backslash escapes the next byte; otherwise a
-// backslash is refused, except inside SQLite [brackets], which have no escape.
+// backslash is refused, except inside SQLite [brackets], which have no
+// escape and hold it as a plain character.
 func (l *lexer) quoted(open, close byte, kind TokKind, backslashEscapes bool) error {
 	start := l.i
 	j := l.i + 1
@@ -223,7 +232,7 @@ func (l *lexer) quoted(open, close byte, kind TokKind, backslashEscapes bool) er
 		case c == '\\' && backslashEscapes:
 			j += 2
 			continue
-		case c == '\\':
+		case c == '\\' && open != '[':
 			return refuse(errBackslash)
 		case c == close:
 			if open != '[' && j+1 < len(l.s) && l.s[j+1] == close {
@@ -286,10 +295,15 @@ func isASCIILetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <
 // number lexes a numeric literal: digits with an optional fraction. Any
 // identifier characters that follow (exponent, 0x1F, a MySQL name such as
 // 1abc) stay in the same token; the sign of an exponent becomes punctuation.
-// In PostgreSQL a number never continues with '$' ('$' is not an identifier
-// start there), so 1$$ is the integer 1 followed by a dollar quote; '$' only
-// joins the token after a letter, as part of trailing identifier junk.
-func (l *lexer) number() {
+//
+// In PostgreSQL '$' is not an identifier start, so 1$$ and 1e3$$ are a
+// number then a dollar quote. When other trailing identifier characters
+// come first, servers disagree: PostgreSQL 13 and 14 end the number there
+// and read the rest as an identifier, which then takes the '$' (1x0$$ is
+// the integer 1 and the identifier x0$$), while 15+ reject the trailing
+// junk. Such a token directly followed by '$' is refused, since locksql
+// cannot tell whether a dollar quote opens there.
+func (l *lexer) number() error {
 	j := l.i
 	for j < len(l.s) && isDigit(l.s[j]) {
 		j++
@@ -300,12 +314,26 @@ func (l *lexer) number() {
 			j++
 		}
 	}
-	for j < len(l.s) && isIdentChar(l.s[j]) {
-		if l.s[j] == '$' && l.d == Postgres && !isIdentStart(l.s[j-1]) && l.s[j-1] != '$' {
-			break
+	if l.d == Postgres {
+		if j+1 < len(l.s) && (l.s[j] == 'e' || l.s[j] == 'E') && isDigit(l.s[j+1]) {
+			j += 2
+			for j < len(l.s) && isDigit(l.s[j]) {
+				j++
+			}
 		}
-		j++
+		junk := j
+		for j < len(l.s) && isIdentChar(l.s[j]) && l.s[j] != '$' {
+			j++
+		}
+		if j > junk && j < len(l.s) && l.s[j] == '$' {
+			return refuse("a number directly followed by letters and '$' is ambiguous in PostgreSQL; add a space")
+		}
+	} else {
+		for j < len(l.s) && isIdentChar(l.s[j]) {
+			j++
+		}
 	}
 	l.emit(TokNumber, fold(l.s[l.i:j]))
 	l.i = j
+	return nil
 }

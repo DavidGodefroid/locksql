@@ -148,6 +148,10 @@ const valueChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 // ("t(x, y)"), which can rename any column. A PostgreSQL whole-row
 // reference to a table that may hold such a column ("SELECT u",
 // "row_to_json(u)", "to_jsonb(users.*)") is refused too, see wholeRow.
+// A matched column or whole-row reference inside a VALUES list or the
+// arguments of a FROM-clause function, and a TABLE arm after the first, are
+// refused as well. Every named relation counts as a source that may hold a
+// matched column, since it may be a view over a rule table.
 // COUNT(...) is allowed. The
 // error is a *sqlclass.Refusal that explains how to write the query.
 func AliasViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
@@ -295,8 +299,18 @@ func (a *aliasCheck) run() error {
 	if err := a.columnLists(); err != nil {
 		return err
 	}
+	if err := a.valuesAndFromCalls(); err != nil {
+		return err
+	}
 	heads := map[int][]selectItem{}
 	for i := range a.toks {
+		if a.isWord(i, "TABLE") && a.name(i+1) != "" {
+			if later, _ := a.laterArm(i); later {
+				// TABLE t is SELECT * FROM t: every column of t under the
+				// first arm's labels.
+				return refusal("a later UNION/INTERSECT/EXCEPT arm is TABLE %s, which puts all its columns, PII included, under the first arm's labels", strings.ToLower(a.name(i+1)))
+			}
+		}
 		if !a.isWord(i, "SELECT") {
 			continue
 		}
@@ -470,6 +484,9 @@ func (a *aliasCheck) columnLists() error {
 						if a.rows[a.name(k)] {
 							bearing = true
 						}
+						if a.isWord(k, "TABLE") && a.name(k+1) != "" {
+							return refusal("the column list of %s renames the columns of TABLE %s", strings.ToLower(a.name(p)), strings.ToLower(a.name(k+1)))
+						}
 					}
 					for k := b + 1; k < a.match[b]; k++ {
 						if a.isStar(k) && (a.isPunct(k-1, ".") && a.rows[a.name(k-2)] || !a.isPunct(k-1, ".") && bearing) {
@@ -547,6 +564,9 @@ func (a *aliasCheck) namesOnly(s, e int) bool {
 // that no rule matches, so a whole record would go out unmasked. Only names
 // in a.rows count; a plain "u.*" item and COUNT(...) are allowed.
 func (a *aliasCheck) wholeRow(s, e int) error {
+	if a.d != sqlclass.Postgres {
+		return nil // only PostgreSQL has whole-row references
+	}
 	for j := s; j < e; j++ {
 		n := a.name(j)
 		if n == "" || !a.rows[n] || a.insideCount(j) {
@@ -567,9 +587,10 @@ func (a *aliasCheck) wholeRow(s, e int) error {
 }
 
 // rowSources returns the names (table, schema and alias) of every FROM or
-// JOIN item, at any level, whose rows may carry a rule-matched column: a
-// table a Mask pattern's table segment matches ('*' matches all), a CTE, or
-// a parenthesised item that holds a SELECT or names such a table. Names are
+// JOIN item, at any level, whose rows may carry a rule-matched column: any
+// named relation (a table no rule names may still be a view over one, and
+// views have no origin), a CTE, or a function call or parenthesised item
+// that holds a SELECT or names such a table. Names are
 // gathered per statement, not per scope: a false match only refuses more.
 func (a *aliasCheck) rowSources() map[string]bool {
 	ctes := map[string]bool{}
@@ -595,6 +616,7 @@ func (a *aliasCheck) rowSources() map[string]bool {
 	type group struct {
 		names   []string
 		bearing bool
+		call    bool // the item is a function call (its alias names no relation)
 	}
 	var groups []*group
 	cur := map[int]*group{}
@@ -606,6 +628,10 @@ func (a *aliasCheck) rowSources() map[string]bool {
 			d := t.Depth - 1
 			if inFrom(d) && cur[d] != nil && a.match[j] > j && a.bearingSpan(j+1, a.match[j], ctes) {
 				cur[d].bearing = true
+			}
+			if inFrom(d) && cur[d] != nil && len(cur[d].names) == 0 &&
+				(a.isWord(j-1, "UNNEST", "JSON_TABLE") || a.isWord(j-1, "FROM") && a.isWord(j-2, "ROWS")) {
+				cur[d].call = true
 			}
 			delete(clause, t.Depth) // a new level starts with no clause
 		case t.Kind == sqlclass.TokWord && (t.Text == "FROM" || t.Text == "JOIN"):
@@ -626,6 +652,9 @@ func (a *aliasCheck) rowSources() map[string]bool {
 				continue
 			}
 			g := cur[t.Depth]
+			if len(g.names) == 0 && a.isPunct(j+1, "(") {
+				g.call = true
+			}
 			g.names = append(g.names, n)
 			if ctes[n] || a.tableUnderRule(n) {
 				g.bearing = true
@@ -634,7 +663,9 @@ func (a *aliasCheck) rowSources() map[string]bool {
 	}
 	rows := map[string]bool{}
 	for _, g := range groups {
-		if g.bearing {
+		// A named relation bears even when no rule names its table: it may
+		// be a view over one, and a view has no origin.
+		if g.bearing || !g.call && len(g.names) > 0 {
 			for _, n := range g.names {
 				rows[n] = true
 			}
@@ -666,4 +697,96 @@ func (a *aliasCheck) tableUnderRule(n string) bool {
 		}
 	}
 	return false
+}
+
+// fromCallSkip are words that, before a parenthesis in a FROM clause, open
+// something other than a function call or a ROWS FROM list: index hints,
+// partitions, sampling, a parenthesised join or a LATERAL subquery.
+var fromCallSkip = map[string]bool{
+	"FROM": true, "JOIN": true, "LATERAL": true, "INDEX": true, "KEY": true, "PARTITION": true,
+	"ONLY": true, "TABLESAMPLE": true, "SYSTEM": true, "BERNOULLI": true, "REPEATABLE": true,
+	"ON": true, "USING": true, "AS": true, "STRAIGHT_JOIN": true, "INNER": true, "LEFT": true,
+	"RIGHT": true, "FULL": true, "OUTER": true, "CROSS": true, "NATURAL": true, "WITH": true,
+}
+
+// valuesAndFromCalls refuses a rule-matched column, or a PostgreSQL
+// whole-row reference, inside a VALUES list or the arguments of a
+// FROM-clause function (unnest(...), lower(b.email) x, JSON_TABLE(...),
+// json_each(...), ROWS FROM (...)). Its values come out under labels such as
+// column1, unnest or value that no rule matches, with no origin, and no
+// select-list item of the query renames them.
+func (a *aliasCheck) valuesAndFromCalls() error {
+	clause := a.clauses()
+	for j, t := range a.toks {
+		if a.isWord(j, "VALUES") {
+			e := j + 1
+			for e < len(a.toks) && (a.toks[e].Depth > t.Depth ||
+				a.toks[e].Depth == t.Depth && !(a.toks[e].Kind == sqlclass.TokWord && listEnd[a.toks[e].Text])) {
+				e++
+			}
+			if err := a.spanLeak(j+1, e, clause, "a VALUES list"); err != nil {
+				return err
+			}
+			continue
+		}
+		if !a.isPunct(j, "(") || a.match[j] < 0 {
+			continue
+		}
+		if c := clause[j]; c != "FROM" && c != "JOIN" {
+			continue
+		}
+		p := j - 1
+		call := a.name(p) != "" && !(a.toks[p].Kind == sqlclass.TokWord && fromCallSkip[a.toks[p].Text])
+		if a.isWord(p, "FROM") && a.isWord(p-1, "ROWS") {
+			call = true
+		}
+		if !call {
+			continue
+		}
+		if err := a.spanLeak(j+1, a.match[j], clause, "the arguments of a FROM-clause function"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// spanLeak refuses a rule-matched column in [s, e), or a bare name of a
+// PII-bearing source used as a value (a PostgreSQL whole-row reference),
+// except where it names a table of a nested FROM clause.
+func (a *aliasCheck) spanLeak(s, e int, clause []string, where string) error {
+	for k := s; k < e; k++ {
+		if a.matched(k) && !a.insideCount(k) {
+			return refusal("PII column %s is used in %s", strings.ToLower(a.name(k)), where)
+		}
+		n := a.name(k)
+		if a.d != sqlclass.Postgres || n == "" || !a.rows[n] || a.insideCount(k) ||
+			clause[k] == "FROM" || clause[k] == "JOIN" ||
+			a.isPunct(k-1, ".") || a.isPunct(k+1, ".") || a.isPunct(k+1, "(") {
+			continue
+		}
+		return refusal("the whole row of %s is used in %s", strings.ToLower(n), where)
+	}
+	return nil
+}
+
+// clauses returns, for each token, the clause word (see clauseWords) in
+// force at its parenthesis level; a parenthesis carries the clause of the
+// level it sits in, and a new level starts with none.
+func (a *aliasCheck) clauses() []string {
+	out := make([]string, len(a.toks))
+	cur := map[int]string{}
+	for j, t := range a.toks {
+		switch {
+		case a.isPunct(j, "("):
+			out[j] = cur[t.Depth-1]
+			delete(cur, t.Depth)
+			continue
+		case a.isPunct(j, ")"):
+			delete(cur, t.Depth+1)
+		case t.Kind == sqlclass.TokWord && clauseWords[t.Text]:
+			cur[t.Depth] = t.Text
+		}
+		out[j] = cur[t.Depth]
+	}
+	return out
 }
