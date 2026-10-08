@@ -181,14 +181,16 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.query(ctx, `SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE FROM information_schema.COLUMNS
-		WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, ORDINAL_POSITION`, db)
+	rows, err := s.query(ctx, `SELECT c.TABLE_NAME, c.COLUMN_NAME, c.COLUMN_TYPE, t.TABLE_TYPE
+		FROM information_schema.COLUMNS c
+		JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
+		WHERE c.TABLE_SCHEMA = ? ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION`, db)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]engine.ColumnInfo, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, engine.ColumnInfo{DB: db, Table: str(r[0]), Column: str(r[1]), Type: str(r[2])})
+		out = append(out, engine.ColumnInfo{DB: db, Table: str(r[0]), Column: str(r[1]), Type: str(r[2]), View: str(r[3]) == "VIEW"})
 	}
 	return out, nil
 }

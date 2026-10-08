@@ -23,6 +23,7 @@ const explainPrefix = "EXPLAIN (FORMAT JSON, VERBOSE) "
 // pgNode is one node of PostgreSQL's EXPLAIN (FORMAT JSON) output, reduced
 // to the fields the normalisation reads.
 type pgNode struct {
+	TotalCost   *float64 `json:"Total Cost"`
 	NodeType    string   `json:"Node Type"`
 	Parent      string   `json:"Parent Relationship"`
 	SubplanName string   `json:"Subplan Name"`
@@ -139,7 +140,11 @@ func ParsePlan(raw []byte, sizes map[string]int64) (engine.Plan, error) {
 	root := engine.PlanNode{Detail: "QUERY", EstRows: -1}
 	b := builder{sizes: sizes}
 	b.walk(&top, &root, walkCtx{})
-	return engine.Plan{Root: root, Raw: json.RawMessage(bytes.Clone(raw))}, nil
+	cost := -1.0
+	if top.TotalCost != nil {
+		cost = *top.TotalCost
+	}
+	return engine.Plan{Root: root, Cost: cost, Raw: json.RawMessage(bytes.Clone(raw))}, nil
 }
 
 type builder struct {

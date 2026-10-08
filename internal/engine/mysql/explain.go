@@ -42,7 +42,34 @@ func ParsePlan(raw []byte) (engine.Plan, error) {
 	}
 	root := engine.PlanNode{Detail: "QUERY", EstRows: -1}
 	block(qb, &root)
-	return engine.Plan{Root: root, Raw: json.RawMessage(bytes.Clone(raw))}, nil
+	return engine.Plan{Root: root, Cost: blockCost(qb), Raw: json.RawMessage(bytes.Clone(raw))}, nil
+}
+
+// blockCost is MySQL's cost_info.query_cost (a string) or MariaDB's cost
+// (a number), -1 when absent.
+func blockCost(qb map[string]any) float64 {
+	num := func(v any) float64 {
+		switch x := v.(type) {
+		case json.Number:
+			if f, err := x.Float64(); err == nil {
+				return f
+			}
+		case string:
+			if f, err := json.Number(x).Float64(); err == nil {
+				return f
+			}
+		}
+		return -1
+	}
+	if ci, ok := qb["cost_info"].(map[string]any); ok {
+		if c := num(ci["query_cost"]); c >= 0 {
+			return c
+		}
+	}
+	if c, ok := qb["cost"]; ok {
+		return num(c)
+	}
+	return -1
 }
 
 // keyOrder visits "table" and "nested_loop" first, so that a block's

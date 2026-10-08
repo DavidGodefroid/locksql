@@ -261,7 +261,8 @@ func (s *session) Describe(ctx context.Context, db, table string) (engine.TableI
 func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, error) {
 	var out []engine.ColumnInfo
 	err := s.catalog(ctx, db, func(ctx context.Context, c *pgx.Conn) error {
-		rows, err := c.Query(ctx, `SELECT n.nspname, c.relname, a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod)
+		rows, err := c.Query(ctx, `SELECT n.nspname, c.relname, a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod),
+				c.relkind IN ('v', 'm', 'f')
 			FROM pg_catalog.pg_attribute a
 			JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
 			JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -273,7 +274,7 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 		}
 		out, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (engine.ColumnInfo, error) {
 			var ci engine.ColumnInfo
-			err := r.Scan(&ci.DB, &ci.Table, &ci.Column, &ci.Type)
+			err := r.Scan(&ci.DB, &ci.Table, &ci.Column, &ci.Type, &ci.View)
 			return ci, err
 		})
 		return err

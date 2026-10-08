@@ -37,6 +37,9 @@ type ColumnInfo struct {
 	Table  string `json:"table"`
 	Column string `json:"column"`
 	Type   string `json:"type"`
+	// View is set for a column of a view (or a materialized view or a
+	// foreign table): its base columns are unknown.
+	View bool `json:"view,omitempty"`
 }
 
 // ColumnDesc describes one column for catalog.describe.
@@ -133,7 +136,11 @@ type PlanNode struct {
 // Plan is a normalised plan plus the engine's raw plan, kept for the audit
 // log and for debugging.
 type Plan struct {
-	Root PlanNode        `json:"root"`
+	Root PlanNode `json:"root"`
+	// Cost is the engine's total cost estimate for the statement, in its
+	// own units (PostgreSQL Total Cost, MySQL query_cost, MariaDB cost), or
+	// -1 when the engine gives none.
+	Cost float64         `json:"cost"`
 	Raw  json.RawMessage `json:"raw"`
 }
 

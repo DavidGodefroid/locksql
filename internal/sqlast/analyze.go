@@ -148,6 +148,9 @@ func (a *Analysis) Masked() bool {
 type column struct {
 	name string // folded; "" when the engine names it
 	prov Prov
+	// labeled is set when the engine labels the column with name (an
+	// alias, a plain column reference or a star expansion).
+	labeled bool
 }
 
 type relation struct {
@@ -217,7 +220,11 @@ func Analyze(st *Statement, env Env) (*Analysis, error) {
 		return nil, err
 	}
 	for _, c := range cols {
-		an.a.Outputs = append(an.a.Outputs, Output{Label: c.name, Prov: c.prov, Mask: an.maskOf(c.prov)})
+		label := ""
+		if c.labeled {
+			label = c.name
+		}
+		an.a.Outputs = append(an.a.Outputs, Output{Label: label, Prov: c.prov, Mask: an.maskOf(c.prov)})
 	}
 	if st.Explain {
 		if env.Masking && (an.a.PIIFilter || len(an.a.KChecks) > 0) {
@@ -318,7 +325,7 @@ func (an *analyzer) body(b Body, parent *scope) ([]column, *scope, error) {
 		}
 		out := make([]column, len(l))
 		for i := range l {
-			out[i] = column{name: l[i].name, prov: union(l[i].prov, r[i].prov)}
+			out[i] = column{name: l[i].name, prov: union(l[i].prov, r[i].prov), labeled: l[i].labeled}
 		}
 		return out, nil, nil
 	}
@@ -445,7 +452,7 @@ func renameCols(cols []column, names []string, what string) ([]column, error) {
 	}
 	out := make([]column, len(cols))
 	for i := range cols {
-		out[i] = column{name: names[i], prov: cols[i].prov}
+		out[i] = column{name: names[i], prov: cols[i].prov, labeled: true}
 	}
 	return out, nil
 }
@@ -488,11 +495,12 @@ func (an *analyzer) selectCore(s *Select, parent *scope) ([]column, *scope, erro
 		if err != nil {
 			return nil, nil, err
 		}
-		name := it.Alias
+		name, labeled := it.Alias, it.Alias != ""
 		if name == "" {
 			name = defaultName(it.Expr)
+			_, labeled = it.Expr.(*ColumnRef)
 		}
-		cols = append(cols, column{name: name, prov: p})
+		cols = append(cols, column{name: name, prov: p, labeled: labeled})
 	}
 	sc.aliases = cols
 	// GROUP BY.
@@ -680,7 +688,7 @@ func (an *analyzer) joinStar(ls, rs []column, using []string) ([]column, error) 
 		if l == nil || r == nil {
 			return column{name: name}
 		}
-		return column{name: name, prov: union(l.prov, r.prov)}
+		return column{name: name, prov: union(l.prov, r.prov), labeled: true}
 	}
 	var out []column
 	if an.d == sqlclass.SQLite {
@@ -773,7 +781,7 @@ func (an *analyzer) tableName(t *TableName) (*relation, error) {
 			f := fold(c)
 			if k == 0 {
 				names = append(names, f)
-				r.cols = append(r.cols, column{name: f})
+				r.cols = append(r.cols, column{name: f, labeled: true})
 			} else if names[i] != f {
 				return nil, refusef("table %s is ambiguous (several schemas hold it); qualify it", strings.ToLower(strings.Join(t.Parts, ".")))
 			}

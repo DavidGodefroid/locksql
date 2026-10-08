@@ -53,7 +53,7 @@ func TestLoadFillsDefaults(t *testing.T) {
 	if uat.Limits != DefaultLimits(false) {
 		t.Errorf("uat limits = %+v, want %+v", uat.Limits, DefaultLimits(false))
 	}
-	want := Limits{StatementTimeout: 30 * time.Second, ExplainRowsWarn: 100_000, ExplainRowsRefuse: 1_000_000, MaxRows: 200, MaxCellChars: 200, MaxOutputBytes: 65_536}
+	want := Limits{StatementTimeout: 30 * time.Second, ExplainRowsWarn: 100_000, ExplainRowsRefuse: 1_000_000, MaxRows: 200, MaxCellChars: 200, MaxOutputBytes: 65_536, KAnonymity: 5}
 	if uat.Limits != want {
 		t.Errorf("non-production defaults = %+v, want %+v", uat.Limits, want)
 	}

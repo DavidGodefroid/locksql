@@ -150,6 +150,9 @@ func Assess(p engine.Plan, l config.Limits, production bool) Verdict {
 			flag(Warn, fmt.Sprintf("temporary table over ~%s rows", num(x.rows)))
 		}
 	}
+	if l.ExplainCostRefuse > 0 && p.Cost > l.ExplainCostRefuse {
+		flag(Refuse, fmt.Sprintf("estimated cost %s > explain_cost_refuse %s", costText(p.Cost), costText(l.ExplainCostRefuse)))
+	}
 	if production {
 		for _, name := range s.unknown {
 			flag(Warn, fmt.Sprintf("full scan of %s (unknown size: the engine has no row count for it)", name))
@@ -174,6 +177,9 @@ func Assess(p engine.Plan, l config.Limits, production bool) Verdict {
 		est += "+"
 	}
 	parts = append(parts, "est. "+est+" rows examined")
+	if p.Cost > 0 {
+		parts = append(parts, "cost "+costText(p.Cost))
+	}
 	v.Summary = strings.Join(parts, " · ")
 	return v
 }
@@ -284,3 +290,6 @@ func num(n int64) string {
 	}
 	return b.String()
 }
+
+// costText prints an engine cost rounded to two decimals.
+func costText(c float64) string { return strconv.FormatFloat(math.Round(c*100)/100, 'f', -1, 64) }

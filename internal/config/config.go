@@ -78,6 +78,13 @@ type Limits struct {
 	MaxRows           int           `toml:"max_rows" json:"max_rows"`
 	MaxCellChars      int           `toml:"max_cell_chars" json:"max_cell_chars"`
 	MaxOutputBytes    int           `toml:"max_output_bytes" json:"max_output_bytes"`
+	// ExplainCostRefuse refuses a plan whose total cost, in the engine's
+	// own units, is above it; 0 disables the check. Engines without a cost
+	// (SQLite) are not checked.
+	ExplainCostRefuse float64 `toml:"explain_cost_refuse" json:"explain_cost_refuse,omitempty"`
+	// KAnonymity is the smallest number of rows a PII filter, a grouping
+	// on a PII column or an aggregate of one may cover.
+	KAnonymity int `toml:"k_anonymity" json:"k_anonymity,omitempty"`
 }
 
 // Profile is one named database target with its policy.
@@ -95,6 +102,10 @@ type Profile struct {
 	Production  bool     `json:"production"`
 	Detectors   []string `json:"detectors"`
 	Limits      Limits   `json:"limits"`
+	// CredentialsTTL makes the console ask for the secret again (and
+	// reconnect) once the connection is that old; 0 keeps it for the
+	// session. It suits short-lived secrets from a vault.
+	CredentialsTTL time.Duration `json:"credentials_ttl,omitempty"`
 }
 
 // Config is the merged set of profiles visible from a working directory.
@@ -197,12 +208,14 @@ func ProjectHash(root string) string {
 }
 
 type rawLimits struct {
-	StatementTimeout  string `toml:"statement_timeout"`
-	ExplainRowsWarn   int64  `toml:"explain_rows_warn"`
-	ExplainRowsRefuse int64  `toml:"explain_rows_refuse"`
-	MaxRows           int    `toml:"max_rows"`
-	MaxCellChars      int    `toml:"max_cell_chars"`
-	MaxOutputBytes    int    `toml:"max_output_bytes"`
+	StatementTimeout  string  `toml:"statement_timeout"`
+	ExplainRowsWarn   int64   `toml:"explain_rows_warn"`
+	ExplainRowsRefuse int64   `toml:"explain_rows_refuse"`
+	MaxRows           int     `toml:"max_rows"`
+	MaxCellChars      int     `toml:"max_cell_chars"`
+	MaxOutputBytes    int     `toml:"max_output_bytes"`
+	ExplainCostRefuse float64 `toml:"explain_cost_refuse"`
+	KAnonymity        int     `toml:"k_anonymity"`
 }
 
 type rawProfile struct {
@@ -217,6 +230,8 @@ type rawProfile struct {
 	Production  bool      `toml:"production"`
 	Detectors   []string  `toml:"detectors"`
 	Limits      rawLimits `toml:"limits"`
+	// CredentialsTTL is a duration ("20m", "1h").
+	CredentialsTTL string `toml:"credentials_ttl"`
 }
 
 type rawFile struct {
@@ -342,6 +357,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		Limits: Limits{
 			ExplainRowsWarn: r.Limits.ExplainRowsWarn, ExplainRowsRefuse: r.Limits.ExplainRowsRefuse,
 			MaxRows: r.Limits.MaxRows, MaxCellChars: r.Limits.MaxCellChars, MaxOutputBytes: r.Limits.MaxOutputBytes,
+			ExplainCostRefuse: r.Limits.ExplainCostRefuse, KAnonymity: r.Limits.KAnonymity,
 		},
 	}
 
@@ -395,6 +411,16 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		}
 		p.Limits.StatementTimeout = d
 	}
+	if r.CredentialsTTL != "" {
+		d, err := time.ParseDuration(r.CredentialsTTL)
+		if err != nil || d < time.Minute {
+			return Profile{}, errf("credentials_ttl: want a duration of at least 1m, such as \"20m\" or \"1h\"")
+		}
+		p.CredentialsTTL = d
+	}
+	if r.Limits.ExplainCostRefuse < 0 {
+		return Profile{}, errf("limits.explain_cost_refuse must not be negative")
+	}
 	for _, f := range []struct {
 		key string
 		val int64
@@ -405,6 +431,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		{"max_rows", int64(p.Limits.MaxRows)},
 		{"max_cell_chars", int64(p.Limits.MaxCellChars)},
 		{"max_output_bytes", int64(p.Limits.MaxOutputBytes)},
+		{"k_anonymity", int64(p.Limits.KAnonymity)},
 	} {
 		if f.val < 0 {
 			return Profile{}, errf("limits.%s must not be negative", f.key)

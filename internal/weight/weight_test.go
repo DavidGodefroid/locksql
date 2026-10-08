@@ -157,7 +157,7 @@ func TestSummary(t *testing.T) {
 
 	p, _ = loadPlan(t, filepath.Join("..", "..", "testdata", "explain", "mariadb", "11.4", "join.json"))
 	v = Assess(p, limits, false)
-	if want := "s full ~3 · a lookup ~1 · est. 3 rows examined"; v.Summary != want {
+	if want := "s full ~3 · a lookup ~1 · est. 3 rows examined · cost 0.02"; v.Summary != want {
 		t.Errorf("summary = %q, want %q", v.Summary, want)
 	}
 }
@@ -280,5 +280,21 @@ func TestLevelText(t *testing.T) {
 	}
 	if OK.String() != "OK" || Warn.String() != "WARN" || Refuse.String() != "REFUSE" {
 		t.Error("String")
+	}
+}
+
+func TestAssessCostThreshold(t *testing.T) {
+	p := engine.Plan{Root: engine.PlanNode{Detail: "QUERY", EstRows: -1}, Cost: 1234.5}
+	l := config.DefaultLimits(false)
+	if v := Assess(p, l, false); v.Level != OK || !strings.Contains(v.Summary, "cost 1234.5") {
+		t.Errorf("no threshold: %+v", v)
+	}
+	l.ExplainCostRefuse = 1000
+	if v := Assess(p, l, false); v.Level != Refuse {
+		t.Errorf("cost above threshold: %+v", v)
+	}
+	p.Cost = -1
+	if v := Assess(p, l, false); v.Level != OK {
+		t.Errorf("unknown cost refused: %+v", v)
 	}
 }

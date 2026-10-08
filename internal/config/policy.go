@@ -22,6 +22,9 @@ type Policy struct {
 	Profile  Profile  `json:"profile"`
 	PIIMask  []string `json:"pii_mask"`  // sorted column patterns
 	PIIAllow []string `json:"pii_allow"` // sorted column patterns
+	// PIIModes maps a mask pattern to its mode when it is not the default
+	// ("partial"): redact, email or hash.
+	PIIModes map[string]string `json:"pii_modes,omitempty"`
 }
 
 // Change is one difference between two policies. For list fields (detectors,
@@ -38,6 +41,15 @@ func NewPolicy(p Profile, mask, allow []string) Policy {
 	return canonical(Policy{Profile: p, PIIMask: mask, PIIAllow: allow})
 }
 
+// WithModes returns p with the mask modes m (pattern -> mode).
+func (p Policy) WithModes(m map[string]string) Policy {
+	p.PIIModes = m
+	return canonical(p)
+}
+
+// DefaultMaskMode is the mode of a mask rule that sets none.
+const DefaultMaskMode = "partial"
+
 // sortedSet returns a sorted, de-duplicated, non-nil copy of s.
 func sortedSet(s []string) []string {
 	out := slices.Clone(s)
@@ -53,7 +65,29 @@ func canonical(p Policy) Policy {
 	p.Profile.Detectors = sortedSet(p.Profile.Detectors)
 	p.PIIMask = sortedSet(p.PIIMask)
 	p.PIIAllow = sortedSet(p.PIIAllow)
+	var modes map[string]string
+	for pat, m := range p.PIIModes {
+		if m == "" || m == DefaultMaskMode {
+			continue
+		}
+		if _, found := slices.BinarySearch(p.PIIMask, pat); !found {
+			continue
+		}
+		if modes == nil {
+			modes = map[string]string{}
+		}
+		modes[pat] = m
+	}
+	p.PIIModes = modes
 	return p
+}
+
+// modeOf is the mode of a mask pattern in p.
+func (p Policy) modeOf(pat string) string {
+	if m, ok := p.PIIModes[pat]; ok {
+		return m
+	}
+	return DefaultMaskMode
 }
 
 // Fingerprint returns the hex sha256 of the policy's canonical JSON.
@@ -115,10 +149,39 @@ func Diff(approved, current Policy) []Change {
 	limit("max_rows", int64(al.MaxRows), int64(cl.MaxRows), num)
 	limit("max_cell_chars", int64(al.MaxCellChars), int64(cl.MaxCellChars), num)
 	limit("max_output_bytes", int64(al.MaxOutputBytes), int64(cl.MaxOutputBytes), num)
+	if al.ExplainCostRefuse != cl.ExplainCostRefuse {
+		f := func(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
+		out = append(out, Change{Field: "limits.explain_cost_refuse", Old: f(al.ExplainCostRefuse), New: f(cl.ExplainCostRefuse),
+			Loosens: cl.ExplainCostRefuse == 0 || al.ExplainCostRefuse != 0 && cl.ExplainCostRefuse > al.ExplainCostRefuse})
+	}
+	if al.KAnonymity != cl.KAnonymity {
+		// A smaller k loosens; 0 (an approved policy from before k existed)
+		// is the loosest.
+		out = append(out, Change{Field: "limits.k_anonymity", Old: num(int64(al.KAnonymity)), New: num(int64(cl.KAnonymity)),
+			Loosens: cl.KAnonymity < al.KAnonymity})
+	}
+	if ap.CredentialsTTL != cp.CredentialsTTL {
+		out = append(out, Change{Field: "credentials_ttl", Old: dur(int64(ap.CredentialsTTL)), New: dur(int64(cp.CredentialsTTL)),
+			Loosens: looserLimit(int64(ap.CredentialsTTL), int64(cp.CredentialsTTL))})
+	}
 
 	out = append(out, setDiff("detectors", ap.Detectors, cp.Detectors, true)...)
 	out = append(out, setDiff("pii.mask", a.PIIMask, c.PIIMask, true)...)
 	out = append(out, setDiff("pii.allow", a.PIIAllow, c.PIIAllow, false)...)
+	for _, pat := range c.PIIMask {
+		if _, found := slices.BinarySearch(a.PIIMask, pat); !found {
+			if m := c.modeOf(pat); m != DefaultMaskMode {
+				// A new rule's mode is shown with it; it only tightens.
+				out = append(out, Change{Field: "pii.mode", New: pat + " = " + m})
+			}
+			continue
+		}
+		if o, n := a.modeOf(pat), c.modeOf(pat); o != n {
+			// Any mode but redact reveals more than redact; between the
+			// others there is no order, so every other change loosens.
+			out = append(out, Change{Field: "pii.mode", Old: pat + " = " + o, New: pat + " = " + n, Loosens: n != "redact"})
+		}
+	}
 	return out
 }
 

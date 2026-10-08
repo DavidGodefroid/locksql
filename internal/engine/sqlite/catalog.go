@@ -147,7 +147,7 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 	}
 	db = orMain(db)
 	rows, err := s.conn.QueryContext(ctx,
-		`SELECT m.name, p.name, p.type FROM `+quoteIdent(db)+`.sqlite_schema AS m, pragma_table_info(m.name, ?) AS p
+		`SELECT m.name, p.name, p.type, m.type = 'view' FROM `+quoteIdent(db)+`.sqlite_schema AS m, pragma_table_info(m.name, ?) AS p
 		 WHERE `+userObjects("m.")+` ORDER BY m.name, p.cid`, db)
 	if err != nil {
 		return nil, wrap(ctx, err)
@@ -155,7 +155,7 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 	var out []engine.ColumnInfo
 	for rows.Next() {
 		c := engine.ColumnInfo{DB: db}
-		if err := rows.Scan(&c.Table, &c.Column, &c.Type); err != nil {
+		if err := rows.Scan(&c.Table, &c.Column, &c.Type, &c.View); err != nil {
 			rows.Close()
 			return nil, wrap(ctx, err)
 		}

@@ -67,7 +67,7 @@ func (s *session) Explain(ctx context.Context, db, q string) (engine.Plan, error
 	if err := enc.Encode(eqp); err != nil {
 		return engine.Plan{}, err
 	}
-	return engine.Plan{Root: parsePlan(eqp, st, aliases(toks, names)), Raw: bytes.TrimSpace(raw.Bytes())}, nil
+	return engine.Plan{Root: parsePlan(eqp, st, aliases(toks, names)), Cost: -1, Raw: bytes.TrimSpace(raw.Bytes())}, nil
 }
 
 // aliases maps lower-cased aliases to table names, from "<table> [AS] <alias>"

@@ -27,10 +27,34 @@ const RulesFile = ".locksql/pii.toml"
 type Rules struct {
 	Mask  []string
 	Allow []string
+	// Modes maps a Mask pattern to its mode when it is not ModePartial.
+	Modes map[string]string
+}
+
+// Mask modes.
+const (
+	// ModeRedact replaces the whole value: "<redacted>".
+	ModeRedact = "redact"
+	// ModePartial keeps the first character and the length: "j***(12)".
+	ModePartial = "partial"
+	// ModeEmail keeps the first character and the domain of an address:
+	// "j***@example.com" (other values are masked as partial).
+	ModeEmail = "email"
+	// ModeHash replaces the value with a token, the same for the same value
+	// within one console session: "tok_...". Joins, grouping, counting and
+	// equality filters on tokens keep working; the value never leaves the
+	// console. The token key changes with every session.
+	ModeHash = "hash"
+)
+
+// ValidMode reports whether m is a mask mode.
+func ValidMode(m string) bool {
+	return m == ModeRedact || m == ModePartial || m == ModeEmail || m == ModeHash
 }
 
 type ruleEntry struct {
 	Column string `toml:"column"`
+	Mode   string `toml:"mode,omitempty"`
 }
 
 type rulesFile struct {
@@ -62,7 +86,7 @@ func LoadRules(projectRoot string) (Rules, error) {
 	}
 	var r Rules
 	for _, e := range f.Mask {
-		if err := r.Add(e.Column); err != nil {
+		if err := r.AddMode(e.Column, e.Mode); err != nil {
 			return Rules{}, fmt.Errorf("pii: %s: %w", RulesFile, err)
 		}
 	}
@@ -80,9 +104,14 @@ func SaveRules(root string, r Rules) error {
 	var b bytes.Buffer
 	b.WriteString("# locksql PII column rules: \"db.table.column\", '*' matches any segment.\n")
 	b.WriteString("# [[mask]] masks whole cells; [[allow]] is an exception that is never masked.\n")
+	b.WriteString("# mode = \"partial\" (default: j***(12)), \"redact\", \"email\" (j***@example.com) or\n")
+	b.WriteString("# \"hash\" (a per-session token that keeps joins, grouping and equality filters).\n")
 	write := func(kind string, patterns []string) {
 		for _, p := range canonical(patterns) {
 			fmt.Fprintf(&b, "\n[[%s]]\ncolumn = %q\n", kind, p)
+			if m := r.Modes[p]; kind == "mask" && m != "" && m != ModePartial {
+				fmt.Fprintf(&b, "mode = %q\n", m)
+			}
 		}
 	}
 	write("mask", r.Mask)
@@ -125,6 +154,72 @@ func (r *Rules) Add(pattern string) error {
 		r.Mask = append(r.Mask, p)
 	}
 	return nil
+}
+
+// AddMode adds a mask pattern with a mode ("" for the default). Adding an
+// existing pattern sets its mode.
+func (r *Rules) AddMode(pattern, mode string) error {
+	if mode == "" {
+		mode = ModePartial
+	}
+	if !ValidMode(mode) {
+		return fmt.Errorf("pii rule %q: unknown mode %q (want partial, redact, email or hash)", pattern, mode)
+	}
+	if err := r.Add(pattern); err != nil {
+		return err
+	}
+	p, _ := parsePattern(pattern)
+	if mode == ModePartial {
+		delete(r.Modes, p)
+		return nil
+	}
+	if r.Modes == nil {
+		r.Modes = map[string]string{}
+	}
+	r.Modes[p] = mode
+	return nil
+}
+
+// Mode returns the mask mode of the column db.table.column and whether a
+// rule masks it. Several matching rules with different modes give
+// ModeRedact.
+func (r Rules) Mode(db, table, column string) (string, bool) {
+	if !r.Matches(db, table, column) {
+		return "", false
+	}
+	seg := [3]string{db, table, column}
+	return r.combine(func(p string) bool { return anyMatch([]string{p}, seg) }), true
+}
+
+// ModeByName is Mode for a column known by its name only (MatchesName).
+func (r Rules) ModeByName(column string) (string, bool) {
+	if !r.MatchesName(column) {
+		return "", false
+	}
+	return r.combine(func(p string) bool { return !isASCII(column) || looseSegMatch(lastSeg(p), column) }), true
+}
+
+func (r Rules) combine(match func(string) bool) string {
+	mode := ""
+	for _, p := range r.Mask {
+		if !match(p) {
+			continue
+		}
+		m := r.Modes[p]
+		if m == "" {
+			m = ModePartial
+		}
+		switch {
+		case mode == "":
+			mode = m
+		case mode != m:
+			return ModeRedact
+		}
+	}
+	if mode == "" {
+		return ModeRedact
+	}
+	return mode
 }
 
 func (r *Rules) addAllow(pattern string) error {

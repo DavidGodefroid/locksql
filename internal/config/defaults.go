@@ -45,6 +45,7 @@ func DefaultLimits(production bool) Limits {
 			MaxRows:           200,
 			MaxCellChars:      200,
 			MaxOutputBytes:    65_536,
+			KAnonymity:        10,
 		}
 	}
 	return Limits{
@@ -54,6 +55,7 @@ func DefaultLimits(production bool) Limits {
 		MaxRows:           200,
 		MaxCellChars:      200,
 		MaxOutputBytes:    65_536,
+		KAnonymity:        5,
 	}
 }
 
@@ -93,5 +95,8 @@ func applyDefaults(p *Profile, detectorsSet bool) {
 	}
 	if l.MaxOutputBytes == 0 {
 		l.MaxOutputBytes = d.MaxOutputBytes
+	}
+	if l.KAnonymity == 0 {
+		l.KAnonymity = d.KAnonymity
 	}
 }
