@@ -80,3 +80,15 @@ func TestPromptSQLiteRelativeAnswer(t *testing.T) {
 		t.Fatalf("Prompt = %+v, %v", a, err)
 	}
 }
+
+func TestPromptSQLiteSkipsKeychain(t *testing.T) {
+	// URL, name, tier, production: no keychain question for a file.
+	s := &script{answers: []string{"sqlite:///tmp/x.db", "", "", ""}}
+	a, err := Prompt(context.Background(), s, "/", nil)
+	if err != nil || a.Keychain || a.Name != "dev" {
+		t.Fatalf("Prompt = %+v, %v", a, err)
+	}
+	if strings.Contains(strings.Join(s.out, "\n"), "keychain") {
+		t.Fatal("asked about the keychain for sqlite")
+	}
+}

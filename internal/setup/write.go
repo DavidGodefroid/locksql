@@ -22,13 +22,14 @@ type Answers struct {
 }
 
 type outProfile struct {
-	Engine      string `toml:"engine"`
-	Host        string `toml:"host,omitempty"`
-	Port        int    `toml:"port,omitempty"`
+	Engine string `toml:"engine"`
+	Host   string `toml:"host,omitempty"`
+	// Port is a pointer: omitempty writes a 0 int (sqlite has no port).
+	Port        *int   `toml:"port,omitempty"`
 	Path        string `toml:"path,omitempty"`
 	User        string `toml:"user,omitempty"`
 	Database    string `toml:"database,omitempty"`
-	Credentials string `toml:"credentials"`
+	Credentials string `toml:"credentials,omitempty"`
 	Tier        string `toml:"tier"`
 	Production  bool   `toml:"production"`
 }
@@ -40,10 +41,16 @@ func Render(a Answers) []byte {
 	if a.Keychain {
 		creds = config.CredentialsKeychain
 	}
+	var port *int
+	if a.Engine == config.EngineSQLite {
+		creds = "" // a file has no password
+	} else {
+		port = &a.Port
+	}
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "[profiles.%s]\n", strconv.Quote(a.Name))
 	_ = toml.NewEncoder(&buf).Encode(outProfile{
-		Engine: a.Engine, Host: a.Host, Port: a.Port, Path: a.Path, User: a.User,
+		Engine: a.Engine, Host: a.Host, Port: port, Path: a.Path, User: a.User,
 		Database: a.Database, Credentials: creds, Tier: a.Tier, Production: a.Production,
 	})
 	return buf.Bytes()

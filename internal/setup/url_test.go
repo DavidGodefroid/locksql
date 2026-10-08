@@ -35,13 +35,17 @@ func TestParseURLRefusesWithoutEcho(t *testing.T) {
 		"oracle://h/db",
 		"postgres://h/db#S3cretPw",
 		"",
+		// The password after the first ':' parses as a port, then the rest as
+		// the path; an encoded ':' smuggles it into the user name.
+		"postgres://u:2024/Pass@host",
+		"postgres://app%3Apw@h/db",
 	} {
 		_, err := ParseURL(in, "/")
 		if err == nil {
 			t.Errorf("ParseURL(%q) accepted", in)
 			continue
 		}
-		if strings.Contains(err.Error(), "S3cretPw") {
+		if msg := err.Error(); strings.Contains(msg, "S3cretPw") || strings.Contains(msg, "Pass") || strings.Contains(msg, "pw") {
 			t.Errorf("ParseURL(%q) error echoes the secret: %v", in, err)
 		}
 	}

@@ -83,3 +83,15 @@ func TestAppendProfileKeepsSymlink(t *testing.T) {
 		t.Fatalf("target: %+v %v", cfg, err)
 	}
 }
+
+func TestRenderSQLiteHasNoPortNorCredentials(t *testing.T) {
+	out := string(Render(Answers{Target: Target{Engine: "sqlite", Path: "/tmp/x.db"}, Name: "dev", Tier: "read", Keychain: true}))
+	for _, bad := range []string{"port", "credentials", "host"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("sqlite profile renders %q:\n%s", bad, out)
+		}
+	}
+	if _, err := config.ParseProfiles([]byte(out), "x", "/"); err != nil {
+		t.Fatalf("does not load: %v\n%s", err, out)
+	}
+}

@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 )
 
 // IO is the terminal the prompts use; *console.Terminal implements it.
@@ -103,6 +101,9 @@ func Prompt(ctx context.Context, io IO, cwd string, taken []string) (Answers, er
 	}
 	if a.Production && (len(a.Name) < 2 || slices.Contains([]string{"y", "yes", "n", "no", "ok"}, strings.ToLower(a.Name))) {
 		return Answers{}, errors.New("a production profile needs a name of 2 characters or more that is not y, yes, n, no or ok")
+	}
+	if a.Engine == "sqlite" {
+		return a, nil // a file has no password
 	}
 	if a.Keychain, err = yesNo(ask, "Remember the password in the OS keychain? [Y/n]: ", true); err != nil {
 		return Answers{}, err
@@ -200,19 +201,4 @@ func askChecked(io IO, ask func(string) (string, error), p, hint string, ok func
 		}
 		io.Println(hint)
 	}
-}
-
-func validHost(s string) bool {
-	if strings.ContainsAny(s, "@/") || strings.IndexFunc(s, unicode.IsSpace) >= 0 {
-		return false
-	}
-	return !strings.Contains(s, ":") || net.ParseIP(s) != nil
-}
-
-func validUser(s string) bool {
-	return !strings.ContainsAny(s, "@:/") && strings.IndexFunc(s, unicode.IsSpace) < 0
-}
-
-func validDatabase(s string) bool {
-	return !strings.ContainsAny(s, "/@;") && strings.IndexFunc(s, unicode.IsSpace) < 0
 }

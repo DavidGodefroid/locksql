@@ -69,6 +69,16 @@ func ParseURL(s, cwd string) (Target, error) {
 		return Target{}, errors.New("the URL path must be a single database name")
 	}
 	t := Target{Engine: engine, Host: u.Hostname(), User: u.User.Username(), Database: db, Port: DefaultPort(engine)}
+	// A password with a '/' or an encoded ':' parses as a port, a path or a
+	// user name: the step-by-step checks catch what it leaves behind.
+	switch {
+	case !validUser(t.User):
+		return Target{}, errors.New("the URL user name holds '@', ':', '/' or spaces: leave any password out, the console asks for it")
+	case !validHost(t.Host):
+		return Target{}, errors.New("the URL host is not a name or an address")
+	case !validDatabase(t.Database):
+		return Target{}, errors.New("the URL database name holds '/', '@', ';' or spaces: leave any password out, the console asks for it")
+	}
 	if p := u.Port(); p != "" {
 		n, err := strconv.Atoi(p)
 		if err != nil || n < 1 || n > 65535 {
