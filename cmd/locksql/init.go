@@ -10,16 +10,25 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
 )
 
-// runInit is `locksql init AGENT...`: it writes the agent integration files
-// into the project of the current directory and prints the steps for any
-// file outside it.
+// runInit is `locksql init [AGENT...]`: it writes the agent integration
+// files into the project of the current directory and prints the steps for
+// any file outside it. Without an agent named, it uses the agents found on
+// this machine.
 func runInit(e env, args []string) int {
-	usage := "locksql init " + strings.Join(agentinit.Agents(), "|") + " [...]"
+	usage := "locksql init [" + strings.Join(agentinit.Agents(), "|") + " ...]"
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	agents, err := parseInterleaved(fs, args)
 	if err != nil {
 		return usageFail(e, "init", usage, err.Error())
+	}
+	if len(agents) == 0 && e.agentEnv != nil {
+		if ae, err := e.agentEnv(); err == nil {
+			agents = agentinit.Detect(ae)
+			if len(agents) > 0 {
+				fmt.Fprintf(e.stdout, "Agents found: %s\n", strings.Join(agents, ", "))
+			}
+		}
 	}
 	if len(agents) == 0 {
 		return usageFail(e, "init", usage, "name at least one agent")

@@ -11,9 +11,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/DavidGodefroid/locksql/internal/agentinit"
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
+	"github.com/DavidGodefroid/locksql/internal/sysconf"
 )
 
 // env is what a command reads and writes; tests replace it.
@@ -21,6 +23,12 @@ type env struct {
 	stdin          io.Reader
 	stdout, stderr io.Writer
 	cwd            string
+	// tty reports whether stdin is a terminal.
+	tty bool
+	// agentEnv is the account the agents are wired for; nil means none.
+	agentEnv func() (agentinit.Env, error)
+	// sys loads the separated-mode setup; nil means same-user mode.
+	sys func() (*sysconf.Config, error)
 }
 
 // usageError is a usage or configuration error (exit 3).
