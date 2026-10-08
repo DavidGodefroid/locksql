@@ -422,22 +422,33 @@ PATH), then installs `/usr/local/bin/locksql`, with `sudo` if needed:
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh
 less install.sh                     # read it first
-sh install.sh                       # LOCKSQL_VERSION=v0.1.0 to pin a version
+sh install.sh                       # LOCKSQL_VERSION=v0.1.1 to pin a version
 ```
 
 `LOCKSQL_INSTALL_DIR=~/.local/bin` installs without `sudo`, but the binary is
 then owned by your account and `locksql doctor` warns: in separated mode, the
 console must run a binary the agent cannot replace (`sudo locksql install`
-copies it to `/usr/local/bin`).
+copies it to `/usr/local/bin`). To upgrade, run the script again.
 
-**Debian, Ubuntu, Fedora, RHEL, Alpine.** Download the package from the
-[releases page](https://github.com/DavidGodefroid/locksql/releases), then:
+**Debian, Ubuntu, Fedora, RHEL, Alpine.** Packages install
+`/usr/bin/locksql`, owned by root. Copy-paste, the latest version and your
+architecture are detected:
 
 ```sh
-sudo apt install ./locksql_<version>_linux_amd64.deb     # Debian, Ubuntu
-sudo dnf install ./locksql_<version>_linux_amd64.rpm     # Fedora, RHEL
-sudo apk add --allow-untrusted ./locksql_<version>_linux_amd64.apk   # Alpine
+V=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/DavidGodefroid/locksql/releases/latest); V=${V##*/v}
+A=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+U=https://github.com/DavidGodefroid/locksql/releases/download/v$V/locksql_${V}_linux_$A
+
+# Debian, Ubuntu
+curl -fsSLO $U.deb && sudo apt install ./locksql_${V}_linux_$A.deb
+# Fedora, RHEL
+sudo dnf install $U.rpm
+# Alpine
+curl -fsSLO $U.apk && sudo apk add --allow-untrusted ./locksql_${V}_linux_$A.apk
 ```
+
+To upgrade, run the same lines again; to remove, `sudo apt remove locksql`
+(or `dnf remove`, `apk del`).
 
 **By hand.** Download `locksql_<version>_<os>_<arch>.tar.gz`, `checksums.txt`
 and `checksums.txt.sigstore.json`, then:
