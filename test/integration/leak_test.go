@@ -4,45 +4,80 @@ package integration
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/DavidGodefroid/locksql/internal/audit"
+	"github.com/DavidGodefroid/locksql/internal/config"
+	"github.com/DavidGodefroid/locksql/internal/console"
 	"github.com/DavidGodefroid/locksql/internal/engine"
+	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
-// assertNoLeak runs each query the way the console does (classify, alias
-// check when needed, run, mask) and fails when an e-mail value of big comes
-// out. A refusal by locksql or an error from the server both count as safe.
+// yesIO approves every prompt.
+type yesIO struct{ t *testing.T }
+
+func (y yesIO) Println(string) {}
+func (y yesIO) Ask(context.Context, string, time.Duration) (string, bool) {
+	return "y", true
+}
+func (y yesIO) AskSecret(context.Context, string) ([]byte, error) { return nil, errors.New("no secret") }
+
+// assertNoLeak runs each query through a console server, the way a client
+// would (plan, approval, run, mask), and fails when an e-mail value of big
+// comes out. A refusal by locksql or an error from the server both count
+// as safe.
 func assertNoLeak(t *testing.T, s engine.Session, d sqlclass.Dialect, rules pii.Rules, queries []string) {
 	t.Helper()
+	log, err := audit.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := string(s.Flavor())
+	p := config.Profile{Name: "it", Engine: eng, Host: "127.0.0.1", Tier: config.TierWrite, Credentials: config.CredentialsAsk,
+		Limits: config.DefaultLimits(false), Detectors: []string{}}
+	srv, err := console.NewServer(console.ServerConfig{
+		Policy: config.NewPolicy(p, rules.Mask, rules.Allow), Root: t.TempDir(), Session: nopClose{s},
+		DBUser: "it", Databases: []string{"app"}, Audit: log, IO: yesIO{t}, Version: "it",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(method string, params any) ipc.Response {
+		raw, _ := json.Marshal(params)
+		return srv.Handle(context.Background(), ipc.Request{JSONRPC: "2.0", ID: 1, Method: method, Params: raw})
+	}
 	for _, q := range queries {
-		st, err := sqlclass.Classify(d, q, 200)
-		if err != nil {
+		resp := call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
+		if resp.Error != nil {
 			continue // refused
 		}
-		if pii.PlanCheck(st, rules, d, s.OriginColumns()) != nil {
-			continue
+		var pr ipc.PlanResult
+		if err := json.Unmarshal(resp.Result, &pr); err != nil {
+			t.Fatal(err)
 		}
-		r, err := s.Run(context.Background(), "app", st, 100)
-		if err != nil {
-			continue
-		}
-		if pii.NeedsAliasCheck(r, s.OriginColumns()) && pii.ResultAliasViolation(st, rules, d, r.Columns) != nil {
-			continue
-		}
-		pii.MaskResult(&r, rules, nil, s.OriginColumns())
-		for _, row := range r.Rows {
-			for _, v := range row {
-				if strings.Contains(fmt.Sprint(v), "@example.com") {
-					t.Errorf("%s: leaked %v (columns %+v)", q, v, r.Columns)
-				}
+		resp = call(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+		if resp.Error != nil {
+			if strings.Contains(resp.Error.Message, "@example.com") {
+				t.Errorf("%s: leaked in an error: %s", q, resp.Error.Message)
 			}
+			continue
+		}
+		if strings.Contains(string(resp.Result), "@example.com") {
+			t.Errorf("%s: leaked %s", q, resp.Result)
 		}
 	}
 }
+
+// nopClose keeps the shared session open when a test server ends.
+type nopClose struct{ engine.Session }
+
+func (nopClose) Close() error { return nil }
 
 // leakQueries are the adversarial review round 2 and 3 cases, written
 // against the seeds (big.email under a rule, small(id, label)). Write cases
@@ -53,6 +88,19 @@ func leakQueries(d sqlclass.Dialect) []string {
 		"SELECT email AS emaİl FROM big WHERE id IN (SELECT id FROM small) ORDER BY id LIMIT 3",
 		"SELECT small.*, big.email FROM small, big WHERE big.id = 1 UNION SELECT id, email, id FROM big WHERE id < 3 LIMIT 5",
 		"SELECT * FROM (SELECT email FROM big WHERE id = 1) a CROSS JOIN ((SELECT id FROM small) UNION SELECT email FROM big WHERE id < 3) b LIMIT 10",
+		// Provenance: aliases, CTEs, derived tables, set operations, scalar
+		// subqueries and stars all resolve to big.email.
+		"WITH c(x) AS (SELECT email FROM big) SELECT x AS id FROM c WHERE id IS NOT NULL LIMIT 3",
+		"SELECT id FROM (SELECT email AS id FROM big) t LIMIT 3",
+		"SELECT t.* FROM (SELECT b.* FROM big b) t LIMIT 3",
+		"SELECT (SELECT max(email) FROM big) AS m FROM small LIMIT 1",
+		"SELECT label FROM small UNION ALL SELECT email FROM big LIMIT 5",
+		// Expressions and oracles over the PII column are refused.
+		"SELECT concat(email, '') AS x FROM big LIMIT 3",
+		"SELECT CASE WHEN email LIKE 'a%' THEN 1 ELSE 0 END AS f FROM big LIMIT 3",
+		"SELECT id FROM big WHERE substr(email, 1, 1) = 'a' LIMIT 3",
+		"SELECT id FROM big ORDER BY email LIMIT 3",
+		"SELECT email AS id FROM big ORDER BY id LIMIT 3",
 	}
 	switch d {
 	case sqlclass.MySQL:

@@ -263,6 +263,10 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 	err := s.catalog(ctx, db, func(ctx context.Context, c *pgx.Conn) error {
 		rows, err := c.Query(ctx, `SELECT n.nspname, c.relname, a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod),
 				c.relkind IN ('v', 'm', 'f')
+				-- Classic inheritance: a parent returns its children's rows and a
+				-- child shares its parent's columns, so rules match by name.
+				OR (c.relkind = 'r' AND (c.relhassubclass
+					OR EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid)))
 			FROM pg_catalog.pg_attribute a
 			JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
 			JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
