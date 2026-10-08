@@ -1,14 +1,116 @@
-# locksql
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+    <img alt="locksql — Your AI writes the query. You hold the key." src="docs/assets/banner-light.svg" width="600">
+  </picture>
+</p>
 
-> *Your AI writes the query. You hold the key.*
+<p align="center">
+  <a href="https://github.com/DavidGodefroid/locksql/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/DavidGodefroid/locksql/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Go 1.26+" src="https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white">
+  <img alt="Linux | macOS" src="https://img.shields.io/badge/platform-linux%20%7C%20macOS-475569">
+  <img alt="CGO_ENABLED=0" src="https://img.shields.io/badge/cgo-off-8B5CF6">
+  <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-14B8A6"></a>
+</p>
 
-locksql lets an AI coding agent (Claude Code, Codex, Cursor, Gemini CLI, ...)
-query MariaDB, MySQL, PostgreSQL and SQLite databases while you stay in
-control. The agent never sees a credential, and every statement it runs has
-been validated, weighed and approved by you in a separate terminal.
+<p align="center">
+  <b>Let Claude Code, Codex, Cursor or Gemini CLI query your databases<br>
+  without ever handing them a password.</b>
+</p>
 
-Status: pre-release. No tagged release has been published yet; build from
-source (see [Build](#build)) until `v0.1.0` is out.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#safety-model">Safety model</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="docs/usage.md">Docs</a>
+</p>
+
+---
+
+locksql puts a **human-held console** between your AI agent and MariaDB, MySQL,
+PostgreSQL or SQLite. The agent proposes SQL; the console, running in a
+terminal you keep in view, holds the credentials, parses and weighs every
+statement, masks personal data and waits for **your** approval. The agent
+never sees a credential and never opens a connection.
+
+> [!NOTE]
+> **Pre-release.** No tagged release yet: build from source (see [Build](#build))
+> until `v0.1.0` is out.
+
+## Why locksql?
+
+Agent tools already ask before running a command, but that approval lives
+inside the agent's own process: the agent holds the credentials, the prompt
+can be configured away, and a long session trains you to press "yes".
+locksql moves the decision **out of the agent**.
+
+| | In-agent approval | locksql |
+|---|:---:|:---:|
+| Agent never sees the DB password | ❌ | ✅ |
+| Agent has no DB connection | ❌ | ✅ |
+| Approval cannot be switched off from the agent side | ❌ | ✅ |
+| Every read parsed down to its source columns | ❌ | ✅ |
+| `EXPLAIN` cost check before running | ❌ | ✅ |
+| PII masked on its source column, not its label | ❌ | ✅ |
+| k-anonymity on PII filters and aggregates | ❌ | ✅ |
+| Policy loosening needs a human confirmation | ❌ | ✅ |
+| Append-only audit log | ❌ | ✅ |
+
+In-agent approval is a convenience; a separate approval process is a boundary.
+
+## Highlights
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**🔑 One key holder**<br>
+Credentials are typed at console start or read from the OS keychain. Never in
+argv, env, files, logs, the socket or error messages.
+
+</td>
+<td width="50%" valign="top">
+
+**👤 Human in the loop**<br>
+Every statement is shown with its plan, cost and PII footprint. On production
+you type the profile name, not `y`.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**🧱 Fail closed**<br>
+A dialect-aware classifier refuses anything it cannot classify with certainty.
+Reads are parsed in full; unknown syntax is refused.
+
+</td>
+<td valign="top">
+
+**🕶️ PII masking**<br>
+Every output column is traced to its source through aliases, CTEs, unions and
+joins, then masked (`partial`, `redact`, `email`, `hash` tokens).
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**⚖️ Weight check**<br>
+`LIMIT` is mandatory, `EXPLAIN` runs first, and plans that would scan too many rows
+are refused before they run.
+
+</td>
+<td valign="top">
+
+**🛡️ OS separation**<br>
+`locksql install` runs the console under its own account; the kernel checks
+every peer on the socket.
+
+</td>
+</tr>
+</table>
 
 ## Quick start
 
@@ -37,17 +139,24 @@ locksql doctor
 
 Two processes in two terminals. Only the console holds the key.
 
-```
- Your terminal                                    Agent side
- ┌───────────────────────────────────┐            ┌──────────────────────────────┐
- │ locksql console --profile dev     │  local     │ locksql mcp   (stdio MCP)    │◄── AI agent
- │  credentials (ask | OS keychain)  │  socket    │ locksql plan|run|status|pii  │◄── AI via shell
- │  policy · classifier · EXPLAIN    │◄──────────►│ no secrets, no DB connection │
- │  approval prompt · masking · audit│  JSON-RPC  └──────────────────────────────┘
- └─────────────────┬─────────────────┘
-                   │ native protocol
-                   ▼
-        MariaDB · MySQL · PostgreSQL · SQLite
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as 🤖 AI agent<br/>(locksql mcp / CLI)
+    participant C as 🔐 locksql console<br/>(your terminal)
+    actor H as 👤 You
+    participant D as 🗄️ Database
+    A->>C: plan "SELECT … LIMIT 20"
+    C->>C: classify · parse · resolve PII columns
+    C->>D: EXPLAIN
+    D-->>C: plan & row estimate
+    C-->>A: plan id + verdict (OK / WARN / REFUSE)
+    A->>C: run PLAN_ID
+    C->>H: approval screen
+    H-->>C: y
+    C->>D: k-anonymity counts, then the statement
+    D-->>C: rows
+    C-->>A: masked, capped rows (untrusted data)
 ```
 
 1. The agent submits SQL with `locksql plan` (or the `locksql_plan` MCP tool).
@@ -74,6 +183,24 @@ Two processes in two terminals. Only the console holds the key.
    filters, groups or aggregates PII, then the statement itself, masks PII,
    caps the output and hands the rows back to the agent, framed as untrusted
    data.
+
+<details>
+<summary>Process layout</summary>
+
+```
+ Your terminal                                    Agent side
+ ┌───────────────────────────────────┐            ┌──────────────────────────────┐
+ │ locksql console --profile dev     │  local     │ locksql mcp   (stdio MCP)    │◄── AI agent
+ │  credentials (ask | OS keychain)  │  socket    │ locksql plan|run|status|pii  │◄── AI via shell
+ │  policy · classifier · EXPLAIN    │◄──────────►│ no secrets, no DB connection │
+ │  approval prompt · masking · audit│  JSON-RPC  └──────────────────────────────┘
+ └─────────────────┬─────────────────┘
+                   │ native protocol
+                   ▼
+        MariaDB · MySQL · PostgreSQL · SQLite
+```
+
+</details>
 
 Full walkthrough: [docs/usage.md](docs/usage.md).
 
@@ -176,6 +303,9 @@ k_anonymity         = 5
 explain_cost_refuse = 0             # engine cost units; 0 = off
 ```
 
+<details>
+<summary>All profile keys</summary>
+
 | Key | Default | Notes |
 |---|---|---|
 | `engine` | required | `mariadb`, `mysql`, `postgres`, `sqlite` |
@@ -196,6 +326,10 @@ explain_cost_refuse = 0             # engine cost units; 0 = off
 | `limits.max_output_bytes` | 65 536 | output is cut with a marker |
 | `limits.k_anonymity` | 5 (production 10) | smallest row count a PII filter, a group or an aggregate of a PII column may cover; lowering it is a loosening |
 | `limits.explain_cost_refuse` | 0 (off) | refuse plans above this total cost, in the engine's own units; SQLite reports no cost and is not checked |
+
+</details>
+
+### PII rules
 
 PII column rules live in `.locksql/pii.toml`:
 
@@ -268,27 +402,14 @@ iteration, and it is deliberately narrow:
 - One console per profile and project, one request at a time. No remote or
   shared consoles, no data export.
 
-## Why a separate console?
-
-Agent tools already ask before running a command, but that approval lives
-inside the agent's own process and UI: the agent holds the credentials, the
-prompt can be configured away, and a long session trains you to press "yes".
-locksql moves the decision out of the agent. The agent process has no
-credential and no database connection, so there is nothing to bypass from
-its side; the console in your terminal holds both, shows you the exact SQL
-with its cost and PII status, and applies limits that only you can loosen.
-In-agent approval is a convenience; a separate approval process is a
-boundary.
-
 ## Documentation
 
-- [docs/usage.md](docs/usage.md): console, client commands, MCP server, agent
-  integration.
-- [docs/security-model.md](docs/security-model.md): threat model and
-  mitigations, and an upstream recommendation (PII encrypted at rest with a
-  blind index).
-- [SECURITY.md](SECURITY.md): reporting a vulnerability.
-- [CONTRIBUTING.md](CONTRIBUTING.md): building and testing.
+| | |
+|---|---|
+| 📘 [docs/usage.md](docs/usage.md) | console, client commands, MCP server, agent integration |
+| 🛡️ [docs/security-model.md](docs/security-model.md) | threat model and mitigations, and an upstream recommendation (PII encrypted at rest with a blind index) |
+| 🚨 [SECURITY.md](SECURITY.md) | reporting a vulnerability |
+| 🧑‍💻 [CONTRIBUTING.md](CONTRIBUTING.md) | building and testing |
 
 ## Build
 
