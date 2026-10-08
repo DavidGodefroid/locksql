@@ -91,7 +91,7 @@ func TestAliasViolationRound2(t *testing.T) {
 }
 
 func TestParsePatternRejectsControls(t *testing.T) {
-	for _, p := range []string{"a.b.c\x1b[2J", "a.b‮.c", "a.b.c ", "a.b\x00.c", "a.b.c\u0085", "a.b.c "} {
+	for _, p := range []string{"a.b.c\x1b[2J", "a.b\u202e.c", "a.b.c ", "a.b\x00.c", "a.b.c\u0085", "a.b.c "} {
 		if _, err := parsePattern(p); err == nil {
 			t.Errorf("parsePattern(%q) accepted", p)
 		}

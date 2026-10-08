@@ -264,10 +264,14 @@ func TestListenShared(t *testing.T) {
 	if err := os.Mkdir(dir, 0o710); err != nil {
 		t.Fatal(err)
 	}
+	gid := os.Getgid()
+	// macOS gives a new directory its parent's group, not the process's.
+	if err := os.Chown(dir, -1, gid); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chmod(dir, 0o710); err != nil {
 		t.Fatal(err)
 	}
-	gid := os.Getgid()
 	path := filepath.Join(dir, "x.sock")
 	ln, err := ListenShared(path, gid)
 	if err != nil {

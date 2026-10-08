@@ -18,10 +18,10 @@ func TestPolicyTextIsEscaped(t *testing.T) {
 		{Field: "host", Old: "db", New: "db\x1b[2K", Loosens: true},
 	})
 	p := config.NewPolicy(uatProfile(), nil, []string{evil})
-	p.Profile.Host = "db‮"
+	p.Profile.Host = "db\u202e"
 	lines = append(lines, describePolicy(p)...)
 	for _, l := range lines {
-		if strings.Contains(l, "\x1b[1F") || strings.Contains(l, "\x1b[2K") || strings.Contains(l, "\x1b[8m") || strings.Contains(l, "‮") {
+		if strings.Contains(l, "\x1b[1F") || strings.Contains(l, "\x1b[2K") || strings.Contains(l, "\x1b[8m") || strings.Contains(l, "\u202e") {
 			t.Errorf("raw escape in %q", l)
 		}
 	}
