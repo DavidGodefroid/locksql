@@ -71,6 +71,19 @@ Never point a test at a real or remote database.
 - One logical change per pull request, with a commit message that explains
   why.
 
+Pull requests target `main`, which is protected:
+
+- the CI checks (`test` on Linux and macOS, `lint`, `integration`) must pass
+  and the branch must be up to date with `main`;
+- a review from a code owner is required, and every review thread must be
+  resolved;
+- pull requests are squash-merged: the title becomes the commit subject and
+  the description its body, so write both for the history. Use a
+  conventional prefix (`feat:`, `fix:`, `docs:`, `chore:`, ...).
+
+Workflows on pull requests from forks run after a maintainer approves them.
+Participation is governed by the [code of conduct](CODE_OF_CONDUCT.md).
+
 ## Releases
 
 Releases are built by GoReleaser (`.goreleaser.yaml`) when a `v*` tag is
