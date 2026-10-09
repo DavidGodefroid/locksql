@@ -69,8 +69,10 @@ type session struct {
 	tier    config.Tier
 	timeout time.Duration
 	defDB   string
-	// plain is set when a TCP connection fell back to no TLS.
+	// plain is set when a TCP connection runs without TLS.
 	plain bool
+	// tlsMode and host are the profile's, for the notices.
+	tlsMode, host string
 }
 
 // DriverOptions are the client options of every connection locksql opens:
@@ -96,19 +98,20 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (eng
 		addr = net.JoinHostPort(p.Host, strconv.Itoa(p.Port))
 	}
 	pw := string(secret)
-	// TLS as PostgreSQL's sslmode=prefer: encrypted whenever the server
-	// offers it (certificate not verified), plain otherwise. A Unix socket
-	// stays plain.
-	useTLS := !strings.HasPrefix(p.Host, "/")
-	conn, err := dial(ctx, addr, p.User, pw, p.Database, 0, useTLS)
-	if err != nil && useTLS && noServerTLS(err) {
-		useTLS = false
-		conn, err = dial(ctx, addr, p.User, pw, p.Database, 0, false)
+	tlsCfg, err := engine.TLSConfig(p)
+	if err != nil {
+		return nil, fmt.Errorf("mysql: %w", err)
+	}
+	socket := strings.HasPrefix(p.Host, "/")
+	conn, err := dial(ctx, addr, p.User, pw, p.Database, 0, tlsCfg)
+	if err != nil && tlsCfg != nil && config.TLSRank(p.TLS) <= config.TLSRank(config.TLSPrefer) && noServerTLS(err) {
+		tlsCfg = nil // prefer: the server offers no TLS, fall back to plain
+		conn, err = dial(ctx, addr, p.User, pw, p.Database, 0, nil)
 	}
 	if err != nil {
 		return nil, connectError(err, pw)
 	}
-	ctl, err := dial(ctx, addr, p.User, pw, "", killTimeout, useTLS)
+	ctl, err := dial(ctx, addr, p.User, pw, "", killTimeout, tlsCfg)
 	if err != nil {
 		conn.Close()
 		return nil, connectError(err, pw)
@@ -116,7 +119,7 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (eng
 	s := &session{
 		conn: conn, connID: conn.GetConnectionID(), ctl: ctl, engine: p.Engine,
 		tier: p.Tier, timeout: p.Limits.StatementTimeout, defDB: p.Database,
-		plain: !useTLS && !strings.HasPrefix(p.Host, "/"),
+		plain: tlsCfg == nil && !socket, tlsMode: p.TLS, host: p.Host,
 	}
 	if err := s.setup(); err != nil {
 		s.Close()
@@ -125,20 +128,30 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (eng
 	return s, nil
 }
 
-// Notices reports a TCP connection that is not encrypted: the server
-// offers no TLS (or an attacker stripped it), so queries and results travel
-// in clear.
+// Notices reports a connection an attacker on the path could read or stand
+// in for: plain TCP, or TLS whose certificate is not verified.
 func (s *session) Notices() []string {
-	if s.plain {
-		return []string{"the connection is NOT encrypted: the server offers no TLS (use an SSH tunnel for a remote server)"}
+	switch {
+	case s.plain:
+		return []string{"the connection is NOT encrypted (tls = \"" + s.modeName() + "\"); set tls = \"verify-full\" or use an ssh tunnel"}
+	case config.TLSRank(s.tlsMode) < config.TLSRank(config.TLSVerifyCA) && !strings.HasPrefix(s.host, "/") && !config.IsLoopback(s.host):
+		return []string{"the server certificate is not verified (tls = \"" + s.modeName() + "\"); set tls = \"verify-full\""}
 	}
 	return nil
 }
 
+func (s *session) modeName() string {
+	if s.tlsMode == "" {
+		return config.TLSPrefer
+	}
+	return s.tlsMode
+}
+
 // dial connects with a deadline covering the TCP connect and the handshake
 // (the driver has none for the handshake). readTimeout > 0 bounds every
-// later read and write too.
-func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duration, useTLS bool) (*client.Conn, error) {
+// later read and write too. A nil tlsCfg dials plain, and a plain TCP
+// connection is guarded against a server asking for the password.
+func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duration, tlsCfg *tls.Config) (*client.Conn, error) {
 	deadline := time.Now().Add(connectTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
@@ -153,7 +166,7 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 			nc.Close()
 			return nil, err
 		}
-		if !useTLS && network != "unix" {
+		if tlsCfg == nil && network != "unix" {
 			guard = &clearTextGuard{Conn: nc}
 			guard.armed.Store(true)
 			return guard, nil
@@ -167,9 +180,9 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 			return nil
 		})
 	}
-	if useTLS {
+	if tlsCfg != nil {
 		opts = append(opts, func(c *client.Conn) error {
-			c.SetTLSConfig(&tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}) // prefer: encrypt, do not verify
+			c.SetTLSConfig(tlsCfg.Clone())
 			return nil
 		})
 	}
