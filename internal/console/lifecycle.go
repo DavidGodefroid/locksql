@@ -209,6 +209,10 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 
+	if o.AllowUnmask {
+		o.IO.Println(paint.Warn("--allow-unmask: clients may ask for unmasked PII output; each such query is approved here, never auto-approved"))
+	}
+
 	// 3. Host (confirmed with the policy) and user.
 	o.IO.Println(paint.OK(fmt.Sprintf("profile %s · %s %s %s", paint.Bold(p.Name), p.Engine, st.where(), paint.Dim("(approved policy)"))))
 	st.user = p.User
@@ -281,7 +285,7 @@ func Run(ctx context.Context, o Options) error {
 	s, err := NewServer(ServerConfig{
 		Policy: approved, RulesPath: rulesPath, StateDir: o.StateDir, ApprovedKey: key,
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Now: o.Now,
-		SkipPermissions: o.SkipPermissions, Version: o.Version, LoadPolicy: loadPolicy,
+		SkipPermissions: o.SkipPermissions, AllowUnmask: o.AllowUnmask, Version: o.Version, LoadPolicy: loadPolicy,
 		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health,
 	})
 	if err != nil {

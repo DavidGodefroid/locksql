@@ -247,6 +247,13 @@ account that cannot read what the agent must never see.</p>
   <p class="prose">All engines are pure Go: the binary is built with <code>CGO_ENABLED=0</code>. locksql supports Linux and macOS only, on amd64 and arm64.</p>
 </section>
 
+<section aria-labelledby="unmask">
+  <h2 id="unmask">Raw values: <code>--allow-unmask</code></h2>
+  <div class="prose">
+    <p>An agent can ask for unmasked PII output only when the human started the console with <code>locksql console --allow-unmask</code>. Without it, every unmask request is refused before anything runs, and the refusal is audited. It is a console flag only: no client or config file can turn it on. With it, each unmasked query still needs the human's approval, shown as <code>PII: UNMASKED</code> in red, and is never auto-approved. The console then prints the clear result, so you see exactly what the agent received; the audit log still holds no row data.</p>
+  </div>
+</section>
+
 <section aria-labelledby="skip">
   <h2 id="skip">Fast local iteration: <code>--skip-permissions</code></h2>
   <div class="prose">

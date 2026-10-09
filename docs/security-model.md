@@ -58,7 +58,7 @@ root.
 | Statement smuggling | The classifier refuses several statements, comments, variables, bind parameters and unbalanced quotes, and classifies by keywords outside literals per dialect. Reads are limited to `SELECT`, `WITH ... SELECT` and `EXPLAIN SELECT` and parsed in full by a fail-closed parser: unknown syntax is refused. Multi-statements are off in every driver; PostgreSQL uses the extended protocol only. Tier `read` is also enforced by a read-only session and transaction on the server. |
 | Dangerous functions and statements | Reads may call only allowlisted functions (`internal/sqlast/funcs.go`); schema-qualified (possibly user-defined) functions and system schemas and relations are refused. At every tier: file and OS access, engine escape hatches (`ATTACH`, `load_extension`, `dblink`), SQLite raw storage tables (`sqlite_dbpage`, `dbstat`), sleeps, benchmarks, advisory locks, `FOR UPDATE`, session tampering (`SET ROLE`, `set_config`, guarded `SET` targets) and statements carrying credentials are refused. |
 | Server overload | READ statements need `LIMIT n <= max_rows`; `EXPLAIN` estimates the rows examined and refuses heavy plans, and `explain_cost_refuse` caps the engine's total cost (not on SQLite); k-anonymity counts are weighed too; a server-side timeout plus a client-side cancel; one request at a time. |
-| PII exposure | Column rules proposed from the schema at every start; per-rule mask modes (`redact` by default); quasi-identifiers proposed apart and masked only on acceptance; value detectors with checksums; unmasking is per query, shown in red and never auto-approved. |
+| PII exposure | Column rules proposed from the schema at every start; per-rule mask modes (`redact` by default); quasi-identifiers proposed apart and masked only on acceptance; value detectors with checksums; unmasking is off unless the console runs with `--allow-unmask`, then per query, shown in red and never auto-approved. |
 | Alias or expression bypass | Every output column of a read is resolved to its base source columns through aliases, functions, subqueries, CTEs (recursive ones by fixpoint), set operations, joins and `*`, and masked on that source, not on its label. Expressions and functions over PII columns are refused; aggregates other than `COUNT`, `MIN` and `MAX` are redacted. The result's column count and labels must match the analysis or the result is dropped; the engine's origin metadata is a second check. |
 | Predicate oracles | A PII column may only be compared for equality with a literal (`=`, `IN (literals)`, `IS NULL`) in `WHERE`/`HAVING`, or joined with `=` (also `IN (subquery)`, `USING`, `NATURAL`) to another PII column: a join with an unmasked column would copy its values where no mask applies. These atoms must be positive and reached through `AND` only: a PII atom under `NOT`, `OR` or `XOR`, and `<>`, `!=`, `NOT IN`, `IS NOT NULL`, `IS DISTINCT FROM` on a PII column, would select the complement of what the k-anonymity check counts and are refused. A scalar subquery returning a PII value cannot be a filter operand. `LIKE`, ranges, functions over it, `ORDER BY`, window `PARTITION BY`/`ORDER BY`, `FILTER`, `DISTINCT ON` and constant comparisons in `JOIN ... ON` are refused, so a query cannot compare it character by character with generated values. |
 | Inference through aggregates and filters | A filter, grouping or aggregate on a PII column runs console-built `COUNT` queries (from the statement's own `FROM`, `WHERE`, `GROUP BY` and `HAVING`, shown on the approval screen) after approval and before the statement; fewer than `k_anonymity` rows (default 5, production 10) refuses it. Row estimates are hidden from the agent and `EXPLAIN` is refused for such statements, since the planner's figures would answer the same question. |
@@ -86,6 +86,15 @@ root.
 - Production profiles need the profile name typed, not `y`.
 - REFUSE verdicts cannot be overridden from the console; the human has to
   raise the limits, which is itself a confirmed loosening.
+
+## `--allow-unmask`
+
+Unmasked output is off unless the human starts the console with
+`--allow-unmask`, a console-only flag: no client or config file can turn it
+on, so an agent cannot ask for raw PII values by itself. Without it, an
+unmask request is refused before parsing and audited; with it, each unmasked
+query is still approved by the human and never auto-approved, and its clear
+result is printed in the console, never in the audit log.
 
 ## `--skip-permissions`
 

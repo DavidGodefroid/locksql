@@ -58,8 +58,10 @@ type LineSource interface {
 type Options struct {
 	Profile         string
 	SkipPermissions bool
-	Cwd             string
-	IO              IO
+	// AllowUnmask lets clients ask for unmasked output (--allow-unmask).
+	AllowUnmask bool
+	Cwd         string
+	IO          IO
 	// Now defaults to time.Now.
 	Now func() time.Time
 	// StateDir defaults to config.StateDir().
@@ -92,7 +94,10 @@ type ServerConfig struct {
 	// SkipPermissions auto-approves on non-production profiles (never
 	// unmask, never REFUSE).
 	SkipPermissions bool
-	Version         string
+	// AllowUnmask lets clients ask for unmasked output; without it an
+	// unmask plan is refused before anything else.
+	AllowUnmask bool
+	Version     string
 	// LoadPolicy re-reads the current policy from the config files. Nil
 	// disables CheckPolicy.
 	LoadPolicy func() (config.Policy, error)

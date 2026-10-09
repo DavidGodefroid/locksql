@@ -14,7 +14,8 @@ Workflow (MCP tools `locksql_*`, or the `locksql` CLI from any directory):
    `locksql console ... --project DIR`; `locksql doctor` checks the setup) and stop. Never start one yourself.
 3. `locksql_list_tables` / `locksql_describe` if needed (no approval).
 4. `locksql_plan` with one narrow statement: indexed predicates, an explicit `LIMIT`, no comments, no
-   variables. Use `unmask` only if the user asked to see personal data in clear.
+   variables. Use `unmask` only if the user asked to see personal data in clear; it is refused unless
+   the human started the console with `--allow-unmask`.
 5. Show the user the target, the SQL, the EXPLAIN summary and the verdict, then say you are waiting
    for their approval in the console.
 6. `locksql_run` with the plan id, or `locksql run --profile P PLAN_ID` with a long command timeout

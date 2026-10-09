@@ -110,6 +110,7 @@ func (s *Server) status() ipc.StatusResult {
 		HostConfirmed:   true, // the host is part of the approved policy
 		Production:      s.profile.Production,
 		SkipPermissions: s.autoApprove(),
+		AllowUnmask:     s.cfg.AllowUnmask,
 		Tier:            s.profile.Tier.String(),
 		Databases:       nonNil(s.cfg.Databases),
 		Limits:          s.profile.Limits,
@@ -307,6 +308,9 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		return *r
 	}
 	auditSQL := capSQL(p.SQL)
+	if p.Unmask && !s.cfg.AllowUnmask {
+		return s.refuse(req.ID, db, auditSQL, "", "", "unmasked output is off in this console: run the query masked, or ask the human to restart the console with --allow-unmask")
+	}
 	inner, explain := splitExplain(s.dialect, p.SQL)
 	st, err := sqlclass.Classify(s.dialect, inner, s.profile.Limits.MaxRows)
 	if err != nil {
@@ -595,8 +599,25 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 			more = " (truncated)"
 		}
 		s.println(paint.OK(fmt.Sprintf("done: %d rows%s in %d ms", len(out.Rows), more, rec.DurationMS)))
+		if pl.unmask {
+			s.showUnmasked(out.Text)
+		}
 	}
 	return okResp(req.ID, out)
+}
+
+// showUnmasked prints an unmasked result in the console, so that the human
+// sees the clear values the client receives. The audit log still never
+// holds row data.
+func (s *Server) showUnmasked(text string) {
+	s.println(red + "PII: UNMASKED result" + reset)
+	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		cells := strings.Split(line, "\t")
+		for i, c := range cells {
+			cells[i] = safeText(c, false)
+		}
+		s.println("  " + strings.Join(cells, " │ "))
+	}
 }
 
 // approve shows the prompt and waits for the human. It returns nil when

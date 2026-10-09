@@ -392,6 +392,18 @@ a mode is a loosening unless the new mode is `redact`.
 
 On PostgreSQL the first segment is the schema (`public.users.email`).
 
+## `--allow-unmask`
+
+An agent can ask for unmasked PII output (`locksql plan --unmask`, or
+`unmask` in the MCP `locksql_plan` tool) only when the human started the
+console with `locksql console --allow-unmask`. Without it, the console
+refuses every unmask request before anything runs and audits the refusal.
+Like `--skip-permissions`, it is a console flag only: no client or config
+file can turn it on. With it, each unmasked query still needs the human's
+approval, shown as `PII: UNMASKED` in red, and is never auto-approved. The
+console then prints the clear result, so you see exactly what the agent
+received (the audit log still holds no row data).
+
 ## `--skip-permissions`
 
 `locksql console --profile dev --skip-permissions` auto-approves statements

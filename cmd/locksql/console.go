@@ -16,15 +16,17 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/console"
 )
 
-// runConsole is `locksql console [--profile P] [--skip-permissions]`. It
+// runConsole is `locksql console [--profile P] [--skip-permissions]
+// [--allow-unmask]`. It
 // runs in the human's terminal only. Without --profile it opens the only
 // profile, or asks which one among several.
 func runConsole(e env, args []string) int {
-	const usage = "usage: locksql console [--profile P] [--project DIR] [--skip-permissions]"
+	const usage = "usage: locksql console [--profile P] [--project DIR] [--skip-permissions] [--allow-unmask]"
 	fs := flag.NewFlagSet("console", flag.ContinueOnError)
 	fs.SetOutput(e.stderr)
 	profile := fs.String("profile", "", "profile to open")
 	skip := fs.Bool("skip-permissions", false, "auto-approve statements allowed by the tier and the weight check (never on production, never unmask)")
+	allowUnmask := fs.Bool("allow-unmask", false, "let clients ask for unmasked PII output; each such query is still approved here, never auto-approved (off by default: unmask requests are refused)")
 	project := fs.String("project", "", "project directory (default: the current directory); the console account opens the agent's project from its own session")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -73,11 +75,11 @@ func runConsole(e env, args []string) int {
 			return exitUsage
 		}
 	}
-	return openConsole(e, name, *skip, *project, term)
+	return openConsole(e, name, *skip, *allowUnmask, *project, term)
 }
 
 // openConsole runs the console on profile until it ends.
-func openConsole(e env, profile string, skip bool, project string, term *console.Terminal) int {
+func openConsole(e env, profile string, skip, allowUnmask bool, project string, term *console.Terminal) int {
 	cwd := project
 	if cwd != "" {
 		abs, err := filepath.Abs(cwd)
@@ -90,6 +92,7 @@ func openConsole(e env, profile string, skip bool, project string, term *console
 	err := console.Run(context.Background(), console.Options{
 		Profile:         profile,
 		SkipPermissions: skip,
+		AllowUnmask:     allowUnmask,
 		Cwd:             cwd,
 		IO:              term,
 		TTY:             os.Stdin,

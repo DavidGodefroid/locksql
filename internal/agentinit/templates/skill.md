@@ -30,7 +30,8 @@ directory. Both talk to the same console.
    - Narrow columns, indexed predicates (ids, references, a short date range), an explicit
      `LIMIT n` within the profile's max_rows (`LIMIT 1` for counts). One statement, no comments, no
      variables.
-   - `unmask` only if the user asked to see personal data in clear.
+   - `unmask` only if the user asked to see personal data in clear; the console refuses it unless the
+     human started it with `--allow-unmask` (`locksql status` shows it). Never retry to get around that.
 5. **Show the user** in chat, before running: target (profile, host, database), the SQL, the EXPLAIN
    summary and the verdict. Then say: *"Waiting for your approval in the console."*
 6. **Run.** `locksql_run` with the plan id, or `locksql run --profile P PLAN_ID` with the Bash tool
