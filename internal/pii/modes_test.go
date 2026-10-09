@@ -1,6 +1,7 @@
 package pii
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +12,6 @@ import (
 )
 
 func TestMaskValueModes(t *testing.T) {
-	tok := NewTokens()
 	cases := []struct {
 		mode string
 		in   any
@@ -24,29 +24,18 @@ func TestMaskValueModes(t *testing.T) {
 		{ModeEmail, "not an address", "n***(14)"},
 	}
 	for _, c := range cases {
-		if got := MaskValue(c.in, c.mode, tok); got != c.want {
+		if got := MaskValue(c.in, c.mode); got != c.want {
 			t.Errorf("%s(%v) = %v, want %v", c.mode, c.in, got, c.want)
 		}
 	}
-	a, b := MaskValue("alice@example.com", ModeHash, tok), MaskValue("alice@example.com", ModeHash, tok)
-	if a != b || !strings.HasPrefix(a.(string), "tok_") || strings.Contains(a.(string), "alice") {
-		t.Errorf("hash tokens %v %v", a, b)
-	}
-	if MaskValue("bob@example.com", ModeHash, tok) == a {
-		t.Error("two values share a token")
-	}
-	if NewTokens().Token("alice@example.com") == a {
-		t.Error("tokens are stable across sessions")
-	}
-	v, isTok, ok := tok.Lookup(a.(string))
-	if !isTok || !ok || v != "alice@example.com" {
-		t.Errorf("Lookup = %q %v %v", v, isTok, ok)
-	}
-	if _, isTok, ok := tok.Lookup("tok_aaaaaaaaaaaaaaaaaaaa"); !isTok || ok {
-		t.Error("unknown token resolved")
-	}
-	if _, isTok, _ := tok.Lookup("hello"); isTok {
-		t.Error("plain text taken for a token")
+}
+
+func TestHashModeIsUnknown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pii.toml")
+	os.WriteFile(path, []byte("[[mask]]\ncolumn = \"app.users.email\"\nmode = \"hash\"\n"), 0o644)
+	_, err := LoadRulesFile(path)
+	if err == nil || !strings.Contains(err.Error(), `unknown mode "hash" (want redact, partial or email)`) {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -57,10 +46,11 @@ func TestRulesModes(t *testing.T) {
 	}
 	file := `[[mask]]
 column = "app.users.email"
-mode = "hash"
+mode = "email"
 
 [[mask]]
 column = "*.*.email"
+mode = "partial"
 
 [[mask]]
 column = "app.users.salary"
@@ -90,7 +80,7 @@ mode = "redact"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if back.Modes["app.users.email"] != ModeHash || back.Modes["app.users.salary"] != ModeRedact || len(back.Modes) != 2 {
+	if back.Modes["app.users.email"] != ModeEmail || back.Modes["*.*.email"] != ModePartial || len(back.Modes) != 2 {
 		t.Errorf("modes after save: %v", back.Modes)
 	}
 	if err := os.WriteFile(filepath.Join(dir, RulesFile), []byte("[[mask]]\ncolumn = \"a.b.c\"\nmode = \"rot13\"\n"), 0o644); err != nil {
@@ -109,11 +99,11 @@ func TestMaskOutputs(t *testing.T) {
 	outs := []sqlast.Output{{Label: "X", Mask: ModeRedact}, {Label: "NOTE"}, {}}
 	r := Rules{Mask: []string{"app.users.email"}}
 	ds, _ := Detectors([]string{"email"})
-	if err := MaskOutputs(&res, outs, r, ds, NewTokens(), true); err != nil {
+	if err := MaskOutputs(&res, outs, r, ds, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	row := res.Rows[0]
-	if row[0] != Redacted || strings.Contains(row[1].(string), "bob@") || row[2] != "c***(17)" {
+	if row[0] != Redacted || strings.Contains(row[1].(string), "bob@") || row[2] != Redacted {
 		t.Errorf("masked row %v", row)
 	}
 	// A label the analysis did not expect: refused.
@@ -123,5 +113,102 @@ func TestMaskOutputs(t *testing.T) {
 	}
 	if err := MaskOutputs(&res, nil, r, ds, nil, true); err == nil {
 		t.Error("column count mismatch accepted")
+	}
+}
+
+func TestMaskOutputsReferences(t *testing.T) {
+	res := engine.Result{
+		Columns: []engine.ResultColumn{{Label: "id"}, {Label: "email"}, {Label: "name"}},
+		Rows:    [][]any{{int64(1), "alice@example.com", "Alice"}, {int64(2), "alice@example.com", nil}},
+	}
+	emailProv := sqlast.Prov{Kind: sqlast.KindIdentity, Sources: []sqlast.Source{{DB: "app", Table: "users", Column: "email"}}}
+	outs := []sqlast.Output{{Label: "ID"}, {Label: "EMAIL", Mask: ModeRedact, Prov: emailProv}, {Label: "NAME", Mask: ModePartial}}
+	var got []string
+	cell := func(row, col int, v any) string {
+		got = append(got, fmt.Sprintf("%d.%d=%v", row, col, v))
+		return fmt.Sprintf("r7.%d.%d", row+1, col+1)
+	}
+	if err := MaskOutputs(&res, outs, Rules{Mask: []string{"app.users.email"}}, nil, cell, true); err != nil {
+		t.Fatal(err)
+	}
+	if res.Rows[0][1] != "<redacted:r7.1.2>" || res.Rows[1][1] != "<redacted:r7.2.2>" {
+		t.Errorf("rows %v", res.Rows)
+	}
+	if res.Rows[0][2] != "A***(5)" || res.Rows[1][2] != nil {
+		t.Errorf("partial cell got a reference or NULL was masked: %v", res.Rows)
+	}
+	if strings.Join(got, ",") != "0.1=alice@example.com,1.1=alice@example.com" {
+		t.Errorf("cell calls %v", got)
+	}
+}
+
+// A column that may hold a literal of the statement, or that is masked only
+// by the engine-reported origin, gets no reference: the agent could choose
+// the value behind it.
+func TestMaskOutputsNoReferenceForLiteralOrOrigin(t *testing.T) {
+	res := engine.Result{
+		Columns: []engine.ResultColumn{
+			{Label: "email"},
+			{Label: "x", OriginDB: "app", OriginTable: "users", OriginColumn: "email"},
+			{Label: "e"},
+		},
+		Rows: [][]any{{"alice@example.com", "bob@example.com", "carol@example.com"}, {"john@x.com", "john@x.com", "dave@example.com"}},
+	}
+	outs := []sqlast.Output{
+		{Label: "EMAIL", Mask: ModeRedact, Prov: sqlast.Prov{Kind: sqlast.KindIdentity, Lit: true, Sources: []sqlast.Source{{DB: "app", Table: "users", Column: "email"}}}},
+		{Label: "X"},
+		{Label: "E", Mask: ModeRedact, Prov: sqlast.Prov{Kind: sqlast.KindIdentity, Sources: []sqlast.Source{{DB: "app", Table: "users", Column: "email"}}}},
+	}
+	r := Rules{Mask: []string{"app.users.email"}}
+	cell := func(row, col int, v any) string { return fmt.Sprintf("r1.%d.%d", row+1, col+1) }
+	if err := MaskOutputs(&res, outs, r, nil, cell, true); err != nil {
+		t.Fatal(err)
+	}
+	for ri, row := range res.Rows {
+		if row[0] != Redacted || row[1] != Redacted {
+			t.Errorf("row %d: literal or origin-masked column got a reference: %v", ri, row)
+		}
+		if row[2] != RedactedRef(fmt.Sprintf("r1.%d.3", ri+1)) {
+			t.Errorf("row %d: plain column lost its reference: %v", ri, row)
+		}
+	}
+}
+
+// A reference goes only to a plain column every source of which is under a
+// mask rule: a UNION arm of an unmasked column, or an aggregate, could put a
+// value the agent knows behind it.
+func TestMaskOutputsReferenceNeedsMaskedIdentity(t *testing.T) {
+	email := sqlast.Source{DB: "app", Table: "users", Column: "email"}
+	note := sqlast.Source{DB: "app", Table: "users", Column: "note"}
+	id := sqlast.Source{DB: "app", Table: "users", Column: "id"}
+	vEmail := sqlast.Source{DB: "app", Table: "v", Column: "email", View: true}
+	vOther := sqlast.Source{DB: "app", Table: "v", Column: "x", View: true}
+	r := Rules{Mask: []string{"app.users.email", "*.*.email"}}
+	for _, c := range []struct {
+		name string
+		prov sqlast.Prov
+		ref  bool
+	}{
+		{"plain column", sqlast.Prov{Kind: sqlast.KindIdentity, Sources: []sqlast.Source{email}}, true},
+		{"view column under a name rule", sqlast.Prov{Kind: sqlast.KindIdentity, Sources: []sqlast.Source{vEmail}}, true},
+		{"union with note", sqlast.Prov{Kind: sqlast.KindIdentity, Sources: []sqlast.Source{email, note}}, false},
+		{"union with cast(id)", sqlast.Prov{Kind: sqlast.KindExpr, Sources: []sqlast.Source{email, id}}, false},
+		{"string_agg", sqlast.Prov{Kind: sqlast.KindAggregate, Sources: []sqlast.Source{email}}, false},
+		{"view column without a rule", sqlast.Prov{Kind: sqlast.KindIdentity, Sources: []sqlast.Source{email, vOther}}, false},
+		{"no source", sqlast.Prov{Kind: sqlast.KindIdentity}, false},
+	} {
+		res := engine.Result{Columns: []engine.ResultColumn{{Label: "e"}}, Rows: [][]any{{"alice@example.com"}}}
+		outs := []sqlast.Output{{Label: "E", Mask: ModeRedact, Prov: c.prov}}
+		cell := func(row, col int, v any) string { return "r1.1.1" }
+		if err := MaskOutputs(&res, outs, r, nil, cell, true); err != nil {
+			t.Fatal(err)
+		}
+		want := any(Redacted)
+		if c.ref {
+			want = RedactedRef("r1.1.1")
+		}
+		if res.Rows[0][0] != want {
+			t.Errorf("%s: cell %v, want %v", c.name, res.Rows[0][0], want)
+		}
 	}
 }

@@ -77,6 +77,8 @@ func FormatStatus(w io.Writer, s ipc.StatusResult) {
 	kv("tier", s.Tier)
 	kv("production", yesNo(s.Production))
 	kv("auto-approve", yesNo(s.SkipPermissions))
+	kv("unmask", allowedOff(s.AllowUnmask))
+	kv("show results", onOff(s.ShowResults))
 	kv("databases", strings.Join(s.Databases, ", "))
 	kv("limits", FormatLimits(s.Limits))
 	kv("session", fmt.Sprintf("idle timeout %s · ends in %s",
@@ -328,4 +330,18 @@ func clean(s string) string {
 		}
 	}
 	return b.String()
+}
+
+func allowedOff(b bool) string {
+	if b {
+		return "allowed (each query approved in the console)"
+	}
+	return "off (console started without --allow-unmask)"
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on (the console prints results in clear; you get them masked)"
+	}
+	return "off"
 }

@@ -117,11 +117,11 @@ func TestTimeoutSQL(t *testing.T) {
 }
 
 func TestConnectErrorHidesSecret(t *testing.T) {
-	err := connectError(errors.New("dial: bad thing s3cr3t-pw near s3cr3t-pw"), "s3cr3t-pw")
+	err := connectError(errors.New("dial: bad thing s3cr3t-pw near s3cr3t-pw"), "s3cr3t-pw", config.TLSVerifyFull)
 	if strings.Contains(err.Error(), "s3cr3t-pw") || !strings.Contains(err.Error(), "***") {
 		t.Errorf("err = %v", err)
 	}
-	err = connectError(&gomysql.MyError{Code: 1045, State: "28000", Message: "Access denied for user 'ro'@'x'"}, "pw")
+	err = connectError(&gomysql.MyError{Code: 1045, State: "28000", Message: "Access denied for user 'ro'@'x'"}, "pw", config.TLSVerifyFull)
 	if !strings.Contains(err.Error(), "1045") {
 		t.Errorf("err = %v", err)
 	}
@@ -139,7 +139,7 @@ func TestLexSingle(t *testing.T) {
 }
 
 func TestConnectRefusesOtherEngines(t *testing.T) {
-	_, err := Engine{}.Connect(t.Context(), config.Profile{Engine: config.EngineSQLite}, nil)
+	_, err := Engine{}.Connect(t.Context(), config.Profile{Engine: config.EngineSQLite}, nil, nil)
 	if err == nil {
 		t.Error("sqlite profile accepted")
 	}

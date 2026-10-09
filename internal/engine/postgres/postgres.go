@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,20 +84,18 @@ type session struct {
 	major   int
 	tier    config.Tier
 	timeout time.Duration
-	plain   bool // TCP without TLS (sslmode=prefer fell back)
+	// transport is the profile's; Plain is TCP without TLS (tls = prefer
+	// fell back).
+	transport engine.Transport
 }
 
-// Notices reports a TCP connection that is not encrypted.
-func (s *session) Notices() []string {
-	if s.plain {
-		return []string{"the connection is NOT encrypted: the server offers no TLS (use an SSH tunnel for a remote server)"}
-	}
-	return nil
-}
+// Notices reports a connection an attacker on the path could read or stand
+// in for: plain TCP, or TLS whose certificate is not verified.
+func (s *session) Notices() []string { return s.transport.Notices() }
 
 // Connect opens the connection to the profile's database and applies the
 // session settings of the profile's tier.
-func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (engine.Session, error) {
+func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte, dial engine.DialFunc) (engine.Session, error) {
 	if p.Engine != config.EnginePostgres {
 		return nil, fmt.Errorf("postgres: profile engine is %q", p.Engine)
 	}
@@ -104,7 +103,11 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (eng
 	if err != nil {
 		return nil, err
 	}
-	s := &session{cfg: cfg, conns: map[string]*dbConn{}, tier: p.Tier, timeout: p.Limits.StatementTimeout}
+	if dial != nil {
+		useDialer(cfg, dial)
+	}
+	s := &session{cfg: cfg, conns: map[string]*dbConn{}, tier: p.Tier, timeout: p.Limits.StatementTimeout,
+		transport: engine.Transport{Mode: p.TLS, CA: p.TLSCA, Host: p.Host, Tunneled: dial != nil}}
 	dc, err := s.open(ctx, p.Database)
 	if err != nil {
 		return nil, err
@@ -112,7 +115,7 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (eng
 	s.defDB = dc.name
 	s.conns[dc.name] = dc
 	if _, tlsOn := dc.conn.PgConn().Conn().(*tls.Conn); !tlsOn && !strings.HasPrefix(p.Host, "/") {
-		s.plain = true
+		s.transport.Plain = true
 	}
 	s.version = dc.conn.PgConn().ParameterStatus("server_version")
 	s.major, _ = strconv.Atoi(strings.SplitN(s.version, ".", 2)[0])
@@ -137,18 +140,23 @@ func connConfig(p config.Profile, secret []byte) (*pgx.ConnConfig, error) {
 		kv("user", p.User),
 		kv("dbname", db),
 		kv("passfile", ""),
-		// prefer, as libpq's default: TLS when the server offers it. An
-		// active attacker can strip it, read the queries and results, and
-		// ask for the password in clear (AuthenticationCleartextPassword,
-		// which pgx honours); a profile setting to require verified TLS is
-		// a follow-up, the spec has none.
-		"sslmode=prefer",
+		"sslmode=disable", // TLS is set below from the profile's tls mode
 	}
 	cfg, err := pgx.ParseConfig(strings.Join(settings, " "))
 	if err != nil {
 		return nil, fmt.Errorf("postgres: invalid connection settings: %s", redact(err.Error(), string(secret)))
 	}
 	cfg.Password = string(secret)
+	tlsCfg, err := engine.TLSConfig(p)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: %w", err)
+	}
+	cfg.TLSConfig = tlsCfg
+	cfg.Fallbacks = nil
+	if tlsCfg != nil && config.TLSRank(p.TLS) <= config.TLSRank(config.TLSPrefer) {
+		// prefer: retry in plain when the server refuses TLS.
+		cfg.Fallbacks = []*pgconn.FallbackConfig{{Host: cfg.Host, Port: cfg.Port}}
+	}
 	cfg.ConnectTimeout = connectTimeout
 	cfg.RuntimeParams = map[string]string{"application_name": "locksql", "client_encoding": "UTF8"}
 	cfg.ValidateConnect = nil
@@ -189,7 +197,7 @@ func (s *session) open(ctx context.Context, db string) (*dbConn, error) {
 	defer cancel()
 	conn, err := pgx.ConnectConfig(cctx, cfg)
 	if err != nil {
-		return nil, connectError(err, s.cfg.Password)
+		return nil, connectError(err, s.cfg.Password, s.transport.Mode)
 	}
 	var stmts []string
 	if s.tier == config.TierRead {
@@ -211,14 +219,14 @@ func (s *session) open(ctx context.Context, db string) (*dbConn, error) {
 }
 
 // connectError keeps the server's reason and drops anything that could
-// echo the secret.
-func connectError(err error, pw string) error {
+// echo the secret. A certificate that did not verify gets the way out.
+func connectError(err error, pw, mode string) error {
 	msg := err.Error()
 	var pe *pgconn.PgError
 	if errors.As(err, &pe) {
 		msg = fmt.Sprintf("%s %s: %s", pe.Severity, pe.Code, pe.Message)
 	}
-	return fmt.Errorf("postgres: connect: %s", redact(msg, pw))
+	return fmt.Errorf("postgres: connect: %s%s", redact(msg, pw), engine.TLSVerifyHint(err, mode))
 }
 
 // pgMessage is the server's error without its DETAIL (which can quote row
@@ -599,3 +607,36 @@ func value(v []byte, oid uint32) any {
 	}
 	return string(v)
 }
+
+// useDialer routes every connection of cfg through dial. The dialer must
+// honour ctx: pgconn's own connect-timeout dial wrapper no longer applies. The
+// host name is the dialer's to resolve (it may only exist on the far side of a
+// tunnel), so the lookup hands it through untouched.
+func useDialer(cfg *pgx.ConnConfig, dial engine.DialFunc) {
+	cfg.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		nc, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		if network == "unix" {
+			return nc, nil
+		}
+		return &addrConn{Conn: nc, remote: dialledAddr{network, addr}}, nil
+	}
+	cfg.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }
+}
+
+// addrConn reports the address that was dialled as its remote address. pgconn
+// sends a cancel request to the RemoteAddr of the connection, and a tunnelled
+// connection reports a zero one.
+type addrConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c *addrConn) RemoteAddr() net.Addr { return c.remote }
+
+type dialledAddr struct{ network, addr string }
+
+func (a dialledAddr) Network() string { return a.network }
+func (a dialledAddr) String() string  { return a.addr }

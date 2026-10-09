@@ -21,7 +21,7 @@ var fakeNext *fakeSession
 
 type fakeEngine struct{}
 
-func (fakeEngine) Connect(context.Context, config.Profile, []byte) (engine.Session, error) {
+func (fakeEngine) Connect(context.Context, config.Profile, []byte, engine.DialFunc) (engine.Session, error) {
 	return fakeNext, nil
 }
 
@@ -42,7 +42,19 @@ func reconnectHarness(t *testing.T, p config.Profile, extra []string) (*harness,
 			return st.reconnect(ctx, cur)
 		}
 	})
+	h.io.secrets = []string{"not-used", "not-used", "not-used"} // the password asked again on reconnect
 	return h, next
+}
+
+// asks counts the prompts other than the password asked on reconnect.
+func asks(prompts []string) int {
+	n := 0
+	for _, p := range prompts {
+		if !strings.HasPrefix(p, "Password for ") {
+			n++
+		}
+	}
+	return n
 }
 
 func loseConnection(t *testing.T, h *harness) {
@@ -109,8 +121,8 @@ func TestReconnectCleanAccountNeedsNoPrompt(t *testing.T) {
 	loseConnection(t, h)
 	n := h.io.promptCount()
 	h.ok(t, ipc.MethodCatalogList, ipc.TablesParams{DB: "app"}, nil)
-	if h.io.promptCount() != n || next.catalog != 1 {
-		t.Fatalf("prompts %d -> %d, catalog %d", n, h.io.promptCount(), next.catalog)
+	if asks(h.io.prompts[n:]) != 0 || next.catalog != 1 {
+		t.Fatalf("prompts %q, catalog %d", h.io.prompts[n:], next.catalog)
 	}
 }
 
@@ -133,7 +145,7 @@ func TestReconnectUsesCurrentPolicy(t *testing.T) {
 	if reason, ended := h.s.Ended(); !ended || !strings.Contains(reason, "privilege audit") {
 		t.Fatalf("session not ended by the privilege audit: %q %v", reason, ended)
 	}
-	if h.io.promptCount() != n {
+	if asks(h.io.prompts[n:]) != 0 {
 		t.Errorf("production reconnect prompted: %q", h.io.prompts[n:])
 	}
 	if next.catalog != 0 {

@@ -57,20 +57,19 @@ const (
 )
 
 type session struct {
-	mu      sync.Mutex // serialises use of conn
-	conn    *client.Conn
-	connID  uint32
-	ctlMu   sync.Mutex
-	ctl     *client.Conn
-	dead    atomic.Bool
-	flavor  engine.Flavor
-	engine  string // the profile's engine name
-	version string
-	tier    config.Tier
-	timeout time.Duration
-	defDB   string
-	// plain is set when a TCP connection fell back to no TLS.
-	plain bool
+	mu        sync.Mutex // serialises use of conn
+	conn      *client.Conn
+	connID    uint32
+	ctlMu     sync.Mutex
+	ctl       *client.Conn
+	dead      atomic.Bool
+	flavor    engine.Flavor
+	engine    string // the profile's engine name
+	version   string
+	tier      config.Tier
+	timeout   time.Duration
+	defDB     string
+	transport engine.Transport
 }
 
 // DriverOptions are the client options of every connection locksql opens:
@@ -87,7 +86,7 @@ func DriverOptions() []client.Option {
 
 // Connect opens the main and the control connections, detects the server
 // flavour and applies the session settings of the profile's tier.
-func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (engine.Session, error) {
+func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte, dialFn engine.DialFunc) (engine.Session, error) {
 	if p.Engine != config.EngineMariaDB && p.Engine != config.EngineMySQL {
 		return nil, fmt.Errorf("mysql: profile engine is %q", p.Engine)
 	}
@@ -96,27 +95,28 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (eng
 		addr = net.JoinHostPort(p.Host, strconv.Itoa(p.Port))
 	}
 	pw := string(secret)
-	// TLS as PostgreSQL's sslmode=prefer: encrypted whenever the server
-	// offers it (certificate not verified), plain otherwise. A Unix socket
-	// stays plain.
-	useTLS := !strings.HasPrefix(p.Host, "/")
-	conn, err := dial(ctx, addr, p.User, pw, p.Database, 0, useTLS)
-	if err != nil && useTLS && noServerTLS(err) {
-		useTLS = false
-		conn, err = dial(ctx, addr, p.User, pw, p.Database, 0, false)
+	tlsCfg, err := engine.TLSConfig(p)
+	if err != nil {
+		return nil, fmt.Errorf("mysql: %w", err)
+	}
+	socket := strings.HasPrefix(p.Host, "/")
+	conn, err := dial(ctx, addr, p.User, pw, p.Database, 0, tlsCfg, dialFn)
+	if err != nil && tlsCfg != nil && config.TLSRank(p.TLS) <= config.TLSRank(config.TLSPrefer) && noServerTLS(err) {
+		tlsCfg = nil // prefer: the server offers no TLS, fall back to plain
+		conn, err = dial(ctx, addr, p.User, pw, p.Database, 0, nil, dialFn)
 	}
 	if err != nil {
-		return nil, connectError(err, pw)
+		return nil, connectError(err, pw, p.TLS)
 	}
-	ctl, err := dial(ctx, addr, p.User, pw, "", killTimeout, useTLS)
+	ctl, err := dial(ctx, addr, p.User, pw, "", killTimeout, tlsCfg, dialFn)
 	if err != nil {
 		conn.Close()
-		return nil, connectError(err, pw)
+		return nil, connectError(err, pw, p.TLS)
 	}
 	s := &session{
 		conn: conn, connID: conn.GetConnectionID(), ctl: ctl, engine: p.Engine,
 		tier: p.Tier, timeout: p.Limits.StatementTimeout, defDB: p.Database,
-		plain: !useTLS && !strings.HasPrefix(p.Host, "/"),
+		transport: engine.Transport{Mode: p.TLS, CA: p.TLSCA, Host: p.Host, Plain: tlsCfg == nil && !socket, Tunneled: dialFn != nil},
 	}
 	if err := s.setup(); err != nil {
 		s.Close()
@@ -125,27 +125,29 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (eng
 	return s, nil
 }
 
-// Notices reports a TCP connection that is not encrypted: the server
-// offers no TLS (or an attacker stripped it), so queries and results travel
-// in clear.
-func (s *session) Notices() []string {
-	if s.plain {
-		return []string{"the connection is NOT encrypted: the server offers no TLS (use an SSH tunnel for a remote server)"}
-	}
-	return nil
-}
+// Notices reports a connection an attacker on the path could read or stand
+// in for: plain TCP, or TLS whose certificate is not verified.
+func (s *session) Notices() []string { return s.transport.Notices() }
 
 // dial connects with a deadline covering the TCP connect and the handshake
 // (the driver has none for the handshake). readTimeout > 0 bounds every
-// later read and write too.
-func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duration, useTLS bool) (*client.Conn, error) {
+// later read and write too. dialFn, when not nil, opens the network
+// connection instead of a direct dial. A nil tlsCfg dials plain, and a plain TCP
+// connection is guarded against a server asking for the password.
+func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duration, tlsCfg *tls.Config, dialFn engine.DialFunc) (*client.Conn, error) {
 	deadline := time.Now().Add(connectTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
 	var guard *clearTextGuard
 	dialer := func(ctx context.Context, network, address string) (net.Conn, error) {
-		nc, err := (&net.Dialer{Deadline: deadline}).DialContext(ctx, network, address)
+		var nc net.Conn
+		var err error
+		if dialFn != nil {
+			nc, err = dialFn(ctx, network, address)
+		} else {
+			nc, err = (&net.Dialer{Deadline: deadline}).DialContext(ctx, network, address)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -153,7 +155,7 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 			nc.Close()
 			return nil, err
 		}
-		if !useTLS && network != "unix" {
+		if tlsCfg == nil && network != "unix" {
 			guard = &clearTextGuard{Conn: nc}
 			guard.armed.Store(true)
 			return guard, nil
@@ -167,9 +169,9 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 			return nil
 		})
 	}
-	if useTLS {
+	if tlsCfg != nil {
 		opts = append(opts, func(c *client.Conn) error {
-			c.SetTLSConfig(&tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}) // prefer: encrypt, do not verify
+			c.SetTLSConfig(tlsCfg.Clone())
 			return nil
 		})
 	}
@@ -180,7 +182,7 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 			if c != nil {
 				c.Close()
 			}
-			return nil, guard.why
+			return nil, guardError(guard.why, dialFn != nil)
 		}
 	}
 	if err != nil {
@@ -194,12 +196,25 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 }
 
 // errClearText refuses a server that asks for the password in clear text
-// on an unencrypted TCP connection.
-var errClearText = errors.New("the server asks for the password in clear text (mysql_clear_password) on an unencrypted connection; refused: use a server with TLS, an SSH tunnel or a Unix socket")
+// on an unencrypted TCP connection. guardError adds the remedy.
+var errClearText = errors.New("the server asks for the password in clear text (mysql_clear_password) on an unencrypted connection; refused")
 
 // errPublicKey refuses a server that asks for the password encrypted with
-// an RSA key it sends itself, on an unencrypted TCP connection.
-var errPublicKey = errors.New("the server asks for the password encrypted with a public key it sends itself (caching_sha2_password full authentication or sha256_password) on an unencrypted connection; refused, since an attacker who removed TLS could send its own key: use a server with TLS, an SSH tunnel or a Unix socket")
+// an RSA key it sends itself, on an unencrypted TCP connection. guardError
+// adds the remedy.
+var errPublicKey = errors.New("the server asks for the password encrypted with a public key it sends itself (caching_sha2_password full authentication or sha256_password) on an unencrypted connection; refused, since an attacker who removed TLS could send its own key")
+
+// guardError adds the remedy to a refusal of the clear-text guard. A session
+// dialled through an SSH tunnel is not advised to use one.
+func guardError(why error, tunneled bool) error {
+	if !errors.Is(why, errClearText) && !errors.Is(why, errPublicKey) {
+		return why
+	}
+	if tunneled {
+		return fmt.Errorf("%w: use a server with TLS, or run the ssh tunnel to the database's own host", why)
+	}
+	return fmt.Errorf("%w: use a server with TLS, an SSH tunnel or a Unix socket", why)
+}
 
 // errHugePacket refuses a handshake packet of the maximum size, which the
 // guard cannot frame the way the driver does.
@@ -316,8 +331,8 @@ func noServerTLS(err error) bool {
 }
 
 // connectError keeps the server's reason and drops anything that could
-// echo the secret.
-func connectError(err error, pw string) error {
+// echo the secret. A certificate that did not verify gets the way out.
+func connectError(err error, pw, mode string) error {
 	msg := err.Error()
 	var me *gomysql.MyError
 	if errors.As(err, &me) {
@@ -326,7 +341,7 @@ func connectError(err error, pw string) error {
 	if pw != "" {
 		msg = strings.ReplaceAll(msg, pw, "***")
 	}
-	return fmt.Errorf("mysql: connect: %s", msg)
+	return fmt.Errorf("mysql: connect: %s%s", msg, engine.TLSVerifyHint(err, mode))
 }
 
 func (s *session) setup() error {

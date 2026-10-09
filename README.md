@@ -34,8 +34,13 @@ terminal you keep in view, holds the credentials, parses and weighs every
 statement, masks personal data and waits for **your** approval. The agent
 never sees a credential and never opens a connection.
 
+<p align="center">
+  <img alt="Demo: Claude Code (left) asks for the top Belgian customers; the locksql console (right) shows each query for approval. Claude gets names and emails as redacted references, filters on them in a follow-up query, then searches on an email the human types in the console." src="docs/assets/demo.gif" width="900">
+</p>
+<p align="center"><sub>Claude Code (left, account <code>alice</code>) and the locksql console (right, account <code>locksql</code>, started with <code>--show-results</code>). Claude gets <code>&lt;redacted:rN.R.C&gt;</code> references, filters on them without seeing a value, then searches on an email the human types in the console.</sub></p>
+
 > [!NOTE]
-> **Pre-release** (`v0.1.x`). See [Install](#install).
+> **Pre-release** (`v0.3.x`). See [Install](#install).
 
 ## Why locksql?
 
@@ -53,6 +58,7 @@ locksql moves the decision **out of the agent**.
 | `EXPLAIN` cost check before running | ❌ | ✅ |
 | PII masked on its source column, not its label | ❌ | ✅ |
 | k-anonymity on PII filters and aggregates | ❌ | ✅ |
+| Search on a PII value the agent never sees | ❌ | ✅ |
 | Policy loosening needs a human confirmation | ❌ | ✅ |
 | Append-only audit log | ❌ | ✅ |
 
@@ -89,7 +95,7 @@ Reads are parsed in full; unknown syntax is refused.
 
 **🕶️ PII masking**<br>
 Every output column is traced to its source through aliases, CTEs, unions and
-joins, then masked (`partial`, `redact`, `email`, `hash` tokens).
+joins, then masked (`redact` by default, `partial` or `email`).
 
 </td>
 </tr>
@@ -109,6 +115,22 @@ every peer on the socket.
 
 </td>
 </tr>
+<tr>
+<td valign="top">
+
+**🔎 Blind search**<br>
+The agent filters on `'${email}'` and you type the value in the console, or
+on a redacted cell's reference (`'${r1.2.3}'`). The value never reaches it.
+
+</td>
+<td valign="top">
+
+**👁️ Clear for you only**<br>
+`--show-results` prints the clear rows in the console while the agent gets
+them masked; `--allow-unmask` is the only way an agent can ask for raw PII.
+
+</td>
+</tr>
 </table>
 
 ## Quick start
@@ -117,24 +139,30 @@ every peer on the socket.
 # 1. Install (see Install below for packages, checksums and signatures)
 curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh
 
-# 2. Wire your agents, add a database, start the console (keep this terminal open)
+# 2. Wire your agents and set up the console account
 locksql
 
-# 3. In your agent, anywhere: "how many orders were placed yesterday on dev?"
+# 3. In the locksql session (a separate login), start the console
+#    (keep this terminal open)
+locksql console --project DIR
+
+# 4. In your agent, anywhere: "how many orders were placed yesterday on dev?"
 #    Approve or deny each query in the console.
 ```
 
-Bare `locksql` in a terminal does three things. It wires every installed
-agent (Claude Code, Codex, Gemini CLI, Cursor) for your user account, so
-that they work from any directory. When no database is configured it asks
-for one (a URL first) and saves a profile to your user config. Then it starts
-the console. Later runs only wire agents installed since, then start the
-console.
+Bare `locksql` in a terminal wires every installed agent (Claude Code, Codex,
+Gemini CLI, Cursor) for your user account, so that they work from any
+directory. The console must run in a separate account, so when that is not
+set up yet it explains why and offers to run `sudo locksql install`. It then
+prints the next steps: put your database profile in the project's
+`.locksql/config.toml` (`locksql init <agent>` writes a commented example)
+and run `locksql console --project DIR` in the `locksql` session. Later runs
+only wire agents installed since. Run in the service account, bare `locksql`
+starts the console.
 
-Separated mode (`sudo locksql install`, then `locksql doctor`) and project
-mode (`.locksql/config.toml` committed with the repository, `locksql init
-<agent>`) are described in [docs/usage.md](docs/usage.md). Separated mode
-always uses a project config, read by both accounts.
+The setup is described in [docs/usage.md](docs/usage.md) (`sudo locksql
+install`, then `locksql doctor`; project mode with `.locksql/config.toml`
+committed with the repository). Both accounts read the project config.
 
 ## How it works
 
@@ -168,16 +196,18 @@ sequenceDiagram
    screen and waits:
 
    ```
-   ━━ DEV ━━ 127.0.0.1 / app ━━ user alice ━━ tier read
-   requested by uid 1000 (alice) · pid 48211 (claude)
-   SELECT id, email FROM customers WHERE country = 'BE' LIMIT 20
-   class READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
-   reads: app.customers
-   returns at most 20 rows
-   PII columns touched: customers.email (select)
-   masked outputs: email → partial
-   PII: masked (4 column rules; detectors: email, phone, iban, card)
-   Approve? [y/N]
+   ╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
+   │ requested by uid 1000 (alice) · pid 48211 (claude)
+   │
+   │   SELECT id, email FROM customers WHERE country = 'BE' LIMIT 20
+   │
+   │ class READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
+   │ reads: app.customers
+   │ returns at most 20 rows
+   │ PII columns touched: customers.email (select)
+   │ masked outputs: email → redact
+   │ PII: masked (4 column rules; detectors: email, phone, iban, card)
+   ╰─ Approve? [y/N]
    ```
 
 3. On approval the console runs its k-anonymity counts when the statement
@@ -229,8 +259,8 @@ only guide the agent; the console's checks are the guarantee.
 - **OS separation.** `locksql install` creates a `locksql` console account
   and a `locksql-clients` group: the console runs as that account in its own
   login session, the agent's account only reaches its socket, and the kernel
-  checks every peer. Without it (same-user mode) the console warns that the
-  agent's account could read or type into its terminal.
+  checks every peer. The console refuses to start without this setup, since
+  an agent in the console's own account could read or type into its terminal.
 - **Human approval.** Every statement is shown and approved in the console
   terminal; no socket method can approve. On a production profile you type the
   profile name, not `y`. Pending keystrokes are flushed before each prompt, so
@@ -254,12 +284,32 @@ only guide the agent; the console's checks are the guarantee.
   and `*`, and masked on that source, not on its label; the engine's origin
   metadata is a second check, and a result whose columns do not match the
   analysis is dropped. Value detectors (email, phone, IBAN, card, opt-in
-  national ids) mask the other cells. Mask modes: `partial`, `redact`,
-  `email`, `hash` (per-session tokens that keep joins and equality filters).
+  national ids) mask the other cells. Mask modes: `redact` (the default),
+  `partial`, `email`. Quasi-identifiers (birth date, postal code, gender) are
+  never masked unless you accept them one by one, since masking blocks range
+  filters, `LIKE` and `ORDER BY` on the column.
+- **Statement text.** While mask rules exist, the views that hold the text of
+  past statements are refused, in reads and in writes: `pg_stat_statements`
+  and `pg_stat_activity`; on MySQL and MariaDB,
+  `information_schema.PROCESSLIST`, every `performance_schema` and `sys`
+  relation, `mysql.general_log` and `mysql.slow_log`.
 - **PII usage.** PII columns may be selected, counted, joined with `=` and
   filtered with `=`, `IN (literals)` or `IS NULL`. Expressions over them,
   `LIKE`, ranges and `ORDER BY` are refused. A filter, grouping or aggregate on
   PII must cover at least `k_anonymity` rows (default 5, production 10).
+- **Placeholders and references.** To filter a PII column on a value the agent
+  does not know, it writes `col = '${email}'` and the human types the value in
+  the console (no echo); the value never reaches the agent, the audit log or a
+  client error. Redacted cells come back as `<redacted:r1.2.3>` (result, row,
+  column), and the agent filters on one with `col = '${r1.2.3}'`; the console
+  keeps the clear values of the last results in memory only. Both work only
+  compared with a PII column, and skip the k-anonymity check, since the agent
+  did not choose the value. The approval screen warns, in red and in the audit
+  log, when the agent put a clear value in its statement, when a reference is
+  combined with a unique-key filter or an output with no plain column, and
+  when one result's cells are filtered on one by one beyond
+  `limits.reference_probe`.
+  Warnings never refuse and never carry a value.
 - **Quiet failures.** Clients get a generic message, never the server's error
   text, and no timings; `query.run` answers on a 250 ms quantum.
 - **The AI tightens, the human loosens.** Agents may add mask rules and
@@ -280,6 +330,12 @@ A project profile wins over a user profile of the same name. No file ever
 holds a secret: keys named like `password`, `passwd`, `pwd`, `secret` or
 `token`, and DSNs with an embedded password, are refused.
 
+> **Breaking change.** A remote profile with no `tls` setting now verifies
+> the server certificate (`tls = "verify-full"`). A server with a private CA
+> needs `tls_ca`; to keep encryption without verification, set
+> `tls = "require"`. Until then its connection fails with an error that
+> names both settings.
+
 ```toml
 [profiles.uat]
 engine      = "mariadb"             # mariadb | mysql | postgres | sqlite
@@ -288,6 +344,8 @@ port        = 3306                  # default 3306, or 5432 for postgres
 user        = ""                    # empty: asked at console start
 database    = ""                    # empty: chosen per query (--db)
 credentials = "ask"                 # ask | keychain
+tls         = "verify-full"         # disable | prefer | require | verify-ca | verify-full
+tls_ca      = ""                    # optional PEM bundle replacing the system roots
 credentials_ttl = "20m"             # optional: ask for the secret again
 tier        = "read"                # read | write | ddl | admin
 production  = false
@@ -302,6 +360,30 @@ max_cell_chars      = 200
 max_output_bytes    = 65536
 k_anonymity         = 5
 explain_cost_refuse = 0             # engine cost units; 0 = off
+```
+
+A database reachable only from a bastion gets an `ssh` table: the console
+opens the SSH connection itself, with no local listening port, and verifies
+the bastion against the console account's `~/.ssh/known_hosts` (asking on
+first use, refusing a changed key). `host` is then the database as seen from
+the bastion; keep `tls = "verify-full"` unless the database runs on the
+bastion itself. See
+[Reaching a remote server through SSH](docs/usage.md#reaching-a-remote-server-through-ssh).
+
+```toml
+[profiles.prod]
+engine      = "postgres"
+host        = "db.internal"         # as seen from the bastion
+tls         = "verify-full"
+production  = true
+
+[profiles.prod.ssh]
+host        = "bastion.example.com"
+port        = 22                    # default 22
+user        = "deploy"
+auth        = "key"                 # key | agent | password
+key         = "~/.ssh/id_ed25519"   # auth = "key" only; the console account's home
+credentials = "ask"                 # passphrase or SSH password; default: the profile's
 ```
 
 <details>
@@ -326,7 +408,12 @@ explain_cost_refuse = 0             # engine cost units; 0 = off
 | `limits.max_cell_chars` | 200 | longer cells are cut with `…` |
 | `limits.max_output_bytes` | 65 536 | output is cut with a marker |
 | `limits.k_anonymity` | 5 (production 10) | smallest row count a PII filter, a group or an aggregate of a PII column may cover; lowering it is a loosening |
+| `limits.reference_probe` | 5 | distinct cells of one result the agent may filter on one by one before the console warns (an `IN` list counts once); raising it is a loosening |
 | `limits.explain_cost_refuse` | 0 (off) | refuse plans above this total cost, in the engine's own units; SQLite reports no cost and is not checked |
+| `ssh.host`, `ssh.port`, `ssh.user` | required host and user; port 22 | the bastion; not with sqlite or a Unix socket `host` |
+| `ssh.auth` | required | `key`, `agent` (`SSH_AUTH_SOCK` of the console) or `password` |
+| `ssh.key` | required with `auth = "key"` | private key of the console account, mode 0600 |
+| `ssh.credentials` | the profile's `credentials` | `ask` or `keychain` for the passphrase or SSH password; `locksql forget --profile P` removes it too |
 
 </details>
 
@@ -342,26 +429,49 @@ column = "app.users.email"            # db.table.column, * per segment
 mode   = "email"                      # j***@example.com
 [[mask]]
 column = "app.users.customer_ref"
-mode   = "hash"                       # tok_... per console session
+mode   = "partial"                    # j***(12)
 [[mask]]
-column = "*.*.recipient_reference"    # mode "partial" by default: j***(12)
+column = "*.*.recipient_reference"    # <redacted:rN.R.C> (default)
 [[allow]]                             # explicit exception: never mask
 column = "app.templates.name"
 ```
 
 | Mode | Output | Notes |
 |---|---|---|
-| `partial` (default) | `j***(12)` | first character and length |
-| `redact` | `<redacted>` | |
+| `redact` (default) | `<redacted:rN.R.C>` (result, row, column: a reference the agent can filter on; plain `<redacted>` if the console cannot hold the cell, or for any column but a plain one whose every source is under a mask rule); `partial`, `email` and detector-masked cells carry no reference | a rule without `mode` is `redact` |
+| `partial` | `j***(12)` | first character and length |
 | `email` | `j***@example.com` | first character and domain; other values as `partial` |
-| `hash` | `tok_` + 20 characters | keyed HMAC with a random key per console session: equal values give equal tokens, so the agent can join, group and count, and filter with `WHERE col = 'tok_...'` (the console substitutes the value in the statement that runs) |
 
-Only columns explicitly configured with `mode = "hash"` get tokens, and a
-token is accepted only against such a column. A column covered by several
-rules with different modes is redacted. Changing a mode is a loosening unless
-the new mode is `redact`.
+A column covered by several rules with different modes is redacted. Changing
+a mode is a loosening unless the new mode is `redact`.
+
+`mode = "hash"` is no longer a mode: a rules file that uses it is rejected
+(`unknown mode "hash" (want redact, partial or email)`).
 
 On PostgreSQL the first segment is the schema (`public.users.email`).
+
+## `--allow-unmask`
+
+An agent can ask for unmasked PII output (`locksql plan --unmask`, or
+`unmask` in the MCP `locksql_plan` tool) only when the human started the
+console with `locksql console --allow-unmask`. Without it, the console
+refuses every unmask request before anything runs and audits the refusal.
+Like `--skip-permissions`, it is a console flag only: no client or config
+file can turn it on. With it, each unmasked query still needs the human's
+approval, shown as `PII: UNMASKED` in red, and is never auto-approved. The
+console then prints the clear result, so you see exactly what the agent
+received (the audit log still holds no row data).
+
+## `--show-results`
+
+`locksql console --show-results` prints in the console, in clear, the result
+of each masked query it runs, so you see who the rows are while the agent
+still gets the masked cells. The cells the agent got masked are yellow and
+carry their reference (`‹r1.1.2›`); the output caps apply as for the agent.
+It is a console flag only, off by default: no client or config file can turn
+it on. The console warns at start (in red on production), says so in the
+Ready block and on every approval screen, and `locksql status` reports
+`show results on`. The audit log still holds no row data.
 
 ## `--skip-permissions`
 
@@ -379,29 +489,39 @@ iteration, and it is deliberately narrow:
 
 ## Limitations
 
-- **Same-user mode is weaker.** Without `locksql install`, the agent runs as
-  the console's account and could read its terminal, type into it or read
-  its keychain session. Run `locksql doctor` to see what your machine allows.
-  Malware running as the console account is out of scope in both modes.
+- **The console runs only in a separate account.** `sudo locksql install`
+  sets it up; `locksql console` refuses to start without it and names
+  `locksql doctor`. Run `locksql doctor` to see what your machine allows.
+  Malware running as the console account, or as root, is out of scope.
 - **k-anonymity is a query-set-size control.** It refuses a single query
   whose PII filter covers fewer than `k` rows; it does not stop differencing
   attacks that combine several approved queries.
-- **TLS is not configurable yet.** PostgreSQL, MariaDB and MySQL connect like
-  PostgreSQL's `sslmode=prefer`: encrypted when the server offers TLS, plain
-  otherwise, and the certificate is not verified, so an active attacker on the
-  path can intercept or downgrade the connection. A plain TCP connection is
-  reported as a warning. This mode gives no protection against such an
-  attacker, the password included: over the unverified TLS connection the
-  attacker can ask for it in clear (MySQL and MariaDB `mysql_clear_password`
-  or a `caching_sha2_password` full authentication), and PostgreSQL sends
-  it in clear to a server that asks for cleartext authentication, with or
-  without TLS. On a plain MySQL/MariaDB TCP connection locksql refuses the
-  authentications that would hand the password over (clear text, or RSA
-  encryption with a key the server sends: `sha256_password` and a
-  `caching_sha2_password` full authentication), so a MySQL 8 account on a
-  server without TLS can log in only while the server's authentication cache
-  holds it. Use an SSH tunnel (`ssh -L`) or a Unix socket for remote
-  servers.
+- **Placeholders leave room for a patient agent.** Equality probing through
+  cell references only raises a warning: an agent that spreads its probes
+  under `limits.reference_probe`, across results or sessions, is not stopped.
+  The unmasked columns of a targeted row still identify it, and free text
+  without a detector is not masked.
+- **Clear results stay on the console's screen.** With `--show-results` (and
+  for an unmasked run) the clear rows stay in the scrollback of the console's
+  terminal, visible to anyone who sees that screen (screen sharing, recording,
+  a terminal that logs its output). locksql does not clear it.
+- **Transport security depends on `tls`.** A remote profile defaults to
+  `tls = "verify-full"`; `prefer` is the default only for a Unix socket or a
+  loopback host. `production = true` refuses `disable` and `prefer` on a
+  remote host. Below `verify-ca` an active attacker on the path can intercept
+  or downgrade the connection, and obtain the password: the clear-text guard
+  protects plain TCP connections only, and go-mysql answers
+  `mysql_clear_password`, `sha256_password` and a `caching_sha2_password`
+  full authentication (the MySQL 8 default) in clear over any TLS, so an
+  attacker terminating TLS gets the MySQL/MariaDB password; PostgreSQL sends
+  it in clear to a server that asks for cleartext authentication. On plain
+  TCP (`disable`, or `prefer` after a fallback) the guard refuses a full
+  authentication, so a MySQL 8 account logs in only while the server's
+  authentication cache holds it. `verify-ca`
+  and `verify-full` prevent the impersonation. Through an `ssh` bastion the
+  SSH leg is encrypted and verified, but the bastion-to-database leg is
+  protected only by `tls`, unless the database runs on the bastion. See
+  [Transport security](docs/security-model.md#out-of-scope-and-limitations).
 - One console per profile and project, one request at a time. No remote or
   shared consoles, no data export.
 
@@ -427,7 +547,7 @@ PATH), then installs `/usr/local/bin/locksql`, with `sudo` if needed:
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh
 less install.sh                     # read it first
-sh install.sh                       # LOCKSQL_VERSION=v0.1.1 to pin a version
+sh install.sh                       # LOCKSQL_VERSION=v0.3.0 to pin a version
 ```
 
 `LOCKSQL_INSTALL_DIR=~/.local/bin` installs without `sudo`, but the binary is

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
@@ -145,13 +146,8 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 		out = append(out, check{state, title, detail, fix})
 	}
 
-	// 1. Operating system.
-	switch d.goos {
-	case "linux", "darwin":
-		add(checkOK, "operating system", d.goos, "")
-	default:
-		add(checkFail, "operating system", d.goos+" is not supported", "use Linux or macOS")
-	}
+	// 1. Operating system (the build is Linux or macOS only).
+	add(checkOK, "operating system", d.goos, "")
 
 	// 2. Graphical session.
 	disp := d.display()
@@ -181,7 +177,7 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 		add(checkFail, "system setup", err.Error(), "fix "+sysconf.Path+" (root-owned, mode 0644) or run sudo locksql install again")
 		return out
 	case sys == nil:
-		add(checkWarn, "separation", "same-user mode: the agent runs as the console's account and could read its terminal or type into it",
+		add(checkFail, "separation", "same-user mode: the console refuses to run in the agent's account",
 			"run sudo locksql install, then use the console from a separate locksql session")
 		if on, known := d.tiocsti(); known && on {
 			add(checkWarn, "terminal injection", "dev.tty.legacy_tiocsti = 1: a process can type into a terminal of its own account",
@@ -290,6 +286,14 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 	} else {
 		uid, gid, ok := d.ownerOf(fi)
 		perm := fi.Mode().Perm()
+		shown := perm // with setgid, as chmod takes it
+		if fi.Mode()&os.ModeSetgid != 0 {
+			shown |= 0o2000
+		}
+		wantMode := "0710"
+		if d.goos == "linux" {
+			wantMode = "2710"
+		}
 		want := ""
 		if g, err := user.LookupGroup(sys.ClientGroup); err == nil {
 			want = g.Gid
@@ -303,9 +307,13 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 			add(checkFail, "socket directory", sys.SocketDir+" does not belong to group "+sys.ClientGroup,
 				fmt.Sprintf("sudo chown %s:%s %s", sys.ServiceUser, sys.ClientGroup, sys.SocketDir))
 		case perm&0o027 != 0 || perm&0o010 == 0:
-			add(checkFail, "socket directory", fmt.Sprintf("%s has mode %04o", sys.SocketDir, perm), "sudo chmod 0710 "+sys.SocketDir)
+			add(checkFail, "socket directory", fmt.Sprintf("%s has mode %04o", sys.SocketDir, shown), "sudo chmod "+wantMode+" "+sys.SocketDir)
+		case d.goos == "linux" && fi.Mode()&os.ModeSetgid == 0:
+			// The console cannot give its socket to the client group.
+			add(checkFail, "socket directory", fmt.Sprintf("%s has mode %04o, without setgid", sys.SocketDir, shown),
+				"sudo locksql install (it also fixes /etc/tmpfiles.d/locksql.conf)")
 		default:
-			add(checkOK, "socket directory", fmt.Sprintf("%s %04o %s:%s", sys.SocketDir, perm, sys.ServiceUser, sys.ClientGroup), "")
+			add(checkOK, "socket directory", fmt.Sprintf("%s %04o %s:%s", sys.SocketDir, shown, sys.ServiceUser, sys.ClientGroup), "")
 		}
 	}
 	return out
@@ -337,6 +345,54 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 		add(checkOK, "credentials", "asked at every console start", "")
 	}
 
+	if p.Engine != config.EngineSQLite && !strings.HasPrefix(p.Host, "/") {
+		switch {
+		case config.TLSVerifiesChain(p.TLS, p.TLSCA):
+			add(checkOK, "tls", "tls = \""+p.TLS+"\": the server certificate is verified", "")
+		case p.SSH != nil && config.IsLoopback(p.Host):
+			add(checkOK, "tls", "the database is on the bastion: the ssh tunnel encrypts the whole path (tls = \""+p.TLS+"\")", "")
+		case config.IsLoopback(p.Host):
+			add(checkOK, "tls", "loopback host: tls = \""+p.TLS+"\"", "")
+		case p.SSH != nil:
+			add(checkWarn, "tls", "tls = \""+p.TLS+"\": encrypted by ssh to "+p.SSH.Host+", but an attacker on the bastion's network can read the traffic or obtain the password",
+				"set tls = \"verify-full\" (and tls_ca if the server's CA is private)")
+		default:
+			add(checkWarn, "tls", "tls = \""+p.TLS+"\": an attacker on the path can read the traffic or obtain the password",
+				"set tls = \"verify-full\" (and tls_ca if the server's CA is private), or reach the server through an ssh tunnel")
+		}
+	}
+
+	if s := p.SSH; s != nil {
+		add(checkOK, "ssh", "reached through "+s.User+"@"+s.Host+":"+strconv.Itoa(s.Port)+" ("+s.Auth+")", "")
+		if s.Auth == config.SSHAuthKey {
+			path := s.Key
+			if rest, ok := strings.CutPrefix(path, "~/"); ok {
+				home := "~"
+				if sys != nil {
+					home = "the console account's home"
+				} else if h, err := os.UserHomeDir(); err == nil {
+					home = h
+				}
+				path = filepath.Join(home, rest)
+			}
+			if st, err := d.stat(path); err != nil {
+				if sys == nil {
+					var pe *fs.PathError
+					if errors.As(err, &pe) {
+						err = pe.Err // the path is already in the detail
+					}
+					add(checkFail, "ssh key", path+": "+err.Error(), "check ssh.key")
+				}
+				// In a separated setup the key lives in the console account's
+				// home, which this account cannot read: nothing to check here.
+			} else if st.Mode().Perm()&0o077 != 0 {
+				add(checkFail, "ssh key", path+" is readable by others", "chmod 600 "+path)
+			} else {
+				add(checkOK, "ssh key", path+" is private", "")
+			}
+		}
+	}
+
 	st, err := d.status(cwd, p.Name)
 	if err != nil {
 		if errors.Is(err, client.ErrNoConsole) {
@@ -352,7 +408,11 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 		}
 		return out
 	}
-	add(checkOK, "console", "running, socket reachable", "")
+	detail := "running, socket reachable"
+	if st.ShowResults {
+		detail += "; shows results in clear (--show-results)"
+	}
+	add(checkOK, "console", detail, "")
 	h := st.Health
 	if h == nil {
 		add(checkWarn, "console health", "the console is too old to report its health", "upgrade it")

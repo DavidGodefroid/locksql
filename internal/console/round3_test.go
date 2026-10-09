@@ -1,6 +1,8 @@
 package console
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
@@ -34,7 +36,7 @@ func TestWriteReturningPIIRefusedBeforeRun(t *testing.T) {
 	pr := h.plan(t, "WITH c AS (SELECT email FROM users) SELECT (SELECT * FROM c LIMIT 1) AS x LIMIT 5", false)
 	var rr ipc.RunResult
 	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
-	if got := rr.Rows[0][0]; got != "A***(5)" {
+	if got := rr.Rows[0][0]; !strings.HasPrefix(fmt.Sprint(got), "<redacted") {
 		t.Errorf("nested PII source not masked: %v", got)
 	}
 }

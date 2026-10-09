@@ -62,7 +62,7 @@ func connect(t *testing.T, path string, tier config.Tier) engine.Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := e.Connect(context.Background(), profile(path, tier), nil)
+	s, err := e.Connect(context.Background(), profile(path, tier), nil, nil)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -418,7 +418,7 @@ func TestExtraPrivileges(t *testing.T) {
 func TestConnectMissingFile(t *testing.T) {
 	e, _ := engine.Get(config.EngineSQLite)
 	p := profile(filepath.Join(t.TempDir(), "missing.db"), config.TierWrite)
-	if _, err := e.Connect(context.Background(), p, nil); err == nil {
+	if _, err := e.Connect(context.Background(), p, nil, nil); err == nil {
 		t.Fatal("missing database file was accepted (would be created)")
 	}
 }

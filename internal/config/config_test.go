@@ -53,7 +53,7 @@ func TestLoadFillsDefaults(t *testing.T) {
 	if uat.Limits != DefaultLimits(false) {
 		t.Errorf("uat limits = %+v, want %+v", uat.Limits, DefaultLimits(false))
 	}
-	want := Limits{StatementTimeout: 30 * time.Second, ExplainRowsWarn: 100_000, ExplainRowsRefuse: 1_000_000, MaxRows: 200, MaxCellChars: 200, MaxOutputBytes: 65_536, KAnonymity: 5}
+	want := Limits{StatementTimeout: 30 * time.Second, ExplainRowsWarn: 100_000, ExplainRowsRefuse: 1_000_000, MaxRows: 200, MaxCellChars: 200, MaxOutputBytes: 65_536, KAnonymity: 5, ReferenceProbe: 5}
 	if uat.Limits != want {
 		t.Errorf("non-production defaults = %+v, want %+v", uat.Limits, want)
 	}
@@ -284,5 +284,123 @@ func TestUserConfigPath(t *testing.T) {
 	p, err := UserConfigPath()
 	if err != nil || !strings.HasSuffix(p, filepath.Join("locksql", "config.toml")) {
 		t.Fatalf("UserConfigPath = %q, %v", p, err)
+	}
+}
+
+func TestIsLoopback(t *testing.T) {
+	for host, want := range map[string]bool{
+		"localhost": true, "127.0.0.1": true, "127.8.9.1": true, "::1": true,
+		"LOCALHOST": true, "localhost.example.com": false, "db.internal": false,
+		"10.0.0.1": false, "/var/run/mysqld/mysqld.sock": false, "": false,
+	} {
+		if got := IsLoopback(host); got != want {
+			t.Errorf("IsLoopback(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
+func TestTLSDefaultsAndValidation(t *testing.T) {
+	parse := func(name, body string) (Profile, error) {
+		ps, err := ParseProfiles([]byte("[profiles."+name+"]\n"+body), "t.toml", t.TempDir())
+		return ps[name], err
+	}
+	cases := []struct {
+		name, body, wantTLS, wantErr string
+	}{
+		{"remote default", `engine="postgres"` + "\nhost=\"db.example\"", TLSVerifyFull, ""},
+		{"loopback default", `engine="postgres"` + "\nhost=\"127.0.0.1\"", TLSPrefer, ""},
+		{"socket default", `engine="mysql"` + "\nhost=\"/run/mysqld.sock\"", TLSPrefer, ""},
+		{"explicit require", `engine="mysql"` + "\nhost=\"db\"\ntls=\"require\"", TLSRequire, ""},
+		{"unknown mode", `engine="mysql"` + "\nhost=\"db\"\ntls=\"strict\"", "", "unknown tls mode"},
+		{"ca with prefer", `engine="mysql"` + "\nhost=\"db\"\ntls=\"prefer\"\ntls_ca=\"/ca.pem\"", "", "tls_ca needs tls = \"require\""},
+		{"ca with disable", `engine="mysql"` + "\nhost=\"db\"\ntls=\"disable\"\ntls_ca=\"/ca.pem\"", "", "tls_ca needs tls = \"require\""},
+		{"ca with remote default", `engine="mysql"` + "\nhost=\"db\"\ntls_ca=\"/ca.pem\"", TLSVerifyFull, ""},
+		{"ca with loopback default", `engine="mysql"` + "\nhost=\"127.0.0.1\"\ntls_ca=\"/ca.pem\"", "", "tls_ca needs tls = \"require\""},
+		{"socket verify", `engine="mysql"` + "\nhost=\"/run/m.sock\"\ntls=\"verify-full\"", "", "Unix socket"},
+		{"sqlite tls", `engine="sqlite"` + "\npath=\"x.db\"\ntls=\"require\"", "", "not used by sqlite"},
+		{"production prefer remote", `engine="postgres"` + "\nhost=\"db\"\nproduction=true\ntls=\"prefer\"", "", "production profile"},
+		{"production prefer loopback", `engine="postgres"` + "\nhost=\"localhost\"\nproduction=true\ntls=\"prefer\"", TLSPrefer, ""},
+	}
+	for _, c := range cases {
+		name := "p"
+		if strings.HasPrefix(c.name, "production") {
+			name = "prod" // a production profile name needs 2 characters or more
+		}
+		p, err := parse(name, c.body)
+		if c.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("%s: err = %v, want %q", c.name, err, c.wantErr)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if p.TLS != c.wantTLS {
+			t.Errorf("%s: TLS = %q, want %q", c.name, p.TLS, c.wantTLS)
+		}
+	}
+}
+
+func TestSSHTable(t *testing.T) {
+	parse := func(body string) (Profile, error) {
+		ps, err := ParseProfiles([]byte(body), "t.toml", t.TempDir())
+		return ps["p"], err
+	}
+	head := "[profiles.p]\nengine=\"postgres\"\nhost=\"db.internal\"\ntls=\"require\"\n[profiles.p.ssh]\n"
+	p, err := parse(head + "host=\"bastion\"\nuser=\"deploy\"\nauth=\"key\"\nkey=\"~/.ssh/id_ed25519\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := SSHProfile{Host: "bastion", Port: 22, User: "deploy", Auth: SSHAuthKey, Key: "~/.ssh/id_ed25519", Credentials: CredentialsAsk}
+	if p.SSH == nil || *p.SSH != want {
+		t.Errorf("ssh = %+v, want %+v", p.SSH, want)
+	}
+	for name, c := range map[string]struct{ body, err string }{
+		"no auth":        {head + "host=\"b\"\nuser=\"u\"\n", "ssh.auth"},
+		"bad auth":       {head + "host=\"b\"\nuser=\"u\"\nauth=\"gssapi\"\n", "ssh.auth"},
+		"key missing":    {head + "host=\"b\"\nuser=\"u\"\nauth=\"key\"\n", "ssh.key"},
+		"key with agent": {head + "host=\"b\"\nuser=\"u\"\nauth=\"agent\"\nkey=\"k\"\n", "ssh.key"},
+		"no host":        {head + "user=\"u\"\nauth=\"agent\"\n", "ssh.host"},
+		"no user":        {head + "host=\"b\"\nauth=\"agent\"\n", "ssh.user"},
+		"bad port":       {head + "host=\"b\"\nuser=\"u\"\nauth=\"agent\"\nport=70000\n", "ssh.port"},
+		"unknown key":    {head + "host=\"b\"\nuser=\"u\"\nauth=\"agent\"\nproxy_jump=\"x\"\n", "unknown key"},
+		"secret key":     {head + "host=\"b\"\nuser=\"u\"\nauth=\"password\"\npassword=\"x\"\n", "looks like a secret"},
+		"socket host":    {"[profiles.p]\nengine=\"mysql\"\nhost=\"/run/m.sock\"\n[profiles.p.ssh]\nhost=\"b\"\nuser=\"u\"\nauth=\"agent\"\n", "Unix socket"},
+		"sqlite":         {"[profiles.p]\nengine=\"sqlite\"\npath=\"x.db\"\n[profiles.p.ssh]\nhost=\"b\"\nuser=\"u\"\nauth=\"agent\"\n", "sqlite"},
+		"host secret":    {head + "host=\"u:pw@b\"\nuser=\"u\"\nauth=\"agent\"\n", "embedded password"},
+		"user secret":    {head + "host=\"b\"\nuser=\"u:pw@x\"\nauth=\"agent\"\n", "embedded password"},
+		"key secret":     {head + "host=\"b\"\nuser=\"u\"\nauth=\"key\"\nkey=\"u:pw@x\"\n", "embedded password"},
+		"user control":   {head + "host=\"b\"\nuser=\"u\\u001b[2J\"\nauth=\"agent\"\n", "control"},
+		"control char":   {head + "host=\"b\\u001b[2J\"\nuser=\"u\"\nauth=\"agent\"\n", "control"},
+	} {
+		if _, err := parse(c.body); err == nil || !strings.Contains(err.Error(), c.err) {
+			t.Errorf("%s: err = %v, want %q", name, err, c.err)
+		}
+	}
+}
+
+func TestSSHCredentialsDefaultToProfile(t *testing.T) {
+	ps, err := ParseProfiles([]byte("[profiles.p]\nengine=\"postgres\"\nhost=\"127.0.0.1\"\ncredentials=\"keychain\"\n[profiles.p.ssh]\nhost=\"b\"\nuser=\"u\"\nauth=\"password\"\n"), "t.toml", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps["p"].SSH.Credentials != CredentialsKeychain {
+		t.Errorf("ssh.credentials = %q", ps["p"].SSH.Credentials)
+	}
+}
+
+func TestTLSVerifiesChain(t *testing.T) {
+	for _, c := range []struct {
+		mode, ca string
+		want     bool
+	}{
+		{"", "", false}, {TLSPrefer, "", false}, {TLSRequire, "", false},
+		{TLSRequire, "/ca.pem", true}, {TLSVerifyCA, "", true}, {TLSVerifyFull, "", true},
+	} {
+		if got := TLSVerifiesChain(c.mode, c.ca); got != c.want {
+			t.Errorf("TLSVerifiesChain(%q, %q) = %v, want %v", c.mode, c.ca, got, c.want)
+		}
 	}
 }

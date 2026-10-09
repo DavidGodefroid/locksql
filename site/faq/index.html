@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>locksql FAQ — databases, agents, security limits</title>
+  <meta name="description" content="Answers on locksql: supported databases, agents and platforms, credentials, approval, masking limits, k-anonymity, TLS, audit log and licence.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
+  <link rel="canonical" href="https://locksql.com/faq/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="locksql">
+  <meta property="og:title" content="locksql FAQ — databases, agents, security limits">
+  <meta property="og:description" content="Answers on locksql: supported databases, agents and platforms, credentials, approval, masking limits, k-anonymity, TLS, audit log and licence.">
+  <meta property="og:url" content="https://locksql.com/faq/">
+  <meta property="og:image" content="https://locksql.com/assets/og.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="locksql — Your AI writes the query. You hold the key.">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="locksql FAQ — databases, agents, security limits">
+  <meta name="twitter:description" content="Answers on locksql: supported databases, agents and platforms, credentials, approval, masking limits, k-anonymity, TLS, audit log and licence.">
+  <meta name="twitter:image" content="https://locksql.com/assets/og.png">
+  <meta name="twitter:image:alt" content="locksql — Your AI writes the query. You hold the key.">
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="../"><img src="../assets/logo.svg" alt="" width="32" height="32"><span class="wordmark">lock<span>sql</span></span></a>
+      <nav class="site-nav" aria-label="Main">
+        <ul>
+          <li><a href="../">Home</a></li>
+          <li><a href="../install/">Install</a></li>
+          <li><a href="../how-it-works/">How it works</a></li>
+          <li><a href="../security/">Security</a></li>
+          <li><a href="../faq/" aria-current="page">FAQ</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+  <main id="main" tabindex="-1">
+    <div class="wrap">
+
+<h1>Frequently asked questions</h1>
+<p class="lead prose">Short answers, each drawn from the README and the docs. For anything not covered here, see the <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md">usage guide</a>.</p>
+<div class="faq prose">
+<section aria-labelledby="databases">
+  <h2 id="databases">Which databases does locksql support?</h2>
+  <p>MariaDB 10.1+, MySQL 8.0+, PostgreSQL 13+ and SQLite 3. All engines are pure Go. See <a href="../how-it-works/#engines">supported engines</a>.</p>
+</section>
+<section aria-labelledby="os">
+  <h2 id="os">Which operating systems?</h2>
+  <p>Linux and macOS only, on amd64 and arm64.</p>
+</section>
+<section aria-labelledby="agents">
+  <h2 id="agents">Which AI agents does it work with?</h2>
+  <p>Claude Code, Codex, Gemini CLI and Cursor are wired automatically by bare <code>locksql</code>. An agent talks to the console either through the MCP server (<code>locksql mcp</code>, over stdio) or through the <code>locksql</code> CLI from a shell.</p>
+</section>
+<section aria-labelledby="password">
+  <h2 id="password">Does the agent ever see my database password?</h2>
+  <p>No. The agent never sees a credential and never opens a connection. Credentials are typed at console start (no echo) or read from the OS keychain, and never appear in argv, environment, files, logs, the socket protocol or error messages. No config file may hold a secret.</p>
+</section>
+<section aria-labelledby="self-approve">
+  <h2 id="self-approve">Can the agent approve its own queries, or turn approval off?</h2>
+  <p>Approval comes only from the console terminal: no socket method approves, and no socket method loosens the policy. <a href="../how-it-works/#skip"><code>--skip-permissions</code></a> is a console flag only; no client or config file can turn it on, and it is ignored on production profiles. The agent’s account must be separate from the console’s.</p>
+</section>
+<section aria-labelledby="own-account">
+  <h2 id="own-account">Why does the console need its own OS account?</h2>
+  <p>An agent in the console’s own account could read or type into its terminal. Separation is mandatory: without it the console refuses to start. <code>sudo locksql install</code> sets it up.</p>
+</section>
+<section aria-labelledby="timeout">
+  <h2 id="timeout">What happens if I don’t answer the approval prompt?</h2>
+  <p>No answer within 5 minutes means denied. Anything other than <code>y</code> (or the profile name on a production profile) denies the query.</p>
+</section>
+<section aria-labelledby="writes">
+  <h2 id="writes">Can locksql run writes or DDL?</h2>
+  <p>Tiers are <code>read &lt; write &lt; ddl &lt; admin</code>; the default is <code>read</code>, which is also enforced server side. Above tier <code>read</code> the human’s approval is the gate, and the server does not restrict what an approved write does within the account’s privileges.</p>
+</section>
+<section aria-labelledby="pii">
+  <h2 id="pii">How is personal data protected?</h2>
+  <p>Every output column is traced to its source columns and masked on that source, not on its label; value detectors mask the other cells. Modes are <code>redact</code> (the default), <code>partial</code> and <code>email</code>. Quasi-identifiers (birth date, postal code, gender) are never masked unless you accept them one by one. Masking is best effort: use a database account that cannot read what the agent must never see. <a href="../how-it-works/#masking">More on masking</a>.</p>
+</section>
+<section aria-labelledby="blind-search">
+  <h2 id="blind-search">Can the agent look up a customer by email without seeing it?</h2>
+  <p>Yes. It writes <code>WHERE email = '${email}'</code> and you type the address in the console, without echo; or it filters on the reference of a redacted cell from an earlier result (<code>'${r1.2.3}'</code>), whose clear value only the console holds. The value never reaches the agent, the audit log or a client error. <a href="../how-it-works/#blind-search">More on placeholders and references</a>.</p>
+</section>
+<section aria-labelledby="see-values">
+  <h2 id="see-values">Can I see the real values myself?</h2>
+  <p>Yes: start the console with <code>--show-results</code> and it prints each result in clear, in the console only; the agent still gets the masked cells. If the agent itself must see raw values, start the console with <code>--allow-unmask</code>: only then may it ask for an unmasked query, which you still approve one by one. <a href="../how-it-works/#show-results">More on these flags</a>.</p>
+</section>
+<section aria-labelledby="k-anonymity">
+  <h2 id="k-anonymity">Does k-anonymity stop all inference?</h2>
+  <p>No. It is a query-set-size control: it refuses a single query whose PII filter covers fewer than <code>k</code> rows; it does not stop differencing attacks that combine several approved queries. <a href="../security/#k-anonymity">See the example</a>.</p>
+</section>
+<section aria-labelledby="tls">
+  <h2 id="tls">Is the connection to the database encrypted?</h2>
+  <p>Yes, and verified by default: the profile’s <code>tls</code> setting follows libpq’s <code>sslmode</code> (<code>disable</code>, <code>prefer</code>, <code>require</code>, <code>verify-ca</code>, <code>verify-full</code>). A remote host defaults to <code>verify-full</code>; set <code>tls_ca</code> for a private CA. Below <code>verify-ca</code> an attacker on the path can obtain the password. For a server behind a bastion, add an <code>ssh</code> table to the profile: the console opens the tunnel itself, checks the bastion’s host key and listens on no local port. <a href="../security/#transport">Full details</a>.</p>
+</section>
+<section aria-labelledby="injection">
+  <h2 id="injection">Can text stored in the database manipulate my agent?</h2>
+  <p>It can: locksql assumes the agent may be steered by data, so it treats the agent, and anything that can steer it, such as text stored in the database, as not trusted. Every check runs in the console and every statement needs your approval. Rows are framed as untrusted data in every output, and control and bidirectional characters are escaped so data cannot spoof the approval prompt.</p>
+</section>
+<section aria-labelledby="policy">
+  <h2 id="policy">Can the agent change the policy?</h2>
+  <p>Agents may add mask rules and request changes. A change that loosens the policy only takes effect after you confirm it in the console. <a href="../how-it-works/#policy">How policy changes work</a>.</p>
+</section>
+<section aria-labelledby="audit">
+  <h2 id="audit">What is logged?</h2>
+  <p>Every login, policy change, refusal, decision, catalog read and logout, in a JSONL audit log (mode 0600). Records contain the SQL and metadata, never secrets and never row data.</p>
+</section>
+<section aria-labelledby="skip-permissions">
+  <h2 id="skip-permissions">What is <code>--skip-permissions</code> for?</h2>
+  <p>Fast local iteration: it auto-approves statements that the tier and the weight check allow. It is ignored on production profiles, never auto-approves an unmasked query, never overrides a <code>REFUSE</code> verdict, and each auto-approval is audited.</p>
+</section>
+<section aria-labelledby="sharing">
+  <h2 id="sharing">Can several people share one console, or export data?</h2>
+  <p>No: one console per profile and project, one request at a time, no remote or shared consoles, no data export.</p>
+</section>
+<section aria-labelledby="go">
+  <h2 id="go">Do I need Go to install it?</h2>
+  <p>No. Releases ship static binaries and Linux packages; no Go toolchain is needed. Building from source needs Go 1.26 or later. <a href="../install/">Install options</a>.</p>
+</section>
+<section aria-labelledby="stable">
+  <h2 id="stable">Is locksql stable?</h2>
+  <p>It is a pre-release (<code>v0.3.x</code>).</p>
+</section>
+<section aria-labelledby="report">
+  <h2 id="report">How do I report a vulnerability?</h2>
+  <p>Privately, through <a href="https://github.com/DavidGodefroid/locksql/security/advisories/new">GitHub security advisories</a>, not in a public issue. See <a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+</section>
+<section aria-labelledby="licence">
+  <h2 id="licence">What is the licence?</h2>
+  <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+</section>
+</div>
+
+    </div>
+  </main>
+  <footer class="site-footer">
+    <div class="wrap">
+      <ul>
+        <li><a href="https://github.com/DavidGodefroid/locksql">Source on GitHub</a></li>
+        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md">README</a></li>
+        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md">Usage guide</a></li>
+        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
+        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
+      </ul>
+      <p>Pre-release (<code>v0.3.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+    </div>
+  </footer>
+</body>
+</html>

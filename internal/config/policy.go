@@ -23,7 +23,7 @@ type Policy struct {
 	PIIMask  []string `json:"pii_mask"`  // sorted column patterns
 	PIIAllow []string `json:"pii_allow"` // sorted column patterns
 	// PIIModes maps a mask pattern to its mode when it is not the default
-	// ("partial"): redact, email or hash.
+	// (redact): partial or email.
 	PIIModes map[string]string `json:"pii_modes,omitempty"`
 }
 
@@ -48,7 +48,7 @@ func (p Policy) WithModes(m map[string]string) Policy {
 }
 
 // DefaultMaskMode is the mode of a mask rule that sets none.
-const DefaultMaskMode = "partial"
+const DefaultMaskMode = "redact"
 
 // sortedSet returns a sorted, de-duplicated, non-nil copy of s.
 func sortedSet(s []string) []string {
@@ -79,6 +79,9 @@ func canonical(p Policy) Policy {
 		modes[pat] = m
 	}
 	p.PIIModes = modes
+	if p.Profile.TLS == "" && p.Profile.Engine != EngineSQLite && p.Profile.Engine != "" {
+		p.Profile.TLS = TLSPrefer // approved before the setting existed
+	}
 	return p
 }
 
@@ -103,11 +106,19 @@ func Fingerprint(p Policy) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// SSHString shows a bastion in a policy change.
+func SSHString(s *SSHProfile) string {
+	if s == nil {
+		return "none"
+	}
+	return s.User + "@" + s.Host + ":" + strconv.Itoa(s.Port) + " (" + s.Auth + ")"
+}
+
 // Diff lists the changes from approved to current and marks each loosening
 // (spec section 4): a higher tier, production true→false, a larger limit
 // (0 means unlimited), a removed PII rule or detector, an added allow rule,
 // any change of engine, host, port, path, database or user, and a
-// credentials mode other than ask.
+// credentials mode other than ask, a weaker tls mode, any change of tls_ca and any change of the ssh table.
 func Diff(approved, current Policy) []Change {
 	a, c := canonical(approved), canonical(current)
 	ap, cp := a.Profile, c.Profile
@@ -134,6 +145,27 @@ func Diff(approved, current Policy) []Change {
 	if ap.Credentials != cp.Credentials {
 		out = append(out, Change{Field: "credentials", Old: ap.Credentials, New: cp.Credentials, Loosens: cp.Credentials != CredentialsAsk})
 	}
+	if ap.TLS != cp.TLS {
+		out = append(out, Change{Field: "tls", Old: ap.TLS, New: cp.TLS, Loosens: TLSRank(cp.TLS) < TLSRank(ap.TLS)})
+	}
+	// A new CA can vouch for any certificate: every change loosens.
+	same("tls_ca", ap.TLSCA, cp.TLSCA)
+
+	switch as, cs := ap.SSH, cp.SSH; {
+	case as == nil && cs == nil:
+	case as == nil || cs == nil:
+		// Added or removed: the database is reached another way.
+		out = append(out, Change{Field: "ssh", Old: SSHString(as), New: SSHString(cs), Loosens: true})
+	default:
+		same("ssh.host", as.Host, cs.Host)
+		same("ssh.port", strconv.Itoa(as.Port), strconv.Itoa(cs.Port))
+		same("ssh.user", as.User, cs.User)
+		same("ssh.auth", as.Auth, cs.Auth)
+		same("ssh.key", as.Key, cs.Key)
+		if as.Credentials != cs.Credentials {
+			out = append(out, Change{Field: "ssh.credentials", Old: as.Credentials, New: cs.Credentials, Loosens: cs.Credentials != CredentialsAsk})
+		}
+	}
 
 	limit := func(field string, o, n int64, format func(int64) string) {
 		if o != n {
@@ -159,6 +191,12 @@ func Diff(approved, current Policy) []Change {
 		// is the loosest.
 		out = append(out, Change{Field: "limits.k_anonymity", Old: num(int64(al.KAnonymity)), New: num(int64(cl.KAnonymity)),
 			Loosens: cl.KAnonymity < al.KAnonymity})
+	}
+	// 0 is an approved policy from before reference_probe existed: the
+	// default applies, so it is no change.
+	if ap := al.ReferenceProbe; ap != 0 && ap != cl.ReferenceProbe {
+		out = append(out, Change{Field: "limits.reference_probe", Old: num(int64(ap)), New: num(int64(cl.ReferenceProbe)),
+			Loosens: cl.ReferenceProbe > ap})
 	}
 	if ap.CredentialsTTL != cp.CredentialsTTL {
 		out = append(out, Change{Field: "credentials_ttl", Old: dur(int64(ap.CredentialsTTL)), New: dur(int64(cp.CredentialsTTL)),

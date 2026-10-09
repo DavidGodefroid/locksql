@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -36,7 +37,10 @@ type fakeSession struct {
 	extra    []string // ExtraPrivileges warnings
 	closed   bool
 	// count answers the k-anonymity row counts (nil: the default result).
-	count *engine.Result
+	count   *engine.Result
+	indexes []engine.IndexDesc
+	cols    []engine.ColumnInfo // appended to the catalog Columns answers
+	colsErr error               // answers the catalog Columns calls
 }
 
 func (f *fakeSession) ServerVersion() string { return "11.4.0-MariaDB" }
@@ -56,9 +60,12 @@ func (f *fakeSession) Describe(_ context.Context, db, table string) (engine.Tabl
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.catalog++
-	return engine.TableInfo{DB: db, Table: table, Columns: []engine.ColumnDesc{{Name: "id", Type: "int"}}, EstRows: 3}, nil
+	return engine.TableInfo{DB: db, Table: table, Columns: []engine.ColumnDesc{{Name: "id", Type: "int"}}, Indexes: f.indexes, EstRows: 3}, nil
 }
 func (f *fakeSession) Columns(_ context.Context, db string) ([]engine.ColumnInfo, error) {
+	if f.colsErr != nil {
+		return nil, f.colsErr
+	}
 	var out []engine.ColumnInfo
 	for _, c := range []struct{ t, c string }{
 		{"users", "id"}, {"users", "email"}, {"users", "note"}, {"users", "status"},
@@ -66,6 +73,7 @@ func (f *fakeSession) Columns(_ context.Context, db string) ([]engine.ColumnInfo
 	} {
 		out = append(out, engine.ColumnInfo{DB: db, Table: c.t, Column: c.c, Type: "text"})
 	}
+	out = append(out, f.cols...)
 	return out, nil
 }
 func (f *fakeSession) Explain(_ context.Context, _ string, sql string) (engine.Plan, error) {
@@ -118,6 +126,8 @@ type fakeIO struct {
 	blocked chan struct{}
 	// onAsk, when set, runs before each scripted answer (e.g. to let time pass).
 	onAsk func()
+	// secrets answer AskSecret, in order; none left fails the prompt.
+	secrets []string
 }
 
 func (f *fakeIO) Println(s string) {
@@ -153,8 +163,16 @@ func (f *fakeIO) Ask(ctx context.Context, prompt string, _ time.Duration) (strin
 	return a, true
 }
 
-func (f *fakeIO) AskSecret(context.Context, string) ([]byte, error) {
-	return []byte("not-used"), nil
+func (f *fakeIO) AskSecret(_ context.Context, prompt string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prompts = append(f.prompts, prompt)
+	if len(f.secrets) == 0 {
+		return nil, errors.New("no answer")
+	}
+	s := f.secrets[0]
+	f.secrets = f.secrets[1:]
+	return []byte(s), nil
 }
 
 func (f *fakeIO) promptCount() int {
@@ -334,13 +352,13 @@ func TestApprovedRunReturnsMaskedRows(t *testing.T) {
 	if len(rr.Rows) != 1 || len(rr.Columns) != 3 {
 		t.Fatalf("run result: %+v", rr)
 	}
-	if got := rr.Rows[0][1]; got != "a***(17)" {
+	if got := rr.Rows[0][1]; !strings.HasPrefix(fmt.Sprint(got), "<redacted") {
 		t.Errorf("email column not masked by rule: %v", got)
 	}
 	if got := rr.Rows[0][2]; got == "write to bob@example.org" || !strings.Contains(got.(string), "b***(") {
 		t.Errorf("email detector not applied: %v", got)
 	}
-	if strings.Contains(rr.Text, "alice@example.com") || !strings.Contains(rr.Text, "a***(17)") {
+	if strings.Contains(rr.Text, "alice@example.com") || !strings.Contains(rr.Text, "<redacted") {
 		t.Errorf("text rendering not masked: %q", rr.Text)
 	}
 	prompt := strings.Join(h.io.prompts, "\n")
@@ -349,7 +367,7 @@ func TestApprovedRunReturnsMaskedRows(t *testing.T) {
 	}
 	screen := ansi.ReplaceAllString(h.io.output(), "")
 	for _, want := range []string{"UAT", "db.uat.example.com", "alice", "tier read", selectUsers, "verdict OK", "PII: masked",
-		"reads: app.users", "PII columns touched: users.email (select)", "masked outputs: email → partial", "returns at most 10 rows"} {
+		"reads: app.users", "PII columns touched: users.email (select)", "masked outputs: email → redact", "returns at most 10 rows"} {
 		if !strings.Contains(screen, want) {
 			t.Errorf("approval screen lacks %q:\n%s", want, screen)
 		}
@@ -431,6 +449,8 @@ func TestProductionNeedsProfileName(t *testing.T) {
 
 func skip(c *ServerConfig) { c.SkipPermissions = true }
 
+func allowUnmask(c *ServerConfig) { c.AllowUnmask = true }
+
 func TestSkipPermissions(t *testing.T) {
 	t.Run("auto on uat", func(t *testing.T) {
 		h := newHarness(t, uatProfile(), skip)
@@ -440,7 +460,7 @@ func TestSkipPermissions(t *testing.T) {
 		if h.io.promptCount() != 0 {
 			t.Fatal("skip-permissions prompted on uat")
 		}
-		if rr.Rows[0][1] != "a***(17)" {
+		if !strings.HasPrefix(fmt.Sprint(rr.Rows[0][1]), "<redacted") {
 			t.Errorf("auto-approved rows not masked: %v", rr.Rows[0][1])
 		}
 		if !strings.Contains(h.auditLog(t), `"decision":"auto"`) {
@@ -460,7 +480,7 @@ func TestSkipPermissions(t *testing.T) {
 		}
 	})
 	t.Run("prompts on unmask", func(t *testing.T) {
-		h := newHarness(t, uatProfile(), skip)
+		h := newHarness(t, uatProfile(), skip, allowUnmask)
 		pr := h.plan(t, selectUsers, true)
 		if !pr.Unmask {
 			t.Fatal("unmask flag lost")
@@ -476,6 +496,12 @@ func TestSkipPermissions(t *testing.T) {
 		}
 		if !strings.Contains(h.io.output(), "UNMASKED") {
 			t.Error("approval screen does not say UNMASKED")
+		}
+		if !strings.Contains(h.io.output(), "PII: UNMASKED result") || !strings.Contains(h.io.output(), "alice@example.com") {
+			t.Errorf("unmasked result not shown in the console:\n%s", h.io.output())
+		}
+		if strings.Contains(h.auditLog(t), "alice@example.com") {
+			t.Error("unmasked value in the audit log")
 		}
 		if !strings.Contains(h.auditLog(t), `"unmasked":true`) {
 			t.Error("unmask not audited")
@@ -527,7 +553,7 @@ func TestAliasMaskedByProvenance(t *testing.T) {
 		h.io.answers = []string{"y"}
 		var rr ipc.RunResult
 		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
-		if got := rr.Rows[0][0]; got != "a***(17)" {
+		if got := rr.Rows[0][0]; !strings.HasPrefix(fmt.Sprint(got), "<redacted") {
 			t.Errorf("origin=%v: aliased PII column not masked: %v", origin, got)
 		}
 	}
@@ -827,7 +853,7 @@ func TestClientGoneDuringApproval(t *testing.T) {
 // masking on, it must reach neither the client nor the audit log.
 func TestRunErrorTextIsRedacted(t *testing.T) {
 	// EXTRACTVALUE is outside the function allowlist.
-	h := newHarness(t, uatProfile())
+	h := newHarness(t, uatProfile(), allowUnmask)
 	wantCode(t, h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app",
 		SQL: "SELECT 1 FROM users WHERE EXTRACTVALUE(1, CONCAT(0x7e, email)) LIMIT 1"}), ipc.CodeRefused)
 
@@ -845,5 +871,258 @@ func TestRunErrorTextIsRedacted(t *testing.T) {
 	}
 	if strings.Contains(h.auditLog(t), "zed.secret") || strings.Contains(h.io.output(), "zed.secret") {
 		t.Errorf("value in audit log or console:\n%s\n%s", h.auditLog(t), h.io.output())
+	}
+}
+
+func writeRules(t *testing.T, root, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, pii.RulesFile), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The mask modes of pii.toml reach the policy, and a mode change other
+// than back to redact waits for the human.
+func TestPolicyFromFilesKeepsMaskModes(t *testing.T) {
+	root := t.TempDir()
+	writeProjectConfig(t, root, 100)
+	rulesPath := filepath.Join(root, pii.RulesFile)
+	writeRules(t, root, "[[mask]]\ncolumn = \"app.users.email\"\nmode = \"partial\"\n")
+	load := func() (config.Policy, error) { return policyFromFiles(root, "uat", rulesPath) }
+	cur, err := load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cur.PIIModes["app.users.email"]; got != "partial" {
+		t.Fatalf("mode of app.users.email = %q, want partial (modes %v)", got, cur.PIIModes)
+	}
+
+	// Approved as redact, now partial: a loosening.
+	writeRules(t, root, "[[mask]]\ncolumn = \"app.users.email\"\n")
+	initial, err := load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, initial.Profile, func(c *ServerConfig) {
+		c.Policy = initial
+		c.RulesPath = rulesPath
+		c.ApprovedKey = config.ApprovedKey(root, "uat")
+		c.LoadPolicy = load
+	})
+	writeRules(t, root, "[[mask]]\ncolumn = \"app.users.email\"\nmode = \"partial\"\n")
+	h.s.CheckPolicy()
+	wantCode(t, h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers}), ipc.CodePolicyPending)
+	h.io.answers = []string{"y"}
+	h.s.Command(context.Background(), ":review")
+	if got := h.s.approved.PIIModes["app.users.email"]; got != "partial" {
+		t.Fatalf("accepted mode not applied: %q", got)
+	}
+
+	// Back to redact: applied at once, without a prompt.
+	prompts := h.io.promptCount()
+	writeRules(t, root, "[[mask]]\ncolumn = \"app.users.email\"\n")
+	h.s.CheckPolicy()
+	if h.s.pending != nil || h.io.promptCount() != prompts {
+		t.Fatal("a change back to redact waited for the human")
+	}
+	if _, ok := h.s.approved.PIIModes["app.users.email"]; ok {
+		t.Fatalf("redact not applied: %v", h.s.approved.PIIModes)
+	}
+}
+
+// A mask rule added by a client keeps the modes of the other rules.
+func TestPIIAddKeepsMaskModes(t *testing.T) {
+	h := newHarness(t, uatProfile(), func(c *ServerConfig) {
+		c.Policy = c.Policy.WithModes(map[string]string{"app.users.email": "partial"})
+	})
+	h.ok(t, ipc.MethodPIIAdd, ipc.PIIAddParams{Pattern: "app.users.phone"}, nil)
+	if got := h.s.approved.PIIModes["app.users.email"]; got != "partial" {
+		t.Fatalf("mode lost after pii add: %v", h.s.approved.PIIModes)
+	}
+}
+
+// Unmasked output is off unless the human started the console with
+// --allow-unmask: the agent cannot turn it on by itself.
+func TestUnmaskOffByDefault(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Unmask: true})
+	wantCode(t, resp, ipc.CodeRefused)
+	if !strings.Contains(resp.Error.Message, "--allow-unmask") {
+		t.Errorf("refusal does not name the option: %q", resp.Error.Message)
+	}
+	if h.io.promptCount() != 0 || h.sess.runCount() != 0 {
+		t.Fatal("refused unmask request prompted or ran")
+	}
+	if !strings.Contains(h.auditLog(t), "--allow-unmask") {
+		t.Error("refused unmask request not audited")
+	}
+	var st ipc.StatusResult
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if st.AllowUnmask {
+		t.Error("status reports unmask allowed")
+	}
+	// A masked plan still works.
+	h.plan(t, selectUsers, false)
+
+	h = newHarness(t, uatProfile(), allowUnmask)
+	if pr := h.plan(t, selectUsers, true); !pr.Unmask {
+		t.Fatal("unmask flag lost with --allow-unmask")
+	}
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if !st.AllowUnmask {
+		t.Error("status does not report unmask allowed")
+	}
+}
+
+// A masked run never prints its rows in the console.
+func TestMaskedResultNotShownInConsole(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	if strings.Contains(h.io.output(), "alice@example.com") || strings.Contains(h.io.output(), "UNMASKED result") {
+		t.Errorf("masked run printed rows:\n%s", h.io.output())
+	}
+}
+
+func showResults(c *ServerConfig) { c.ShowResults = true }
+
+// Without --show-results a masked run prints no row in the console.
+func TestShowResultsOffByDefault(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	out := h.io.output()
+	if strings.Contains(out, "alice@example.com") || strings.Contains(out, "result in clear") || strings.Contains(out, "shown here in clear") {
+		t.Errorf("clear rows or reminder without --show-results:\n%s", out)
+	}
+	var st ipc.StatusResult
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if st.ShowResults {
+		t.Error("status reports show results on")
+	}
+}
+
+// With --show-results the human sees the clear rows, the masked cells
+// marked with their reference; the client still gets them masked.
+func TestShowResultsPrintsClearRows(t *testing.T) {
+	h := newHarness(t, uatProfile(), showResults)
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	var rr ipc.RunResult
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	out := h.io.output()
+	if !strings.Contains(out, "result: shown here in clear") {
+		t.Errorf("approval screen lacks the reminder:\n%s", out)
+	}
+	if i, j := strings.Index(out, "result: shown here in clear"), strings.Index(out, "result in clear"); i < 0 || j < i {
+		t.Errorf("reminder not before the result:\n%s", out)
+	}
+	for _, want := range []string{"result in clear (shown here only; the agent got it masked)", "alice@example.com", "write to bob@example.org", "‹r1.1.2›", "(1 rows)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("console lacks %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, paint.Yellow("alice@example.com")) {
+		t.Errorf("masked cell not highlighted:\n%q", out)
+	}
+	if strings.Contains(out, paint.Yellow("1")+" ") {
+		t.Errorf("unmasked id highlighted:\n%q", out)
+	}
+	// The client response is unchanged.
+	if !strings.HasPrefix(fmt.Sprint(rr.Rows[0][1]), "<redacted") || strings.Contains(rr.Text, "alice@example.com") || strings.Contains(fmt.Sprint(rr.Rows), "bob@example.org") {
+		t.Errorf("client got clear values: %+v", rr)
+	}
+	if strings.Contains(h.auditLog(t), "alice@example.com") || strings.Contains(h.auditLog(t), "bob@example.org") {
+		t.Error("row data in the audit log")
+	}
+	// The reference still resolves for the agent.
+	h.plan(t, "SELECT id FROM users WHERE email = '${r1.1.2}' LIMIT 1", false)
+	var st ipc.StatusResult
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if !st.ShowResults {
+		t.Error("status does not report show results on")
+	}
+}
+
+// The output caps apply to the clear rows as to the client's.
+func TestShowResultsCapped(t *testing.T) {
+	p := uatProfile()
+	p.Limits.MaxCellChars = 5
+	h := newHarness(t, p, showResults)
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	if strings.Contains(h.io.output(), "alice@example.com") {
+		t.Errorf("cell not capped at max_cell_chars:\n%s", h.io.output())
+	}
+}
+
+// No client can turn --show-results on: an extra plan parameter is refused.
+func TestShowResultsNotSettableByClient(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	wantCode(t, h.call(t, ipc.MethodQueryPlan, map[string]any{"db": "app", "sql": selectUsers, "show_results": true}), ipc.CodeInvalidParams)
+	var st ipc.StatusResult
+	h.ok(t, ipc.MethodStatus, map[string]any{"show_results": true}, &st)
+	if st.ShowResults {
+		t.Error("a status request turned show results on")
+	}
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	if strings.Contains(h.io.output(), "alice@example.com") {
+		t.Error("clear rows shown after a client asked for them")
+	}
+}
+
+// No config file can turn it on either: the key is unknown, so refused.
+func TestShowResultsNotSettableByConfig(t *testing.T) {
+	root := t.TempDir()
+	writeProjectConfig(t, root, 100)
+	path := filepath.Join(root, ".locksql", "config.toml")
+	for _, extra := range []string{"show_results = true\n", "\n[console]\nshow_results = true\n"} {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(b) + extra // a top-level table
+		if !strings.Contains(extra, "[") {
+			// A key of the profile.
+			body = strings.Replace(string(b), "user = \"alice\"\n", "user = \"alice\"\n"+extra, 1)
+		}
+		p := filepath.Join(t.TempDir(), ".locksql")
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "config.toml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := config.LoadFrom(filepath.Dir(p), ""); err == nil {
+			t.Errorf("config with %q accepted", extra)
+		}
+	}
+}
+
+func TestFlagNoticesAndReadyLines(t *testing.T) {
+	if n := flagNotices(Options{}, uatProfile()); len(n) != 0 {
+		t.Errorf("notices without flags: %q", n)
+	}
+	n := strings.Join(flagNotices(Options{ShowResults: true}, uatProfile()), "\n")
+	if !strings.Contains(n, "--show-results") || !strings.Contains(n, "in clear") {
+		t.Errorf("no --show-results warning: %q", n)
+	}
+	prod := uatProfile()
+	prod.Production = true
+	n = strings.Join(flagNotices(Options{ShowResults: true}, prod), "\n")
+	if !strings.HasPrefix(n, red) || !strings.Contains(n, "PRODUCTION") {
+		t.Errorf("production warning not red: %q", n)
+	}
+	r := strings.Join(readyLines("/run/x.sock", "", true), "\n")
+	if !strings.Contains(r, "shown in clear in this console (--show-results)") {
+		t.Errorf("Ready block lacks the results line: %q", r)
+	}
+	if strings.Contains(strings.Join(readyLines("/run/x.sock", "", false), "\n"), "results") {
+		t.Error("results line without the flag")
 	}
 }

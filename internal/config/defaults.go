@@ -1,6 +1,9 @@
 package config
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Supported engines.
 const (
@@ -46,6 +49,7 @@ func DefaultLimits(production bool) Limits {
 			MaxCellChars:      200,
 			MaxOutputBytes:    65_536,
 			KAnonymity:        10,
+			ReferenceProbe:    5,
 		}
 	}
 	return Limits{
@@ -56,6 +60,7 @@ func DefaultLimits(production bool) Limits {
 		MaxCellChars:      200,
 		MaxOutputBytes:    65_536,
 		KAnonymity:        5,
+		ReferenceProbe:    5,
 	}
 }
 
@@ -65,6 +70,12 @@ func DefaultLimits(production bool) Limits {
 func applyDefaults(p *Profile, detectorsSet bool) {
 	if p.Credentials == "" {
 		p.Credentials = CredentialsAsk
+	}
+	if p.TLS == "" && p.Engine != EngineSQLite {
+		p.TLS = TLSVerifyFull
+		if strings.HasPrefix(p.Host, "/") || IsLoopback(p.Host) {
+			p.TLS = TLSPrefer
+		}
 	}
 	if p.Port == 0 {
 		p.Port = defaultPorts[p.Engine]
@@ -98,5 +109,8 @@ func applyDefaults(p *Profile, detectorsSet bool) {
 	}
 	if l.KAnonymity == 0 {
 		l.KAnonymity = d.KAnonymity
+	}
+	if l.ReferenceProbe == 0 {
+		l.ReferenceProbe = d.ReferenceProbe
 	}
 }

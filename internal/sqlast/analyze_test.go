@@ -33,7 +33,7 @@ var testCatalog = fakeCatalog{
 var testRules = map[string]string{
 	"app.users.email":    "partial",
 	"app.users.salary":   "redact",
-	"app.contacts.email": "hash",
+	"app.contacts.email": "email",
 }
 
 func testEnv(masking bool) Env {
@@ -44,15 +44,6 @@ func testEnv(masking bool) Env {
 			return m, ok
 		},
 		Masking: masking,
-		Token: func(lit string) (string, bool, bool) {
-			if !strings.HasPrefix(lit, "tok_") {
-				return "", false, false
-			}
-			if lit == "tok_known" {
-				return "a@b.example", true, true
-			}
-			return "", true, false
-		},
 	}
 }
 
@@ -81,7 +72,7 @@ func TestProvenanceMasksResolvedSource(t *testing.T) {
 		{"SELECT o.email, u.email FROM orders o JOIN users u ON u.id = o.user_id LIMIT 1", []string{"", "partial"}},
 		{"SELECT sum(salary) AS s FROM users LIMIT 1", []string{"redact"}},
 		{"SELECT count(email) FROM users LIMIT 1", []string{""}},
-		{"SELECT email FROM contacts LIMIT 1", []string{"hash"}},
+		{"SELECT email FROM contacts LIMIT 1", []string{"email"}},
 		{"SELECT email FROM users UNION SELECT email FROM contacts LIMIT 1", []string{"redact"}},
 		{"SELECT id FROM users JOIN contacts USING (id) LIMIT 1", []string{""}},
 		{"SELECT * FROM users JOIN contacts USING (email) LIMIT 1", []string{"redact", "", "", "redact", "", ""}},
@@ -126,8 +117,6 @@ func TestPIIUsageRefused(t *testing.T) {
 		"SELECT id FROM users u JOIN orders o ON o.user_id = u.id AND u.email = 'x' LIMIT 1",
 		"SELECT id FROM users WHERE sum(salary) > 1 LIMIT 1",
 		"SELECT id FROM users GROUP BY id HAVING max(salary) > 1000 LIMIT 1",
-		"SELECT email FROM contacts WHERE email = 'tok_unknown' LIMIT 1",
-		"SELECT id FROM users WHERE email = 'tok_known' LIMIT 1",
 		"SELECT (SELECT count(*) FROM users u WHERE u.email = 'x' AND u.id = o.user_id) FROM orders o LIMIT 1",
 		"WITH g(x) AS (SELECT 'a@b.c') SELECT u.id FROM users u JOIN g ON u.email = g.x LIMIT 1",
 		"EXPLAIN SELECT id FROM users WHERE email = 'x'",
@@ -198,10 +187,6 @@ func TestKAnonymityChecks(t *testing.T) {
 			{SQL: `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" IN ('a', 'b')`},
 			{SQL: "WITH c AS (SELECT * FROM users) SELECT COUNT(*) FROM c WHERE email IN ('a', 'b')"},
 		}},
-		{"SELECT id FROM contacts WHERE email = 'tok_known' LIMIT 1", []KCheck{
-			{SQL: `SELECT COUNT(*) FROM "app"."contacts" WHERE "app"."contacts"."email" = 'a@b.example'`},
-			{SQL: "SELECT COUNT(*) FROM contacts WHERE email = 'a@b.example'"},
-		}},
 		// The subjects are counted in the column's own table, whatever the
 		// join multiplies.
 		{"SELECT o.id FROM users u JOIN orders o ON o.user_id = u.id WHERE u.email IS NULL AND u.salary IN (1, 2) LIMIT 1", []KCheck{
@@ -240,17 +225,13 @@ func TestKCheckQuoting(t *testing.T) {
 	}
 }
 
-func TestTokenSubstitution(t *testing.T) {
-	sql := "SELECT id FROM contacts WHERE email = 'tok_known' LIMIT 1"
-	a, err := analyze(t, sqlclass.Postgres, sql)
-	if err != nil {
-		t.Fatal(err)
+func TestQuoteLiteral(t *testing.T) {
+	got, err := quoteLiteral(sqlclass.Postgres, "o'k")
+	if err != nil || got != "'o''k'" {
+		t.Errorf("quoteLiteral = %q, %v", got, err)
 	}
-	if got, want := a.RunSQL(sql), "SELECT id FROM contacts WHERE email = 'a@b.example' LIMIT 1"; got != want {
-		t.Errorf("RunSQL = %q, want %q", got, want)
-	}
-	if !a.PIIFilter {
-		t.Error("PIIFilter not set")
+	if _, err := quoteLiteral(sqlclass.Postgres, `a\b`); err == nil {
+		t.Error("a backslash was accepted")
 	}
 }
 
@@ -301,5 +282,101 @@ func TestDialectStarOrder(t *testing.T) {
 		if a.Outputs[0].Label != first {
 			t.Errorf("%s: first column %s, want %s", d, a.Outputs[0].Label, first)
 		}
+	}
+}
+
+// On PostgreSQL pg_stat_statements is a view in a user schema and
+// pg_stat_activity is reachable unqualified: both are refused on the read
+// path even when the catalog lists them.
+func TestStatementTextViewsRefusedPostgres(t *testing.T) {
+	env := testEnv(true)
+	env.Catalog = fakeCatalog{
+		"public.pg_stat_statements": {"query"},
+		"public.pg_stat_activity":   {"query"},
+	}
+	for _, sql := range []string{
+		"SELECT query FROM pg_stat_statements LIMIT 1",
+		"SELECT query FROM public.pg_stat_statements LIMIT 1",
+		"SELECT query FROM pg_stat_activity LIMIT 1",
+	} {
+		st, err := Parse(sqlclass.Postgres, sql)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", sql, err)
+		}
+		_, err = Analyze(st, env)
+		var r *sqlclass.Refusal
+		if !errors.As(err, &r) {
+			t.Errorf("%q: got %v, want a refusal", sql, err)
+		}
+	}
+}
+
+// A recursive CTE whose recursive arm brings a literal keeps Lit on its
+// column: the fixpoint must not stop on a provenance that only lost it.
+func TestRecursiveCTELiteralKeepsLit(t *testing.T) {
+	for _, sql := range []string{
+		"WITH RECURSIVE c(e, n) AS (SELECT email, 1 FROM users UNION ALL SELECT 'x', n+1 FROM c WHERE n < 2) SELECT e FROM c LIMIT 5",
+		"WITH RECURSIVE c(e, n) AS (SELECT salary, 1 FROM users UNION ALL SELECT 'x', n+1 FROM c WHERE n < 2) SELECT e FROM c LIMIT 5",
+	} {
+		a, err := analyze(t, sqlclass.MySQL, sql)
+		if err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		if p := a.Outputs[0].Prov; !p.Lit || !p.Sensitive {
+			t.Errorf("%s: provenance %+v, want Lit and Sensitive", sql, p)
+		}
+	}
+	// Without a literal the column stays literal-free.
+	a, err := analyze(t, sqlclass.MySQL, "WITH RECURSIVE c(e, n) AS (SELECT email, 1 FROM users UNION ALL SELECT e, n+1 FROM c WHERE n < 2) SELECT e FROM c LIMIT 5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Outputs[0].Prov.Lit {
+		t.Errorf("plain recursive column marked Lit: %+v", a.Outputs[0].Prov)
+	}
+}
+
+// LitFilter marks a statement that filters a PII column with a literal the
+// agent wrote, wherever it sits; placeholders and IS NULL do not count.
+func TestLitFilter(t *testing.T) {
+	cases := map[string]bool{
+		"SELECT email FROM users WHERE email = 'v@x.com' LIMIT 5":                                          true,
+		"SELECT email FROM users WHERE email IN ('v@x.com', 'b@x.com') LIMIT 5":                            true,
+		"SELECT email FROM users GROUP BY email HAVING email = 'v@x.com' LIMIT 5":                          true,
+		"SELECT email FROM users INTERSECT SELECT email FROM users WHERE email = 'v@x.com' LIMIT 5":        true,
+		"SELECT b.email FROM users a JOIN users b ON a.email = b.email WHERE a.email = 'v@x.com' LIMIT 5":  true,
+		"SELECT email FROM users WHERE id IN (SELECT id FROM users WHERE email = 'v@x.com') LIMIT 5":       true,
+		"SELECT email FROM users WHERE email IN ('${email}', 'v@x.com') LIMIT 5":                           true,
+		"SELECT email FROM users LIMIT 5":                                                                  false,
+		"SELECT email FROM users WHERE id = 1 LIMIT 5":                                                     false,
+		"SELECT email FROM users WHERE email IS NULL LIMIT 5":                                              false,
+		"SELECT email FROM users WHERE email = '${email}' LIMIT 5":                                         false,
+		"SELECT email FROM users WHERE email IN ('${email}', '${other}') LIMIT 5":                          false,
+		"SELECT b.email FROM users a JOIN users b ON a.email = b.email WHERE a.email = '${email}' LIMIT 5": false,
+	}
+	for sql, want := range cases {
+		a, err := analyze(t, sqlclass.MySQL, sql)
+		if err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		if a.LitFilter != want {
+			t.Errorf("%s: LitFilter %v, want %v", sql, a.LitFilter, want)
+		}
+	}
+}
+
+// A recursive CTE whose provenance does not converge within the fixpoint
+// bound is refused: its last iteration may still miss a literal.
+func TestRecursiveCTENotConvergedRefused(t *testing.T) {
+	sql := "WITH RECURSIVE c(a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,n) AS (SELECT email,'victim@x.com',email,email,email,email,email,email,email,email,1 FROM users UNION ALL SELECT a10,a2,a2,a3,a4,a5,a6,a7,a8,a9,n+1 FROM c WHERE n < 12) SELECT a1 FROM c WHERE n >= 10 LIMIT 50"
+	_, err := analyze(t, sqlclass.MySQL, sql)
+	var r *sqlclass.Refusal
+	if !errors.As(err, &r) || !strings.Contains(r.Reason, "too deep") {
+		t.Fatalf("got %v, want a refusal", err)
+	}
+	// Modes stay deduplicated through unions.
+	p := union(Prov{Modes: []string{"redact", "partial"}}, Prov{Modes: []string{"partial", "redact"}})
+	if len(p.Modes) != 2 {
+		t.Errorf("modes %v", p.Modes)
 	}
 }

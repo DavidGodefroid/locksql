@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>locksql security model — guarantees and limits</title>
+  <meta name="description" content="What locksql protects, against whom, and how: one key holder, OS separation, human approval, fail-closed parsing, masking, and its documented limits.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
+  <link rel="canonical" href="https://locksql.com/security/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="locksql">
+  <meta property="og:title" content="locksql security model — guarantees and limits">
+  <meta property="og:description" content="What locksql protects, against whom, and how: one key holder, OS separation, human approval, fail-closed parsing, masking, and its documented limits.">
+  <meta property="og:url" content="https://locksql.com/security/">
+  <meta property="og:image" content="https://locksql.com/assets/og.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="locksql — Your AI writes the query. You hold the key.">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="locksql security model — guarantees and limits">
+  <meta name="twitter:description" content="What locksql protects, against whom, and how: one key holder, OS separation, human approval, fail-closed parsing, masking, and its documented limits.">
+  <meta name="twitter:image" content="https://locksql.com/assets/og.png">
+  <meta name="twitter:image:alt" content="locksql — Your AI writes the query. You hold the key.">
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="../"><img src="../assets/logo.svg" alt="" width="32" height="32"><span class="wordmark">lock<span>sql</span></span></a>
+      <nav class="site-nav" aria-label="Main">
+        <ul>
+          <li><a href="../">Home</a></li>
+          <li><a href="../install/">Install</a></li>
+          <li><a href="../how-it-works/">How it works</a></li>
+          <li><a href="../security/" aria-current="page">Security</a></li>
+          <li><a href="../faq/">FAQ</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+  <main id="main" tabindex="-1">
+    <div class="wrap">
+
+<h1>Security model</h1>
+<div class="prose">
+  <p class="lead">locksql lets an AI agent query a database while a human stays in control.</p>
+  <p>The console is the enforcement point. Skills, rules and MCP tool descriptions only guide the agent; the console’s checks are the guarantee.</p>
+  <p>This page summarises <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">the full security model</a>, which is the reference.</p>
+</div>
+
+<section aria-labelledby="trusted">
+  <h2 id="trusted">Who is trusted</h2>
+  <ul class="prose">
+    <li><strong>Assets:</strong> database credentials; the data (in particular personal data); the availability of the database server; the integrity of the data and of the policy that governs access.</li>
+    <li><strong>The human</strong> runs <code>locksql console</code> in a terminal and is trusted.</li>
+    <li><strong>The agent</strong> (and anything that can steer it, such as text stored in the database or in files it reads) is <em>not</em> trusted. It runs the client commands and the MCP server.</li>
+    <li><strong>Other local users</strong> are not trusted.</li>
+  </ul>
+</section>
+
+<section aria-labelledby="principles">
+  <h2 id="principles">Principles</h2>
+  <ol class="prose">
+    <li><strong>Two processes, one key holder.</strong> The credentials and the only database connection live in the console process. The clients have neither.</li>
+    <li><strong>The console is the enforcement point.</strong> Skills, rules and tool descriptions are guidance. Every check that matters runs in the console.</li>
+    <li><strong>The AI tightens, the human loosens.</strong> Agents may add mask rules or request changes; every loosening needs the human’s confirmation in the console.</li>
+    <li><strong>Fail closed.</strong> What cannot be classified with certainty is refused.</li>
+    <li><strong>Defence in depth.</strong> Server-side read-only and timeouts, a client-side classifier, a full parse and column analysis of reads, a privilege audit, an EXPLAIN gate, k-anonymity counts, result caps, then human approval.</li>
+    <li><strong>Results are data, not instructions.</strong></li>
+  </ol>
+</section>
+
+<section aria-labelledby="enforces">
+  <h2 id="enforces">What the console enforces</h2>
+  <div class="prose">
+    <h3 id="key-holder">One key holder</h3>
+    <p>Credentials are typed at console start (no echo) or read from the OS keychain. They never appear in argv, environment, files, logs, the socket protocol or error messages. The console disables core dumps. <code>credentials_ttl</code> makes it ask again after a set time (vault leases).</p>
+
+    <h3 id="os-separation">OS separation</h3>
+    <p><code>locksql install</code> creates a <code>locksql</code> console account and a <code>locksql-clients</code> group: the console runs as that account in its own login session, the agent’s account only reaches its socket, and the kernel checks every peer. The console refuses to start without this setup, since an agent in the console’s own account could read or type into its terminal.</p>
+
+    <h3 id="approval">Human approval</h3>
+    <p>Every statement is shown and approved in the console terminal; no socket method can approve. On a production profile you type the profile name, not <code>y</code>. Pending keystrokes are flushed before each prompt, so type-ahead never approves. No answer within 5 minutes means denied.</p>
+
+    <h3 id="fail-closed">Fail closed</h3>
+    <p>A dialect-aware classifier refuses anything it cannot classify with certainty: several statements, comments, variables, bind parameters, file and OS access, sleeps and locks, session tampering. Reads are limited to <code>SELECT</code>, <code>WITH ... SELECT</code> and <code>EXPLAIN SELECT</code>, parsed in full: unknown syntax, functions outside an allowlist and system schemas are refused.</p>
+
+    <h3 id="tiers">Tiers</h3>
+    <p><code>read &lt; write &lt; ddl &lt; admin</code>; the default is <code>read</code>. Tier <code>read</code> is also enforced server side (read-only session and transaction).</p>
+
+    <h3 id="weight">Weight check</h3>
+    <p>A READ statement must carry <code>LIMIT n</code> with <code>n &lt;= max_rows</code>. The console runs <code>EXPLAIN</code> and refuses statements that would examine too many rows (or cost more than <code>explain_cost_refuse</code>); REFUSE cannot be overridden from the console.</p>
+
+    <h3 id="pii-masking">PII masking</h3>
+    <p>Every output column is resolved to its source columns through aliases, functions, subqueries, CTEs, unions, joins and <code>*</code>, and masked on that source, not on its label. Masking is best effort (see the limits below). <a href="../how-it-works/#masking">How masking works</a>.</p>
+
+    <h3 id="statement-text">Statement text</h3>
+    <p>While mask rules exist, <code>pg_stat_statements</code> and <code>pg_stat_activity</code> are refused, since they hold the text of past statements. The MySQL and MariaDB system schemas (<code>performance_schema</code>, <code>sys</code>, <code>information_schema</code>) are outside the console’s catalog and refused.</p>
+
+    <h3 id="pii-usage">PII usage</h3>
+    
+<p>PII columns may be selected, counted, joined with <code>=</code> and
+filtered with <code>=</code>, <code>IN (literals)</code> or <code>IS NULL</code>.
+Expressions over them, <code>LIKE</code>, ranges and <code>ORDER BY</code> are
+refused. A filter, grouping or aggregate on PII must cover at least
+<code>k_anonymity</code> rows (default 5, production 10).</p>
+
+    <h3 id="placeholders">Placeholders and references</h3>
+    <p>The agent can filter a PII column on a value it never sees: a placeholder (<code>'${email}'</code>) that you type in the console without echo, or the reference of a redacted cell (<code>'${r1.2.3}'</code>) whose clear value only the console holds, in memory. Both work only compared with a PII column, and the values never reach the agent, the audit log or a client error. The approval screen warns, in red and in the audit log, on a clear value from the agent, a reference with a unique-key filter, and probing beyond <code>limits.reference_probe</code>. <a href="../how-it-works/#blind-search">How it works</a>.</p>
+
+    <h3 id="unmask-gate">Raw values only on your say-so</h3>
+    <p>An agent can ask for unmasked output only when the console was started with <code>--allow-unmask</code>; without it the request is refused and audited. <code>--show-results</code> shows you the clear rows in the console while the agent still gets them masked. Both are console flags only: no client or config file can turn them on.</p>
+
+    <h3 id="quiet">Quiet failures</h3>
+    <p>Clients get a generic message, never the server’s error text, and no timings; <code>query.run</code> answers on a 250 ms quantum.</p>
+
+    <h3 id="tighten">The AI tightens, the human loosens</h3>
+    
+<p>Agents may add mask rules and request changes. A config edit that loosens
+the policy (higher tier, larger limits, new host, removed PII rule, ...) only
+takes effect after you confirm it in the console.</p>
+
+
+    <h3 id="audit">Audit</h3>
+    <p>Every login, policy change, refusal, decision, catalog read and logout is appended to a JSONL audit log (mode 0600). Records contain the SQL and metadata, never secrets and never row data.</p>
+
+    <h3 id="untrusted">Untrusted rows</h3>
+    <p>Rows are framed as untrusted data in every output; the generated agent instructions say so; control and bidirectional characters are escaped in client output and on the console screen, so data cannot spoof the approval prompt.</p>
+
+    <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md#threats-and-mitigations">All threats and mitigations</a> · <a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md#safety-model">Safety model in the README</a></p>
+  </div>
+</section>
+
+<section class="limits" aria-labelledby="not-protected">
+  <h2 id="not-protected">What locksql does not protect against</h2>
+  <div class="prose">
+    <p>These limits are part of the design. Read them before you rely on locksql.</p>
+
+    <h3 id="same-user">Same-user mode is excluded</h3>
+    <p>The console refuses to start without a separated setup, so an agent running as the console’s account (reading its keychain session, attaching with ptrace, typing into its terminal) is not a supported configuration.</p>
+
+    <h3 id="console-account">The console account</h3>
+    <p>Malware running as <code>locksql</code> or as root, and an agent account that can become either, are out of scope. So is an X11 session on a non-production profile with <code>x11 = "warn"</code>.</p>
+    <p>The agent’s account is assumed to have no password-less <code>sudo</code> (<code>locksql doctor</code> fails otherwise) and no other way to become <code>locksql</code> or root.</p>
+
+    <h3 id="transport">Transport security</h3>
+    
+<p>The profile’s <code>tls</code> setting picks the mode, with libpq’s
+<code>sslmode</code> semantics:</p>
+<table>
+<caption>TLS modes</caption>
+<thead><tr><th scope="col">Mode</th><th scope="col">Encrypts</th><th scope="col">Verifies chain</th><th scope="col">Verifies host name</th></tr></thead>
+<tbody>
+<tr><td><code>disable</code></td><td>no</td><td>no</td><td>no</td></tr>
+<tr><td><code>prefer</code></td><td>if offered</td><td>no</td><td>no</td></tr>
+<tr><td><code>require</code></td><td>yes, else refuse</td><td>only with <code>tls_ca</code></td><td>no</td></tr>
+<tr><td><code>verify-ca</code></td><td>yes, else refuse</td><td>yes</td><td>no</td></tr>
+<tr><td><code>verify-full</code></td><td>yes, else refuse</td><td>yes</td><td>yes (<code>host</code>)</td></tr>
+</tbody>
+</table>
+<p>The default is <code>verify-full</code>, except <code>prefer</code> when
+<code>host</code> is a Unix socket path or a loopback host (<code>localhost</code>
+or a loopback IP literal). <code>production = true</code> refuses
+<code>disable</code> and <code>prefer</code> unless the host is loopback or a
+socket path. <code>tls_ca</code> is a PEM bundle that replaces the system roots;
+it is refused with <code>disable</code> and <code>prefer</code>, and with
+<code>require</code> it verifies the chain, as libpq does. A weaker
+<code>tls</code> or any change of <code>tls_ca</code> loosens the approved policy
+and needs the human’s confirmation.</p>
+<p>Below <code>verify-ca</code> an active attacker on the path can intercept or
+downgrade the connection, and obtain the password. The MariaDB/MySQL clear-text
+guard protects plain TCP connections only: over TLS the driver answers
+<code>mysql_clear_password</code>, <code>sha256_password</code> and a
+<code>caching_sha2_password</code> full authentication (the MySQL 8 default) in
+clear, so an attacker terminating TLS gets the password. On plain TCP
+(<code>disable</code>, or <code>prefer</code> after a fallback) the guard refuses
+a full authentication, so a MySQL 8 account logs in only while the server’s
+authentication cache holds it. PostgreSQL likewise sends the password to a
+server that asks for cleartext authentication. <code>verify-ca</code> and
+<code>verify-full</code> prevent the impersonation. A plain or unverified
+connection is reported on the console and in the audit log.</p>
+<p>A profile with an <code>ssh</code> table reaches its database through a
+bastion. The console opens the SSH connection in its own process: no
+<code>ssh</code> binary, no secret in argv, and no local listening port, so
+another local account (the agent’s included) cannot use the tunnel; the bastion
+resolves the database’s host name. The bastion’s host key is checked against the
+console account’s <code>~/.ssh/known_hosts</code>: an unknown key is shown with
+its SHA256 fingerprint and trusted only when the human types <code>yes</code> (on
+a production profile, the fingerprint’s last 8 characters), and a changed key is
+refused with no override. The key passphrase or SSH password follows the same
+rules as the database password. The SSH leg is encrypted and the bastion
+authenticated; the leg from the bastion to the database is protected only by
+<code>tls</code>, unless the database runs on the bastion. Adding, removing or
+changing the <code>ssh</code> table loosens the approved policy. Out of scope:
+<code>ProxyJump</code> chains, <code>~/.ssh/config</code> (never read),
+certificate host keys and forwarding to a Unix socket on the bastion.</p>
+
+
+    <h3 id="write-tiers">Write tiers</h3>
+    <p>Above tier <code>read</code>, the human’s approval is the gate. The classifier assigns the class shown on the screen, but the server does not restrict what an approved write statement does within the account’s privileges. The column analysis covers reads; a write’s <code>RETURNING</code> list or a data-modifying CTE may not alias or transform a masked column.</p>
+
+    <h3 id="best-effort">Masking is best effort</h3>
+    <p>Column rules depend on the rules being right, and value detectors catch common formats only. Use a database account that cannot read what the agent must never see.</p>
+
+    <h3 id="k-anonymity">k-anonymity is a query-set-size control</h3>
+    <p>It refuses a single query whose PII filter, group or aggregate covers fewer than <code>k</code> rows. Each constant PII filter is counted twice: the subjects of the column in its own base table (a join cannot multiply them; a column of a view, which has no base table to count in, cannot be filtered on), and the rows the statement’s own <code>FROM</code>/<code>WHERE</code> selects. A join still multiplies the second count: <code>WHERE u.id = 3 AND u.salary IN (...)</code> joined with a large table passes when at least <code>k</code> users earn one of those salaries, and tells the agent that user 3 is among them. It does not stop differencing attacks: two approved queries whose sets differ by one row (all customers of a city, then the same minus one email) still reveal that row’s other columns. The approval screen shows each PII filter so the human can spot such sequences; <code>--unmask</code> queries skip the check.</p>
+
+    <h3 id="equality">Equality still leaks equality</h3>
+    <p>A filter <code>WHERE email = 'x@example.com'</code> tells the agent whether that value exists among at least <code>k</code> rows. That is the purpose of this feature.</p>
+
+    <h3 id="patient-agent">Placeholders leave room for a patient agent</h3>
+    <p>Equality probing through cell references only raises a warning: an agent that spreads its probes under <code>limits.reference_probe</code>, across results or sessions, is not stopped. The unmasked columns of a targeted row still identify it, and free text without a detector is not masked.</p>
+
+    <h3 id="scrollback">Clear results stay on the console’s screen</h3>
+    <p>With <code>--show-results</code> (and for an unmasked run) the clear rows stay in the scrollback of the console’s terminal, visible to anyone who sees that screen (screen sharing, recording, a terminal that logs its output). That terminal is already the trusted party; locksql does not clear it.</p>
+
+    <h3 id="views">Views and inherited tables</h3>
+    <p>A view, a materialized view or a foreign table is masked by column name only: a view that renames a rule column (<code>firstname AS contact</code>) needs its own rule for the new name. The same holds for a classic-inheritance table (<code>INHERITS</code>) read through a parent or a child the rule does not name. A PostgreSQL partition is resolved to the root of its partition tree, so a rule on the partitioned table covers its partitions.</p>
+
+    <h3 id="copies">Copies at higher tiers</h3>
+    <p>A write (<code>INSERT ... SELECT</code>, <code>UPDATE ... SET</code>, <code>MERGE</code>) that copies a rule column into another column is refused, with or without <code>RETURNING</code>. DDL such as <code>CREATE TABLE ... AS SELECT</code> is not checked that way: at tier <code>ddl</code> and above the human’s approval is the gate.</p>
+
+    <h3 id="catalog">Catalog metadata</h3>
+    <p>Catalog metadata (database, table, column and index names) is returned without approval.</p>
+
+    <h3 id="one-console">One console, no sharing</h3>
+    <p>One console per profile and project, one request at a time. No remote or shared consoles, no data export.</p>
+
+    <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md#out-of-scope-and-limitations">Out of scope and limitations (full text)</a> · <a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md#limitations">Limitations in the README</a></p>
+  </div>
+</section>
+
+<section aria-labelledby="upstream">
+  <h2 id="upstream">Upstream recommendation</h2>
+  <div class="prose">
+    <p>locksql masks what leaves the database; the database still holds plaintext, and any other client of it (a backup, a replica, a reporting tool) sees it. Where you control the schema, store personal data encrypted at rest with a blind index: the application encrypts the value with a key the database never holds, and stores next to it a keyed HMAC of the normalised value for equality lookups and joins. The database then holds no plaintext to leak. locksql’s masks are the downstream half of the same idea: they hide values in query results, whatever the database stores.</p>
+    <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md#upstream-recommendation">Upstream recommendation in the security model</a></p>
+  </div>
+</section>
+
+<section aria-labelledby="report">
+  <h2 id="report">Report a vulnerability</h2>
+  <p class="prose">Report vulnerabilities privately through <a href="https://github.com/DavidGodefroid/locksql/security/advisories/new">GitHub security advisories</a>, not in a public issue. See <a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+</section>
+
+    </div>
+  </main>
+  <footer class="site-footer">
+    <div class="wrap">
+      <ul>
+        <li><a href="https://github.com/DavidGodefroid/locksql">Source on GitHub</a></li>
+        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md">README</a></li>
+        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md">Usage guide</a></li>
+        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
+        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
+      </ul>
+      <p>Pre-release (<code>v0.3.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+    </div>
+  </footer>
+</body>
+</html>

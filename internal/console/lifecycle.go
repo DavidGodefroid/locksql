@@ -21,6 +21,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/secrets"
+	"github.com/DavidGodefroid/locksql/internal/tunnel"
 	"github.com/DavidGodefroid/locksql/internal/ui"
 )
 
@@ -50,6 +51,9 @@ func (st *starter) audit(rec audit.Record) {
 	rec.Host = st.profile.Host
 	if st.profile.Engine == config.EngineSQLite {
 		rec.Host = st.profile.Path
+	}
+	if st.profile.SSH != nil && rec.SSHHost == "" {
+		rec.SSHHost = st.profile.SSH.Host
 	}
 	if err := st.log.Write(rec); err != nil {
 		st.io.Println("audit log write failed: " + err.Error())
@@ -83,11 +87,41 @@ func legacyRulesNotice(cwd, projectRoot, rulesPath string) string {
 	return fmt.Sprintf("note: %s is no longer read outside a project; PII rules now live in %s (copy it there to keep its rules)", old, rulesPath)
 }
 
+// newIsolationEnv builds what Run's isolation checks read; tests replace it.
+var newIsolationEnv = realIsolationEnv
+
+// policyFromFiles reads the current policy of profile from the config
+// found from cwd and from the PII rules at rulesPath, mask modes included.
+func policyFromFiles(cwd, profile, rulesPath string) (config.Policy, error) {
+	c, err := config.Load(cwd)
+	if err != nil {
+		return config.Policy{}, err
+	}
+	cp, ok := c.Profiles[profile]
+	if !ok {
+		return config.Policy{}, fmt.Errorf("profile %q is no longer in the config", profile)
+	}
+	r, err := pii.LoadRulesFile(rulesPath)
+	if err != nil {
+		return config.Policy{}, err
+	}
+	return config.NewPolicy(cp, r.Mask, r.Allow).WithModes(r.Modes), nil
+}
+
 // Run is `locksql console`: the start-up sequence of spec §6, then the
 // request loop until Ctrl-C, logout, :quit or a timeout.
 func Run(ctx context.Context, o Options) error {
 	if o.IO == nil {
 		return errors.New("console: no terminal")
+	}
+	// Same-user mode is refused before any prompt or file write.
+	isoEnv := newIsolationEnv(o.TTY)
+	sys, err := isoEnv.loadSys()
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrConfig, err)
+	}
+	if err := SameUserRefused(sys); err != nil {
+		return err
 	}
 	if err := harden(); err != nil {
 		o.IO.Println("warning: could not disable core dumps: " + err.Error())
@@ -143,19 +177,7 @@ func Run(ctx context.Context, o Options) error {
 	st := &starter{o: o, io: o.IO, log: log, profile: p}
 
 	loadPolicy := func() (config.Policy, error) {
-		c, err := config.Load(o.Cwd)
-		if err != nil {
-			return config.Policy{}, err
-		}
-		cp, ok := c.Profiles[o.Profile]
-		if !ok {
-			return config.Policy{}, fmt.Errorf("profile %q is no longer in the config", o.Profile)
-		}
-		r, err := pii.LoadRulesFile(rulesPath)
-		if err != nil {
-			return config.Policy{}, err
-		}
-		return config.NewPolicy(cp, r.Mask, r.Allow), nil
+		return policyFromFiles(o.Cwd, o.Profile, rulesPath)
 	}
 	cur, err := loadPolicy()
 	if err != nil {
@@ -171,7 +193,7 @@ func Run(ctx context.Context, o Options) error {
 	st.profile = p
 
 	// Separation from the agent, before any secret is asked for.
-	iso, err := checkIsolation(o.IO, realIsolationEnv(o.TTY), p)
+	iso, err := checkIsolation(o.IO, isoEnv, p)
 	if err != nil {
 		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
 		return err
@@ -189,6 +211,10 @@ func Run(ctx context.Context, o Options) error {
 		if o.SkipPermissions {
 			o.IO.Println("--skip-permissions is ignored on production profiles: every statement is prompted")
 		}
+	}
+
+	for _, l := range flagNotices(o, p) {
+		o.IO.Println(l)
 	}
 
 	// 3. Host (confirmed with the policy) and user.
@@ -263,7 +289,7 @@ func Run(ctx context.Context, o Options) error {
 	s, err := NewServer(ServerConfig{
 		Policy: approved, RulesPath: rulesPath, StateDir: o.StateDir, ApprovedKey: key,
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Now: o.Now,
-		SkipPermissions: o.SkipPermissions, Version: o.Version, LoadPolicy: loadPolicy,
+		SkipPermissions: o.SkipPermissions, AllowUnmask: o.AllowUnmask, ShowResults: o.ShowResults, Version: o.Version, LoadPolicy: loadPolicy,
 		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health,
 	})
 	if err != nil {
@@ -274,13 +300,9 @@ func Run(ctx context.Context, o Options) error {
 	s.refused = refusedFP
 	s.audit(audit.Record{Event: audit.EventLogin, Decision: "ok"})
 	o.IO.Println("")
-	o.IO.Println(paint.Heading("Ready", 60))
-	o.IO.Println("  " + paint.Dim("socket   ") + path)
-	if cfg.ProjectRoot != "" {
-		// Only agents working under this root dial this socket.
-		o.IO.Println("  " + paint.Dim("serving  ") + "agents in " + safeText(cfg.ProjectRoot, false))
+	for _, l := range readyLines(path, cfg.ProjectRoot, o.ShowResults) {
+		o.IO.Println(l)
 	}
-	o.IO.Println("  " + paint.Dim("commands ") + paint.Accent(":review") + "  " + paint.Accent(":status") + "  " + paint.Accent(":quit") + paint.Dim(" · Ctrl-C ends the session"))
 	o.IO.Println("")
 	s.println(paint.Step("Listening…"))
 
@@ -395,10 +417,32 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 	}
 	prof := p
 	prof.User = st.user
+	var dial engine.DialFunc
+	var tun *tunnel.Tunnel
+	if p.SSH != nil {
+		t, err := st.openTunnel(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		tun, dial = t, t.Dial
+	}
+	// Every return without a session closes the tunnel opened for it; a
+	// session takes the tunnel over and closes it with itself.
+	connected := false
+	defer func() {
+		if !connected && tun != nil {
+			tun.Close()
+		}
+	}()
 	open := func(secret []byte) (engine.Session, error) {
 		cctx, cancel := context.WithTimeout(ctx, connectTimeout)
 		defer cancel()
-		return eng.Connect(cctx, prof, secret)
+		sess, err := eng.Connect(cctx, prof, secret, dial)
+		if err != nil || tun == nil {
+			return sess, err
+		}
+		connected = true
+		return &tunneledSession{Session: sess, closeTunnel: tun.Close, bastion: p.SSH.Host, dbHost: p.Host}, nil
 	}
 	if p.Engine == config.EngineSQLite {
 		sess, err := open(nil)
@@ -460,11 +504,17 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 }
 
 func (st *starter) offerSave(ctx context.Context, secret []byte, prompt string) {
+	st.offerSaveAs(ctx, st.profile.Host, secret, prompt)
+}
+
+// offerSaveAs offers to store secret in the OS keychain under the
+// profile's name and host.
+func (st *starter) offerSaveAs(ctx context.Context, host string, secret []byte, prompt string) {
 	ans, ok := st.io.Ask(ctx, prompt, ApprovalTimeout)
 	if !ok || strings.TrimSpace(ans) != "y" {
 		return
 	}
-	if err := secrets.KeychainSet(st.profile.Name, st.profile.Host, secret); err != nil {
+	if err := secrets.KeychainSet(st.profile.Name, host, secret); err != nil {
 		st.io.Println("not saved: " + secrets.Sanitize(err, secret))
 		return
 	}
@@ -552,12 +602,21 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 		}
 		proposals = append(proposals, pat)
 	}
-	if !firstRun && len(proposals) == 0 {
+	var quasi []string
+	for _, pat := range pii.ProposeQuasi(cols) {
+		seg := strings.SplitN(pat, ".", 3)
+		if len(seg) == 3 && rules.Covered(seg[0], seg[1], seg[2]) {
+			continue
+		}
+		quasi = append(quasi, pat)
+	}
+	if !firstRun && len(proposals) == 0 && len(quasi) == 0 {
 		return ap, nil
 	}
-	if len(proposals) == 0 {
+	if len(proposals) == 0 && len(quasi) == 0 {
 		st.io.Println(paint.OK("PII: no personal-data columns found in the schema"))
-	} else {
+	}
+	if len(proposals) > 0 {
 		if firstRun {
 			st.io.Println(bold + "PII: these columns look like personal data and would be masked:" + reset)
 		} else {
@@ -599,6 +658,32 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 			st.io.Println("PII: no rules added; add them later with locksql pii add")
 		}
 	}
+	allowed := false
+	if len(quasi) > 0 {
+		st.io.Println(bold + "PII scan: these columns can identify a person together (quasi-identifiers); they are not masked unless you say so:" + reset)
+		for _, pat := range quasi {
+			a, ok := st.io.Ask(ctx, "Mask "+safeText(pat, false)+"? ("+pii.QuasiLimit+") [y/N] ", ApprovalTimeout)
+			if ctx.Err() != nil {
+				return ap, ctx.Err()
+			}
+			if !ok {
+				continue // asked again at the next start
+			}
+			switch strings.TrimSpace(strings.ToLower(a)) {
+			case "y", "yes":
+				if err := rules.Add(pat); err != nil {
+					return ap, err
+				}
+			case "n", "no", "":
+				if err := rules.AddAllow(pat); err != nil {
+					return ap, err
+				}
+				allowed = true
+			default:
+				// Not an answer: nothing is written, asked again at the next start.
+			}
+		}
+	}
 	next := config.NewPolicy(ap.Profile, rules.Mask, rules.Allow).WithModes(rules.Modes)
 	switch {
 	case firstRun:
@@ -621,6 +706,13 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 				}
 			}
 		}
+		for _, pat := range rules.Allow {
+			if !slices.Contains(ap.PIIAllow, pat) {
+				if err := onDisk.AddAllow(pat); err != nil {
+					return ap, err
+				}
+			}
+		}
 		if err := pii.SaveRulesFile(rulesPath, onDisk); err != nil {
 			return ap, err
 		}
@@ -630,8 +722,43 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 		if err := config.SaveApproved(stateDir, key, next); err != nil {
 			return ap, err
 		}
-		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "tightened"})
+		decision := "tightened"
+		if allowed {
+			decision = "approved" // the human declined to mask a quasi-identifier, in the console
+		}
+		st.audit(audit.Record{Event: audit.EventPolicy, Decision: decision})
 		st.io.Println(paint.OK(fmt.Sprintf("PII: %d mask rules in %s", len(next.PIIMask), rulesPath)))
 	}
 	return next, nil
+}
+
+// flagNotices are the start-up warnings of the console-only flags that
+// widen what the console does.
+func flagNotices(o Options, p config.Profile) []string {
+	var out []string
+	if o.AllowUnmask {
+		out = append(out, paint.Warn("--allow-unmask: clients may ask for unmasked PII output; each such query is approved here, never auto-approved"))
+	}
+	if o.ShowResults {
+		msg := "--show-results: the result of each query is printed here in clear, PII included; the agent still gets it masked"
+		if p.Production {
+			out = append(out, red+ui.MarkWarn+" "+msg+" (PRODUCTION data: mind screen sharing and the terminal's scrollback)"+reset)
+		} else {
+			out = append(out, paint.Warn(msg))
+		}
+	}
+	return out
+}
+
+// readyLines is the "Ready" block printed once the console serves.
+func readyLines(socket, root string, showResults bool) []string {
+	out := []string{paint.Heading("Ready", 60), "  " + paint.Dim("socket   ") + socket}
+	if root != "" {
+		// Only agents working under this root dial this socket.
+		out = append(out, "  "+paint.Dim("serving  ")+"agents in "+safeText(root, false))
+	}
+	if showResults {
+		out = append(out, "  "+paint.Dim("results  ")+paint.Yellow("shown in clear in this console (--show-results)"))
+	}
+	return append(out, "  "+paint.Dim("commands ")+paint.Accent(":review")+"  "+paint.Accent(":status")+"  "+paint.Accent(":quit")+paint.Dim(" · Ctrl-C ends the session"))
 }

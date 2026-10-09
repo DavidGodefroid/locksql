@@ -58,8 +58,13 @@ type LineSource interface {
 type Options struct {
 	Profile         string
 	SkipPermissions bool
-	Cwd             string
-	IO              IO
+	// AllowUnmask lets clients ask for unmasked output (--allow-unmask).
+	AllowUnmask bool
+	// ShowResults prints masked results in clear in the console
+	// (--show-results).
+	ShowResults bool
+	Cwd         string
+	IO          IO
 	// Now defaults to time.Now.
 	Now func() time.Time
 	// StateDir defaults to config.StateDir().
@@ -92,7 +97,13 @@ type ServerConfig struct {
 	// SkipPermissions auto-approves on non-production profiles (never
 	// unmask, never REFUSE).
 	SkipPermissions bool
-	Version         string
+	// AllowUnmask lets clients ask for unmasked output; without it an
+	// unmask plan is refused before anything else.
+	AllowUnmask bool
+	// ShowResults prints in the console, in clear, the result of each
+	// masked run; the client still gets it masked.
+	ShowResults bool
+	Version     string
 	// LoadPolicy re-reads the current policy from the config files. Nil
 	// disables CheckPolicy.
 	LoadPolicy func() (config.Policy, error)
@@ -112,18 +123,19 @@ type ServerConfig struct {
 
 // plan is a one-shot plan awaiting query.run.
 type plan struct {
-	id      string
-	db      string
-	st      sqlclass.Statement
-	level   string
-	summary string
-	reasons []string
-	unmask  bool
-	created time.Time
-	explain *engine.Plan // the EXPLAIN result, assessed again when the plan runs
+	id       string
+	db       string
+	st       sqlclass.Statement
+	level    string
+	summary  string
+	reasons  []string
+	unmask   bool
+	created  time.Time
+	warnings []string
+	explain  *engine.Plan // the EXPLAIN result, assessed again when the plan runs
 	// an is the analysis of a read statement (nil for other classes);
-	// runSQL is the statement that runs (token values substituted) and
-	// isExplain marks an EXPLAIN SELECT, answered with the plan.
+	// runSQL is the statement that runs; isExplain marks an EXPLAIN
+	// SELECT, answered with the plan.
 	an        *sqlast.Analysis
 	runSQL    string
 	isExplain bool
@@ -141,13 +153,20 @@ type Server struct {
 	sess      engine.Session
 	now       func() time.Time
 
+	// refs keeps the values behind the references of redacted cells.
+	refs refStore
+	// typed keeps the values the human typed for placeholder names.
+	typed map[string]typedValue
+	// probes are, per result number, the reference uses seen as filters
+	// (a single reference, or one IN list of references).
+	probes map[int]map[string]bool
+	// keys caches whether "db.table.column" is a one-column unique key.
+	keys map[string]bool
+
 	plans    map[string]*plan
 	started  time.Time
 	lastSeen time.Time
 
-	// tokens is the session's token table (mask mode hash); its key dies
-	// with the console.
-	tokens *pii.Tokens
 	// catalogCache holds the column catalog per database for the analyser.
 	catalogCache map[string][]engine.ColumnInfo
 	// quantum levels response times (ResponseQuantum; 0 in tests).
@@ -177,7 +196,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, tokens: pii.NewTokens(), quantum: cfg.Quantum}
+	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, probes: map[int]map[string]bool{}, keys: map[string]bool{}, quantum: cfg.Quantum}
 	if err := s.apply(cfg.Policy); err != nil {
 		return nil, err
 	}

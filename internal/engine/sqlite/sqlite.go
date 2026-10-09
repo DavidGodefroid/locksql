@@ -42,7 +42,7 @@ type session struct {
 
 // Connect opens the profile's database file. secret is unused: SQLite has
 // no credentials.
-func (Engine) Connect(ctx context.Context, p config.Profile, _ []byte) (engine.Session, error) {
+func (Engine) Connect(ctx context.Context, p config.Profile, _ []byte, _ engine.DialFunc) (engine.Session, error) {
 	if p.Engine != config.EngineSQLite {
 		return nil, fmt.Errorf("sqlite: profile engine is %q", p.Engine)
 	}

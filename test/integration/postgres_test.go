@@ -100,7 +100,7 @@ func connectPG(t *testing.T, srv Server, user string, tier config.Tier, timeout 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	s, err := e.Connect(ctx, pgProfile(srv, user, tier, timeout), []byte(pgPassword(user)))
+	s, err := e.Connect(ctx, pgProfile(srv, user, tier, timeout), []byte(pgPassword(user)), nil)
 	if err != nil {
 		t.Fatalf("connect %s: %v", user, err)
 	}
@@ -264,6 +264,12 @@ func testPostgresServer(t *testing.T, version string, srv Server) {
 	t.Run("no leak through rows returned by a write", func(t *testing.T) {
 		s := connectPG(t, srv, "rw", config.TierWrite, 5*time.Second)
 		assertNoLeak(t, s, sqlclass.Postgres, pii.Rules{Mask: []string{"public.big.email"}}, writeLeakQueries(sqlclass.Postgres))
+	})
+
+	t.Run("placeholder and reference round trip", func(t *testing.T) {
+		id := insertObrien(t, connectPG(t, srv, "rw", config.TierWrite, 5*time.Second), "big")
+		s := connectPG(t, srv, "ro", config.TierRead, 5*time.Second)
+		assertPlaceholderRoundTrip(t, s, pii.Rules{Mask: []string{"public.big.email"}}, id)
 	})
 
 	t.Run("origins follow a rename by another session", func(t *testing.T) {
@@ -567,7 +573,7 @@ func testPostgresServer(t *testing.T, version string, srv Server) {
 
 	t.Run("bad password is not echoed", func(t *testing.T) {
 		e, _ := engine.Get(config.EnginePostgres)
-		_, err := e.Connect(ctx, pgProfile(srv, "ro", config.TierRead, time.Second), []byte("wrong-secret-xyz"))
+		_, err := e.Connect(ctx, pgProfile(srv, "ro", config.TierRead, time.Second), []byte("wrong-secret-xyz"), nil)
 		if err == nil || strings.Contains(err.Error(), "wrong-secret-xyz") {
 			t.Errorf("err = %v", err)
 		}

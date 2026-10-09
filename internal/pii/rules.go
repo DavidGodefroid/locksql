@@ -27,29 +27,24 @@ const RulesFile = ".locksql/pii.toml"
 type Rules struct {
 	Mask  []string
 	Allow []string
-	// Modes maps a Mask pattern to its mode when it is not ModePartial.
+	// Modes maps a Mask pattern to its mode when it is not ModeRedact.
 	Modes map[string]string
 }
 
 // Mask modes.
 const (
-	// ModeRedact replaces the whole value: "<redacted>".
+	// ModeRedact replaces the whole value: "<redacted>" (the default).
 	ModeRedact = "redact"
 	// ModePartial keeps the first character and the length: "j***(12)".
 	ModePartial = "partial"
 	// ModeEmail keeps the first character and the domain of an address:
 	// "j***@example.com" (other values are masked as partial).
 	ModeEmail = "email"
-	// ModeHash replaces the value with a token, the same for the same value
-	// within one console session: "tok_...". Joins, grouping, counting and
-	// equality filters on tokens keep working; the value never leaves the
-	// console. The token key changes with every session.
-	ModeHash = "hash"
 )
 
 // ValidMode reports whether m is a mask mode.
 func ValidMode(m string) bool {
-	return m == ModeRedact || m == ModePartial || m == ModeEmail || m == ModeHash
+	return m == ModeRedact || m == ModePartial || m == ModeEmail
 }
 
 type ruleEntry struct {
@@ -98,7 +93,7 @@ func LoadRulesFile(path string) (Rules, error) {
 		}
 	}
 	for _, e := range f.Allow {
-		if err := r.addAllow(e.Column); err != nil {
+		if err := r.AddAllow(e.Column); err != nil {
 			return Rules{}, fmt.Errorf("pii: %s: %w", name, err)
 		}
 	}
@@ -117,12 +112,11 @@ func SaveRulesFile(path string, r Rules) error {
 	var b bytes.Buffer
 	b.WriteString("# locksql PII column rules: \"db.table.column\", '*' matches any segment.\n")
 	b.WriteString("# [[mask]] masks whole cells; [[allow]] is an exception that is never masked.\n")
-	b.WriteString("# mode = \"partial\" (default: j***(12)), \"redact\", \"email\" (j***@example.com) or\n")
-	b.WriteString("# \"hash\" (a per-session token that keeps joins, grouping and equality filters).\n")
+	b.WriteString("# mode = \"redact\" (default: <redacted>), \"partial\" (j***(12)) or \"email\" (j***@example.com).\n")
 	write := func(kind string, patterns []string) {
 		for _, p := range canonical(patterns) {
 			fmt.Fprintf(&b, "\n[[%s]]\ncolumn = %q\n", kind, p)
-			if m := r.Modes[p]; kind == "mask" && m != "" && m != ModePartial {
+			if m := r.Modes[p]; kind == "mask" && m != "" && m != ModeRedact {
 				fmt.Fprintf(&b, "mode = %q\n", m)
 			}
 		}
@@ -132,11 +126,11 @@ func SaveRulesFile(path string, r Rules) error {
 
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("pii: %w", err)
+		return dirError(dir, err)
 	}
 	tmp, err := os.CreateTemp(dir, ".pii-*.toml")
 	if err != nil {
-		return fmt.Errorf("pii: %w", err)
+		return dirError(dir, err)
 	}
 	defer os.Remove(tmp.Name()) // no-op after a successful rename
 	if _, err := tmp.Write(b.Bytes()); err != nil {
@@ -151,9 +145,20 @@ func SaveRulesFile(path string, r Rules) error {
 		return fmt.Errorf("pii: %w", err)
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
-		return fmt.Errorf("pii: %w", err)
+		return dirError(dir, err)
 	}
 	return nil
+}
+
+// dirError explains a refused write in the rules directory: the file is
+// replaced through a temporary file in that directory, so the account needs
+// write access to the directory itself, which a separated setup must grant
+// to the console's account.
+func dirError(dir string, err error) error {
+	if errors.Is(err, fs.ErrPermission) {
+		return fmt.Errorf("pii: this account cannot write the PII rules in %s: %w; it needs write access to the directory itself (separated setup: sudo chown <service_user> %s, config.toml readable by both accounts)", dir, err, dir)
+	}
+	return fmt.Errorf("pii: %w", err)
 }
 
 // Add adds a mask pattern after validating it. Adding an existing pattern
@@ -173,16 +178,16 @@ func (r *Rules) Add(pattern string) error {
 // existing pattern sets its mode.
 func (r *Rules) AddMode(pattern, mode string) error {
 	if mode == "" {
-		mode = ModePartial
+		mode = ModeRedact
 	}
 	if !ValidMode(mode) {
-		return fmt.Errorf("pii rule %q: unknown mode %q (want partial, redact, email or hash)", pattern, mode)
+		return fmt.Errorf("pii rule %q: unknown mode %q (want redact, partial or email)", pattern, mode)
 	}
 	if err := r.Add(pattern); err != nil {
 		return err
 	}
 	p, _ := parsePattern(pattern)
-	if mode == ModePartial {
+	if mode == ModeRedact {
 		delete(r.Modes, p)
 		return nil
 	}
@@ -220,7 +225,7 @@ func (r Rules) combine(match func(string) bool) string {
 		}
 		m := r.Modes[p]
 		if m == "" {
-			m = ModePartial
+			m = ModeRedact
 		}
 		switch {
 		case mode == "":
@@ -235,7 +240,8 @@ func (r Rules) combine(match func(string) bool) string {
 	return mode
 }
 
-func (r *Rules) addAllow(pattern string) error {
+// AddAllow adds an allow pattern after validating it. Adding an existing pattern is a no-op.
+func (r *Rules) AddAllow(pattern string) error {
 	p, err := parsePattern(pattern)
 	if err != nil {
 		return err

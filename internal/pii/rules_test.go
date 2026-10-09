@@ -97,3 +97,56 @@ func TestRulesFileRoundTrip(t *testing.T) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 }
+
+func TestDefaultModeIsRedact(t *testing.T) {
+	var r Rules
+	if err := r.Add("app.users.email"); err != nil {
+		t.Fatal(err)
+	}
+	if m, ok := r.Mode("app", "users", "email"); !ok || m != ModeRedact {
+		t.Fatalf("Mode = %q %v, want redact", m, ok)
+	}
+	if err := r.AddMode("app.users.name", ModePartial); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "pii.toml")
+	if err := SaveRulesFile(path, r); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	if !strings.Contains(string(b), "column = \"app.users.name\"\nmode = \"partial\"") {
+		t.Errorf("partial not written explicitly:\n%s", b)
+	}
+	if strings.Contains(string(b), "\nmode = \"redact\"") {
+		t.Errorf("the default is written:\n%s", b)
+	}
+	back, err := LoadRulesFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := back.Mode("app", "users", "name"); m != ModePartial {
+		t.Errorf("partial lost on reload: %q", m)
+	}
+}
+
+// The console replaces pii.toml through a temporary file next to it: a
+// directory it cannot write is named with the fix.
+func TestSaveRulesFileUnwritableDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes anywhere")
+	}
+	dir := filepath.Join(t.TempDir(), ".locksql")
+	if err := os.Mkdir(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	err := SaveRulesFile(filepath.Join(dir, "pii.toml"), Rules{Mask: []string{"app.users.email"}})
+	if err == nil {
+		t.Fatal("write in a read-only directory succeeded")
+	}
+	for _, want := range []string{dir, "write access to the directory", "sudo chown"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+}

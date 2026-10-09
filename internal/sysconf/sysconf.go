@@ -56,7 +56,7 @@ type Config struct {
 	// ClientGroup's members may connect to the console sockets.
 	ClientGroup string `toml:"client_group"`
 	// SocketDir holds the sockets: owned by ServiceUser, group
-	// ClientGroup, mode 0710 or 0750.
+	// ClientGroup, mode 0710 or 0750, setgid on Linux.
 	SocketDir string `toml:"socket_dir"`
 	// AllowedUIDs may connect besides the group's members.
 	AllowedUIDs []int `toml:"allowed_uids"`

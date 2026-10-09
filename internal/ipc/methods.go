@@ -74,6 +74,9 @@ type PlanResult struct {
 	Summary string   `json:"summary"`
 	Reasons []string `json:"reasons,omitempty"`
 	Unmask  bool     `json:"unmask,omitempty"`
+	// Values are the placeholder names the human typed in this console
+	// session: '${name}' reuses a value without a prompt.
+	Values []string `json:"values,omitempty"`
 }
 
 // RunParams runs an approved plan.
@@ -100,6 +103,8 @@ type StatusResult struct {
 	HostConfirmed   bool          `json:"host_confirmed"`
 	Production      bool          `json:"production"`
 	SkipPermissions bool          `json:"skip_permissions"`
+	AllowUnmask     bool          `json:"allow_unmask"`
+	ShowResults     bool          `json:"show_results"`
 	Tier            string        `json:"tier"`
 	Databases       []string      `json:"databases"`
 	Limits          config.Limits `json:"limits"`

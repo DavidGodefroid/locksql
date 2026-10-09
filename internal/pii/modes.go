@@ -1,14 +1,8 @@
 package pii
 
 import (
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base32"
 	"fmt"
-	"regexp"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -16,74 +10,14 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/sqlast"
 )
 
-// Tokens is the token table of one console session (mask mode "hash"): a
-// keyed HMAC of the value, so the same value always gives the same token
-// within the session, and a random key per session, so tokens cannot be
-// correlated across sessions. It remembers which value each token stands
-// for, so that an agent may filter on a token (WHERE email = 'tok_...'):
-// the console substitutes the value in the statement that runs. Only
-// equality leaks: no order, no prefix, no length.
-type Tokens struct {
-	mu     sync.Mutex
-	key    [32]byte
-	values map[string]string
-}
-
-// maxTokens bounds the remembered values; tokens issued beyond it still
-// mask, but cannot be filtered on.
-const maxTokens = 200_000
-
-var tokenRe = regexp.MustCompile(`^tok_[a-z2-7]{20}$`)
-
-var tokenEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
-
-// NewTokens returns a token table with a fresh random key.
-func NewTokens() *Tokens {
-	t := &Tokens{values: map[string]string{}}
-	if _, err := rand.Read(t.key[:]); err != nil {
-		panic(err) // crypto/rand never fails on supported platforms
-	}
-	return t
-}
-
-// Token returns the token of value.
-func (t *Tokens) Token(value string) string {
-	m := hmac.New(sha256.New, t.key[:])
-	m.Write([]byte(value))
-	tok := "tok_" + strings.ToLower(tokenEncoding.EncodeToString(m.Sum(nil)))[:20]
-	t.mu.Lock()
-	if len(t.values) < maxTokens {
-		t.values[tok] = value
-	}
-	t.mu.Unlock()
-	return tok
-}
-
-// Lookup resolves a token issued in this session. isToken reports whether
-// s has the token format at all.
-func (t *Tokens) Lookup(s string) (value string, isToken, ok bool) {
-	if !tokenRe.MatchString(s) {
-		return "", false, false
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	v, ok := t.values[s]
-	return v, true, ok
-}
-
 // Redacted is the cell of a column masked in mode redact.
 const Redacted = "<redacted>"
 
 // MaskValue masks one non-NULL cell in mode.
-func MaskValue(v any, mode string, tok *Tokens) any {
+func MaskValue(v any, mode string) any {
 	switch mode {
 	case ModeRedact:
 		return Redacted
-	case ModeHash:
-		if tok == nil {
-			return Redacted
-		}
-		return tok.Token(cellText(v))
 	case ModeEmail:
 		if s, ok := v.(string); ok {
 			if at := strings.LastIndexByte(s, '@'); at > 0 && at < len(s)-1 && utf8.ValidString(s) {
@@ -95,7 +29,8 @@ func MaskValue(v any, mode string, tok *Tokens) any {
 	return maskCell(v)
 }
 
-func cellText(v any) string {
+// CellText is the text of a cell value, as compared and substituted.
+func CellText(v any) string {
 	switch x := v.(type) {
 	case []byte:
 		return string(x)
@@ -107,44 +42,86 @@ func cellText(v any) string {
 	return fmt.Sprint(v)
 }
 
+// RedactedRef is a redacted cell that carries a reference to its value,
+// which the console alone keeps.
+func RedactedRef(name string) string { return "<redacted:" + name + ">" }
+
 // MaskOutputs masks res in place following the analysed outputs of its
 // statement: each column whose resolved sources are under a rule is masked
 // in the output's mode. As a second line of defence a column whose engine-
 // reported origin matches a rule is masked too. The other text and integer
 // cells go through the detectors.
 //
+// cell, when not nil, stores the value of a cell masked in mode redact and
+// returns its reference name, or "" for none. It is called only for a plain
+// column the analysis masks in mode redact, whose values cannot be literals
+// of the statement and all of whose sources are under a mask rule
+// (referenceable): anywhere else the agent may know the value behind the
+// reference (a constant, an unmasked UNION arm, an aggregate) and could
+// look up one row on it without the k-anonymity check. A column masked by
+// its engine-reported origin alone gets plain <redacted> too.
+//
 // The result must have exactly the analysed columns, and the columns the
 // analysis expects by name (plain references, aliases, star expansions)
 // must carry that label: otherwise masking by position could hit the wrong
 // column, and the result is refused.
-func MaskOutputs(res *engine.Result, outs []sqlast.Output, r Rules, ds []Detector, tok *Tokens, origin bool) error {
+func MaskOutputs(res *engine.Result, outs []sqlast.Output, r Rules, ds []Detector, cell func(row, col int, v any) string, origin bool) error {
 	if len(res.Columns) != len(outs) {
 		return fmt.Errorf("the result has %d columns where the statement was analysed with %d", len(res.Columns), len(outs))
 	}
 	modes := make([]string, len(outs))
+	refs := make([]bool, len(outs))
 	for i, c := range res.Columns {
 		o := outs[i]
 		if o.Label != "" && fold(o.Label) != fold(c.Label) {
 			return fmt.Errorf("result column %d is labelled %q where %q was expected", i+1, c.Label, strings.ToLower(o.Label))
 		}
 		modes[i] = o.Mask
+		refs[i] = o.Mask == ModeRedact && referenceable(o.Prov, r)
 		if modes[i] == "" && origin && c.HasOrigin() {
 			if m, ok := r.Mode(c.OriginDB, c.OriginTable, c.OriginColumn); ok {
 				modes[i] = m
 			}
 		}
 	}
-	for _, row := range res.Rows {
+	for ri, row := range res.Rows {
 		for i, v := range row {
 			if v == nil || i >= len(modes) {
 				continue
 			}
 			if modes[i] != "" {
-				row[i] = MaskValue(v, modes[i], tok)
+				if refs[i] && cell != nil {
+					if name := cell(ri, i, v); name != "" {
+						row[i] = RedactedRef(name)
+						continue
+					}
+				}
+				row[i] = MaskValue(v, modes[i])
 				continue
 			}
 			row[i] = detect(v, ds)
 		}
 	}
 	return nil
+}
+
+// referenceable reports a plain, literal-free column whose every source is
+// under a mask rule: its cells hold only values the agent never saw. A view
+// source counts only when a rule matches it by name (fail closed).
+func referenceable(p sqlast.Prov, r Rules) bool {
+	if p.Kind != sqlast.KindIdentity || p.Lit || len(p.Sources) == 0 {
+		return false
+	}
+	for _, s := range p.Sources {
+		var ok bool
+		if s.View {
+			_, ok = r.ModeByName(s.Column)
+		} else {
+			_, ok = r.Mode(s.DB, s.Table, s.Column)
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
 }

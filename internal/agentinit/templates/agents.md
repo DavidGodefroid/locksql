@@ -10,11 +10,12 @@ Workflow (MCP tools `locksql_*`, or the `locksql` CLI from any directory):
 1. Prefer a non-production profile unless the question is about real production data. Find the
    database and table from the code first.
 2. `locksql_status` (CLI `locksql status`). If no console runs (CLI exit code 2), ask the user to
-   run the command the status gives in a separate terminal (`locksql` outside a project, the exact
-   `locksql console ... --project DIR` inside one) and stop. Never start one yourself.
+   run the command the status gives in the locksql account's own session (the exact
+   `locksql console ... --project DIR`; `locksql doctor` checks the setup) and stop. Never start one yourself.
 3. `locksql_list_tables` / `locksql_describe` if needed (no approval).
 4. `locksql_plan` with one narrow statement: indexed predicates, an explicit `LIMIT`, no comments, no
-   variables. Use `unmask` only if the user asked to see personal data in clear.
+   variables. Use `unmask` only if the user asked to see personal data in clear; it is refused unless
+   the human started the console with `--allow-unmask`.
 5. Show the user the target, the SQL, the EXPLAIN summary and the verdict, then say you are waiting
    for their approval in the console.
 6. `locksql_run` with the plan id, or `locksql run --profile P PLAN_ID` with a long command timeout
@@ -31,8 +32,6 @@ What a statement may do (the console parses it and resolves every column to its 
   them.
   Filters, groups and aggregates on them must cover at least k rows (k-anonymity): a refusal for k
   rows is final, do not work around it.
-- Token-masked columns return `tok_...` values, stable within the console session: join, group or
-  filter on them (`WHERE col = 'tok_...'`).
 - Database errors come back generic; the human sees the details in the console.
 
 Rules:

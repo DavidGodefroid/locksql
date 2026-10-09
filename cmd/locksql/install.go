@@ -61,15 +61,9 @@ func runInstall(e env, args []string) int {
 		fmt.Fprintln(e.stderr, "locksql install:", err)
 		return exitFail
 	}
-	var script string
-	switch runtime.GOOS {
-	case "linux":
-		script = linuxInstallScript(bin, *client, *svc, *group)
-	case "darwin":
+	script := linuxInstallScript(bin, *client, *svc, *group)
+	if runtime.GOOS == "darwin" {
 		script = darwinInstallScript(bin, *client, *svc, *group)
-	default:
-		fmt.Fprintf(e.stderr, "locksql install: separated mode is supported on Linux and macOS, not %s\n", runtime.GOOS)
-		return exitFail
 	}
 	fmt.Fprintf(e.stdout, `locksql install separates the console from the agent:
   - the console runs as %[1]q, in its own login session (use Wayland), and alone
@@ -132,6 +126,10 @@ x11          = "refuse"
 `, svc, group, dir)
 }
 
+// linuxInstallScript sets up a separated install on Linux. The socket
+// directory is setgid: the console's account is not in the client group, and
+// Linux lets it give its socket only to a group it belongs to or to the one
+// the socket already has, which setgid makes the client group.
 func linuxInstallScript(bin, client, svc, group string) string {
 	dir := "/run/locksql"
 	return fmt.Sprintf(`set -eu
@@ -145,8 +143,9 @@ cat > /etc/locksql/system.toml <<'LOCKSQL'
 %[5]sLOCKSQL
 chown root:root /etc/locksql/system.toml
 chmod 0644 /etc/locksql/system.toml
-printf 'd %[6]s 0710 %[2]s %[3]s -\n' > /etc/tmpfiles.d/locksql.conf
-systemd-tmpfiles --create /etc/tmpfiles.d/locksql.conf 2>/dev/null || install -d -m 0710 -o %[2]s -g %[3]s %[6]s
+install -d -m 0755 -o root -g root /etc/tmpfiles.d
+printf 'd %[6]s 2710 %[2]s %[3]s -\n' > /etc/tmpfiles.d/locksql.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/locksql.conf 2>/dev/null || install -d -m 2710 -o %[2]s -g %[3]s %[6]s
 `, client, svc, group, shellQuote(bin), systemToml(svc, group, dir), dir)
 }
 

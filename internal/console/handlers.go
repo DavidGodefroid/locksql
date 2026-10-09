@@ -20,6 +20,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/render"
 	"github.com/DavidGodefroid/locksql/internal/secrets"
+	"github.com/DavidGodefroid/locksql/internal/sqlast"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 	"github.com/DavidGodefroid/locksql/internal/weight"
 )
@@ -109,6 +110,8 @@ func (s *Server) status() ipc.StatusResult {
 		HostConfirmed:   true, // the host is part of the approved policy
 		Production:      s.profile.Production,
 		SkipPermissions: s.autoApprove(),
+		AllowUnmask:     s.cfg.AllowUnmask,
+		ShowResults:     s.cfg.ShowResults,
 		Tier:            s.profile.Tier.String(),
 		Databases:       nonNil(s.cfg.Databases),
 		Limits:          s.profile.Limits,
@@ -175,13 +178,39 @@ func (s *Server) masking() bool {
 // errText is the text of a statement error for the client, the console and
 // the audit log. With masking on, a value the server quotes in its message
 // (a failed cast in a WHERE clause) is redacted: it reaches no result row,
-// so neither the rules nor the detectors would mask it otherwise.
-func (s *Server) errText(err error, sql string, unmask bool) string {
-	msg := secrets.Sanitize(err)
+// so neither the rules nor the detectors would mask it otherwise. The
+// values substituted for the placeholders of pl are removed.
+func (s *Server) errText(err error, sql string, unmask bool, pl *plan) string {
+	msg := secrets.Sanitize(err, s.planValues(pl)...)
 	if unmask || !s.masking() {
 		return msg
 	}
 	return pii.RedactMessage(msg, sql, s.detectors)
+}
+
+// auditErrText is the text of a statement error for the audit log. When
+// the plan substituted values, none of the database's text is kept: it may
+// echo a value in a form no scrubbing recognises (cut, re-quoted).
+func (s *Server) auditErrText(err error, pl *plan) string {
+	if pl.an == nil || len(pl.an.Values) == 0 {
+		return s.errText(err, pl.st.SQL, false, pl)
+	}
+	switch {
+	case errors.Is(err, engine.ErrConnLost):
+		return "the database connection was lost"
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return "statement interrupted"
+	}
+	return "statement refused by the database (the text is withheld: the statement holds placeholder values)"
+}
+
+// failedPlan is failed for an error raised while serving pl: the text
+// reaching the client is scrubbed of the plan's values.
+func (s *Server) failedPlan(id int64, what string, err error, pl *plan) ipc.Response {
+	if errors.Is(err, engine.ErrConnLost) {
+		return s.failed(id, what, err)
+	}
+	return errResp(id, ipc.CodeInternal, what+": "+s.errText(err, pl.st.SQL, false, pl))
 }
 
 // checkDB resolves the database of a request: the given one, or the
@@ -239,7 +268,18 @@ func (s *Server) catalog(ctx context.Context, req ipc.Request) ipc.Response {
 
 // refuse audits and reports a refused plan.
 func (s *Server) refuse(id int64, db, sql, class, verdict, reason string) ipc.Response {
-	s.audit(audit.Record{Event: audit.EventRefused, DB: db, SQL: sql, Class: class, Verdict: verdict, Error: reason})
+	return s.refuseRec(id, audit.Record{Event: audit.EventRefused, DB: db, SQL: sql, Class: class, Verdict: verdict, Error: reason})
+}
+
+// refuseWarned is refuse for a plan whose warnings are computed: the audit
+// record carries them.
+func (s *Server) refuseWarned(id int64, pl *plan, class, reason string) ipc.Response {
+	return s.refuseRec(id, audit.Record{Event: audit.EventRefused, DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Error: reason, Warnings: pl.warnings})
+}
+
+func (s *Server) refuseRec(id int64, rec audit.Record) ipc.Response {
+	reason := rec.Error
+	s.audit(rec)
 	s.println(paint.Fail("refused: " + reason))
 	return errResp(id, ipc.CodeRefused, reason)
 }
@@ -269,6 +309,9 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		return *r
 	}
 	auditSQL := capSQL(p.SQL)
+	if p.Unmask && !s.cfg.AllowUnmask {
+		return s.refuse(req.ID, db, auditSQL, "", "", "unmasked output is off in this console: run the query masked, or ask the human to restart the console with --allow-unmask")
+	}
 	inner, explain := splitExplain(s.dialect, p.SQL)
 	st, err := sqlclass.Classify(s.dialect, inner, s.profile.Limits.MaxRows)
 	if err != nil {
@@ -286,6 +329,11 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	if int(st.Class) > int(s.profile.Tier) {
 		return s.refuse(req.ID, db, st.SQL, class, "", fmt.Sprintf(
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
+	}
+	if st.Class != sqlclass.Read && sqlast.HasPlaceholder(s.dialect, st.SQL) {
+		// A write is never analysed for placeholders: it would run with
+		// the literal text '${...}'.
+		return s.refuse(req.ID, db, st.SQL, class, "", "placeholders are only allowed in read statements, compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")
 	}
 	sess, r := s.session(ctx, req.ID)
 	if r != nil {
@@ -328,6 +376,7 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	return okResp(req.ID, ipc.PlanResult{
 		PlanID: pl.id, Profile: s.profile.Name, Host: s.host(), DB: db, SQL: pl.st.SQL,
 		Class: class, Verdict: pl.level, Summary: summary, Reasons: reasons, Unmask: pl.unmask,
+		Values: s.typedNames(),
 	})
 }
 
@@ -418,29 +467,63 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, reason)
 		}
 	}
-	rec := audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask}
 	sess, r := s.session(ctx, req.ID)
 	if r != nil {
 		return *r
 	}
+	pl.warnings = s.warnings(ctx, sess, pl)
+	rec := audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask, Warnings: pl.warnings}
 
 	s.screen(ctx, pl)
+	// The values are asked before the approval, and asked even when the
+	// approval is skipped: nothing runs while a placeholder has none.
+	missing, _ := s.placeholders(pl)
+	if r := s.askValues(ctx, req.ID, pl, rec, missing); r != nil {
+		return *r
+	}
 	if s.autoApprove() && !pl.unmask {
 		rec.Event, rec.Decision = audit.EventAuto, "auto"
 		s.println(s.frameEnd(paint.Yellow("auto-approved") + " (--skip-permissions)"))
 	} else {
-		if r := s.approve(ctx, req.ID, pl, rec); r != nil {
-			return *r
-		}
-		// The prompt may have waited: check the TTL again, so that an
-		// approval landing after it runs nothing.
-		if s.now().Sub(pl.created) > PlanTTL {
-			rec.Event, rec.Decision = audit.EventTimeout, "expired"
-			s.audit(rec)
-			s.println(paint.Fail("plan expired while waiting for approval: not run"))
-			return errResp(req.ID, ipc.CodeNoSuchPlan, "the plan expired while waiting for approval; plan the query again")
+		for {
+			r, retype := s.approve(ctx, req.ID, pl, rec)
+			if r != nil {
+				return *r
+			}
+			if !retype {
+				break
+			}
+			_, reused := s.placeholders(pl)
+			if r := s.askValues(ctx, req.ID, pl, rec, reused); r != nil {
+				return *r
+			}
 		}
 		rec.Event, rec.Decision = audit.EventApproved, "approved"
+	}
+	// The prompts may have waited: check the TTL again, so that an
+	// approval or a value landing after it runs nothing.
+	if s.now().Sub(pl.created) > PlanTTL {
+		rec.Event, rec.Decision = audit.EventTimeout, "expired"
+		s.audit(rec)
+		s.println(paint.Fail("plan expired while waiting for approval: not run"))
+		return errResp(req.ID, ipc.CodeNoSuchPlan, "the plan expired while waiting for approval; plan the query again")
+	}
+	if pl.an != nil && len(pl.an.Values) > 0 {
+		// The values are known now: analyse again, so that the statement
+		// and its k-anonymity checks carry them. pl.st.SQL is the statement
+		// as the agent wrote it, placeholders included: the audit keeps it.
+		if reason, refused, err := s.analyzeRead(ctx, sess, pl, pl.st.SQL); err != nil || refused {
+			if err != nil {
+				// Approved already: the failure is audited like a run's.
+				rec.Error = s.auditErrText(err, pl)
+				s.audit(rec)
+				return s.failedPlan(req.ID, "plan", err, pl)
+			}
+			return s.refuseWarned(req.ID, pl, class, reason)
+		}
+		if missing, _ := s.placeholders(pl); len(missing) > 0 {
+			return s.refuseWarned(req.ID, pl, class, "a placeholder has no value")
+		}
 	}
 
 	rctx := ctx
@@ -454,11 +537,11 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	defer s.level(ctx, start)
 	if reason, err := s.kCheck(rctx, sess, pl); err != nil || reason != "" {
 		if err != nil {
-			rec.Error = s.errText(err, pl.st.SQL, false)
+			rec.Error = s.auditErrText(err, pl)
 			s.audit(rec)
-			return s.failed(req.ID, "k-anonymity check", err)
+			return s.failedPlan(req.ID, "k-anonymity check", err, pl)
 		}
-		return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, reason+" (approved, but not run)")
+		return s.refuseWarned(req.ID, pl, class, reason+" (approved, but not run)")
 	}
 	var res engine.Result
 	var err error
@@ -475,9 +558,9 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	rec.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
 		// The audit log never holds row data, even for an unmask run.
-		rec.Error = s.errText(err, pl.st.SQL, false)
+		rec.Error = s.auditErrText(err, pl)
 		s.audit(rec)
-		s.println(paint.Fail("failed: " + rec.Error))
+		s.println(paint.Fail("failed: " + s.errText(err, pl.st.SQL, false, pl)))
 		if errors.Is(err, engine.ErrConnLost) {
 			return s.failed(req.ID, "statement failed", err)
 		}
@@ -487,16 +570,21 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		// Never the server's message: it can quote values.
 		return errResp(req.ID, ipc.CodeInternal, genericFailure)
 	}
+	var clear *engine.Result
+	if s.cfg.ShowResults && !pl.unmask && len(res.Columns) > 0 {
+		c := cloneResult(res)
+		clear = &c
+	}
 	if !pl.unmask && pl.an != nil {
 		if err := s.maskRead(&res, pl, sess); err != nil {
 			s.println(paint.Fail("result dropped: " + err.Error()))
-			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, "the result could not be masked with certainty and was dropped: "+err.Error())
+			return s.refuseWarned(req.ID, pl, class, "the result could not be masked with certainty and was dropped: "+err.Error())
 		}
 	} else if !pl.unmask {
 		origin := sess.OriginColumns()
 		if pii.NeedsAliasCheck(res, origin) {
 			if err := pii.ResultAliasViolation(pl.st, s.rules, s.dialect, res.Columns); err != nil {
-				return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, err.Error()+" (the result was dropped)")
+				return s.refuseWarned(req.ID, pl, class, err.Error()+" (the result was dropped)")
 			}
 		}
 		pii.MaskResult(&res, s.rules, s.detectors, origin)
@@ -517,19 +605,103 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 			more = " (truncated)"
 		}
 		s.println(paint.OK(fmt.Sprintf("done: %d rows%s in %d ms", len(out.Rows), more, rec.DurationMS)))
+		switch {
+		case pl.unmask:
+			s.showTable(red+"PII: UNMASKED result"+reset, res, nil)
+		case clear != nil:
+			s.showTable(paint.Yellow("result in clear (shown here only; the agent got it masked)"), *clear, &res)
+		}
 	}
 	return okResp(req.ID, out)
 }
 
+// cloneResult copies the rows of res, which masking rewrites in place.
+func cloneResult(res engine.Result) engine.Result {
+	c := res
+	c.Columns = slices.Clone(res.Columns)
+	c.Rows = make([][]any, len(res.Rows))
+	for i, r := range res.Rows {
+		c.Rows[i] = slices.Clone(r)
+	}
+	return c
+}
+
+// showTable prints a result in the console, under the profile's output
+// caps, so that the human sees the clear values. With masked, the result
+// as the client got it, each cell the client got masked is yellow and
+// followed by its reference name when it has one. The audit log never
+// holds row data.
+func (s *Server) showTable(title string, res engine.Result, masked *engine.Result) {
+	t := render.TSVTable(res, s.profile.Limits)
+	var m render.Table
+	if masked != nil {
+		m = render.TSVTable(*masked, s.profile.Limits)
+	}
+	maskedAt := func(i, j int) (bool, string) {
+		if i >= len(m.Rows) || j >= len(m.Rows[i]) || j >= len(t.Rows[i]) || m.Rows[i][j] == t.Rows[i][j] {
+			return false, ""
+		}
+		mc := m.Rows[i][j]
+		if strings.HasPrefix(mc, "<redacted:") && strings.HasSuffix(mc, ">") {
+			return true, strings.TrimSuffix(strings.TrimPrefix(mc, "<redacted:"), ">")
+		}
+		return true, ""
+	}
+	col := make([]bool, len(t.Header))
+	for i := range t.Rows {
+		for j := range t.Rows[i] {
+			if ok, _ := maskedAt(i, j); ok && j < len(col) {
+				col[j] = true
+			}
+		}
+	}
+	s.println(title)
+	head := make([]string, len(t.Header))
+	for j, h := range t.Header {
+		head[j] = safeText(h, false)
+		if col[j] {
+			head[j] = paint.Yellow(head[j])
+		}
+	}
+	s.println("  " + strings.Join(head, " │ "))
+	for i, r := range t.Rows {
+		cells := make([]string, len(r))
+		for j, c := range r {
+			cells[j] = safeText(c, false)
+			if ok, ref := maskedAt(i, j); ok {
+				cells[j] = paint.Yellow(cells[j])
+				if ref != "" {
+					cells[j] += " " + paint.Dim("‹"+safeText(ref, false)+"›")
+				}
+			}
+		}
+		s.println("  " + strings.Join(cells, " │ "))
+	}
+	for _, f := range t.Footer {
+		s.println("  " + safeText(f, false))
+	}
+}
+
 // approve shows the prompt and waits for the human. It returns nil when
-// approved, the error response otherwise (audited).
-func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Record) *ipc.Response {
+// approved, the error response otherwise (audited). retype reports that the
+// human asked to type again the values the plan reuses.
+func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Record) (resp *ipc.Response, retype bool) {
 	expected, prompt := "y", "Approve? [y/N] "
 	if s.profile.Production {
 		expected = s.profile.Name
 		prompt = fmt.Sprintf("Type the profile name %q to approve: ", s.profile.Name)
 	}
+	_, reused := s.placeholders(pl)
+	// "r" retypes, unless it is the approval answer itself (a production
+	// profile named r).
+	canRetype := len(reused) > 0 && expected != "r"
+	if canRetype {
+		prompt = "(r to retype ${" + strings.Join(reused, "}, ${") + "}) " + prompt
+	}
 	ans, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold(prompt)), ApprovalTimeout)
+	if ok && canRetype && strings.TrimSpace(ans) == "r" {
+		return nil, true
+	}
 	var r ipc.Response
 	switch {
 	case !ok && ctx.Err() != nil:
@@ -545,10 +717,10 @@ func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Reco
 		s.println(paint.Fail("denied"))
 		r = errResp(id, ipc.CodeDenied, "denied by the human; do not retry unless asked")
 	default:
-		return nil
+		return nil, false
 	}
 	s.audit(rec)
-	return &r
+	return &r, false
 }
 
 // result renders the masked result as capped JSON rows and TSV text.
@@ -600,7 +772,7 @@ func (s *Server) piiAdd(req ipc.Request) ipc.Response {
 	}
 	next := s.approved
 	next.PIIMask = append(append([]string(nil), next.PIIMask...), pattern)
-	next = config.NewPolicy(next.Profile, next.PIIMask, next.PIIAllow)
+	next = config.NewPolicy(next.Profile, next.PIIMask, next.PIIAllow).WithModes(next.PIIModes)
 	if err := s.adopt(next, "tightened"); err != nil {
 		return errResp(req.ID, ipc.CodeInternal, err.Error())
 	}
@@ -608,7 +780,7 @@ func (s *Server) piiAdd(req ipc.Request) ipc.Response {
 		// The pending loosening was read before this rule reached the file:
 		// applying it as is from :review would drop the rule.
 		p := *s.pending
-		p = config.NewPolicy(p.Profile, append(append([]string(nil), p.PIIMask...), pattern), p.PIIAllow)
+		p = config.NewPolicy(p.Profile, append(append([]string(nil), p.PIIMask...), pattern), p.PIIAllow).WithModes(p.PIIModes)
 		s.pending = &p
 	}
 	s.println("PII rule added by a client: mask " + safeText(pattern, false))

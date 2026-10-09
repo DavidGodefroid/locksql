@@ -21,7 +21,8 @@ var stdinIsTerminal = func(r io.Reader) bool {
 }
 
 // runForget is `locksql forget --profile P`: it deletes the profile's OS
-// keychain item. Like the console, it runs in the human's terminal only.
+// keychain items: the database secret and, with an ssh table, the SSH one.
+// Like the console, it runs in the human's terminal only.
 func runForget(e env, args []string) int {
 	fs := flag.NewFlagSet("forget", flag.ContinueOnError)
 	fs.SetOutput(e.stderr)
@@ -52,14 +53,20 @@ func runForget(e env, args []string) int {
 		fmt.Fprintf(e.stderr, "locksql forget: profile %s has no keychain secret (no server credentials)\n", p.Name)
 		return exitFail
 	}
-	switch err := secrets.KeychainDelete(p.Name, p.Host); {
-	case err == nil:
-		fmt.Fprintf(e.stdout, "removed the keychain secret of %s@%s\n", p.Name, p.Host)
-	case errors.Is(err, secrets.ErrNotFound):
-		fmt.Fprintf(e.stdout, "no keychain secret for %s@%s, nothing to remove\n", p.Name, p.Host)
-	default:
-		fmt.Fprintln(e.stderr, "locksql forget:", secrets.Sanitize(err))
-		return exitFail
+	hosts := []string{p.Host}
+	if p.SSH != nil {
+		hosts = append(hosts, "ssh:"+p.SSH.Host)
+	}
+	for _, host := range hosts {
+		switch err := secrets.KeychainDelete(p.Name, host); {
+		case err == nil:
+			fmt.Fprintf(e.stdout, "removed the keychain secret of %s@%s\n", p.Name, host)
+		case errors.Is(err, secrets.ErrNotFound):
+			fmt.Fprintf(e.stdout, "no keychain secret for %s@%s, nothing to remove\n", p.Name, host)
+		default:
+			fmt.Fprintln(e.stderr, "locksql forget:", secrets.Sanitize(err))
+			return exitFail
+		}
 	}
 	return exitOK
 }
