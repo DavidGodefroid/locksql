@@ -50,6 +50,9 @@ type Prov struct {
 	// Lit is set when some values may be literals of the statement (a
 	// UNION of a column and a constant, for instance).
 	Lit bool
+	// grown marks a column whose values a growing call built (see
+	// analyzer.grows): reading it counts as such a call.
+	grown bool
 }
 
 // Table is one relation of the catalog.
@@ -404,6 +407,7 @@ func union(a, b Prov) Prov {
 		Sensitive: a.Sensitive || b.Sensitive,
 		Modes:     mergeSources(a.Modes, b.Modes),
 		Lit:       a.Lit || b.Lit || a.Kind == KindConst || b.Kind == KindConst,
+		grown:     a.grown || b.grown,
 	}
 }
 
@@ -511,14 +515,14 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 
 // sameCols reports whether a recursive CTE's provenance has converged:
 // every field that decides masking and references (kind, sensitivity,
-// literals, sources, modes) is unchanged.
+// literals, sources, modes, growth) is unchanged.
 func sameCols(a, b []column) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
 		p, q := a[i].prov, b[i].prov
-		if p.Kind != q.Kind || p.Sensitive != q.Sensitive || p.Lit != q.Lit || !sameSet(p.Sources, q.Sources) || !sameSet(p.Modes, q.Modes) {
+		if p.Kind != q.Kind || p.Sensitive != q.Sensitive || p.Lit != q.Lit || p.grown != q.grown || !sameSet(p.Sources, q.Sources) || !sameSet(p.Modes, q.Modes) {
 			return false
 		}
 	}
@@ -603,10 +607,14 @@ func (an *analyzer) selectCore(s *Select, parent *scope) ([]column, *scope, erro
 			cols = append(cols, exp...)
 			continue
 		}
+		grown := an.growth
 		p, err := an.value(it.Expr, sc, "select")
 		if err != nil {
 			return nil, nil, err
 		}
+		// A column built by a growing call carries it to the queries that
+		// read it (derived tables, CTEs, set operations).
+		p.grown = p.grown || an.growth > grown
 		name, labeled := it.Alias, it.Alias != ""
 		if name == "" {
 			name = defaultName(it.Expr)
@@ -1046,6 +1054,9 @@ func (an *analyzer) value(e Expr, sc *scope, clause string) (Prov, error) {
 			return Prov{}, err
 		}
 		an.touch(p, clause)
+		if p.grown {
+			an.growth++
+		}
 		return p, nil
 	case *Literal:
 		return Prov{Kind: KindConst, Lit: true}, nil
@@ -1214,7 +1225,7 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (p Prov, err err
 			p, err = Prov{}, refusef("%s: an argument calls REPEAT, LPAD, RPAD, SPACE, ZEROBLOB, or a replacement that grows its input", strings.ToLower(f.Name))
 			return
 		}
-		if concatAggs[f.Name] && an.growth > grown {
+		if _, ok := sizeArg[f.Name]; ok && an.growth > grown || concatAggs[f.Name] && an.growth > grown {
 			// One value built from all rows: a size function multiplies
 			// by the row count what it builds per row.
 			p, err = Prov{}, refusef("%s: an argument built by a size function is not allowed", strings.ToLower(f.Name))

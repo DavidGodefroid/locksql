@@ -511,3 +511,42 @@ func TestAdvConcatAggregateSize(t *testing.T) {
 		}
 	}
 }
+
+// A column built by a growing call keeps growing in the queries that read
+// it: a derived table, a CTE or a set operation does not hide the call.
+func TestAdvGrownColumn(t *testing.T) {
+	b := strings.Repeat("b", 1024)
+	aggs := map[sqlclass.Dialect]string{
+		sqlclass.Postgres: "string_agg(x, '')",
+		sqlclass.MySQL:    "group_concat(x SEPARATOR '')",
+		sqlclass.SQLite:   "group_concat(x, '')",
+	}
+	for d, agg := range aggs {
+		refused := []string{
+			"SELECT " + agg + " FROM (SELECT repeat('a', 65536) AS x FROM users) t LIMIT 1",
+			"WITH c AS (SELECT repeat('a', 65536) AS x FROM users) SELECT " + agg + " FROM c LIMIT 1",
+			"SELECT " + agg + " FROM (SELECT y AS x FROM (SELECT lpad(name, 65536, 'a') AS y FROM users) t) u LIMIT 1",
+			"SELECT " + agg + " FROM (SELECT name AS x FROM users UNION ALL SELECT repeat('a', 65536) FROM users) t LIMIT 1",
+			"SELECT " + agg + " FROM (SELECT * FROM (SELECT repeat('a', 65536) AS x FROM users) t) u LIMIT 1",
+			"SELECT " + agg + " FROM (SELECT coalesce(lower(y), '') AS x FROM (SELECT repeat('a', 65536) AS y FROM users) t) u LIMIT 1",
+			"SELECT replace(y, 'b', '" + b + "') FROM (SELECT replace(x, 'a', '" + b + "') AS y FROM (SELECT repeat('a', 65536) AS x) t) u LIMIT 1",
+			"WITH t AS (SELECT repeat('a', 65536) AS x) SELECT replace(x, 'a', 'bb') FROM t LIMIT 1",
+			"SELECT lpad(x, 10, '0') FROM (SELECT repeat('a', 65536) AS x) t LIMIT 1",
+		}
+		for _, sql := range refused {
+			_, err := analyze(t, d, sql)
+			if err == nil || !strings.Contains(err.Error(), "an argument") {
+				t.Errorf("%s %q: got %v, want a growth refusal", d, sql, err)
+			}
+		}
+		for _, sql := range []string{
+			"SELECT " + agg + " FROM (SELECT name AS x FROM users) t LIMIT 1",
+			"SELECT replace(x, '-', '') FROM (SELECT repeat('a-', 100) AS x) t LIMIT 1",
+			"SELECT x FROM (SELECT repeat('a', 65536) AS x) t LIMIT 1",
+		} {
+			if _, err := analyze(t, d, sql); err != nil {
+				t.Errorf("%s %q: %v", d, sql, err)
+			}
+		}
+	}
+}
