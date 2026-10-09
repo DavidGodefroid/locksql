@@ -112,6 +112,10 @@ func (t *Terminal) Ask(ctx context.Context, prompt string, timeout time.Duration
 	}
 }
 
+// errSecretTimeout is AskSecret's error when no answer comes within
+// ApprovalTimeout.
+var errSecretTimeout = errors.New("console: no password entered")
+
 // AskSecret reads a line with echo off. Before the reader goroutine runs it
 // uses secrets.PromptPassword; afterwards it turns echo off on in itself.
 func (t *Terminal) AskSecret(ctx context.Context, prompt string) ([]byte, error) {
@@ -135,7 +139,7 @@ func (t *Terminal) AskSecret(ctx context.Context, prompt string) ([]byte, error)
 		}
 		return []byte(line), nil
 	case <-timer.C:
-		return nil, errors.New("console: no password entered")
+		return nil, errSecretTimeout
 	case <-ctx.Done():
 		return nil, secrets.ErrInterrupted
 	}

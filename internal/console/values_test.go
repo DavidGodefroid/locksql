@@ -1,6 +1,7 @@
 package console
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -74,6 +75,84 @@ func TestTypedValueCancelled(t *testing.T) {
 	if pr = h.plan(t, typedQ, false); len(pr.Values) != 0 {
 		t.Errorf("a cancelled name became known: %v", pr.Values)
 	}
+	if log := h.auditLog(t); !strings.Contains(log, `"event":"denied"`) || !strings.Contains(log, `"decision":"no value"`) {
+		t.Errorf("audit log:\n%s", log)
+	}
+}
+
+func TestTypedValueClientGone(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	pr := h.plan(t, typedQ, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	wantCode(t, h.callCtx(t, ctx, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeDenied)
+	if h.sess.runCount() != 0 {
+		t.Errorf("ran %q", h.sess.runs)
+	}
+	if log := h.auditLog(t); !strings.Contains(log, `"decision":"abandoned"`) {
+		t.Errorf("audit log:\n%s", log)
+	}
+}
+
+func TestTypedValueUnsafeAudited(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	pr := h.plan(t, typedQ, false)
+	h.io.secrets = []string{`a\b`}
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeDenied)
+	if log := h.auditLog(t); !strings.Contains(log, `"decision":"unsafe value"`) || strings.Contains(log, `a\\b`) {
+		t.Errorf("audit log:\n%s", log)
+	}
+}
+
+// On a production profile named r, typing the name approves: it is not
+// taken for a retype.
+func TestRetypeNotTheApprovalAnswer(t *testing.T) {
+	p := prodProfile()
+	p.Name = "r"
+	h := newHarness(t, p)
+	pr := h.plan(t, typedQ, false)
+	h.io.secrets, h.io.answers = []string{"alice@example.com"}, []string{"r"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	pr = h.plan(t, typedQ, false)
+	h.io.answers = []string{"r"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	if h.sess.runCount() != 2 {
+		t.Errorf("runs %q", h.sess.runs)
+	}
+	if strings.Contains(h.io.prompts[len(h.io.prompts)-1], "retype") {
+		t.Errorf("prompt %q", h.io.prompts[len(h.io.prompts)-1])
+	}
+}
+
+// A database error echoing the value SQL-quoted, or cut short, leaves no
+// trace of it in the audit log, the console or the client answer.
+func TestTypedValueQuotedOrCutEcho(t *testing.T) {
+	for _, v := range []string{"o'brien@example.com", "o'zz-secret-77"} {
+		h := newHarness(t, uatProfile())
+		pr := h.plan(t, typedQ, false)
+		q := strings.ReplaceAll(v, "'", "''")
+		h.sess.runErr = errors.New("error 1064 (42000): You have an error in your SQL syntax; check the manual near '" + q + "' LIMIT 5' at line 1 and " + q)
+		h.io.secrets, h.io.answers = []string{v}, []string{"y"}
+		resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+		if resp.Error == nil {
+			t.Fatal("want an error")
+		}
+		for where, text := range map[string]string{"client": resp.Error.Message, "audit": h.auditLog(t), "console": h.io.output()} {
+			if tail := v[strings.IndexByte(v, '\'')+1:]; strings.Contains(text, tail) {
+				t.Errorf("%s holds %q:\n%s", where, v, text)
+			}
+		}
+	}
+
+	long := "averyveryverylongsecretvalue-0123456789"
+	h := newHarness(t, uatProfile())
+	pr := h.plan(t, typedQ, false)
+	h.sess.runErr = errors.New("error 1406 (22001): Data too long near " + long[:10])
+	h.io.secrets, h.io.answers = []string{long}, []string{"y"}
+	h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	if log := h.auditLog(t); strings.Contains(log, long[:10]) {
+		t.Errorf("audit log holds the cut value:\n%s", log)
+	}
 }
 
 func TestTypedValueQuoting(t *testing.T) {
@@ -104,6 +183,9 @@ func TestSkipPermissionsStillAsksValues(t *testing.T) {
 	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
 	if h.io.promptCount() != 1 {
 		t.Errorf("prompts %q", h.io.prompts)
+	}
+	if h.sess.runCount() == 0 || !strings.Contains(h.sess.runs[len(h.sess.runs)-1], "email = 'alice@example.com'") {
+		t.Errorf("ran %q", h.sess.runs)
 	}
 }
 

@@ -1,8 +1,8 @@
 package console
 
 import (
-	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -80,6 +80,18 @@ func (s *Server) askValues(ctx context.Context, id int64, pl *plan, rec audit.Re
 		v := string(b)
 		clear(b)
 		switch {
+		case err != nil && ctx.Err() != nil:
+			rec.Event, rec.Decision = audit.EventAbandoned, "abandoned"
+			s.audit(rec)
+			s.println("client gone: request cancelled")
+			r := errResp(id, ipc.CodeDenied, "the request was cancelled")
+			return &r
+		case errors.Is(err, errSecretTimeout):
+			rec.Event, rec.Decision = audit.EventTimeout, "timeout"
+			s.audit(rec)
+			s.println("no value typed in time: denied")
+			r := errResp(id, ipc.CodeDenied, "the human typed no value for ${"+n+"}; do not retry unless asked")
+			return &r
 		case err != nil || v == "":
 			rec.Event, rec.Decision = audit.EventDenied, "no value"
 			s.audit(rec)
@@ -87,7 +99,7 @@ func (s *Server) askValues(ctx context.Context, id int64, pl *plan, rec audit.Re
 			r := errResp(id, ipc.CodeDenied, "the human typed no value for ${"+n+"}; do not retry unless asked")
 			return &r
 		case strings.ContainsAny(v, "\\\x00"):
-			rec.Event, rec.Decision = audit.EventDenied, "no value"
+			rec.Event, rec.Decision = audit.EventDenied, "unsafe value"
 			s.audit(rec)
 			s.println("a backslash or a NUL cannot be substituted safely: denied")
 			r := errResp(id, ipc.CodeDenied, "the value typed for ${"+n+"} cannot be substituted safely; do not retry unless asked")
@@ -98,14 +110,14 @@ func (s *Server) askValues(ctx context.Context, id int64, pl *plan, rec audit.Re
 	return nil
 }
 
-// hideValues removes from a message the values substituted for the
-// placeholders of a plan: a database error may quote them, and they must
-// reach neither a client, nor the audit log, nor the console's error text.
-func (s *Server) hideValues(msg string, pl *plan) string {
+// planValues are the values substituted for the placeholders of a plan,
+// typed or referenced, each also in its SQL-quoted form (” for '): a
+// database error may quote them either way.
+func (s *Server) planValues(pl *plan) [][]byte {
 	if pl == nil || pl.an == nil {
-		return msg
+		return nil
 	}
-	var vals []string
+	var vals [][]byte
 	for _, u := range pl.an.Values {
 		var v string
 		var ok bool
@@ -116,14 +128,13 @@ func (s *Server) hideValues(msg string, pl *plan) string {
 			tv, ok = s.typed[u.Name]
 			v = tv.value
 		}
-		if ok && v != "" {
-			vals = append(vals, v)
+		if !ok || v == "" {
+			continue
+		}
+		vals = append(vals, []byte(v))
+		if q := strings.ReplaceAll(v, "'", "''"); q != v {
+			vals = append(vals, []byte(q))
 		}
 	}
-	// The longest first, so that a value inside another goes too.
-	slices.SortFunc(vals, func(a, b string) int { return cmp.Compare(len(b), len(a)) })
-	for _, v := range vals {
-		msg = strings.ReplaceAll(msg, v, "<value redacted>")
-	}
-	return msg
+	return vals
 }

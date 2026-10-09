@@ -176,13 +176,38 @@ func (s *Server) masking() bool {
 // the audit log. With masking on, a value the server quotes in its message
 // (a failed cast in a WHERE clause) is redacted: it reaches no result row,
 // so neither the rules nor the detectors would mask it otherwise. The
-// values substituted for the placeholders of pl never appear.
+// values substituted for the placeholders of pl are removed.
 func (s *Server) errText(err error, sql string, unmask bool, pl *plan) string {
-	msg := s.hideValues(secrets.Sanitize(err), pl)
+	msg := secrets.Sanitize(err, s.planValues(pl)...)
 	if unmask || !s.masking() {
 		return msg
 	}
 	return pii.RedactMessage(msg, sql, s.detectors)
+}
+
+// auditErrText is the text of a statement error for the audit log. When
+// the plan substituted values, none of the database's text is kept: it may
+// echo a value in a form no scrubbing recognises (cut, re-quoted).
+func (s *Server) auditErrText(err error, pl *plan) string {
+	if pl.an == nil || len(pl.an.Values) == 0 {
+		return s.errText(err, pl.st.SQL, false, pl)
+	}
+	switch {
+	case errors.Is(err, engine.ErrConnLost):
+		return "the database connection was lost"
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return "statement interrupted"
+	}
+	return "statement refused by the database (the text is withheld: the statement holds placeholder values)"
+}
+
+// failedPlan is failed for an error raised while serving pl: the text
+// reaching the client is scrubbed of the plan's values.
+func (s *Server) failedPlan(id int64, what string, err error, pl *plan) ipc.Response {
+	if errors.Is(err, engine.ErrConnLost) {
+		return s.failed(id, what, err)
+	}
+	return errResp(id, ipc.CodeInternal, what+": "+s.errText(err, pl.st.SQL, false, pl))
 }
 
 // checkDB resolves the database of a request: the given one, or the
@@ -466,7 +491,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		// as the agent wrote it, placeholders included: the audit keeps it.
 		if reason, refused, err := s.analyzeRead(ctx, sess, pl, pl.st.SQL); err != nil || refused {
 			if err != nil {
-				return s.failed(req.ID, "plan", err)
+				return s.failedPlan(req.ID, "plan", err, pl)
 			}
 			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, reason)
 		}
@@ -486,9 +511,9 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	defer s.level(ctx, start)
 	if reason, err := s.kCheck(rctx, sess, pl); err != nil || reason != "" {
 		if err != nil {
-			rec.Error = s.errText(err, pl.st.SQL, false, pl)
+			rec.Error = s.auditErrText(err, pl)
 			s.audit(rec)
-			return s.failed(req.ID, "k-anonymity check", err)
+			return s.failedPlan(req.ID, "k-anonymity check", err, pl)
 		}
 		return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, reason+" (approved, but not run)")
 	}
@@ -507,9 +532,9 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	rec.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
 		// The audit log never holds row data, even for an unmask run.
-		rec.Error = s.errText(err, pl.st.SQL, false, pl)
+		rec.Error = s.auditErrText(err, pl)
 		s.audit(rec)
-		s.println(paint.Fail("failed: " + rec.Error))
+		s.println(paint.Fail("failed: " + s.errText(err, pl.st.SQL, false, pl)))
 		if errors.Is(err, engine.ErrConnLost) {
 			return s.failed(req.ID, "statement failed", err)
 		}
@@ -563,11 +588,14 @@ func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Reco
 		prompt = fmt.Sprintf("Type the profile name %q to approve: ", s.profile.Name)
 	}
 	_, reused := s.placeholders(pl)
-	if len(reused) > 0 {
+	// "r" retypes, unless it is the approval answer itself (a production
+	// profile named r).
+	canRetype := len(reused) > 0 && expected != "r"
+	if canRetype {
 		prompt = "(r to retype ${" + strings.Join(reused, "}, ${") + "}) " + prompt
 	}
 	ans, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold(prompt)), ApprovalTimeout)
-	if ok && len(reused) > 0 && strings.TrimSpace(ans) == "r" {
+	if ok && canRetype && strings.TrimSpace(ans) == "r" {
 		return nil, true
 	}
 	var r ipc.Response
