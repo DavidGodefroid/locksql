@@ -27,7 +27,17 @@ func separated() *sysconf.Config {
 	return &sysconf.Config{ServiceUser: "locksql", ClientGroup: "locksql-clients", SocketDir: "/run/locksql", X11: sysconf.X11Warn}
 }
 
+// skipWithTestHook skips a same-user refusal test in a locksql_testhook
+// build, where the console accepts same-user mode.
+func skipWithTestHook(t *testing.T) {
+	t.Helper()
+	if allowSameUserForTests {
+		t.Skip("built with the locksql_testhook tag")
+	}
+}
+
 func TestIsolationSameUserRefused(t *testing.T) {
+	skipWithTestHook(t)
 	io := &fakeIO{}
 	_, err := checkIsolation(io, fakeIsolation(nil, sysconf.DisplayWayland), uatProfile())
 	if err == nil {
@@ -41,6 +51,7 @@ func TestIsolationSameUserRefused(t *testing.T) {
 }
 
 func TestIsolationSameUserRefusedBeforeX11(t *testing.T) {
+	skipWithTestHook(t)
 	io := &fakeIO{}
 	_, err := checkIsolation(io, fakeIsolation(nil, sysconf.DisplayX11), uatProfile())
 	if err == nil || !strings.Contains(err.Error(), "separate account") {
@@ -54,9 +65,7 @@ func TestIsolationSameUserRefusedBeforeX11(t *testing.T) {
 // TestRunSameUserRefusedFirst pins spec §8 "Console refuses to start without
 // a separated setup": no prompt, no approved policy, no audit file.
 func TestRunSameUserRefusedFirst(t *testing.T) {
-	if allowSameUserForTests {
-		t.Skip("built with the locksql_testhook tag")
-	}
+	skipWithTestHook(t)
 	root := t.TempDir()
 	writeProjectConfig(t, root, 200)
 	state := t.TempDir()
