@@ -42,6 +42,9 @@ func (s *Server) screen(ctx context.Context, pl *plan) {
 	} else {
 		add(fmt.Sprintf("PII: masked (%d column rules; detectors: %s)",
 			len(s.rules.Mask), strings.Join(s.profile.Detectors, ", ")))
+		if s.cfg.ShowResults {
+			add(paint.Yellow("result: shown here in clear (--show-results); the agent gets it masked"))
+		}
 	}
 	for _, w := range pl.warnings {
 		add(red + "warning: " + safeText(w, false) + reset)

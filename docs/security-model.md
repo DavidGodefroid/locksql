@@ -96,6 +96,17 @@ unmask request is refused before parsing and audited; with it, each unmasked
 query is still approved by the human and never auto-approved, and its clear
 result is printed in the console, never in the audit log.
 
+## `--show-results`
+
+A console-only flag, off by default, that prints in the console the clear
+result of each masked query it runs. It changes nothing for the agent, which
+still gets the masked cells: the human is the trusted party and already sees
+the SQL and holds the credentials. No client, config file or environment
+variable can turn it on, and `locksql status` only reports it. It is accepted
+on production profiles with a red warning at start; every approval screen
+says the result will be shown in clear. The audit log still holds no row
+data.
+
 ## `--skip-permissions`
 
 Auto-approval is a console-only flag. It is ignored on production profiles,
@@ -132,6 +143,11 @@ Records contain the SQL and metadata, never secrets and never row data.
   restrict what an approved write statement does within the account's
   privileges. The column analysis covers reads; a write's `RETURNING` list
   or a data-modifying CTE may not alias or transform a masked column.
+- **Clear results on the human's screen.** With `--show-results` (and for an
+  unmasked run) the clear rows stay in the scrollback of the console's
+  terminal, and are visible to anyone who sees that screen (screen sharing,
+  recording, a terminal that logs its output). That terminal is already the
+  trusted party; locksql does not clear it.
 - **Masking is best effort.** Column rules depend on the rules being right,
   and value detectors catch common formats only. Use a database account that
   cannot read what the agent must never see.

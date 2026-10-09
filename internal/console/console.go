@@ -60,6 +60,9 @@ type Options struct {
 	SkipPermissions bool
 	// AllowUnmask lets clients ask for unmasked output (--allow-unmask).
 	AllowUnmask bool
+	// ShowResults prints masked results in clear in the console
+	// (--show-results).
+	ShowResults bool
 	Cwd         string
 	IO          IO
 	// Now defaults to time.Now.
@@ -97,6 +100,9 @@ type ServerConfig struct {
 	// AllowUnmask lets clients ask for unmasked output; without it an
 	// unmask plan is refused before anything else.
 	AllowUnmask bool
+	// ShowResults prints in the console, in clear, the result of each
+	// masked run; the client still gets it masked.
+	ShowResults bool
 	Version     string
 	// LoadPolicy re-reads the current policy from the config files. Nil
 	// disables CheckPolicy.

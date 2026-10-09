@@ -298,7 +298,7 @@ each; the exit code is 1 when any check fails.
 In a terminal you keep in view, in the `locksql` session:
 
 ```sh
-locksql console [--profile dev] [--project DIR] [--skip-permissions] [--allow-unmask]
+locksql console [--profile dev] [--project DIR] [--skip-permissions] [--allow-unmask] [--show-results]
 ```
 
 Without `--profile` the console uses the only profile, or asks which one when
@@ -308,6 +308,20 @@ there are several. It first wires agents installed since the last run (see
 `--project` names the project directory (default: the current directory);
 the console and the agent must agree on it, since it selects the socket. A
 console on a project prints `serving agents in <root>`.
+
+`--show-results` prints in the console, in clear, the result of each masked
+query it runs, under `result in clear (shown here only; the agent got it
+masked)`; the agent still gets the masked cells (`<redacted:rN.R.C>`,
+`a***(17)`). The cells the agent got masked are yellow, followed by their
+reference (`‹r1.1.2›`) when they have one, so you can tie what you read to
+what the agent handles. `max_rows`, `max_cell_chars` and `max_output_bytes`
+apply as for the agent. Off by default, it is a console flag only: no client,
+config file or environment variable can turn it on. While it is on, the
+console warns at start (in red on a production profile, where it is
+accepted), shows `results  shown in clear in this console` in the Ready
+block and `result: shown here in clear` on every approval screen, and
+`locksql status` reports `show results on`. The audit log still holds no row
+data, and references and placeholders work as without it.
 
 The console needs an interactive terminal. At start it:
 

@@ -254,6 +254,13 @@ account that cannot read what the agent must never see.</p>
   </div>
 </section>
 
+<section aria-labelledby="show-results">
+  <h2 id="show-results">See the rows yourself: <code>--show-results</code></h2>
+  <div class="prose">
+    <p><code>locksql console --show-results</code> prints in the console, in clear, the result of each masked query it runs, so you see who the rows are while the agent still gets the masked cells. The cells the agent got masked are highlighted and carry their reference (<code>‹r1.1.2›</code>); the output caps apply as for the agent. It is a console flag only, off by default: no client or config file can turn it on. The console warns at start (in red on production), says so in the Ready block and on every approval screen, and <code>locksql status</code> reports it. The audit log still holds no row data, and the clear rows stay in your terminal's scrollback.</p>
+  </div>
+</section>
+
 <section aria-labelledby="skip">
   <h2 id="skip">Fast local iteration: <code>--skip-permissions</code></h2>
   <div class="prose">

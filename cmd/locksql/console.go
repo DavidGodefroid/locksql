@@ -17,16 +17,17 @@ import (
 )
 
 // runConsole is `locksql console [--profile P] [--skip-permissions]
-// [--allow-unmask]`. It
+// [--allow-unmask] [--show-results]`. It
 // runs in the human's terminal only. Without --profile it opens the only
 // profile, or asks which one among several.
 func runConsole(e env, args []string) int {
-	const usage = "usage: locksql console [--profile P] [--project DIR] [--skip-permissions] [--allow-unmask]"
+	const usage = "usage: locksql console [--profile P] [--project DIR] [--skip-permissions] [--allow-unmask] [--show-results]"
 	fs := flag.NewFlagSet("console", flag.ContinueOnError)
 	fs.SetOutput(e.stderr)
 	profile := fs.String("profile", "", "profile to open")
 	skip := fs.Bool("skip-permissions", false, "auto-approve statements allowed by the tier and the weight check (never on production, never unmask)")
 	allowUnmask := fs.Bool("allow-unmask", false, "let clients ask for unmasked PII output; each such query is still approved here, never auto-approved (off by default: unmask requests are refused)")
+	showResults := fs.Bool("show-results", false, "print in this console, in clear, the result of each masked query it runs; the client still gets it masked")
 	project := fs.String("project", "", "project directory (default: the current directory); the console account opens the agent's project from its own session")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -75,11 +76,17 @@ func runConsole(e env, args []string) int {
 			return exitUsage
 		}
 	}
-	return openConsole(e, name, *skip, *allowUnmask, *project, term)
+	return openConsole(e, name, consoleFlags{skip: *skip, allowUnmask: *allowUnmask, showResults: *showResults}, *project, term)
+}
+
+// consoleFlags are the console-only switches: no client or config file can
+// set them.
+type consoleFlags struct {
+	skip, allowUnmask, showResults bool
 }
 
 // openConsole runs the console on profile until it ends.
-func openConsole(e env, profile string, skip, allowUnmask bool, project string, term *console.Terminal) int {
+func openConsole(e env, profile string, f consoleFlags, project string, term *console.Terminal) int {
 	cwd := project
 	if cwd != "" {
 		abs, err := filepath.Abs(cwd)
@@ -91,8 +98,9 @@ func openConsole(e env, profile string, skip, allowUnmask bool, project string, 
 	}
 	err := console.Run(context.Background(), console.Options{
 		Profile:         profile,
-		SkipPermissions: skip,
-		AllowUnmask:     allowUnmask,
+		SkipPermissions: f.skip,
+		AllowUnmask:     f.allowUnmask,
+		ShowResults:     f.showResults,
 		Cwd:             cwd,
 		IO:              term,
 		TTY:             os.Stdin,
