@@ -105,13 +105,15 @@ type Profile struct {
 	Credentials string `json:"credentials"`
 	// TLS is the transport mode (TLSDisable ... TLSVerifyFull) and TLSCA an
 	// optional PEM bundle that replaces the system roots.
-	TLS        string   `json:"tls,omitempty"`
-	TLSCA      string   `json:"tls_ca,omitempty"`
-	Port       int      `json:"port"`
-	Tier       Tier     `json:"tier"`
-	Production bool     `json:"production"`
-	Detectors  []string `json:"detectors"`
-	Limits     Limits   `json:"limits"`
+	TLS   string `json:"tls,omitempty"`
+	TLSCA string `json:"tls_ca,omitempty"`
+	// SSH, when set, is the bastion the profile is reached through.
+	SSH        *SSHProfile `json:"ssh,omitempty"`
+	Port       int         `json:"port"`
+	Tier       Tier        `json:"tier"`
+	Production bool        `json:"production"`
+	Detectors  []string    `json:"detectors"`
+	Limits     Limits      `json:"limits"`
 	// CredentialsTTL makes the console ask for the secret again (and
 	// reconnect) once the connection is that old; 0 keeps it for the
 	// session. It suits short-lived secrets from a vault.
@@ -245,6 +247,7 @@ type rawProfile struct {
 	Credentials string    `toml:"credentials"`
 	TLS         string    `toml:"tls"`
 	TLSCA       string    `toml:"tls_ca"`
+	SSH         *rawSSH   `toml:"ssh"`
 	Tier        string    `toml:"tier"`
 	Production  bool      `toml:"production"`
 	Detectors   []string  `toml:"detectors"`
@@ -479,6 +482,14 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		}
 	}
 
+	if r.SSH != nil {
+		s, err := buildSSH(*r.SSH, p, errf)
+		if err != nil {
+			return Profile{}, err
+		}
+		p.SSH = s
+	}
+
 	applyDefaults(&p, detectorsSet)
 	if p.Production && TLSRank(p.TLS) < TLSRank(TLSRequire) && !strings.HasPrefix(p.Host, "/") && !IsLoopback(p.Host) {
 		return Profile{}, errf("a production profile on a remote host needs tls = \"require\" or stronger, or an ssh tunnel to the database's own host")
@@ -526,4 +537,82 @@ func IsLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// SSH authentication methods.
+const (
+	SSHAuthKey      = "key"
+	SSHAuthAgent    = "agent"
+	SSHAuthPassword = "password"
+)
+
+// SSHProfile is the bastion a network profile is reached through. Host and
+// Port of the profile are then seen from the bastion. It never holds a
+// secret: a key passphrase or an SSH password follows Credentials.
+type SSHProfile struct {
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	User        string `json:"user"`
+	Auth        string `json:"auth"`
+	Key         string `json:"key,omitempty"`
+	Credentials string `json:"credentials"`
+}
+
+type rawSSH struct {
+	Host        string `toml:"host"`
+	Port        int    `toml:"port"`
+	User        string `toml:"user"`
+	Auth        string `toml:"auth"`
+	Key         string `toml:"key"`
+	Credentials string `toml:"credentials"`
+}
+
+func buildSSH(r rawSSH, p Profile, errf func(string, ...any) error) (*SSHProfile, error) {
+	if p.Engine == EngineSQLite {
+		return nil, errf("ssh is not used by sqlite")
+	}
+	if strings.HasPrefix(p.Host, "/") {
+		return nil, errf("ssh needs a TCP host; forwarding to a Unix socket is not supported")
+	}
+	for _, f := range []struct{ key, val string }{{"ssh.host", r.Host}, {"ssh.user", r.User}, {"ssh.key", r.Key}} {
+		if strings.IndexFunc(f.val, unsafeRune) >= 0 {
+			return nil, errf("%s holds a control or formatting character", f.key)
+		}
+	}
+	switch {
+	case r.Host == "":
+		return nil, errf("ssh.host is required")
+	case r.User == "":
+		return nil, errf("ssh.user is required")
+	case r.Port < 0 || r.Port > 65535:
+		return nil, errf("ssh.port %d out of range", r.Port)
+	}
+	switch r.Auth {
+	case SSHAuthKey:
+		if r.Key == "" {
+			return nil, errf("ssh.key is required with ssh.auth = \"key\"")
+		}
+	case SSHAuthAgent, SSHAuthPassword:
+		if r.Key != "" {
+			return nil, errf("ssh.key is only used with ssh.auth = \"key\"")
+		}
+	default:
+		return nil, errf("ssh.auth must be key, agent or password")
+	}
+	switch r.Credentials {
+	case "", CredentialsAsk, CredentialsKeychain:
+	default:
+		return nil, errf("unknown ssh.credentials mode %q (want ask or keychain)", r.Credentials)
+	}
+	s := &SSHProfile{Host: r.Host, Port: r.Port, User: r.User, Auth: r.Auth, Key: r.Key, Credentials: r.Credentials}
+	if s.Port == 0 {
+		s.Port = 22
+	}
+	if s.Credentials == "" {
+		s.Credentials = p.Credentials
+		if s.Credentials == "" {
+			s.Credentials = CredentialsAsk
+		}
+	}
+	return s, nil
 }

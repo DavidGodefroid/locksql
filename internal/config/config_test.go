@@ -339,3 +339,47 @@ func TestTLSDefaultsAndValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestSSHTable(t *testing.T) {
+	parse := func(body string) (Profile, error) {
+		ps, err := ParseProfiles([]byte(body), "t.toml", t.TempDir())
+		return ps["p"], err
+	}
+	head := "[profiles.p]\nengine=\"postgres\"\nhost=\"db.internal\"\ntls=\"require\"\n[profiles.p.ssh]\n"
+	p, err := parse(head + "host=\"bastion\"\nuser=\"deploy\"\nauth=\"key\"\nkey=\"~/.ssh/id_ed25519\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := SSHProfile{Host: "bastion", Port: 22, User: "deploy", Auth: SSHAuthKey, Key: "~/.ssh/id_ed25519", Credentials: CredentialsAsk}
+	if p.SSH == nil || *p.SSH != want {
+		t.Errorf("ssh = %+v, want %+v", p.SSH, want)
+	}
+	for name, c := range map[string]struct{ body, err string }{
+		"no auth":        {head + "host=\"b\"\nuser=\"u\"\n", "ssh.auth"},
+		"bad auth":       {head + "host=\"b\"\nuser=\"u\"\nauth=\"gssapi\"\n", "ssh.auth"},
+		"key missing":    {head + "host=\"b\"\nuser=\"u\"\nauth=\"key\"\n", "ssh.key"},
+		"key with agent": {head + "host=\"b\"\nuser=\"u\"\nauth=\"agent\"\nkey=\"k\"\n", "ssh.key"},
+		"no host":        {head + "user=\"u\"\nauth=\"agent\"\n", "ssh.host"},
+		"no user":        {head + "host=\"b\"\nauth=\"agent\"\n", "ssh.user"},
+		"bad port":       {head + "host=\"b\"\nuser=\"u\"\nauth=\"agent\"\nport=70000\n", "ssh.port"},
+		"unknown key":    {head + "host=\"b\"\nuser=\"u\"\nauth=\"agent\"\nproxy_jump=\"x\"\n", "unknown key"},
+		"secret key":     {head + "host=\"b\"\nuser=\"u\"\nauth=\"password\"\npassword=\"x\"\n", "looks like a secret"},
+		"socket host":    {"[profiles.p]\nengine=\"mysql\"\nhost=\"/run/m.sock\"\n[profiles.p.ssh]\nhost=\"b\"\nuser=\"u\"\nauth=\"agent\"\n", "Unix socket"},
+		"sqlite":         {"[profiles.p]\nengine=\"sqlite\"\npath=\"x.db\"\n[profiles.p.ssh]\nhost=\"b\"\nuser=\"u\"\nauth=\"agent\"\n", "sqlite"},
+		"control char":   {head + "host=\"b\\u001b[2J\"\nuser=\"u\"\nauth=\"agent\"\n", "control"},
+	} {
+		if _, err := parse(c.body); err == nil || !strings.Contains(err.Error(), c.err) {
+			t.Errorf("%s: err = %v, want %q", name, err, c.err)
+		}
+	}
+}
+
+func TestSSHCredentialsDefaultToProfile(t *testing.T) {
+	ps, err := ParseProfiles([]byte("[profiles.p]\nengine=\"postgres\"\nhost=\"127.0.0.1\"\ncredentials=\"keychain\"\n[profiles.p.ssh]\nhost=\"b\"\nuser=\"u\"\nauth=\"password\"\n"), "t.toml", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps["p"].SSH.Credentials != CredentialsKeychain {
+		t.Errorf("ssh.credentials = %q", ps["p"].SSH.Credentials)
+	}
+}
