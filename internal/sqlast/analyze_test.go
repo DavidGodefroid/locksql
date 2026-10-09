@@ -335,3 +335,32 @@ func TestRecursiveCTELiteralKeepsLit(t *testing.T) {
 		t.Errorf("plain recursive column marked Lit: %+v", a.Outputs[0].Prov)
 	}
 }
+
+// LitFilter marks a statement that filters a PII column with a literal the
+// agent wrote, wherever it sits; placeholders and IS NULL do not count.
+func TestLitFilter(t *testing.T) {
+	cases := map[string]bool{
+		"SELECT email FROM users WHERE email = 'v@x.com' LIMIT 5":                                          true,
+		"SELECT email FROM users WHERE email IN ('v@x.com', 'b@x.com') LIMIT 5":                            true,
+		"SELECT email FROM users GROUP BY email HAVING email = 'v@x.com' LIMIT 5":                          true,
+		"SELECT email FROM users INTERSECT SELECT email FROM users WHERE email = 'v@x.com' LIMIT 5":        true,
+		"SELECT b.email FROM users a JOIN users b ON a.email = b.email WHERE a.email = 'v@x.com' LIMIT 5":  true,
+		"SELECT email FROM users WHERE id IN (SELECT id FROM users WHERE email = 'v@x.com') LIMIT 5":       true,
+		"SELECT email FROM users WHERE email IN ('${email}', 'v@x.com') LIMIT 5":                           true,
+		"SELECT email FROM users LIMIT 5":                                                                  false,
+		"SELECT email FROM users WHERE id = 1 LIMIT 5":                                                     false,
+		"SELECT email FROM users WHERE email IS NULL LIMIT 5":                                              false,
+		"SELECT email FROM users WHERE email = '${email}' LIMIT 5":                                         false,
+		"SELECT email FROM users WHERE email IN ('${email}', '${other}') LIMIT 5":                          false,
+		"SELECT b.email FROM users a JOIN users b ON a.email = b.email WHERE a.email = '${email}' LIMIT 5": false,
+	}
+	for sql, want := range cases {
+		a, err := analyze(t, sqlclass.MySQL, sql)
+		if err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		if a.LitFilter != want {
+			t.Errorf("%s: LitFilter %v, want %v", sql, a.LitFilter, want)
+		}
+	}
+}

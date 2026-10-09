@@ -370,7 +370,12 @@ func (s *Server) maskRead(res *engine.Result, pl *plan, sess engine.Session) err
 		pii.MaskResult(res, pii.Rules{}, s.detectors, false)
 		return nil
 	}
-	n := s.refs.begin()
-	cell := func(row, col int, v any) string { return s.refs.put(n, row, col, pii.CellText(v)) }
+	// A PII filter on a literal of the agent: the agent chose the value
+	// behind every cell it selects, so no cell gets a reference.
+	var cell func(row, col int, v any) string
+	if !pl.an.LitFilter {
+		n := s.refs.begin()
+		cell = func(row, col int, v any) string { return s.refs.put(n, row, col, pii.CellText(v)) }
+	}
 	return pii.MaskOutputs(res, pl.an.Outputs, s.rules, s.detectors, cell, sess.OriginColumns())
 }

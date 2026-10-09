@@ -367,3 +367,62 @@ func TestNoReferenceForRecursiveCTELiteral(t *testing.T) {
 		}
 	}
 }
+
+// A statement that filters a PII column with a literal the agent wrote gets
+// no reference on any column: the agent chose the value behind it, and a
+// reference would let it look that value up without the k-anonymity check.
+func TestNoReferenceUnderAgentLiteralFilter(t *testing.T) {
+	for _, q := range []string{
+		"SELECT email FROM users WHERE email = 'victim@x.com' LIMIT 50",
+		"SELECT email FROM users WHERE email IN ('victim@x.com', 'b@x.com') LIMIT 50",
+		"SELECT email FROM users GROUP BY email HAVING email = 'victim@x.com' LIMIT 5",
+		"SELECT email FROM users INTERSECT SELECT email FROM users WHERE email = 'victim@x.com' LIMIT 5",
+		"SELECT email FROM users UNION SELECT email FROM users WHERE email = 'victim@x.com' LIMIT 5",
+		"SELECT b.email FROM users a JOIN users b ON a.email = b.email WHERE a.email = 'victim@x.com' LIMIT 5",
+		"SELECT email FROM users WHERE id IN (SELECT id FROM users WHERE email = 'victim@x.com') LIMIT 5",
+		"SELECT email FROM users WHERE email IN ('${r9.1.1}', 'victim@x.com') LIMIT 5",
+	} {
+		h := newHarness(t, uatProfile())
+		h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"victim@x.com"}}}
+		h.sess.count = &engine.Result{Columns: []engine.ResultColumn{{Label: "n"}}, Rows: [][]any{{int64(100)}}}
+		if strings.Contains(q, "r9.1.1") {
+			// A reference to a known cell, mixed with a literal.
+			pr := h.plan(t, "SELECT email FROM users WHERE id = 1 LIMIT 1", false)
+			h.io.answers = []string{"y"}
+			h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+			q = strings.Replace(q, "r9.1.1", "r1.1.1", 1)
+		}
+		pr := h.plan(t, q, false)
+		h.io.answers = []string{"y"}
+		var rr ipc.RunResult
+		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+		if len(rr.Rows) == 0 || rr.Rows[0][0] != "<redacted>" {
+			t.Errorf("%s: rows %v", q, rr.Rows)
+		}
+	}
+}
+
+// A plain fetch, and a fetch filtered by a reference or a typed value, keep
+// their references: the agent chose none of the values.
+func TestReferenceUnderPlaceholderFilter(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"alice@example.com"}}}
+	run := func(q string) ipc.RunResult {
+		t.Helper()
+		pr := h.plan(t, q, false)
+		h.io.answers = []string{"y"}
+		var rr ipc.RunResult
+		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+		return rr
+	}
+	if rr := run("SELECT email FROM users LIMIT 5"); rr.Rows[0][0] != "<redacted:r1.1.1>" {
+		t.Errorf("plain fetch: %v", rr.Rows)
+	}
+	if rr := run("SELECT email FROM users WHERE email = '${r1.1.1}' LIMIT 5"); rr.Rows[0][0] != "<redacted:r2.1.1>" {
+		t.Errorf("reference filter: %v", rr.Rows)
+	}
+	h.io.secrets = []string{"alice@example.com"}
+	if rr := run("SELECT email FROM users WHERE email IN ('${email}', '${r1.1.1}') LIMIT 5"); rr.Rows[0][0] != "<redacted:r3.1.1>" {
+		t.Errorf("typed value filter: %v", rr.Rows)
+	}
+}

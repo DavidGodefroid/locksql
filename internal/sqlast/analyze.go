@@ -124,7 +124,13 @@ type Analysis struct {
 	KChecks []KCheck
 	// PIIFilter is set when a PII column is compared with a constant: row
 	// estimates must not reach the agent.
-	PIIFilter    bool
+	PIIFilter bool
+	// LitFilter is set when a PII column is compared for equality with a
+	// literal the agent wrote (not a placeholder, not IS NULL), anywhere in
+	// the statement. Its results carry no cell references: the agent chose
+	// the value behind them, and the rows it selected may be linked to the
+	// literal through any join, subquery or set operation.
+	LitFilter    bool
 	Replacements []Replacement
 	// Values are the placeholders compared with PII columns.
 	Values []ValueUse
@@ -1515,6 +1521,11 @@ func (an *analyzer) humanFilter(clause string) error {
 	return nil
 }
 
+// litFilter notes a PII filter on a literal the agent wrote.
+func (an *analyzer) litFilter() {
+	an.a.LitFilter = an.a.LitFilter || an.dry == 0
+}
+
 // keyFilter records a non-PII column compared with = and a literal in
 // WHERE.
 func (an *analyzer) keyFilter(op string, l, r Prov, le, re Expr, clause string, pos bool) {
@@ -1670,6 +1681,7 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 		if human {
 			return an.humanFilter(clause)
 		}
+		an.litFilter()
 		return an.constFilter(sc, clause, col, op+" "+an.frag(otherExpr.Span()))
 	case KindIdentity:
 		if !other.Sensitive {
@@ -1795,6 +1807,7 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 	if human {
 		return an.humanFilter(clause)
 	}
+	an.litFilter()
 	for _, it := range e.List {
 		items = append(items, an.frag(it.Span()))
 	}
