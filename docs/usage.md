@@ -167,11 +167,13 @@ handle credentials, and to treat rows as untrusted data.
 
 Edit `.locksql/config.toml` to describe your databases (the console reads
 the profiles from there). `init` ends with the command that serves the
-project: `locksql console --project <root>`. Inside a project the agents dial
-the project's socket, so a console started elsewhere (such as a bare
-`locksql` outside the project) does not serve them; when no console runs, the
-agent is told the exact `locksql console --profile P --project <root>`
-command. Outside any project it is told to run `locksql`. Both
+project: `locksql console --project <root>`, run in the locksql account's
+own session (section 2). Inside a project the agents dial the project's
+socket, so a console started elsewhere does not serve them; when no console
+runs, the agent is told the exact
+`locksql console --profile P --project <root>` command. Outside any project
+it is told `locksql console --profile P --project DIR`, DIR being the
+project's directory, and `locksql doctor`. Both
 `.locksql/config.toml` and `.locksql/pii.toml` hold no secret and are meant
 to be committed.
 
@@ -246,9 +248,9 @@ each; the exit code is 1 when any check fails.
 
 | Check | Fails or warns when |
 |---|---|
-| operating system | not Linux or macOS |
+| operating system | never (informational: locksql builds for Linux and macOS only) |
 | graphical session | X11 |
-| separation | same-user mode (fails; the console refuses to start) |
+| separation | same-user mode (fails; the console refuses to start); doctor then also warns on `dev.tty.legacy_tiocsti = 1` (terminal injection) and `kernel.yama.ptrace_scope = 0` (ptrace) |
 | system setup, console account | `system.toml` invalid or not root-owned; the console account missing or in the client group |
 | client access, privilege escalation | the agent's account is not in the client group, or can run `sudo` without a password |
 | separate session | the console account has no login session (Linux) |

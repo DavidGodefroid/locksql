@@ -112,7 +112,7 @@ func TestDialWithoutConsoleIsErrNoConsole(t *testing.T) {
 	if StartCommand("uat", "") != "locksql console --profile uat" {
 		t.Fatalf("StartCommand = %q", StartCommand("uat", ""))
 	}
-	if !strings.Contains(err.Error(), "run `locksql`") || nc.Project != "" {
+	if !strings.Contains(err.Error(), "--project DIR") || !strings.Contains(err.Error(), "locksql doctor") || strings.Contains(err.Error(), "run `locksql`") || nc.Project != "" {
 		t.Fatalf("outside a project: %q (project %q)", err.Error(), nc.Project)
 	}
 }
