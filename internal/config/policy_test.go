@@ -56,7 +56,7 @@ func TestDiffLoosening(t *testing.T) {
 func fullPolicy() Policy {
 	return NewPolicy(Profile{
 		Name: "uat", Engine: EngineMariaDB, Host: "db", Port: 3306, Database: "app", User: "ro",
-		Credentials: CredentialsAsk, Tier: TierWrite, Production: true,
+		Credentials: CredentialsAsk, Tier: TierWrite, Production: true, TLS: TLSVerifyFull,
 		Detectors: []string{"email", "phone"},
 		Limits:    DefaultLimits(true),
 	}, []string{"app.users.email", "app.users.phone"}, []string{"app.t.name"})
@@ -95,6 +95,8 @@ func TestDiffEveryRule(t *testing.T) {
 		{"database", "database", func(p *Policy) { p.Profile.Database = "other" }, true},
 		{"path", "path", func(p *Policy) { p.Profile.Path = "/tmp/x.db" }, true},
 		{"user", "user", func(p *Policy) { p.Profile.User = "admin" }, true},
+		{"tls down", "tls", func(p *Policy) { p.Profile.TLS = TLSRequire }, true},
+		{"tls ca changed", "tls_ca", func(p *Policy) { p.Profile.TLSCA = "/other.pem" }, true},
 		{"ask->keychain", "credentials", func(p *Policy) { p.Profile.Credentials = CredentialsKeychain }, true},
 	}
 	for _, c := range cases {
@@ -301,5 +303,30 @@ func TestDiffModesAndNewLimits(t *testing.T) {
 	}
 	if ch := field(Diff(cost, a), "limits.explain_cost_refuse"); ch == nil || !ch.Loosens {
 		t.Errorf("cost 1000 → off: %+v", ch)
+	}
+}
+
+func TestDiffTLSUpTightens(t *testing.T) {
+	a := fullPolicy()
+	a.Profile.TLS = TLSRequire
+	c := fullPolicy()
+	c.Profile.TLS = TLSVerifyFull
+	ch := Diff(a, c)
+	if len(ch) != 1 || ch[0].Field != "tls" || ch[0].Loosens {
+		t.Fatalf("changes = %+v", ch)
+	}
+}
+
+func TestDiffLegacyApprovedPolicy(t *testing.T) {
+	legacy := fullPolicy()
+	legacy.Profile.TLS = "" // approved before the setting existed
+	cur := fullPolicy()
+	cur.Profile.TLS = TLSPrefer
+	if ch := Diff(legacy, cur); len(ch) != 0 {
+		t.Errorf("prefer vs legacy: %+v", ch)
+	}
+	cur.Profile.TLS = TLSVerifyFull
+	if ch := Diff(legacy, cur); len(ch) != 1 || ch[0].Loosens {
+		t.Errorf("verify-full vs legacy: %+v", ch)
 	}
 }

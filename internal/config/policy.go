@@ -79,6 +79,9 @@ func canonical(p Policy) Policy {
 		modes[pat] = m
 	}
 	p.PIIModes = modes
+	if p.Profile.TLS == "" && p.Profile.Engine != EngineSQLite && p.Profile.Engine != "" {
+		p.Profile.TLS = TLSPrefer // approved before the setting existed
+	}
 	return p
 }
 
@@ -107,7 +110,7 @@ func Fingerprint(p Policy) string {
 // (spec section 4): a higher tier, production true→false, a larger limit
 // (0 means unlimited), a removed PII rule or detector, an added allow rule,
 // any change of engine, host, port, path, database or user, and a
-// credentials mode other than ask.
+// credentials mode other than ask, a weaker tls mode and any change of tls_ca.
 func Diff(approved, current Policy) []Change {
 	a, c := canonical(approved), canonical(current)
 	ap, cp := a.Profile, c.Profile
@@ -134,6 +137,11 @@ func Diff(approved, current Policy) []Change {
 	if ap.Credentials != cp.Credentials {
 		out = append(out, Change{Field: "credentials", Old: ap.Credentials, New: cp.Credentials, Loosens: cp.Credentials != CredentialsAsk})
 	}
+	if ap.TLS != cp.TLS {
+		out = append(out, Change{Field: "tls", Old: ap.TLS, New: cp.TLS, Loosens: TLSRank(cp.TLS) < TLSRank(ap.TLS)})
+	}
+	// A new CA can vouch for any certificate: every change loosens.
+	same("tls_ca", ap.TLSCA, cp.TLSCA)
 
 	limit := func(field string, o, n int64, format func(int64) string) {
 		if o != n {
