@@ -122,8 +122,8 @@ type plan struct {
 	created time.Time
 	explain *engine.Plan // the EXPLAIN result, assessed again when the plan runs
 	// an is the analysis of a read statement (nil for other classes);
-	// runSQL is the statement that runs and
-	// isExplain marks an EXPLAIN SELECT, answered with the plan.
+	// runSQL is the statement that runs; isExplain marks an EXPLAIN
+	// SELECT, answered with the plan.
 	an        *sqlast.Analysis
 	runSQL    string
 	isExplain bool

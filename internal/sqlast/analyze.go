@@ -124,7 +124,7 @@ type Analysis struct {
 	Replacements []Replacement
 }
 
-// RunSQL is the statement with its token replacements applied.
+// RunSQL is the statement with its replacements applied.
 func (a *Analysis) RunSQL(sql string) string {
 	return applyReplacements(sql, Span{0, len(sql)}, a.Replacements)
 }

@@ -368,8 +368,8 @@ column = "app.templates.name"
 | `partial` | `j***(12)` | first character and length |
 | `email` | `j***@example.com` | first character and domain; other values as `partial` |
 
-A column covered by several rules with different modes is redacted. Changing a mode is a loosening unless
-the new mode is `redact`.
+A column covered by several rules with different modes is redacted. Changing
+a mode is a loosening unless the new mode is `redact`.
 
 `mode = "hash"` is no longer a mode: a rules file that uses it is rejected
 (`unknown mode "hash" (want redact, partial or email)`).
