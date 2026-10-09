@@ -631,11 +631,18 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 			if !ok {
 				continue // asked again at the next start
 			}
-			if strings.TrimSpace(strings.ToLower(a)) == "y" {
-				_ = rules.Add(pat)
-			} else {
-				_ = rules.AddAllow(pat)
+			switch strings.TrimSpace(strings.ToLower(a)) {
+			case "y", "yes":
+				if err := rules.Add(pat); err != nil {
+					return ap, err
+				}
+			case "n", "no", "":
+				if err := rules.AddAllow(pat); err != nil {
+					return ap, err
+				}
 				allowed = true
+			default:
+				// Not an answer: nothing is written, asked again at the next start.
 			}
 		}
 	}

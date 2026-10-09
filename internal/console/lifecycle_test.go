@@ -143,3 +143,52 @@ func TestPIIScanQuasiIdentifiers(t *testing.T) {
 		t.Errorf("allow not merged into the file on disk: %+v", onDisk)
 	}
 }
+
+// A quasi-identifier answer is read like the other prompts: yes masks, no
+// or Enter allows, and anything else is no answer, so nothing is written.
+func TestPIIScanQuasiAnswers(t *testing.T) {
+	root, state := t.TempDir(), t.TempDir()
+	rulesPath := filepath.Join(root, pii.RulesFile)
+	log, err := audit.Open(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io := &fakeIO{}
+	p := uatProfile()
+	st := &starter{io: io, log: log, profile: p}
+	sess := &columnsSession{cols: []engine.ColumnInfo{
+		{DB: "app", Table: "users", Column: "birth_date", Type: "date"},
+		{DB: "app", Table: "users", Column: "gender", Type: "varchar"},
+		{DB: "app", Table: "users", Column: "zip_code", Type: "varchar"},
+	}}
+	key := config.ApprovedKey(root, p.Name)
+	// birth_date: " Yes "; gender: "maybe"; zip_code: no answer.
+	io.answers = []string{" Yes ", "maybe"}
+	ap, err := st.piiBootstrap(context.Background(), sess, []string{"app"}, rulesPath, state, key, config.NewPolicy(p, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(ap.PIIMask, ","); got != "app.users.birth_date" {
+		t.Errorf("mask = %s", got)
+	}
+	if len(ap.PIIAllow) != 0 {
+		t.Errorf("allow = %v", ap.PIIAllow)
+	}
+	onDisk, _ := pii.LoadRulesFile(rulesPath)
+	if onDisk.Covered("app", "users", "gender") || onDisk.Covered("app", "users", "zip_code") {
+		t.Errorf("file on disk: %+v", onDisk)
+	}
+
+	// Next start: gender and zip_code are asked again; "NO" and Enter allow.
+	io.prompts, io.answers = nil, []string{"NO", ""}
+	ap, err = st.piiBootstrap(context.Background(), sess, []string{"app"}, rulesPath, state, key, ap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(io.prompts) != 2 {
+		t.Fatalf("prompts %q", io.prompts)
+	}
+	if got := strings.Join(ap.PIIAllow, ","); got != "app.users.gender,app.users.zip_code" {
+		t.Errorf("allow = %s", got)
+	}
+}

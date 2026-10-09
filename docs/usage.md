@@ -315,11 +315,11 @@ The console needs an interactive terminal. At start it:
    Quasi-identifiers (birth date, postal code, gender; multilingual names) are
    listed apart, after the personal-data columns, one prompt each:
    `Mask <db.table.column>? (masking blocks range filters, LIKE and ORDER BY
-   on this column) [y/N]`. `y` adds a `redact` mask rule; any other answer
-   adds an `[[allow]]` rule so the column is not asked about again (removing
-   that allow later is a tightening). No answer within the timeout writes
-   nothing, and the column is asked again at the next start. Proposed
-   personal-data rules use mode `redact`.
+   on this column) [y/N]`. `y` or `yes` adds a `redact` mask rule; `n`, `no`
+   or Enter adds an `[[allow]]` rule so the column is not asked about again
+   (removing that allow later is a tightening). Any other answer, or none
+   within the timeout, writes nothing, and the column is asked again at the
+   next start. Proposed personal-data rules use mode `redact`.
 7. Lists the databases and prints `Listening…`.
 
 Between requests you can type:
