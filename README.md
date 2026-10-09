@@ -275,6 +275,18 @@ only guide the agent; the console's checks are the guarantee.
   filtered with `=`, `IN (literals)` or `IS NULL`. Expressions over them,
   `LIKE`, ranges and `ORDER BY` are refused. A filter, grouping or aggregate on
   PII must cover at least `k_anonymity` rows (default 5, production 10).
+- **Placeholders and references.** To filter a PII column on a value the agent
+  does not know, it writes `col = '${email}'` and the human types the value in
+  the console (no echo); the value never reaches the agent, the audit log or a
+  client error. Redacted cells come back as `<redacted:r1.2.3>` (result, row,
+  column), and the agent filters on one with `col = '${r1.2.3}'`; the console
+  keeps the clear values of the last results in memory only. Both work only
+  compared with a PII column, and skip the k-anonymity check, since the agent
+  did not choose the value. The approval screen warns, in red and in the audit
+  log, when the agent put a clear value in its statement, when a reference is
+  combined with a unique-key filter or a counts-only output, and when one
+  result's cells are filtered on one by one beyond `limits.reference_probe`.
+  Warnings never refuse and never carry a value.
 - **Quiet failures.** Clients get a generic message, never the server's error
   text, and no timings; `query.run` answers on a 250 ms quantum.
 - **The AI tightens, the human loosens.** Agents may add mask rules and
@@ -341,6 +353,7 @@ explain_cost_refuse = 0             # engine cost units; 0 = off
 | `limits.max_cell_chars` | 200 | longer cells are cut with `…` |
 | `limits.max_output_bytes` | 65 536 | output is cut with a marker |
 | `limits.k_anonymity` | 5 (production 10) | smallest row count a PII filter, a group or an aggregate of a PII column may cover; lowering it is a loosening |
+| `limits.reference_probe` | 5 | distinct cells of one result the agent may filter on one by one before the console warns (an `IN` list counts once); raising it is a loosening |
 | `limits.explain_cost_refuse` | 0 (off) | refuse plans above this total cost, in the engine's own units; SQLite reports no cost and is not checked |
 
 </details>
@@ -401,6 +414,11 @@ iteration, and it is deliberately narrow:
 - **k-anonymity is a query-set-size control.** It refuses a single query
   whose PII filter covers fewer than `k` rows; it does not stop differencing
   attacks that combine several approved queries.
+- **Placeholders leave room for a patient agent.** Equality probing through
+  cell references only raises a warning: an agent that spreads its probes
+  under `limits.reference_probe`, across results or sessions, is not stopped.
+  The unmasked columns of a targeted row still identify it, and free text
+  without a detector is not masked.
 - **TLS is not configurable yet.** PostgreSQL, MariaDB and MySQL connect like
   PostgreSQL's `sslmode=prefer`: encrypted when the server offers TLS, plain
   otherwise, and the certificate is not verified, so an active attacker on the

@@ -385,7 +385,7 @@ The console watches the config and PII files while it runs.
   larger `k_anonymity`, a new mask rule or detector, a mode changed to
   `redact`) is applied at once.
 - A change that loosens it (higher tier, `production = true → false`, larger
-  limits, a smaller `k_anonymity`, a higher or removed `explain_cost_refuse`,
+  limits, a smaller `k_anonymity`, a larger `reference_probe`, a higher or removed `explain_cost_refuse`,
   a longer or removed `credentials_ttl`, a new host, port, engine, user or
   database, `ask → keychain`, a removed mask rule or detector, a mask mode
   changed to anything but `redact`, a new allow rule) waits for you. Plans are
@@ -494,6 +494,67 @@ PII columns (columns under a mask rule) may be used as follows:
   `PII: UNMASKED` in red, and it is never auto-approved.
 - At tiers above `read`, a write's `RETURNING` list (or a data-modifying CTE)
   must not alias or transform a masked column.
+
+### Placeholders and cell references
+
+To search on a value the agent does not know, it never asks you to type the
+value in the chat. It writes a placeholder, `'${name}'` (`name`: `a-z`, `0-9`,
+`_`), as the literal of `pii_col = '...'` or `pii_col IN ('${a}', '${b}')` in a
+`WHERE` clause, and you type the value in the console. A redacted cell comes
+back as `<redacted:rN.R.C>` (result N, row R, column number C, all 1-based), and
+`'${rN.R.C}'` filters on it.
+
+Worked example: "find the failed documents of one customer".
+
+1. The agent plans `SELECT d.id, u.email FROM users u JOIN documents d ON
+   d.user_id = u.id WHERE u.email = '${email}' AND d.status = 'failed' LIMIT 20`.
+   The answer to `locksql_plan` lists no typed value yet, so `${email}` is new.
+2. On `locksql_run`, the console shows the statement with
+   `values to type: ${email}`, asks for the value (without echo), then asks
+   you to approve:
+
+   ```
+   value for ${email} (app.users.email):
+   ```
+
+3. The statement runs with your value. The agent receives
+   `<redacted:r1.1.2>` in the `email` cell of the first row (result 1, row 1,
+   column 2); it never sees the address.
+4. The agent now plans `SELECT id, status FROM mail_log d WHERE d.recipient =
+   '${r1.1.2}' LIMIT 20`. The console substitutes the cell's clear value from
+   memory: no second prompt.
+
+The rules:
+
+- A value is asked once per name per session. Later statements reuse it
+  without a prompt; the approval screen shows `${email} = value typed at 14:02`
+  and `r` retypes it. A new name always prompts, and `query.plan` answers list
+  the names already typed (`values`), so the agent can reuse one or pick another.
+- `--skip-permissions` skips the approval, never the value prompt. If you
+  cancel the prompt or let it time out, the query is denied and nothing runs.
+  A value with a backslash or a NUL is refused.
+- The console keeps the clear values of the last results in memory only, at
+  most 50 results and 16 MiB; the oldest are forgotten, and a reference to one
+  is refused as `unknown reference rN.R.C`. Cells masked in `partial` or `email`
+  mode, or by a detector, carry no reference.
+- Placeholders work only as the literal side of such a comparison in `WHERE`
+  (not `JOIN`), on a masked statement (not `--unmask`); anywhere else the
+  statement is refused (`a placeholder may only be compared with a PII column`),
+  and so is any malformed `${...}` literal.
+- A filter made only of placeholders skips the k-anonymity check; an `IN` list
+  that mixes placeholders and literals keeps it.
+- Values never reach the audit log, client answers, plan answers or client
+  errors. When a statement had values substituted, its audit error is generic.
+
+Warnings appear in red on the approval screen and in the `warnings` field of
+the audit record. They never refuse and never carry a value:
+
+- the agent received a value in clear: a literal matched by a detector;
+- a reference filter combined with a filter on a one-column unique key
+  (`this statement tests whether one row (users.id) has the same value as r1.1.2`);
+- a counts-only output with a reference filter;
+- the agent filtered on cells of one result in more than `limits.reference_probe`
+  distinct ways (default 5; an `IN` list counts once).
 
 ### MCP server
 
