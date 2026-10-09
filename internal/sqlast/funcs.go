@@ -25,6 +25,9 @@ var (
 		"BIT_AND", "BIT_OR", "BIT_XOR", "BOOL_AND", "BOOL_OR", "EVERY", "TOTAL", "JSON_AGG", "JSONB_AGG",
 		"JSON_ARRAYAGG", "JSON_GROUP_ARRAY", "JSON_OBJECT_AGG", "JSONB_OBJECT_AGG", "JSON_OBJECTAGG",
 		"JSON_GROUP_OBJECT")
+	// concatAggs build one value from the values of all their rows.
+	concatAggs = newSet("GROUP_CONCAT", "STRING_AGG", "ARRAY_AGG", "JSON_AGG", "JSONB_AGG", "JSON_ARRAYAGG",
+		"JSON_GROUP_ARRAY", "JSON_OBJECT_AGG", "JSONB_OBJECT_AGG", "JSON_OBJECTAGG", "JSON_GROUP_OBJECT", "XMLAGG")
 	// windowOnly are window functions that are not aggregates.
 	windowOnly = newSet("ROW_NUMBER", "RANK", "DENSE_RANK", "PERCENT_RANK", "CUME_DIST", "NTILE", "LAG",
 		"LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE")
@@ -163,10 +166,14 @@ func (an *analyzer) checkReplaceArgs(f *FuncCall) error {
 }
 
 // grows reports a call whose result may be much larger than its input: a
-// size function, a REGEXP_REPLACE (an empty match inserts the replacement
-// at every position), a REPLACE whose replacement is longer than a plain
-// literal pattern. TRANSLATE maps characters one to one.
+// size function, a format (padded to its widths), a REGEXP_REPLACE (an
+// empty match inserts the replacement at every position), a REPLACE whose
+// replacement is longer than a plain literal pattern. TRANSLATE maps
+// characters one to one.
 func (an *analyzer) grows(f *FuncCall) bool {
+	if an.formatArg(f.Name) {
+		return true
+	}
 	switch f.Name {
 	case "REPEAT", "LPAD", "RPAD", "SPACE", "ZEROBLOB", "REGEXP_REPLACE":
 		return true

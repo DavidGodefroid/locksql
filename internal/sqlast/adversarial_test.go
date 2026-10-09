@@ -461,3 +461,53 @@ func TestAdvFormatWidthCap(t *testing.T) {
 		t.Errorf("mysql format: %v", err)
 	}
 }
+
+// A concatenating aggregate builds one value from all its rows: a size
+// function in its argument multiplies what it builds by the row count.
+func TestAdvConcatAggregateSize(t *testing.T) {
+	refused := map[sqlclass.Dialect][]string{
+		sqlclass.Postgres: {
+			"SELECT string_agg(repeat('x', 65536), '') FROM users LIMIT 1",
+			"SELECT string_agg(lower(lpad(name, 65536, 'x')), ',') FROM users LIMIT 1",
+			"SELECT array_agg(format('%65536s', name)) FROM users LIMIT 1",
+			"SELECT json_agg(replace(name, 'a', 'bbbb')) FROM users LIMIT 1",
+			"SELECT string_agg(regexp_replace(name, '', 'x', 'g'), '') FROM users LIMIT 1",
+			"SELECT string_agg(name, repeat(',', 1000)) FROM users LIMIT 1",
+			"SELECT string_agg((SELECT repeat('x', 10)), ',') OVER () FROM users LIMIT 1",
+		},
+		sqlclass.MySQL: {
+			"SELECT group_concat(repeat('x', 65536)) FROM users LIMIT 1",
+			"SELECT group_concat(space(65536) SEPARATOR '') FROM users LIMIT 1",
+			"SELECT json_arrayagg(rpad(name, 65536, 'x')) FROM users LIMIT 1",
+		},
+		sqlclass.SQLite: {
+			"SELECT group_concat(repeat('x', 65536), '') FROM users LIMIT 1",
+			"SELECT json_group_array(zeroblob(65536)) FROM users LIMIT 1",
+			"SELECT group_concat(printf('%65536s', name)) FROM users LIMIT 1",
+		},
+	}
+	accepted := map[sqlclass.Dialect][]string{
+		sqlclass.Postgres: {
+			"SELECT string_agg(name, ',') FROM users LIMIT 1",
+			"SELECT string_agg(replace(name, '-', ''), ',') FROM users LIMIT 1",
+			"SELECT max(repeat('x', 10)) FROM users LIMIT 1",
+		},
+		sqlclass.MySQL:  {"SELECT group_concat(name) FROM users LIMIT 1"},
+		sqlclass.SQLite: {"SELECT group_concat(name, ','), json_group_array(name) FROM users LIMIT 1"},
+	}
+	for d, list := range refused {
+		for _, sql := range list {
+			_, err := analyze(t, d, sql)
+			if err == nil || !strings.Contains(err.Error(), ": an argument built by a size function is not allowed") {
+				t.Errorf("%s %q: got %v, want a size-function refusal", d, sql, err)
+			}
+		}
+	}
+	for d, list := range accepted {
+		for _, sql := range list {
+			if _, err := analyze(t, d, sql); err != nil {
+				t.Errorf("%s %q: %v", d, sql, err)
+			}
+		}
+	}
+}

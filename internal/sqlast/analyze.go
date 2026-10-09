@@ -1214,6 +1214,12 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (p Prov, err err
 			p, err = Prov{}, refusef("%s: an argument calls REPEAT, LPAD, RPAD, SPACE, ZEROBLOB, or a replacement that grows its input", strings.ToLower(f.Name))
 			return
 		}
+		if concatAggs[f.Name] && an.growth > grown {
+			// One value built from all rows: a size function multiplies
+			// by the row count what it builds per row.
+			p, err = Prov{}, refusef("%s: an argument built by a size function is not allowed", strings.ToLower(f.Name))
+			return
+		}
 		if _, ok := sizeArg[f.Name]; ok {
 			an.sizeCalls++
 		}

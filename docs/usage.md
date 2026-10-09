@@ -621,11 +621,13 @@ locksql doctor   [--profile P]
   these size functions, and a replacement that grows its input takes no other
   call that grows it. The format string of `format` (PostgreSQL, SQLite) and
   `printf` (SQLite) is a literal whose widths and precisions are at most
-  65 536, never `*`. System schemas and relations (`information_schema`,
-  `pg_catalog`, `mysql`, `performance_schema`, `sys`, SQLite internals) are
-  refused, and so are `pg_stat_statements` and `pg_stat_activity` while mask
-  rules exist (they hold the text of past statements). Every table and column
-  must resolve against the catalog.
+  65 536, never `*`. An aggregate that builds one value from all its rows
+  (`STRING_AGG`, `GROUP_CONCAT`, `ARRAY_AGG`, the JSON aggregates) takes no
+  argument built by these functions. System schemas and relations
+  (`information_schema`, `pg_catalog`, `mysql`, `performance_schema`, `sys`,
+  SQLite internals) are refused, and so are `pg_stat_statements` and
+  `pg_stat_activity` while mask rules exist (they hold the text of past
+  statements). Every table and column must resolve against the catalog.
 - Every output column is traced to its source columns, so an alias, a CTE or
   a subquery does not hide a PII column: `SELECT e FROM (SELECT email AS e
   FROM users) t LIMIT 5` is masked like `email`.
