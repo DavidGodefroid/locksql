@@ -543,7 +543,8 @@ The console watches the config and PII files while it runs.
   `Apply these changes? [y/N]`.
 - If you refuse, the last approved policy stays in force.
 - If an applied change alters the connection target (engine, host, port,
-  path, user or database), the session ends: restart the console.
+  path, user or database) or its transport (`tls`, `tls_ca` or the `ssh`
+  table), the session ends: restart the console.
 
 The approved policy is stored outside the repository, in
 `<user state dir>/locksql/approved/`.

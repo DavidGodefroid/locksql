@@ -70,3 +70,39 @@ func TestPIIAddWhilePending(t *testing.T) {
 		t.Error("review shows the client rule as removed")
 	}
 }
+
+// An adopted change of the transport (tls, tls_ca, the ssh table) ends the
+// session as a host change does: the open connection keeps the old one.
+func TestAdoptTransportChangeEndsSession(t *testing.T) {
+	bastion := &config.SSHProfile{Host: "bastion", Port: 22, User: "ops", Auth: config.SSHAuthAgent, Credentials: config.CredentialsAsk}
+	cases := []struct {
+		name   string
+		start  func(p *config.Profile)
+		change func(p *config.Profile)
+		ends   bool
+	}{
+		{"host", nil, func(p *config.Profile) { p.Host = "other.example" }, true},
+		{"tls", nil, func(p *config.Profile) { p.TLS = config.TLSRequire }, true},
+		{"tls_ca", nil, func(p *config.Profile) { p.TLSCA = "/ca.pem" }, true},
+		{"ssh added", nil, func(p *config.Profile) { p.SSH = bastion }, true},
+		{"ssh removed", func(p *config.Profile) { p.SSH = bastion }, func(p *config.Profile) { p.SSH = nil }, true},
+		{"ssh host", func(p *config.Profile) { p.SSH = bastion }, func(p *config.Profile) { s := *bastion; s.Host = "other"; p.SSH = &s }, true},
+		{"ssh same", func(p *config.Profile) { p.SSH = bastion }, func(p *config.Profile) { s := *bastion; p.SSH = &s }, false},
+		{"limits", nil, func(p *config.Profile) { p.Limits.MaxRows *= 2 }, false},
+	}
+	for _, c := range cases {
+		prof := uatProfile()
+		if c.start != nil {
+			c.start(&prof)
+		}
+		h := newHarness(t, prof)
+		next := h.s.approved
+		c.change(&next.Profile)
+		if err := h.s.adopt(next, "approved"); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if _, ended := h.s.Ended(); ended != c.ends {
+			t.Errorf("%s: session ended = %v, want %v", c.name, ended, c.ends)
+		}
+	}
+}
