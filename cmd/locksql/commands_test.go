@@ -320,7 +320,7 @@ func TestPlanAndRun(t *testing.T) {
 
 	sio.answer("y")
 	o = cli(t, dir, "", "run", "--profile", "uat", pl.PlanID)
-	o.want(t, exitOK, "id\temail\n", "1\ta***(17)")
+	o.want(t, exitOK, "id\temail\n", "1\t<redacted>")
 	if strings.Contains(o.stdout, "alice@example.com") {
 		t.Fatalf("unmasked output: %s", o.stdout)
 	}
@@ -336,7 +336,7 @@ func TestPlanAndRun(t *testing.T) {
 	o.want(t, exitOK)
 	var rr ipc.RunResult
 	decodeJSON(t, o.stdout, &rr)
-	if len(rr.Columns) != 2 || len(rr.Rows) != 1 || rr.Text != "" || rr.Rows[0][1] != "a***(17)" {
+	if len(rr.Columns) != 2 || len(rr.Rows) != 1 || rr.Text != "" || rr.Rows[0][1] != "<redacted>" {
 		t.Fatalf("run = %+v", rr)
 	}
 }

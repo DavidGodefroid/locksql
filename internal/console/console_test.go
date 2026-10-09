@@ -334,13 +334,13 @@ func TestApprovedRunReturnsMaskedRows(t *testing.T) {
 	if len(rr.Rows) != 1 || len(rr.Columns) != 3 {
 		t.Fatalf("run result: %+v", rr)
 	}
-	if got := rr.Rows[0][1]; got != "a***(17)" {
+	if got := rr.Rows[0][1]; got != pii.Redacted {
 		t.Errorf("email column not masked by rule: %v", got)
 	}
 	if got := rr.Rows[0][2]; got == "write to bob@example.org" || !strings.Contains(got.(string), "b***(") {
 		t.Errorf("email detector not applied: %v", got)
 	}
-	if strings.Contains(rr.Text, "alice@example.com") || !strings.Contains(rr.Text, "a***(17)") {
+	if strings.Contains(rr.Text, "alice@example.com") || !strings.Contains(rr.Text, pii.Redacted) {
 		t.Errorf("text rendering not masked: %q", rr.Text)
 	}
 	prompt := strings.Join(h.io.prompts, "\n")
@@ -349,7 +349,7 @@ func TestApprovedRunReturnsMaskedRows(t *testing.T) {
 	}
 	screen := ansi.ReplaceAllString(h.io.output(), "")
 	for _, want := range []string{"UAT", "db.uat.example.com", "alice", "tier read", selectUsers, "verdict OK", "PII: masked",
-		"reads: app.users", "PII columns touched: users.email (select)", "masked outputs: email → partial", "returns at most 10 rows"} {
+		"reads: app.users", "PII columns touched: users.email (select)", "masked outputs: email → redact", "returns at most 10 rows"} {
 		if !strings.Contains(screen, want) {
 			t.Errorf("approval screen lacks %q:\n%s", want, screen)
 		}
@@ -440,7 +440,7 @@ func TestSkipPermissions(t *testing.T) {
 		if h.io.promptCount() != 0 {
 			t.Fatal("skip-permissions prompted on uat")
 		}
-		if rr.Rows[0][1] != "a***(17)" {
+		if rr.Rows[0][1] != pii.Redacted {
 			t.Errorf("auto-approved rows not masked: %v", rr.Rows[0][1])
 		}
 		if !strings.Contains(h.auditLog(t), `"decision":"auto"`) {
@@ -527,7 +527,7 @@ func TestAliasMaskedByProvenance(t *testing.T) {
 		h.io.answers = []string{"y"}
 		var rr ipc.RunResult
 		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
-		if got := rr.Rows[0][0]; got != "a***(17)" {
+		if got := rr.Rows[0][0]; got != pii.Redacted {
 			t.Errorf("origin=%v: aliased PII column not masked: %v", origin, got)
 		}
 	}

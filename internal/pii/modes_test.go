@@ -61,6 +61,7 @@ mode = "hash"
 
 [[mask]]
 column = "*.*.email"
+mode = "partial"
 
 [[mask]]
 column = "app.users.salary"
@@ -90,7 +91,7 @@ mode = "redact"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if back.Modes["app.users.email"] != ModeHash || back.Modes["app.users.salary"] != ModeRedact || len(back.Modes) != 2 {
+	if back.Modes["app.users.email"] != ModeHash || back.Modes["*.*.email"] != ModePartial || len(back.Modes) != 2 {
 		t.Errorf("modes after save: %v", back.Modes)
 	}
 	if err := os.WriteFile(filepath.Join(dir, RulesFile), []byte("[[mask]]\ncolumn = \"a.b.c\"\nmode = \"rot13\"\n"), 0o644); err != nil {
@@ -113,7 +114,7 @@ func TestMaskOutputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := res.Rows[0]
-	if row[0] != Redacted || strings.Contains(row[1].(string), "bob@") || row[2] != "c***(17)" {
+	if row[0] != Redacted || strings.Contains(row[1].(string), "bob@") || row[2] != Redacted {
 		t.Errorf("masked row %v", row)
 	}
 	// A label the analysis did not expect: refused.

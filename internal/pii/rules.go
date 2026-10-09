@@ -27,13 +27,13 @@ const RulesFile = ".locksql/pii.toml"
 type Rules struct {
 	Mask  []string
 	Allow []string
-	// Modes maps a Mask pattern to its mode when it is not ModePartial.
+	// Modes maps a Mask pattern to its mode when it is not ModeRedact.
 	Modes map[string]string
 }
 
 // Mask modes.
 const (
-	// ModeRedact replaces the whole value: "<redacted>".
+	// ModeRedact replaces the whole value: "<redacted>" (the default).
 	ModeRedact = "redact"
 	// ModePartial keeps the first character and the length: "j***(12)".
 	ModePartial = "partial"
@@ -117,12 +117,11 @@ func SaveRulesFile(path string, r Rules) error {
 	var b bytes.Buffer
 	b.WriteString("# locksql PII column rules: \"db.table.column\", '*' matches any segment.\n")
 	b.WriteString("# [[mask]] masks whole cells; [[allow]] is an exception that is never masked.\n")
-	b.WriteString("# mode = \"partial\" (default: j***(12)), \"redact\", \"email\" (j***@example.com) or\n")
-	b.WriteString("# \"hash\" (a per-session token that keeps joins, grouping and equality filters).\n")
+	b.WriteString("# mode = \"redact\" (default: <redacted>), \"partial\" (j***(12)) or \"email\" (j***@example.com).\n")
 	write := func(kind string, patterns []string) {
 		for _, p := range canonical(patterns) {
 			fmt.Fprintf(&b, "\n[[%s]]\ncolumn = %q\n", kind, p)
-			if m := r.Modes[p]; kind == "mask" && m != "" && m != ModePartial {
+			if m := r.Modes[p]; kind == "mask" && m != "" && m != ModeRedact {
 				fmt.Fprintf(&b, "mode = %q\n", m)
 			}
 		}
@@ -173,7 +172,7 @@ func (r *Rules) Add(pattern string) error {
 // existing pattern sets its mode.
 func (r *Rules) AddMode(pattern, mode string) error {
 	if mode == "" {
-		mode = ModePartial
+		mode = ModeRedact
 	}
 	if !ValidMode(mode) {
 		return fmt.Errorf("pii rule %q: unknown mode %q (want partial, redact, email or hash)", pattern, mode)
@@ -182,7 +181,7 @@ func (r *Rules) AddMode(pattern, mode string) error {
 		return err
 	}
 	p, _ := parsePattern(pattern)
-	if mode == ModePartial {
+	if mode == ModeRedact {
 		delete(r.Modes, p)
 		return nil
 	}
@@ -220,7 +219,7 @@ func (r Rules) combine(match func(string) bool) string {
 		}
 		m := r.Modes[p]
 		if m == "" {
-			m = ModePartial
+			m = ModeRedact
 		}
 		switch {
 		case mode == "":

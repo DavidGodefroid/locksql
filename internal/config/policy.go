@@ -23,7 +23,7 @@ type Policy struct {
 	PIIMask  []string `json:"pii_mask"`  // sorted column patterns
 	PIIAllow []string `json:"pii_allow"` // sorted column patterns
 	// PIIModes maps a mask pattern to its mode when it is not the default
-	// ("partial"): redact, email or hash.
+	// (redact): partial, email or hash.
 	PIIModes map[string]string `json:"pii_modes,omitempty"`
 }
 
@@ -48,7 +48,7 @@ func (p Policy) WithModes(m map[string]string) Policy {
 }
 
 // DefaultMaskMode is the mode of a mask rule that sets none.
-const DefaultMaskMode = "partial"
+const DefaultMaskMode = "redact"
 
 // sortedSet returns a sorted, de-duplicated, non-nil copy of s.
 func sortedSet(s []string) []string {

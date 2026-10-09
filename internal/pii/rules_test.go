@@ -97,3 +97,34 @@ func TestRulesFileRoundTrip(t *testing.T) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 }
+
+func TestDefaultModeIsRedact(t *testing.T) {
+	var r Rules
+	if err := r.Add("app.users.email"); err != nil {
+		t.Fatal(err)
+	}
+	if m, ok := r.Mode("app", "users", "email"); !ok || m != ModeRedact {
+		t.Fatalf("Mode = %q %v, want redact", m, ok)
+	}
+	if err := r.AddMode("app.users.name", ModePartial); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "pii.toml")
+	if err := SaveRulesFile(path, r); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	if !strings.Contains(string(b), "column = \"app.users.name\"\nmode = \"partial\"") {
+		t.Errorf("partial not written explicitly:\n%s", b)
+	}
+	if strings.Contains(string(b), "\nmode = \"redact\"") {
+		t.Errorf("the default is written:\n%s", b)
+	}
+	back, err := LoadRulesFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := back.Mode("app", "users", "name"); m != ModePartial {
+		t.Errorf("partial lost on reload: %q", m)
+	}
+}
