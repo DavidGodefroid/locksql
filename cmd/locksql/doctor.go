@@ -344,6 +344,18 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 		add(checkOK, "credentials", "asked at every console start", "")
 	}
 
+	if p.Engine != config.EngineSQLite && !strings.HasPrefix(p.Host, "/") {
+		switch {
+		case config.TLSRank(p.TLS) >= config.TLSRank(config.TLSVerifyCA):
+			add(checkOK, "tls", "tls = \""+p.TLS+"\": the server certificate is verified", "")
+		case config.IsLoopback(p.Host):
+			add(checkOK, "tls", "loopback host: tls = \""+p.TLS+"\"", "")
+		default:
+			add(checkWarn, "tls", "tls = \""+p.TLS+"\": an attacker on the path can read the traffic or obtain the password",
+				"set tls = \"verify-full\" (and tls_ca if the server's CA is private), or reach the server through an ssh tunnel")
+		}
+	}
+
 	st, err := d.status(cwd, p.Name)
 	if err != nil {
 		if errors.Is(err, client.ErrNoConsole) {

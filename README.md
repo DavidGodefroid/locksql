@@ -330,6 +330,11 @@ A project profile wins over a user profile of the same name. No file ever
 holds a secret: keys named like `password`, `passwd`, `pwd`, `secret` or
 `token`, and DSNs with an embedded password, are refused.
 
+> **Breaking change.** A remote profile with no `tls` setting now verifies
+> the server certificate (`tls = "verify-full"`). A server with a private CA
+> needs `tls_ca`; to keep encryption without verification, set
+> `tls = "require"`.
+
 ```toml
 [profiles.uat]
 engine      = "mariadb"             # mariadb | mysql | postgres | sqlite
@@ -338,6 +343,8 @@ port        = 3306                  # default 3306, or 5432 for postgres
 user        = ""                    # empty: asked at console start
 database    = ""                    # empty: chosen per query (--db)
 credentials = "ask"                 # ask | keychain
+tls         = "verify-full"         # disable | prefer | require | verify-ca | verify-full
+tls_ca      = ""                    # optional PEM bundle replacing the system roots
 credentials_ttl = "20m"             # optional: ask for the secret again
 tier        = "read"                # read | write | ddl | admin
 production  = false
@@ -469,22 +476,17 @@ iteration, and it is deliberately narrow:
   for an unmasked run) the clear rows stay in the scrollback of the console's
   terminal, visible to anyone who sees that screen (screen sharing, recording,
   a terminal that logs its output). locksql does not clear it.
-- **TLS is not configurable yet.** PostgreSQL, MariaDB and MySQL connect like
-  PostgreSQL's `sslmode=prefer`: encrypted when the server offers TLS, plain
-  otherwise, and the certificate is not verified, so an active attacker on the
-  path can intercept or downgrade the connection. A plain TCP connection is
-  reported as a warning. This mode gives no protection against such an
-  attacker, the password included: over the unverified TLS connection the
-  attacker can ask for it in clear (MySQL and MariaDB `mysql_clear_password`
-  or a `caching_sha2_password` full authentication), and PostgreSQL sends
-  it in clear to a server that asks for cleartext authentication, with or
-  without TLS. On a plain MySQL/MariaDB TCP connection locksql refuses the
-  authentications that would hand the password over (clear text, or RSA
-  encryption with a key the server sends: `sha256_password` and a
-  `caching_sha2_password` full authentication), so a MySQL 8 account on a
-  server without TLS can log in only while the server's authentication cache
-  holds it. Use an SSH tunnel (`ssh -L`) or a Unix socket for remote
-  servers.
+- **Transport security depends on `tls`.** A remote profile defaults to
+  `tls = "verify-full"`; `prefer` is the default only for a Unix socket or a
+  loopback host. `production = true` refuses `disable` and `prefer` on a
+  remote host. Below `verify-ca` an active attacker on the path can intercept
+  or downgrade the connection, and obtain the password: the clear-text guard
+  protects plain TCP connections only, and go-mysql answers
+  `mysql_clear_password` and `sha256_password` in clear over any TLS, so an
+  attacker terminating TLS gets the MySQL/MariaDB password; PostgreSQL sends
+  it in clear to a server that asks for cleartext authentication. `verify-ca`
+  and `verify-full` prevent the impersonation. See
+  [Transport security](docs/security-model.md#out-of-scope-and-limitations).
 - One console per profile and project, one request at a time. No remote or
   shared consoles, no data export.
 

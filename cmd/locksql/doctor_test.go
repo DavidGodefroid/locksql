@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DavidGodefroid/locksql/internal/client"
+	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/secrets"
 	"github.com/DavidGodefroid/locksql/internal/sysconf"
@@ -90,6 +91,28 @@ func stateOf(checks []check, title string) string {
 		}
 	}
 	return ""
+}
+
+func hasCheck(checks []check, state, titlePart string) bool {
+	for _, c := range checks {
+		if c.state == state && strings.Contains(c.title, titlePart) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDoctorTLSMode(t *testing.T) {
+	d := fakeDoctor(nil)
+	weak := config.Profile{Name: "p", Engine: config.EnginePostgres, Host: "db.example", TLS: config.TLSRequire, Credentials: config.CredentialsAsk}
+	if !hasCheck(profileChecks(d, weak, nil, t.TempDir()), checkWarn, "tls") {
+		t.Error("require on a remote host is not reported")
+	}
+	strong := weak
+	strong.TLS = config.TLSVerifyFull
+	if !hasCheck(profileChecks(d, strong, nil, t.TempDir()), checkOK, "tls") {
+		t.Error("verify-full not reported ok")
+	}
 }
 
 func separatedSys() *sysconf.Config {

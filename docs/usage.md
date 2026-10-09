@@ -382,6 +382,26 @@ The session ends on Ctrl-C, `:quit`, `locksql logout`, after 20 minutes
 without activity, or after 4 hours. Each end closes the connection, removes
 the socket and is audited.
 
+### TLS to the database
+
+`tls` and `tls_ca` set the transport security of a network profile:
+
+```toml
+[profiles.prod]
+engine = "postgres"
+host   = "db.example.com"
+tls    = "verify-full"          # disable | prefer | require | verify-ca | verify-full
+tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
+```
+
+- Default: `verify-full` for a remote host, `prefer` for a Unix socket or a
+  loopback host. A remote profile that must keep an unverified connection
+  needs an explicit `tls = "require"`.
+- `tls_ca` is refused with `disable` and `prefer`.
+- `production = true` refuses `disable` and `prefer` on a remote host.
+- `locksql doctor` warns when a remote profile verifies nothing. See
+  [Transport security](security-model.md#out-of-scope-and-limitations) for the modes.
+
 ### Approving a query
 
 ```
@@ -426,7 +446,7 @@ The console watches the config and PII files while it runs.
 - A change that loosens it (higher tier, `production = true → false`, larger
   limits, a smaller `k_anonymity`, a larger `reference_probe`, a higher or
   removed `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
-  host, port, engine, user or database, `ask → keychain`, a removed mask rule or detector, a mask mode
+  host, port, engine, user or database, a weaker `tls` or any change of `tls_ca`, `ask → keychain`, a removed mask rule or detector, a mask mode
   changed to anything but `redact`, a new allow rule) waits for you. Plans are
   refused with `policy_pending` until you run `:review` and answer
   `Apply these changes? [y/N]`.

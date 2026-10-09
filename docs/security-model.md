@@ -129,15 +129,34 @@ Records contain the SQL and metadata, never secrets and never row data.
 - **The console account.** Malware running as `locksql` or as root, and an
   agent account that can become either, are out of scope. So is an X11
   session on a non-production profile with `x11 = "warn"`.
-- **Transport security.** TLS to the database is not configurable yet.
-  PostgreSQL, MariaDB and MySQL connect like PostgreSQL's `sslmode=prefer`:
-  encrypted when the server offers TLS, plain otherwise, and the certificate
-  is not verified. A plain TCP connection is reported on the console and in
-  the audit log (`"decision":"notice"`). MariaDB and MySQL refuse a server
-  that asks for the password in clear text (`mysql_clear_password`) on an
-  unencrypted connection. An active attacker on the path can still strip TLS
-  or intercept the unverified handshake. Use an SSH tunnel to reach remote
-  servers.
+- **Transport security.** The profile's `tls` setting picks the mode:
+
+  | Mode | Encrypts | Verifies chain | Verifies host name |
+  |---|---|---|---|
+  | `disable` | no | no | no |
+  | `prefer` | if offered | no | no |
+  | `require` | yes, else refuse | no | no |
+  | `verify-ca` | yes, else refuse | yes | no |
+  | `verify-full` | yes, else refuse | yes | yes (`host`) |
+
+  The default is `verify-full`, except `prefer` when `host` is a Unix socket
+  path or a loopback host (`localhost` or a loopback IP literal).
+  `production = true` refuses `disable` and `prefer` unless the host is
+  loopback or a socket path. `tls_ca` is a PEM bundle that replaces the
+  system roots; it is refused with `disable` and `prefer`. A weaker `tls` or
+  any change of `tls_ca` loosens the approved policy and needs the human's
+  confirmation.
+
+  Below `verify-ca` an active attacker on the path can intercept or downgrade
+  the connection, and obtain the password. The MariaDB/MySQL clear-text guard
+  protects plain TCP connections only: over TLS, go-mysql answers
+  `mysql_clear_password` and `sha256_password` in clear, so an attacker
+  terminating TLS gets the password. PostgreSQL likewise sends the password
+  to a server that asks for cleartext authentication. `verify-ca` and
+  `verify-full` prevent the impersonation. A plain connection is reported on
+  the console and in the audit log (`"decision":"notice"`) as `the connection
+  is NOT encrypted (tls = ...)`; unverified TLS on a non-loopback host as
+  `the server certificate is not verified (tls = ...)`.
 - **Write tiers.** Above tier `read`, the human's approval is the gate. The
   classifier assigns the class shown on the screen, but the server does not
   restrict what an approved write statement does within the account's
