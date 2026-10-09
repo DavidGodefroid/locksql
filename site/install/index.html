@@ -52,7 +52,7 @@
 <h1>Install locksql</h1>
 <div class="prose">
   <p class="lead">Every release ships a static binary for Linux and macOS (amd64, arm64), Linux packages, a <code>checksums.txt</code> and its cosign signature. No Go toolchain is needed.</p>
-  <p>locksql is a pre-release (<code>v0.3.x</code>). It supports Linux and macOS only, on amd64 and arm64.</p>
+  <p>locksql is a pre-release (<code>v0.4.x</code>). It supports Linux and macOS only, on amd64 and arm64.</p>
 </div>
 
 <section aria-labelledby="script">
@@ -60,7 +60,7 @@
   <p class="prose">Downloads the archive for your OS and architecture, checks it against <code>checksums.txt</code> (and the signature when <code>cosign</code> is on PATH), then installs <code>/usr/local/bin/locksql</code>, with <code>sudo</code> if needed:</p>
   <pre tabindex="0"><code>curl -fsSLO https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh
 less install.sh                     # read it first
-sh install.sh                       # LOCKSQL_VERSION=v0.3.0 to pin a version</code></pre>
+sh install.sh                       # LOCKSQL_VERSION=v0.4.0 to pin a version</code></pre>
   <p>Or, in one line:</p>
   <pre tabindex="0"><code>curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh</code></pre>
   <p class="prose"><code>LOCKSQL_INSTALL_DIR=~/.local/bin</code> installs without <code>sudo</code>, but the binary is then owned by your account and <code>locksql doctor</code> warns: in separated mode, the console must run a binary the agent cannot replace (<code>sudo locksql install</code> copies it to <code>/usr/local/bin</code>). To upgrade, run the script again.</p>
@@ -133,6 +133,8 @@ port        = 3306                  # default 3306, or 5432 for postgres
 user        = ""                    # empty: asked at console start
 database    = ""                    # empty: chosen per query (--db)
 credentials = "ask"                 # ask | keychain
+tls         = "verify-full"         # disable | prefer | require | verify-ca | verify-full
+tls_ca      = ""                    # optional PEM bundle replacing the system roots
 credentials_ttl = "20m"             # optional: ask for the secret again
 tier        = "read"                # read | write | ddl | admin
 production  = false
@@ -147,6 +149,18 @@ max_cell_chars      = 200
 max_output_bytes    = 65536
 k_anonymity         = 5
 explain_cost_refuse = 0             # engine cost units; 0 = off</code></pre>
+  <p class="prose">A remote host defaults to <code>tls = "verify-full"</code>: the server certificate must verify, against <code>tls_ca</code> for a private CA. A database reachable only from a bastion gets an <code>ssh</code> table: the console opens the SSH connection itself, with no local listening port, and checks the bastion against the console account’s <code>~/.ssh/known_hosts</code>, asking on first use and refusing a changed key. <code>host</code> is then the database as seen from the bastion.</p>
+  <pre tabindex="0"><code>[profiles.prod]
+engine      = "postgres"
+host        = "db.internal"         # as seen from the bastion
+tls         = "verify-full"
+production  = true
+
+[profiles.prod.ssh]
+host        = "bastion.example.com"
+user        = "deploy"
+auth        = "key"                 # key | agent | password
+key         = "~/.ssh/id_ed25519"   # in the console account's home</code></pre>
   <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md#configuration">All profile keys</a></p>
 
   <h3 id="doctor">Check the machine</h3>
@@ -170,7 +184,7 @@ explain_cost_refuse = 0             # engine cost units; 0 = off</code></pre>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
       </ul>
-      <p>Pre-release (<code>v0.3.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (<code>v0.4.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
     </div>
   </footer>
 </body>
