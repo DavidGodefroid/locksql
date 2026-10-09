@@ -1,0 +1,39 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a security issue, use the private report link instead. Never paste real credentials or real personal data.
+  - type: input
+    id: version
+    attributes:
+      label: locksql version
+      description: Output of `locksql version`.
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: OS and database engine/version
+      placeholder: Ubuntu 24.04, PostgreSQL 17
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output or logs
+      render: text
