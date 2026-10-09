@@ -46,6 +46,7 @@ func DefaultLimits(production bool) Limits {
 			MaxCellChars:      200,
 			MaxOutputBytes:    65_536,
 			KAnonymity:        10,
+			ReferenceProbe:    5,
 		}
 	}
 	return Limits{
@@ -56,6 +57,7 @@ func DefaultLimits(production bool) Limits {
 		MaxCellChars:      200,
 		MaxOutputBytes:    65_536,
 		KAnonymity:        5,
+		ReferenceProbe:    5,
 	}
 }
 
@@ -98,5 +100,8 @@ func applyDefaults(p *Profile, detectorsSet bool) {
 	}
 	if l.KAnonymity == 0 {
 		l.KAnonymity = d.KAnonymity
+	}
+	if l.ReferenceProbe == 0 {
+		l.ReferenceProbe = d.ReferenceProbe
 	}
 }

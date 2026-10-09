@@ -96,6 +96,9 @@ func (s *Server) screenBody(ctx context.Context, pl *plan, add func(string)) {
 	for _, r := range pl.reasons {
 		add("  - " + safeText(r, false))
 	}
+	for _, w := range pl.warnings {
+		s.println(red + "warning: " + safeText(w, false) + reset)
+	}
 }
 
 // readDetails explains a read plan to the human: what it reads, which PII

@@ -112,15 +112,16 @@ type ServerConfig struct {
 
 // plan is a one-shot plan awaiting query.run.
 type plan struct {
-	id      string
-	db      string
-	st      sqlclass.Statement
-	level   string
-	summary string
-	reasons []string
-	unmask  bool
-	created time.Time
-	explain *engine.Plan // the EXPLAIN result, assessed again when the plan runs
+	id       string
+	db       string
+	st       sqlclass.Statement
+	level    string
+	summary  string
+	reasons  []string
+	unmask   bool
+	created  time.Time
+	warnings []string
+	explain  *engine.Plan // the EXPLAIN result, assessed again when the plan runs
 	// an is the analysis of a read statement (nil for other classes);
 	// runSQL is the statement that runs; isExplain marks an EXPLAIN
 	// SELECT, answered with the plan.
@@ -145,6 +146,11 @@ type Server struct {
 	refs refStore
 	// typed keeps the values the human typed for placeholder names.
 	typed map[string]typedValue
+	// probes are, per result number, the reference uses seen as filters
+	// (a single reference, or one IN list of references).
+	probes map[int]map[string]bool
+	// keys caches whether "db.table.column" is a one-column unique key.
+	keys map[string]bool
 
 	plans    map[string]*plan
 	started  time.Time
@@ -179,7 +185,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, quantum: cfg.Quantum}
+	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, probes: map[int]map[string]bool{}, keys: map[string]bool{}, quantum: cfg.Quantum}
 	if err := s.apply(cfg.Policy); err != nil {
 		return nil, err
 	}

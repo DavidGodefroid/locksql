@@ -445,11 +445,12 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, reason)
 		}
 	}
-	rec := audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask}
 	sess, r := s.session(ctx, req.ID)
 	if r != nil {
 		return *r
 	}
+	pl.warnings = s.warnings(ctx, sess, pl)
+	rec := audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask, Warnings: pl.warnings}
 
 	s.screen(ctx, pl)
 	// The values are asked before the approval, and asked even when the

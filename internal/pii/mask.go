@@ -93,6 +93,12 @@ func maskCell(v any) any {
 	}
 }
 
+// Detects reports whether a detector would mask something in s.
+func Detects(s string, ds []Detector) bool {
+	out, ok := detect(s, ds).(string)
+	return ok && out != s
+}
+
 func detect(v any, ds []Detector) any {
 	if len(ds) == 0 {
 		return v

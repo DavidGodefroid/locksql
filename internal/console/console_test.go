@@ -37,8 +37,9 @@ type fakeSession struct {
 	extra    []string // ExtraPrivileges warnings
 	closed   bool
 	// count answers the k-anonymity row counts (nil: the default result).
-	count *engine.Result
-	cols  []engine.ColumnInfo // appended to the catalog Columns answers
+	count   *engine.Result
+	indexes []engine.IndexDesc
+	cols    []engine.ColumnInfo // appended to the catalog Columns answers
 }
 
 func (f *fakeSession) ServerVersion() string { return "11.4.0-MariaDB" }
@@ -58,7 +59,7 @@ func (f *fakeSession) Describe(_ context.Context, db, table string) (engine.Tabl
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.catalog++
-	return engine.TableInfo{DB: db, Table: table, Columns: []engine.ColumnDesc{{Name: "id", Type: "int"}}, EstRows: 3}, nil
+	return engine.TableInfo{DB: db, Table: table, Columns: []engine.ColumnDesc{{Name: "id", Type: "int"}}, Indexes: f.indexes, EstRows: 3}, nil
 }
 func (f *fakeSession) Columns(_ context.Context, db string) ([]engine.ColumnInfo, error) {
 	var out []engine.ColumnInfo

@@ -235,6 +235,20 @@ func TestStateDir(t *testing.T) {
 	}
 }
 
+func TestReferenceProbeLoosening(t *testing.T) {
+	p := Profile{Name: "uat", Engine: EngineSQLite, Path: "/x", Limits: DefaultLimits(false)}
+	a := NewPolicy(p, nil, nil)
+	p.Limits.ReferenceProbe = 9
+	b := NewPolicy(p, nil, nil)
+	ch := Diff(a, b)
+	if len(ch) != 1 || ch[0].Field != "limits.reference_probe" || !ch[0].Loosens {
+		t.Errorf("raising reference_probe: %+v", ch)
+	}
+	if ch := Diff(b, a); len(ch) != 1 || ch[0].Loosens {
+		t.Errorf("lowering reference_probe: %+v", ch)
+	}
+}
+
 func TestDiffModesAndNewLimits(t *testing.T) {
 	p := Profile{Name: "uat", Engine: EngineSQLite, Path: "/x", Limits: DefaultLimits(false)}
 	a := NewPolicy(p, []string{"app.users.email"}, nil)
