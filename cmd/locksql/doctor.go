@@ -359,7 +359,11 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 		}
 		return out
 	}
-	add(checkOK, "console", "running, socket reachable", "")
+	detail := "running, socket reachable"
+	if st.ShowResults {
+		detail += "; shows results in clear (--show-results)"
+	}
+	add(checkOK, "console", detail, "")
 	h := st.Health
 	if h == nil {
 		add(checkWarn, "console health", "the console is too old to report its health", "upgrade it")

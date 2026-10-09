@@ -984,3 +984,145 @@ func TestMaskedResultNotShownInConsole(t *testing.T) {
 		t.Errorf("masked run printed rows:\n%s", h.io.output())
 	}
 }
+
+func showResults(c *ServerConfig) { c.ShowResults = true }
+
+// Without --show-results a masked run prints no row in the console.
+func TestShowResultsOffByDefault(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	out := h.io.output()
+	if strings.Contains(out, "alice@example.com") || strings.Contains(out, "result in clear") || strings.Contains(out, "shown here in clear") {
+		t.Errorf("clear rows or reminder without --show-results:\n%s", out)
+	}
+	var st ipc.StatusResult
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if st.ShowResults {
+		t.Error("status reports show results on")
+	}
+}
+
+// With --show-results the human sees the clear rows, the masked cells
+// marked with their reference; the client still gets them masked.
+func TestShowResultsPrintsClearRows(t *testing.T) {
+	h := newHarness(t, uatProfile(), showResults)
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	var rr ipc.RunResult
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	out := h.io.output()
+	if !strings.Contains(out, "result: shown here in clear") {
+		t.Errorf("approval screen lacks the reminder:\n%s", out)
+	}
+	if i, j := strings.Index(out, "result: shown here in clear"), strings.Index(out, "result in clear"); i < 0 || j < i {
+		t.Errorf("reminder not before the result:\n%s", out)
+	}
+	for _, want := range []string{"result in clear (shown here only; the agent got it masked)", "alice@example.com", "write to bob@example.org", "‹r1.1.2›", "(1 rows)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("console lacks %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, paint.Yellow("alice@example.com")) {
+		t.Errorf("masked cell not highlighted:\n%q", out)
+	}
+	if strings.Contains(out, paint.Yellow("1")+" ") {
+		t.Errorf("unmasked id highlighted:\n%q", out)
+	}
+	// The client response is unchanged.
+	if !strings.HasPrefix(fmt.Sprint(rr.Rows[0][1]), "<redacted") || strings.Contains(rr.Text, "alice@example.com") || strings.Contains(fmt.Sprint(rr.Rows), "bob@example.org") {
+		t.Errorf("client got clear values: %+v", rr)
+	}
+	if strings.Contains(h.auditLog(t), "alice@example.com") || strings.Contains(h.auditLog(t), "bob@example.org") {
+		t.Error("row data in the audit log")
+	}
+	// The reference still resolves for the agent.
+	h.plan(t, "SELECT id FROM users WHERE email = '${r1.1.2}' LIMIT 1", false)
+	var st ipc.StatusResult
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if !st.ShowResults {
+		t.Error("status does not report show results on")
+	}
+}
+
+// The output caps apply to the clear rows as to the client's.
+func TestShowResultsCapped(t *testing.T) {
+	p := uatProfile()
+	p.Limits.MaxCellChars = 5
+	h := newHarness(t, p, showResults)
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	if strings.Contains(h.io.output(), "alice@example.com") {
+		t.Errorf("cell not capped at max_cell_chars:\n%s", h.io.output())
+	}
+}
+
+// No client can turn --show-results on: an extra plan parameter is refused.
+func TestShowResultsNotSettableByClient(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	wantCode(t, h.call(t, ipc.MethodQueryPlan, map[string]any{"db": "app", "sql": selectUsers, "show_results": true}), ipc.CodeInvalidParams)
+	var st ipc.StatusResult
+	h.ok(t, ipc.MethodStatus, map[string]any{"show_results": true}, &st)
+	if st.ShowResults {
+		t.Error("a status request turned show results on")
+	}
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	if strings.Contains(h.io.output(), "alice@example.com") {
+		t.Error("clear rows shown after a client asked for them")
+	}
+}
+
+// No config file can turn it on either: the key is unknown, so refused.
+func TestShowResultsNotSettableByConfig(t *testing.T) {
+	root := t.TempDir()
+	writeProjectConfig(t, root, 100)
+	path := filepath.Join(root, ".locksql", "config.toml")
+	for _, extra := range []string{"show_results = true\n", "\n[console]\nshow_results = true\n"} {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(b) + extra // a top-level table
+		if !strings.Contains(extra, "[") {
+			// A key of the profile.
+			body = strings.Replace(string(b), "user = \"alice\"\n", "user = \"alice\"\n"+extra, 1)
+		}
+		p := filepath.Join(t.TempDir(), ".locksql")
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "config.toml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := config.LoadFrom(filepath.Dir(p), ""); err == nil {
+			t.Errorf("config with %q accepted", extra)
+		}
+	}
+}
+
+func TestFlagNoticesAndReadyLines(t *testing.T) {
+	if n := flagNotices(Options{}, uatProfile()); len(n) != 0 {
+		t.Errorf("notices without flags: %q", n)
+	}
+	n := strings.Join(flagNotices(Options{ShowResults: true}, uatProfile()), "\n")
+	if !strings.Contains(n, "--show-results") || !strings.Contains(n, "in clear") {
+		t.Errorf("no --show-results warning: %q", n)
+	}
+	prod := uatProfile()
+	prod.Production = true
+	n = strings.Join(flagNotices(Options{ShowResults: true}, prod), "\n")
+	if !strings.HasPrefix(n, red) || !strings.Contains(n, "PRODUCTION") {
+		t.Errorf("production warning not red: %q", n)
+	}
+	r := strings.Join(readyLines("/run/x.sock", "", true), "\n")
+	if !strings.Contains(r, "shown in clear in this console (--show-results)") {
+		t.Errorf("Ready block lacks the results line: %q", r)
+	}
+	if strings.Contains(strings.Join(readyLines("/run/x.sock", "", false), "\n"), "results") {
+		t.Error("results line without the flag")
+	}
+}

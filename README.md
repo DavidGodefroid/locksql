@@ -404,6 +404,17 @@ approval, shown as `PII: UNMASKED` in red, and is never auto-approved. The
 console then prints the clear result, so you see exactly what the agent
 received (the audit log still holds no row data).
 
+## `--show-results`
+
+`locksql console --show-results` prints in the console, in clear, the result
+of each masked query it runs, so you see who the rows are while the agent
+still gets the masked cells. The cells the agent got masked are yellow and
+carry their reference (`‹r1.1.2›`); the output caps apply as for the agent.
+It is a console flag only, off by default: no client or config file can turn
+it on. The console warns at start (in red on production), says so in the
+Ready block and on every approval screen, and `locksql status` reports
+`show results on`. The audit log still holds no row data.
+
 ## `--skip-permissions`
 
 `locksql console --profile dev --skip-permissions` auto-approves statements

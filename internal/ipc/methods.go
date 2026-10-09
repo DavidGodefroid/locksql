@@ -104,6 +104,7 @@ type StatusResult struct {
 	Production      bool          `json:"production"`
 	SkipPermissions bool          `json:"skip_permissions"`
 	AllowUnmask     bool          `json:"allow_unmask"`
+	ShowResults     bool          `json:"show_results"`
 	Tier            string        `json:"tier"`
 	Databases       []string      `json:"databases"`
 	Limits          config.Limits `json:"limits"`

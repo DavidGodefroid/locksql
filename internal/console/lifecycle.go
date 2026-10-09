@@ -209,8 +209,8 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 
-	if o.AllowUnmask {
-		o.IO.Println(paint.Warn("--allow-unmask: clients may ask for unmasked PII output; each such query is approved here, never auto-approved"))
+	for _, l := range flagNotices(o, p) {
+		o.IO.Println(l)
 	}
 
 	// 3. Host (confirmed with the policy) and user.
@@ -285,7 +285,7 @@ func Run(ctx context.Context, o Options) error {
 	s, err := NewServer(ServerConfig{
 		Policy: approved, RulesPath: rulesPath, StateDir: o.StateDir, ApprovedKey: key,
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Now: o.Now,
-		SkipPermissions: o.SkipPermissions, AllowUnmask: o.AllowUnmask, Version: o.Version, LoadPolicy: loadPolicy,
+		SkipPermissions: o.SkipPermissions, AllowUnmask: o.AllowUnmask, ShowResults: o.ShowResults, Version: o.Version, LoadPolicy: loadPolicy,
 		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health,
 	})
 	if err != nil {
@@ -296,13 +296,9 @@ func Run(ctx context.Context, o Options) error {
 	s.refused = refusedFP
 	s.audit(audit.Record{Event: audit.EventLogin, Decision: "ok"})
 	o.IO.Println("")
-	o.IO.Println(paint.Heading("Ready", 60))
-	o.IO.Println("  " + paint.Dim("socket   ") + path)
-	if cfg.ProjectRoot != "" {
-		// Only agents working under this root dial this socket.
-		o.IO.Println("  " + paint.Dim("serving  ") + "agents in " + safeText(cfg.ProjectRoot, false))
+	for _, l := range readyLines(path, cfg.ProjectRoot, o.ShowResults) {
+		o.IO.Println(l)
 	}
-	o.IO.Println("  " + paint.Dim("commands ") + paint.Accent(":review") + "  " + paint.Accent(":status") + "  " + paint.Accent(":quit") + paint.Dim(" · Ctrl-C ends the session"))
 	o.IO.Println("")
 	s.println(paint.Step("Listening…"))
 
@@ -702,4 +698,35 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 		st.io.Println(paint.OK(fmt.Sprintf("PII: %d mask rules in %s", len(next.PIIMask), rulesPath)))
 	}
 	return next, nil
+}
+
+// flagNotices are the start-up warnings of the console-only flags that
+// widen what the console does.
+func flagNotices(o Options, p config.Profile) []string {
+	var out []string
+	if o.AllowUnmask {
+		out = append(out, paint.Warn("--allow-unmask: clients may ask for unmasked PII output; each such query is approved here, never auto-approved"))
+	}
+	if o.ShowResults {
+		msg := "--show-results: the result of each query is printed here in clear, PII included; the agent still gets it masked"
+		if p.Production {
+			out = append(out, red+ui.MarkWarn+" "+msg+" (PRODUCTION data: mind screen sharing and the terminal's scrollback)"+reset)
+		} else {
+			out = append(out, paint.Warn(msg))
+		}
+	}
+	return out
+}
+
+// readyLines is the "Ready" block printed once the console serves.
+func readyLines(socket, root string, showResults bool) []string {
+	out := []string{paint.Heading("Ready", 60), "  " + paint.Dim("socket   ") + socket}
+	if root != "" {
+		// Only agents working under this root dial this socket.
+		out = append(out, "  "+paint.Dim("serving  ")+"agents in "+safeText(root, false))
+	}
+	if showResults {
+		out = append(out, "  "+paint.Dim("results  ")+paint.Yellow("shown in clear in this console (--show-results)"))
+	}
+	return append(out, "  "+paint.Dim("commands ")+paint.Accent(":review")+"  "+paint.Accent(":status")+"  "+paint.Accent(":quit")+paint.Dim(" · Ctrl-C ends the session"))
 }

@@ -231,3 +231,19 @@ func TestDoctorShowsSetgidMode(t *testing.T) {
 		}
 	}
 }
+
+func TestDoctorReportsShowResults(t *testing.T) {
+	d := fakeDoctor(separatedSys())
+	d.status = func(string, string) (*ipc.StatusResult, error) {
+		return &ipc.StatusResult{Tier: "read", ShowResults: true, Health: &ipc.Health{Separated: true, Display: "wayland", ExplainOK: true}}, nil
+	}
+	for _, c := range doctor(d, doctorProject(t, "ask"), "") {
+		if strings.HasSuffix(c.title, ": console") {
+			if !strings.Contains(c.detail, "--show-results") {
+				t.Errorf("console check does not report --show-results: %q", c.detail)
+			}
+			return
+		}
+	}
+	t.Fatal("no console check")
+}
