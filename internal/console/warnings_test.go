@@ -61,8 +61,44 @@ func TestWarnProbeCountsOnly(t *testing.T) {
 	firstResult(t, h)
 	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "count"}}, Rows: [][]any{{int64(1)}}}
 	out := runWarned(t, h, "SELECT count(*) FROM users WHERE email = '${r1.1.2}' LIMIT 1")
-	if !strings.Contains(out, "holds only counts") {
+	if !strings.Contains(out, "holds no plain column") {
 		t.Errorf("no counts warning:\n%s", out)
+	}
+	// An expression over an aggregate is no plain column either.
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "n"}}, Rows: [][]any{{int64(1)}}}
+	for _, q := range []string{
+		"SELECT coalesce(max(id), 0) AS n FROM users WHERE email = '${r1.1.2}' LIMIT 1",
+		"SELECT id + 0 AS n FROM users WHERE email = '${r1.1.2}' LIMIT 1",
+	} {
+		if out := runWarned(t, h, q); !strings.Contains(out, "holds no plain column") {
+			t.Errorf("%s: no warning:\n%s", q, out)
+		}
+	}
+}
+
+// IN and BETWEEN on a unique key pin one row as = does.
+func TestWarnProbeUniqueKeyInBetween(t *testing.T) {
+	for _, w := range []string{"id IN (57)", "id BETWEEN 57 AND 57"} {
+		h := newHarness(t, uatProfile())
+		h.sess.indexes = []engine.IndexDesc{{Name: "PRIMARY", Columns: []string{"id"}, Primary: true}}
+		firstResult(t, h)
+		out := runWarned(t, h, "SELECT id, email, note FROM users WHERE "+w+" AND email = '${r1.1.2}' LIMIT 1")
+		if !strings.Contains(out, "tests whether one row (users.id) has the same value as r1.1.2") {
+			t.Errorf("%s: no probe warning:\n%s", w, out)
+		}
+	}
+}
+
+// The plain fetch of the rows behind references warns of nothing.
+func TestNoWarningOnPlainInFetch(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.sess.indexes = []engine.IndexDesc{{Name: "PRIMARY", Columns: []string{"id"}, Primary: true}}
+	firstResult(t, h)
+	out := runWarned(t, h, "SELECT id, email FROM users WHERE email IN ('${r1.1.2}') LIMIT 9")
+	for _, w := range []string{"tests whether", "no plain column", "distinct ways", "in clear"} {
+		if strings.Contains(out, w) {
+			t.Errorf("plain IN fetch warned %q:\n%s", w, out)
+		}
 	}
 }
 

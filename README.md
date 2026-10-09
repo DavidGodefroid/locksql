@@ -284,8 +284,9 @@ only guide the agent; the console's checks are the guarantee.
   compared with a PII column, and skip the k-anonymity check, since the agent
   did not choose the value. The approval screen warns, in red and in the audit
   log, when the agent put a clear value in its statement, when a reference is
-  combined with a unique-key filter or a counts-only output, and when one
-  result's cells are filtered on one by one beyond `limits.reference_probe`.
+  combined with a unique-key filter or an output with no plain column, and
+  when one result's cells are filtered on one by one beyond
+  `limits.reference_probe`.
   Warnings never refuse and never carry a value.
 - **Quiet failures.** Clients get a generic message, never the server's error
   text, and no timings; `query.run` answers on a 250 ms quantum.

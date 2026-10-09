@@ -162,6 +162,27 @@ func TestKeyFilters(t *testing.T) {
 	if len(a.KeyFilters) != 1 || a.KeyFilters[0] != (Source{DB: "app", Table: "users", Column: "id"}) {
 		t.Errorf("KeyFilters = %+v", a.KeyFilters)
 	}
+	// IN (literals) and BETWEEN constants pin a row as well as =.
+	env := valueEnv(map[string]string{"r1.1.2": "a@b.example"})
+	for _, w := range []string{"id IN (57)", "id IN (57, 58)", "id BETWEEN 57 AND 57", "(id BETWEEN 1 AND 2)"} {
+		a, err := analyzeWith(t, "SELECT id FROM users WHERE "+w+" AND email = '${r1.1.2}' LIMIT 1", env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(a.KeyFilters) != 1 || a.KeyFilters[0].Column != "id" {
+			t.Errorf("%s: KeyFilters = %+v", w, a.KeyFilters)
+		}
+	}
+	// Negated, disjunctive or non-constant: not a key filter.
+	for _, w := range []string{"id NOT IN (57)", "NOT id IN (57)", "id NOT BETWEEN 1 AND 2", "(id IN (57) OR id = 3)", "id BETWEEN id AND 57", "id IN (id)"} {
+		a, err := analyzeWith(t, "SELECT id FROM users WHERE "+w+" AND email = '${r1.1.2}' LIMIT 1", env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(a.KeyFilters) != 0 {
+			t.Errorf("%s: KeyFilters = %+v", w, a.KeyFilters)
+		}
+	}
 }
 
 func TestHasPlaceholder(t *testing.T) {

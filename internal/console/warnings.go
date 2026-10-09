@@ -44,8 +44,8 @@ func (s *Server) warnings(ctx context.Context, sess engine.Session, pl *plan) []
 			break
 		}
 	}
-	if countsOnly(pl.an.Outputs) {
-		out = append(out, "the result holds only counts: this statement tests whether rows have the same value as "+list)
+	if noPlainColumn(pl.an.Outputs) {
+		out = append(out, "the result holds no plain column (only counts or expressions): this statement tests whether rows have the same value as "+list)
 	}
 	return append(out, s.scanWarnings(refs)...)
 }
@@ -80,16 +80,14 @@ func (s *Server) clearLiteral(sql string) bool {
 	return false
 }
 
-func countsOnly(outs []sqlast.Output) bool {
-	if len(outs) == 0 {
-		return false
-	}
-	for _, o := range outs {
-		if k := o.Prov.Kind; k != sqlast.KindCount && k != sqlast.KindAggregate && k != sqlast.KindConst {
-			return false
-		}
-	}
-	return true
+// noPlainColumn reports a result with no plain column of a table: counts,
+// aggregates, expressions and constants only. Such a result tells whether
+// some rows matched more than which rows did. Warnings never refuse, so
+// any shape short of a plain column warns.
+func noPlainColumn(outs []sqlast.Output) bool {
+	return !slices.ContainsFunc(outs, func(o sqlast.Output) bool {
+		return o.Prov.Kind == sqlast.KindIdentity && !o.Prov.Lit
+	})
 }
 
 // uniqueKey reports whether src is a one-column primary key or unique

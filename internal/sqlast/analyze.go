@@ -1320,6 +1320,22 @@ func (an *analyzer) filter(e Expr, sc *scope, clause string, pos bool) error {
 		}
 	case *In:
 		return an.inFilter(e, sc, clause, pos)
+	case *Between:
+		// Checked as a value (a PII operand is refused there); a positive
+		// range between constants on a plain column is a key filter.
+		p, err := an.value(e, sc, clause)
+		if err != nil {
+			return err
+		}
+		if ref, ok := e.X.(*ColumnRef); ok && !e.Not && !p.Sensitive {
+			// Resolved again: a plain column, so no side effect repeats.
+			x, err := an.value(ref, sc, clause)
+			if err != nil {
+				return err
+			}
+			an.keyFilterOf(x, clause, pos, e.Lo, e.Hi)
+		}
+		return nil
 	case *Exists:
 		// The subquery is a node of its own: its filters start positive
 		// and its k-anonymity checks run on their own.
@@ -1477,7 +1493,7 @@ func (an *analyzer) humanFilter(clause string) error {
 // keyFilter records a non-PII column compared with = and a literal in
 // WHERE.
 func (an *analyzer) keyFilter(op string, l, r Prov, le, re Expr, clause string, pos bool) {
-	if an.dry > 0 || clause != "where" || !pos || op != "=" {
+	if op != "=" {
 		return
 	}
 	col := l
@@ -1485,8 +1501,20 @@ func (an *analyzer) keyFilter(op string, l, r Prov, le, re Expr, clause string, 
 		col = r
 		re = le
 	}
-	if col.Kind != KindIdentity || !isConstant(re) {
+	an.keyFilterOf(col, clause, pos, re)
+}
+
+// keyFilterOf records col as a key filter when the positive WHERE atom
+// pins it to constants: = a literal, IN (literals) or BETWEEN two
+// constants all narrow it to as few rows as a unique key holds values.
+func (an *analyzer) keyFilterOf(col Prov, clause string, pos bool, consts ...Expr) {
+	if an.dry > 0 || clause != "where" || !pos || col.Kind != KindIdentity || col.Sensitive || len(consts) == 0 {
 		return
+	}
+	for _, c := range consts {
+		if !isConstant(c) {
+			return
+		}
 	}
 	for _, s := range col.Sources {
 		if !slices.Contains(an.a.KeyFilters, s) {
@@ -1715,6 +1743,9 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 		listProv = an.mix(listProv, p)
 	}
 	if !an.env.Masking || !x.Sensitive && !listProv.Sensitive {
+		if !e.Not && !listProv.Sensitive {
+			an.keyFilterOf(x, clause, pos, e.List...)
+		}
 		return nil
 	}
 	if x.Sensitive && x.Kind != KindIdentity || listProv.Sensitive {

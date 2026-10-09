@@ -555,8 +555,11 @@ the audit record. They never refuse and never carry a value:
 
 - the agent received a value in clear: a literal matched by a detector;
 - a reference filter combined with a filter on a one-column unique key
-  (`this statement tests whether one row (users.id) has the same value as r1.1.2`);
-- a counts-only output with a reference filter;
+  (`= literal`, `IN (literals)` or `BETWEEN` two constants, in the positive
+  part of `WHERE`):
+  `this statement tests whether one row (users.id) has the same value as r1.1.2`;
+- a reference filter with an output that holds no plain column (only counts,
+  aggregates, expressions or constants);
 - the agent filtered on cells of one result in more than `limits.reference_probe`
   distinct ways (default 5; an `IN` list counts once).
 
