@@ -247,6 +247,13 @@ func TestReferenceProbeLoosening(t *testing.T) {
 	if ch := Diff(b, a); len(ch) != 1 || ch[0].Loosens {
 		t.Errorf("lowering reference_probe: %+v", ch)
 	}
+	// An approved policy from before the limit existed stores 0: the
+	// default is no change.
+	old := a
+	old.Profile.Limits.ReferenceProbe = 0
+	if ch := Diff(old, a); len(ch) != 0 {
+		t.Errorf("0 -> default reported: %+v", ch)
+	}
 }
 
 func TestDiffModesAndNewLimits(t *testing.T) {

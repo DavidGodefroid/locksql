@@ -61,10 +61,11 @@ func (s *Server) clearLiteral(sql string) bool {
 		text := t.Text
 		switch t.Kind {
 		case sqlclass.TokString:
-			if len(text) < 2 || text[0] != '\'' {
+			v, ok := sqlast.StringValue(s.dialect, text)
+			if !ok {
 				continue
 			}
-			text = strings.ReplaceAll(text[1:len(text)-1], "''", "'")
+			text = v
 			if _, _, isPH, _ := sqlast.ParsePlaceholder(text); isPH {
 				continue
 			}
@@ -99,12 +100,13 @@ func (s *Server) uniqueKey(ctx context.Context, sess engine.Session, src sqlast.
 		return v
 	}
 	info, err := sess.Describe(ctx, src.DB, src.Table)
+	if err != nil {
+		return false // not cached: the next statement asks again
+	}
 	unique := false
-	if err == nil {
-		for _, ix := range info.Indexes {
-			if (ix.Unique || ix.Primary) && len(ix.Columns) == 1 && fold(ix.Columns[0]) == fold(src.Column) {
-				unique = true
-			}
+	for _, ix := range info.Indexes {
+		if (ix.Unique || ix.Primary) && len(ix.Columns) == 1 && fold(ix.Columns[0]) == fold(src.Column) {
+			unique = true
 		}
 	}
 	s.keys[key] = unique
@@ -130,7 +132,7 @@ func (s *Server) scanWarnings(refs []sqlast.ValueUse) []string {
 	var out []string
 	for n, uses := range s.probes {
 		if len(uses) > s.profile.Limits.ReferenceProbe && slices.ContainsFunc(refs, func(r sqlast.ValueUse) bool { return resultOf(r.Name) == n }) {
-			out = append(out, fmt.Sprintf("the agent has compared %d distinct cells of result r%d, one statement each: it may be rebuilding which values are equal", len(uses), n))
+			out = append(out, fmt.Sprintf("the agent has filtered on cells of result r%d in %d distinct ways, one statement each: it may be rebuilding which values are equal", n, len(uses)))
 		}
 	}
 	slices.Sort(out)

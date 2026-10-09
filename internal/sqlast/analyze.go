@@ -1720,6 +1720,29 @@ func unquote(d sqlclass.Dialect, text string) (string, bool) {
 	return strings.ReplaceAll(text[1:len(text)-1], "''", "'"), true
 }
 
+// StringValue returns the value of a string-literal token ('...', "..." in
+// MySQL, E'...', N'...', $tag$...$tag$), or false for any other text. Unlike
+// the substitution path it does not refuse backslashes: it serves warnings.
+func StringValue(d sqlclass.Dialect, text string) (string, bool) {
+	if len(text) >= 2 && text[0] == '$' {
+		if i := strings.Index(text[1:], "$"); i >= 0 {
+			tag := text[:i+2]
+			if len(text) >= 2*len(tag) && strings.HasSuffix(text, tag) {
+				return text[len(tag) : len(text)-len(tag)], true
+			}
+		}
+		return "", false
+	}
+	if len(text) >= 3 && strings.ContainsRune("eEnN", rune(text[0])) && text[1] == '\'' {
+		text = text[1:]
+	}
+	if len(text) < 2 || text[len(text)-1] != text[0] || text[0] != '\'' && !(text[0] == '"' && d == sqlclass.MySQL) {
+		return "", false
+	}
+	q := string(text[0])
+	return strings.ReplaceAll(text[1:len(text)-1], q+q, q), true
+}
+
 // quoteLiteral quotes a value as a string literal of the dialect. Values
 // with a backslash or a NUL are refused: their meaning depends on server
 // settings.

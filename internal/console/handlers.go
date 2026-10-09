@@ -265,7 +265,18 @@ func (s *Server) catalog(ctx context.Context, req ipc.Request) ipc.Response {
 
 // refuse audits and reports a refused plan.
 func (s *Server) refuse(id int64, db, sql, class, verdict, reason string) ipc.Response {
-	s.audit(audit.Record{Event: audit.EventRefused, DB: db, SQL: sql, Class: class, Verdict: verdict, Error: reason})
+	return s.refuseRec(id, audit.Record{Event: audit.EventRefused, DB: db, SQL: sql, Class: class, Verdict: verdict, Error: reason})
+}
+
+// refuseWarned is refuse for a plan whose warnings are computed: the audit
+// record carries them.
+func (s *Server) refuseWarned(id int64, pl *plan, class, reason string) ipc.Response {
+	return s.refuseRec(id, audit.Record{Event: audit.EventRefused, DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Error: reason, Warnings: pl.warnings})
+}
+
+func (s *Server) refuseRec(id int64, rec audit.Record) ipc.Response {
+	reason := rec.Error
+	s.audit(rec)
 	s.println(paint.Fail("refused: " + reason))
 	return errResp(id, ipc.CodeRefused, reason)
 }
@@ -494,10 +505,10 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 			if err != nil {
 				return s.failedPlan(req.ID, "plan", err, pl)
 			}
-			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, reason)
+			return s.refuseWarned(req.ID, pl, class, reason)
 		}
 		if missing, _ := s.placeholders(pl); len(missing) > 0 {
-			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, "a placeholder has no value")
+			return s.refuseWarned(req.ID, pl, class, "a placeholder has no value")
 		}
 	}
 
@@ -516,7 +527,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 			s.audit(rec)
 			return s.failedPlan(req.ID, "k-anonymity check", err, pl)
 		}
-		return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, reason+" (approved, but not run)")
+		return s.refuseWarned(req.ID, pl, class, reason+" (approved, but not run)")
 	}
 	var res engine.Result
 	var err error
@@ -548,13 +559,13 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	if !pl.unmask && pl.an != nil {
 		if err := s.maskRead(&res, pl, sess); err != nil {
 			s.println(paint.Fail("result dropped: " + err.Error()))
-			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, "the result could not be masked with certainty and was dropped: "+err.Error())
+			return s.refuseWarned(req.ID, pl, class, "the result could not be masked with certainty and was dropped: "+err.Error())
 		}
 	} else if !pl.unmask {
 		origin := sess.OriginColumns()
 		if pii.NeedsAliasCheck(res, origin) {
 			if err := pii.ResultAliasViolation(pl.st, s.rules, s.dialect, res.Columns); err != nil {
-				return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, err.Error()+" (the result was dropped)")
+				return s.refuseWarned(req.ID, pl, class, err.Error()+" (the result was dropped)")
 			}
 		}
 		pii.MaskResult(&res, s.rules, s.detectors, origin)

@@ -47,9 +47,9 @@ func TestWarnProbeUniqueKey(t *testing.T) {
 	if !strings.Contains(out, "tests whether one row (users.id) has the same value as r1.1.2") {
 		t.Errorf("no probe warning:\n%s", out)
 	}
-	// Without a unique key on the filtered column: no warning.
-	h.sess.indexes = nil
+	// A unique key on another column than the filtered one: no warning.
 	h2 := newHarness(t, uatProfile())
+	h2.sess.indexes = []engine.IndexDesc{{Name: "PRIMARY", Columns: []string{"id"}, Primary: true}}
 	firstResult(t, h2)
 	if out := runWarned(t, h2, "SELECT id, email, note FROM users WHERE status = 'x' AND email = '${r1.1.2}' LIMIT 1"); strings.Contains(out, "tests whether") {
 		t.Errorf("warned without a unique key:\n%s", out)
@@ -77,14 +77,44 @@ func TestWarnProbeScan(t *testing.T) {
 	}
 	firstResult(t, h) // r1.1.2 .. r1.7.2
 	// One IN list counts once.
-	if out := runWarned(t, h, "SELECT id, email, note FROM users WHERE email IN ('${r1.1.2}', '${r1.2.2}', '${r1.3.2}', '${r1.4.2}', '${r1.5.2}', '${r1.6.2}') LIMIT 9"); strings.Contains(out, "distinct cells") {
+	if out := runWarned(t, h, "SELECT id, email, note FROM users WHERE email IN ('${r1.1.2}', '${r1.2.2}', '${r1.3.2}', '${r1.4.2}', '${r1.5.2}', '${r1.6.2}') LIMIT 9"); strings.Contains(out, "distinct ways") {
 		t.Errorf("an IN list counted as a scan:\n%s", out)
 	}
 	var out string
 	for i := 1; i <= 6; i++ {
 		out = runWarned(t, h, "SELECT id, email, note FROM users WHERE email = '${r1."+string(rune('0'+i))+".2}' LIMIT 9")
 	}
-	if !strings.Contains(out, "compared 7 distinct cells of result r1") {
+	if !strings.Contains(out, "filtered on cells of result r1 in 7 distinct ways") {
 		t.Errorf("no scan warning after 7 uses (threshold 5):\n%s", out)
+	}
+}
+
+func TestClearLiteralQuoting(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	for _, q := range []string{
+		`SELECT 1 FROM users WHERE email = "alice@example.com"`,
+		`SELECT 1 FROM users WHERE email = N'alice@example.com'`,
+		`SELECT 1 FROM users WHERE email = 'ali''ce@example.com'`,
+	} {
+		if !h.s.clearLiteral(q) {
+			t.Errorf("clear value missed: %s", q)
+		}
+	}
+	if h.s.clearLiteral(`SELECT 1 FROM users WHERE email = '${email}'`) {
+		t.Error("placeholder taken for a clear value")
+	}
+}
+
+// A refusal after the approval still carries the warnings in the audit.
+func TestWarnAuditedOnKAnonymityRefusal(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{int64(1)}}}
+	h.sess.count = countResult(int64(2))
+	pr := h.plan(t, "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1", false)
+	h.io.answers = []string{"y"}
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeRefused)
+	log := h.auditLog(t)
+	if !strings.Contains(log, `"refused"`) || !strings.Contains(log, `"warnings"`) {
+		t.Errorf("refusal audited without the warnings:\n%s", log)
 	}
 }
