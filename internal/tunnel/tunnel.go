@@ -40,6 +40,9 @@ type Options struct {
 	Home string
 	// HostKey verifies the bastion's key (see KnownHosts).
 	HostKey ssh.HostKeyCallback
+	// HostKeyAlgorithms limits the host key algorithms offered to the
+	// bastion (see HostKeyAlgorithms); empty keeps the library default.
+	HostKeyAlgorithms []string
 	// Secret returns a key passphrase or an SSH password; it is called only
 	// when one is needed, and Open wipes what it returns.
 	Secret func(prompt string) ([]byte, error)
@@ -104,6 +107,9 @@ func Open(ctx context.Context, o Options) (*Tunnel, error) {
 	cfg := &ssh.ClientConfig{
 		User: p.User, Auth: []ssh.AuthMethod{auth}, HostKeyCallback: verify,
 		ClientVersion: "SSH-2.0-locksql",
+	}
+	if len(o.HostKeyAlgorithms) > 0 {
+		cfg.HostKeyAlgorithms = o.HostKeyAlgorithms
 	}
 	d := net.Dialer{Timeout: connectTimeout}
 	nc, err = d.DialContext(ctx, "tcp", addr)
