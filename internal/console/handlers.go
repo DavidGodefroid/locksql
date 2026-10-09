@@ -689,7 +689,7 @@ func (s *Server) piiAdd(req ipc.Request) ipc.Response {
 	}
 	next := s.approved
 	next.PIIMask = append(append([]string(nil), next.PIIMask...), pattern)
-	next = config.NewPolicy(next.Profile, next.PIIMask, next.PIIAllow)
+	next = config.NewPolicy(next.Profile, next.PIIMask, next.PIIAllow).WithModes(next.PIIModes)
 	if err := s.adopt(next, "tightened"); err != nil {
 		return errResp(req.ID, ipc.CodeInternal, err.Error())
 	}
@@ -697,7 +697,7 @@ func (s *Server) piiAdd(req ipc.Request) ipc.Response {
 		// The pending loosening was read before this rule reached the file:
 		// applying it as is from :review would drop the rule.
 		p := *s.pending
-		p = config.NewPolicy(p.Profile, append(append([]string(nil), p.PIIMask...), pattern), p.PIIAllow)
+		p = config.NewPolicy(p.Profile, append(append([]string(nil), p.PIIMask...), pattern), p.PIIAllow).WithModes(p.PIIModes)
 		s.pending = &p
 	}
 	s.println("PII rule added by a client: mask " + safeText(pattern, false))

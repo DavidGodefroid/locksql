@@ -86,6 +86,24 @@ func legacyRulesNotice(cwd, projectRoot, rulesPath string) string {
 // newIsolationEnv builds what Run's isolation checks read; tests replace it.
 var newIsolationEnv = realIsolationEnv
 
+// policyFromFiles reads the current policy of profile from the config
+// found from cwd and from the PII rules at rulesPath, mask modes included.
+func policyFromFiles(cwd, profile, rulesPath string) (config.Policy, error) {
+	c, err := config.Load(cwd)
+	if err != nil {
+		return config.Policy{}, err
+	}
+	cp, ok := c.Profiles[profile]
+	if !ok {
+		return config.Policy{}, fmt.Errorf("profile %q is no longer in the config", profile)
+	}
+	r, err := pii.LoadRulesFile(rulesPath)
+	if err != nil {
+		return config.Policy{}, err
+	}
+	return config.NewPolicy(cp, r.Mask, r.Allow).WithModes(r.Modes), nil
+}
+
 // Run is `locksql console`: the start-up sequence of spec §6, then the
 // request loop until Ctrl-C, logout, :quit or a timeout.
 func Run(ctx context.Context, o Options) error {
@@ -155,19 +173,7 @@ func Run(ctx context.Context, o Options) error {
 	st := &starter{o: o, io: o.IO, log: log, profile: p}
 
 	loadPolicy := func() (config.Policy, error) {
-		c, err := config.Load(o.Cwd)
-		if err != nil {
-			return config.Policy{}, err
-		}
-		cp, ok := c.Profiles[o.Profile]
-		if !ok {
-			return config.Policy{}, fmt.Errorf("profile %q is no longer in the config", o.Profile)
-		}
-		r, err := pii.LoadRulesFile(rulesPath)
-		if err != nil {
-			return config.Policy{}, err
-		}
-		return config.NewPolicy(cp, r.Mask, r.Allow), nil
+		return policyFromFiles(o.Cwd, o.Profile, rulesPath)
 	}
 	cur, err := loadPolicy()
 	if err != nil {

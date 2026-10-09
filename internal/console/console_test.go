@@ -865,3 +865,70 @@ func TestRunErrorTextIsRedacted(t *testing.T) {
 		t.Errorf("value in audit log or console:\n%s\n%s", h.auditLog(t), h.io.output())
 	}
 }
+
+func writeRules(t *testing.T, root, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, pii.RulesFile), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The mask modes of pii.toml reach the policy, and a mode change other
+// than back to redact waits for the human.
+func TestPolicyFromFilesKeepsMaskModes(t *testing.T) {
+	root := t.TempDir()
+	writeProjectConfig(t, root, 100)
+	rulesPath := filepath.Join(root, pii.RulesFile)
+	writeRules(t, root, "[[mask]]\ncolumn = \"app.users.email\"\nmode = \"partial\"\n")
+	load := func() (config.Policy, error) { return policyFromFiles(root, "uat", rulesPath) }
+	cur, err := load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cur.PIIModes["app.users.email"]; got != "partial" {
+		t.Fatalf("mode of app.users.email = %q, want partial (modes %v)", got, cur.PIIModes)
+	}
+
+	// Approved as redact, now partial: a loosening.
+	writeRules(t, root, "[[mask]]\ncolumn = \"app.users.email\"\n")
+	initial, err := load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, initial.Profile, func(c *ServerConfig) {
+		c.Policy = initial
+		c.RulesPath = rulesPath
+		c.ApprovedKey = config.ApprovedKey(root, "uat")
+		c.LoadPolicy = load
+	})
+	writeRules(t, root, "[[mask]]\ncolumn = \"app.users.email\"\nmode = \"partial\"\n")
+	h.s.CheckPolicy()
+	wantCode(t, h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers}), ipc.CodePolicyPending)
+	h.io.answers = []string{"y"}
+	h.s.Command(context.Background(), ":review")
+	if got := h.s.approved.PIIModes["app.users.email"]; got != "partial" {
+		t.Fatalf("accepted mode not applied: %q", got)
+	}
+
+	// Back to redact: applied at once, without a prompt.
+	prompts := h.io.promptCount()
+	writeRules(t, root, "[[mask]]\ncolumn = \"app.users.email\"\n")
+	h.s.CheckPolicy()
+	if h.s.pending != nil || h.io.promptCount() != prompts {
+		t.Fatal("a change back to redact waited for the human")
+	}
+	if _, ok := h.s.approved.PIIModes["app.users.email"]; ok {
+		t.Fatalf("redact not applied: %v", h.s.approved.PIIModes)
+	}
+}
+
+// A mask rule added by a client keeps the modes of the other rules.
+func TestPIIAddKeepsMaskModes(t *testing.T) {
+	h := newHarness(t, uatProfile(), func(c *ServerConfig) {
+		c.Policy = c.Policy.WithModes(map[string]string{"app.users.email": "partial"})
+	})
+	h.ok(t, ipc.MethodPIIAdd, ipc.PIIAddParams{Pattern: "app.users.phone"}, nil)
+	if got := h.s.approved.PIIModes["app.users.email"]; got != "partial" {
+		t.Fatalf("mode lost after pii add: %v", h.s.approved.PIIModes)
+	}
+}
