@@ -84,29 +84,14 @@ type session struct {
 	major   int
 	tier    config.Tier
 	timeout time.Duration
-	plain   bool // TCP without TLS (tls = prefer fell back)
-	tlsMode string
-	host    string
+	// transport is the profile's; Plain is TCP without TLS (tls = prefer
+	// fell back).
+	transport engine.Transport
 }
 
 // Notices reports a connection an attacker on the path could read or stand
 // in for: plain TCP, or TLS whose certificate is not verified.
-func (s *session) Notices() []string {
-	switch {
-	case s.plain:
-		return []string{"the connection is NOT encrypted (tls = \"" + s.modeName() + "\"); set tls = \"verify-full\" or use an ssh tunnel"}
-	case config.TLSRank(s.tlsMode) < config.TLSRank(config.TLSVerifyCA) && !strings.HasPrefix(s.host, "/") && !config.IsLoopback(s.host):
-		return []string{"the server certificate is not verified (tls = \"" + s.modeName() + "\"); set tls = \"verify-full\""}
-	}
-	return nil
-}
-
-func (s *session) modeName() string {
-	if s.tlsMode == "" {
-		return config.TLSPrefer
-	}
-	return s.tlsMode
-}
+func (s *session) Notices() []string { return s.transport.Notices() }
 
 // Connect opens the connection to the profile's database and applies the
 // session settings of the profile's tier.
@@ -121,7 +106,8 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte, dial
 	if dial != nil {
 		useDialer(cfg, dial)
 	}
-	s := &session{cfg: cfg, conns: map[string]*dbConn{}, tier: p.Tier, timeout: p.Limits.StatementTimeout, tlsMode: p.TLS, host: p.Host}
+	s := &session{cfg: cfg, conns: map[string]*dbConn{}, tier: p.Tier, timeout: p.Limits.StatementTimeout,
+		transport: engine.Transport{Mode: p.TLS, CA: p.TLSCA, Host: p.Host, Tunneled: dial != nil}}
 	dc, err := s.open(ctx, p.Database)
 	if err != nil {
 		return nil, err
@@ -129,7 +115,7 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte, dial
 	s.defDB = dc.name
 	s.conns[dc.name] = dc
 	if _, tlsOn := dc.conn.PgConn().Conn().(*tls.Conn); !tlsOn && !strings.HasPrefix(p.Host, "/") {
-		s.plain = true
+		s.transport.Plain = true
 	}
 	s.version = dc.conn.PgConn().ParameterStatus("server_version")
 	s.major, _ = strconv.Atoi(strings.SplitN(s.version, ".", 2)[0])

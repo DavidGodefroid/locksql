@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -116,5 +117,35 @@ func TestRefusesClearTextAuthSwitchWithoutTLS(t *testing.T) {
 	defer f.mu.Unlock()
 	if bytes.Contains(f.got.Bytes(), []byte(secret)) {
 		t.Fatal("the password reached the server in clear text")
+	}
+}
+
+// TestClearTextRefusalThroughTunnel checks that a session already dialled
+// through an SSH tunnel is not advised to use one.
+func TestClearTextRefusalThroughTunnel(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeServer{ln: ln}
+	go f.serve(t)
+	defer func() { ln.Close(); f.done.Wait() }()
+
+	addr := ln.Addr().(*net.TCPAddr)
+	p := config.Profile{
+		Name: "t", Engine: config.EngineMySQL, Host: "127.0.0.1", Port: addr.Port, User: "u",
+		Tier: config.TierRead, Limits: config.DefaultLimits(false),
+	}
+	tunnel := func(ctx context.Context, network, address string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, address)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err = Engine{}.Connect(ctx, p, []byte("pw"), tunnel)
+	if err == nil || !strings.Contains(err.Error(), "clear text") {
+		t.Fatalf("connect error = %v, want the clear-text refusal", err)
+	}
+	if strings.Contains(err.Error(), "an SSH tunnel or") || !strings.Contains(err.Error(), "the database's own host") {
+		t.Errorf("connect error = %v, want the advice of a tunnelled session", err)
 	}
 }

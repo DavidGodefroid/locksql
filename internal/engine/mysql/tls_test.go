@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
+	"github.com/DavidGodefroid/locksql/internal/engine"
 )
 
 // TestRequireNeverFallsBack checks that a server offering no TLS is refused
@@ -46,7 +47,7 @@ func TestNoticeOnlyWhenNotVerified(t *testing.T) {
 		{config.TLSVerifyFull, false, ""},
 	}
 	for _, c := range cases {
-		s := &session{tlsMode: c.mode, plain: c.plain, host: "db.example"}
+		s := &session{transport: engine.Transport{Mode: c.mode, Plain: c.plain, Host: "db.example"}}
 		got := strings.Join(s.Notices(), "\n")
 		if c.want == "" && got != "" || c.want != "" && !strings.Contains(got, c.want) {
 			t.Errorf("%s plain=%v: notices = %q, want %q", c.mode, c.plain, got, c.want)

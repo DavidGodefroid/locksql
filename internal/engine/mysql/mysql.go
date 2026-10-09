@@ -57,22 +57,19 @@ const (
 )
 
 type session struct {
-	mu      sync.Mutex // serialises use of conn
-	conn    *client.Conn
-	connID  uint32
-	ctlMu   sync.Mutex
-	ctl     *client.Conn
-	dead    atomic.Bool
-	flavor  engine.Flavor
-	engine  string // the profile's engine name
-	version string
-	tier    config.Tier
-	timeout time.Duration
-	defDB   string
-	// plain is set when a TCP connection runs without TLS.
-	plain bool
-	// tlsMode and host are the profile's, for the notices.
-	tlsMode, host string
+	mu        sync.Mutex // serialises use of conn
+	conn      *client.Conn
+	connID    uint32
+	ctlMu     sync.Mutex
+	ctl       *client.Conn
+	dead      atomic.Bool
+	flavor    engine.Flavor
+	engine    string // the profile's engine name
+	version   string
+	tier      config.Tier
+	timeout   time.Duration
+	defDB     string
+	transport engine.Transport
 }
 
 // DriverOptions are the client options of every connection locksql opens:
@@ -119,7 +116,7 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte, dial
 	s := &session{
 		conn: conn, connID: conn.GetConnectionID(), ctl: ctl, engine: p.Engine,
 		tier: p.Tier, timeout: p.Limits.StatementTimeout, defDB: p.Database,
-		plain: tlsCfg == nil && !socket, tlsMode: p.TLS, host: p.Host,
+		transport: engine.Transport{Mode: p.TLS, CA: p.TLSCA, Host: p.Host, Plain: tlsCfg == nil && !socket, Tunneled: dialFn != nil},
 	}
 	if err := s.setup(); err != nil {
 		s.Close()
@@ -130,22 +127,7 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte, dial
 
 // Notices reports a connection an attacker on the path could read or stand
 // in for: plain TCP, or TLS whose certificate is not verified.
-func (s *session) Notices() []string {
-	switch {
-	case s.plain:
-		return []string{"the connection is NOT encrypted (tls = \"" + s.modeName() + "\"); set tls = \"verify-full\" or use an ssh tunnel"}
-	case config.TLSRank(s.tlsMode) < config.TLSRank(config.TLSVerifyCA) && !strings.HasPrefix(s.host, "/") && !config.IsLoopback(s.host):
-		return []string{"the server certificate is not verified (tls = \"" + s.modeName() + "\"); set tls = \"verify-full\""}
-	}
-	return nil
-}
-
-func (s *session) modeName() string {
-	if s.tlsMode == "" {
-		return config.TLSPrefer
-	}
-	return s.tlsMode
-}
+func (s *session) Notices() []string { return s.transport.Notices() }
 
 // dial connects with a deadline covering the TCP connect and the handshake
 // (the driver has none for the handshake). readTimeout > 0 bounds every
@@ -200,7 +182,7 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 			if c != nil {
 				c.Close()
 			}
-			return nil, guard.why
+			return nil, guardError(guard.why, dialFn != nil)
 		}
 	}
 	if err != nil {
@@ -214,12 +196,25 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 }
 
 // errClearText refuses a server that asks for the password in clear text
-// on an unencrypted TCP connection.
-var errClearText = errors.New("the server asks for the password in clear text (mysql_clear_password) on an unencrypted connection; refused: use a server with TLS, an SSH tunnel or a Unix socket")
+// on an unencrypted TCP connection. guardError adds the remedy.
+var errClearText = errors.New("the server asks for the password in clear text (mysql_clear_password) on an unencrypted connection; refused")
 
 // errPublicKey refuses a server that asks for the password encrypted with
-// an RSA key it sends itself, on an unencrypted TCP connection.
-var errPublicKey = errors.New("the server asks for the password encrypted with a public key it sends itself (caching_sha2_password full authentication or sha256_password) on an unencrypted connection; refused, since an attacker who removed TLS could send its own key: use a server with TLS, an SSH tunnel or a Unix socket")
+// an RSA key it sends itself, on an unencrypted TCP connection. guardError
+// adds the remedy.
+var errPublicKey = errors.New("the server asks for the password encrypted with a public key it sends itself (caching_sha2_password full authentication or sha256_password) on an unencrypted connection; refused, since an attacker who removed TLS could send its own key")
+
+// guardError adds the remedy to a refusal of the clear-text guard. A session
+// dialled through an SSH tunnel is not advised to use one.
+func guardError(why error, tunneled bool) error {
+	if !errors.Is(why, errClearText) && !errors.Is(why, errPublicKey) {
+		return why
+	}
+	if tunneled {
+		return fmt.Errorf("%w: use a server with TLS, or run the ssh tunnel to the database's own host", why)
+	}
+	return fmt.Errorf("%w: use a server with TLS, an SSH tunnel or a Unix socket", why)
+}
 
 // errHugePacket refuses a handshake packet of the maximum size, which the
 // guard cannot frame the way the driver does.
