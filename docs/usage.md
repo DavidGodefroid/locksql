@@ -385,9 +385,9 @@ The console watches the config and PII files while it runs.
   larger `k_anonymity`, a new mask rule or detector, a mode changed to
   `redact`) is applied at once.
 - A change that loosens it (higher tier, `production = true → false`, larger
-  limits, a smaller `k_anonymity`, a larger `reference_probe`, a higher or removed `explain_cost_refuse`,
-  a longer or removed `credentials_ttl`, a new host, port, engine, user or
-  database, `ask → keychain`, a removed mask rule or detector, a mask mode
+  limits, a smaller `k_anonymity`, a larger `reference_probe`, a higher or
+  removed `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
+  host, port, engine, user or database, `ask → keychain`, a removed mask rule or detector, a mask mode
   changed to anything but `redact`, a new allow rule) waits for you. Plans are
   refused with `policy_pending` until you run `:review` and answer
   `Apply these changes? [y/N]`.
@@ -538,7 +538,7 @@ The rules:
   is refused as `unknown reference rN.R.C`. Cells masked in `partial` or `email`
   mode, or by a detector, carry no reference.
 - Placeholders work only as the literal side of such a comparison in `WHERE`
-  (not `JOIN`), on a masked statement (not `--unmask`); anywhere else the
+  or `HAVING` (not in a `JOIN` condition), on a masked statement (not `--unmask`); anywhere else the
   statement is refused (`a placeholder may only be compared with a PII column`),
   and so is any malformed `${...}` literal.
 - A filter made only of placeholders skips the k-anonymity check; an `IN` list
@@ -591,9 +591,11 @@ finds the project's consoles.
   `max_output_bytes` in total (cut with a marker).
 - Control and bidirectional characters are escaped. NULL prints as `NULL`.
 - Masked cells follow the rule's mode: `redact` (the default for a rule
-  without `mode`) gives `<redacted>`, `partial` keeps the first character
-  and the length (`a***(17)`), `email` keeps the first character and the
-  domain (`a***@example.com`). Several rules with different modes on one
+  without `mode`) gives `<redacted:rN.R.C>` (result, row, column; plain
+  `<redacted>` when the console cannot hold the cell), `partial` keeps the
+  first character and the length (`a***(17)`), `email` keeps the first
+  character and the domain (`a***@example.com`). `partial`, `email` and
+  detector-masked cells carry no reference. Several rules with different modes on one
   column give `redact`. Masked binary cells in `partial` mode
   become `<masked bytes:N>`.
 - A result whose column count or labels differ from the analysis is dropped,

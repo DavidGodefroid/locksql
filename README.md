@@ -372,14 +372,14 @@ mode   = "email"                      # j***@example.com
 column = "app.users.customer_ref"
 mode   = "partial"                    # j***(12)
 [[mask]]
-column = "*.*.recipient_reference"    # <redacted> (default)
+column = "*.*.recipient_reference"    # <redacted:rN.R.C> (default)
 [[allow]]                             # explicit exception: never mask
 column = "app.templates.name"
 ```
 
 | Mode | Output | Notes |
 |---|---|---|
-| `redact` (default) | `<redacted>` | a rule without `mode` is `redact` |
+| `redact` (default) | `<redacted:rN.R.C>` (result, row, column: a reference the agent can filter on; plain `<redacted>` if the console cannot hold the cell); `partial`, `email` and detector-masked cells carry no reference | a rule without `mode` is `redact` |
 | `partial` | `j***(12)` | first character and length |
 | `email` | `j***@example.com` | first character and domain; other values as `partial` |
 
