@@ -205,6 +205,9 @@ func TestAdvSetOpOracle(t *testing.T) {
 			"WITH c AS (SELECT email FROM users UNION SELECT name FROM users) SELECT 1 FROM c LIMIT 1",
 			"SELECT salary FROM users INTERSECT SELECT total + 1 FROM orders LIMIT 5",
 			"SELECT name FROM users UNION SELECT email FROM users LIMIT 1",
+			"SELECT email FROM users INTERSECT (SELECT 'x') LIMIT 5",
+			"SELECT email FROM users UNION SELECT NULL LIMIT 5",
+			"WITH RECURSIVE r(e) AS (SELECT email FROM users UNION SELECT 'x' FROM r) SELECT e FROM r LIMIT 5",
 		} {
 			_, err := analyze(t, d, sql)
 			if err == nil || !strings.Contains(err.Error(), "set operation compares a PII column") {
@@ -238,6 +241,35 @@ func TestAdvSetOpOracle(t *testing.T) {
 			t.Errorf("%s: constant filter: %v", d, err)
 		} else if len(a.KChecks) != 2 {
 			t.Errorf("%s: constant filter: checks %+v, want 2", d, a.KChecks)
+		}
+	}
+}
+
+// UNION ALL compares nothing, but a duplicate removal over its result does:
+// DISTINCT, an aggregate's DISTINCT or GROUP BY over a column mixing PII
+// values with values the agent chose is the same equality oracle.
+func TestAdvDedupeOracle(t *testing.T) {
+	for _, d := range []sqlclass.Dialect{sqlclass.MySQL, sqlclass.Postgres, sqlclass.SQLite} {
+		for _, sql := range []string{
+			"SELECT COUNT(*) FROM (SELECT DISTINCT e FROM (SELECT email AS e FROM users UNION ALL SELECT 'x@example.com') t) s LIMIT 1",
+			"SELECT DISTINCT e FROM (SELECT email AS e FROM users UNION ALL SELECT 'x@example.com') t LIMIT 10",
+			"SELECT COUNT(DISTINCT e) FROM (SELECT email AS e FROM users WHERE id = 1 UNION ALL SELECT 'x@example.com') t LIMIT 1",
+			"SELECT e, COUNT(*) FROM (SELECT email AS e FROM users UNION ALL SELECT 'x@example.com') t GROUP BY e LIMIT 10",
+			"SELECT e, COUNT(*) FROM (SELECT email AS e FROM users UNION ALL SELECT name FROM users) t GROUP BY 1 LIMIT 10",
+		} {
+			_, err := analyze(t, d, sql)
+			if err == nil || !strings.Contains(err.Error(), "duplicate removal compares a PII column") {
+				t.Errorf("%s %q: got %v, want a duplicate removal refusal", d, sql, err)
+			}
+		}
+		for _, sql := range []string{
+			"SELECT DISTINCT email FROM users LIMIT 5",
+			"SELECT COUNT(DISTINCT email) FROM users LIMIT 1",
+			"SELECT DISTINCT name FROM users UNION ALL SELECT 'x' LIMIT 5",
+		} {
+			if _, err := analyze(t, d, sql); err != nil {
+				t.Errorf("%s %q: %v", d, sql, err)
+			}
 		}
 	}
 }

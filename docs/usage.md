@@ -631,7 +631,7 @@ PII columns (columns under a mask rule) may be used as follows:
 | `COUNT(col)` (not masked); `MIN`/`MAX` (masked in the column's mode); other aggregates (redacted) | `LIKE`, ranges (`<`, `BETWEEN`) and other comparisons |
 | `JOIN ... ON a.col = b.col`, `col IN (SELECT ...)`, `USING`, `NATURAL` between two PII columns | a join or `IN (subquery)` with a column that has no mask rule (add a rule for it, or compare with literals); constant comparisons in `JOIN ... ON` (put them in `WHERE`) |
 | `WHERE col = 'literal'`, `col IN ('a', 'b')`, `col IS NULL`, combined with `AND` | `<>`, `!=`, `NOT IN`, `IS NOT NULL`, `IS DISTINCT FROM`; a PII condition under `NOT`, `OR` or `XOR`; a scalar subquery returning a PII value as an operand; constant filters on a column of a view |
-| | `UNION`, `INTERSECT` or `EXCEPT` between a PII column and a literal, an expression or an unmasked column (`UNION ALL` is allowed and gives plain `<redacted>`) |
+| | `UNION`, `INTERSECT` or `EXCEPT` between a PII column and a literal (including `NULL`), an expression or an unmasked column (`UNION ALL` is allowed and gives plain `<redacted>`); `DISTINCT`, `COUNT(DISTINCT ...)` or `GROUP BY` over a column that mixes a PII column with such values |
 | `GROUP BY col` | `GROUP BY` an expression of it; `GROUP BY name` where `name` is both an input column and an alias for another value; PII filters in correlated subqueries, recursive CTEs or a `SELECT` without `FROM` |
 | | `ORDER BY`, window `PARTITION BY` and `ORDER BY`, `FILTER`, `DISTINCT ON` |
 

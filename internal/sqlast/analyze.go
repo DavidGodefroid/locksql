@@ -366,6 +366,18 @@ func (an *analyzer) setOpCompare(b *SetOp, i int, l, r Prov) error {
 	return refusef("a set operation compares a PII column with a value the agent chose (column %d)", i+1)
 }
 
+// dedupe checks a value whose duplicates are removed (DISTINCT, an
+// aggregate's DISTINCT, GROUP BY): removing duplicates compares the values
+// for equality, so a PII column may only meet values that are all PII,
+// as in a set operation. A column mixing PII with a literal or an unmasked
+// column (through UNION ALL) would tell whether the agent's value is in it.
+func (an *analyzer) dedupe(p Prov, what string) error {
+	if !an.env.Masking || !p.Sensitive || an.allPII(p) {
+		return nil
+	}
+	return refusef("duplicate removal compares a PII column with a value the agent chose (%s)", what)
+}
+
 // allPII reports a plain value whose every source is under a mask rule and
 // which cannot be a literal of the statement.
 func (an *analyzer) allPII(p Prov) bool {
@@ -579,6 +591,13 @@ func (an *analyzer) selectCore(s *Select, parent *scope) ([]column, *scope, erro
 		cols = append(cols, column{name: name, prov: p, labeled: labeled})
 	}
 	sc.aliases = cols
+	if s.Distinct {
+		for _, c := range cols {
+			if err := an.dedupe(c.prov, "DISTINCT"); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
 	// GROUP BY.
 	for _, g := range s.GroupBy {
 		p, err := an.groupKey(g, sc, cols)
@@ -588,6 +607,9 @@ func (an *analyzer) selectCore(s *Select, parent *scope) ([]column, *scope, erro
 		if p.Sensitive && an.env.Masking {
 			if p.Kind != KindIdentity {
 				return nil, nil, refuse("GROUP BY over an expression of a PII column is not allowed")
+			}
+			if err := an.dedupe(p, "GROUP BY"); err != nil {
+				return nil, nil, err
 			}
 			node.needK = true
 		}
@@ -1208,6 +1230,11 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 	}
 	if arg.Kind == KindExpr && arg.Sensitive && an.env.Masking {
 		return Prov{}, refusef("a PII column (%s) is used inside an expression given to %s", piiNames(arg), strings.ToLower(f.Name))
+	}
+	if f.Distinct {
+		if err := an.dedupe(arg, strings.ToLower(f.Name)+"(DISTINCT ...)"); err != nil {
+			return Prov{}, err
+		}
 	}
 	if arg.Sensitive && an.env.Masking && sc.node != nil {
 		sc.node.needK = true
