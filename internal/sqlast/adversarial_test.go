@@ -276,8 +276,9 @@ func TestAdvDedupeOracle(t *testing.T) {
 }
 
 // A PII column compared with itself is IS NOT NULL in disguise: it selects
-// rows with no constant for the k-anonymity check to count. Two instances
-// of the column (a join, a self-join) stay a PII join.
+// rows with no constant for the k-anonymity check to count. A self-join on
+// the column is the same probe, whatever the relation instances; a join
+// between two different PII columns stays allowed.
 func TestAdvSelfComparison(t *testing.T) {
 	for _, d := range []sqlclass.Dialect{sqlclass.MySQL, sqlclass.Postgres, sqlclass.SQLite} {
 		refused := []string{
@@ -290,6 +291,14 @@ func TestAdvSelfComparison(t *testing.T) {
 			"WITH c AS (SELECT email AS a, email AS b FROM users) SELECT a FROM c WHERE a = b LIMIT 10",
 			"SELECT id FROM orders o WHERE EXISTS (SELECT 1 FROM users u WHERE u.id = o.user_id AND u.email = u.email) LIMIT 10",
 			"SELECT name FROM users u WHERE u.email IN (SELECT u.email FROM orders) LIMIT 10",
+			"SELECT a.name FROM users a JOIN users b ON a.email = b.email LIMIT 10",
+			"SELECT a.name FROM users a JOIN users b ON a.id = b.id WHERE a.email = b.email LIMIT 10",
+			"SELECT name FROM users u WHERE u.email IN (SELECT v.email FROM users v WHERE v.id = u.id) LIMIT 10",
+			"SELECT name FROM users u WHERE u.email IN (SELECT v.email FROM users v) LIMIT 10",
+			"SELECT name FROM users u WHERE EXISTS (SELECT 1 FROM users v WHERE v.id = u.id AND v.email = u.email) LIMIT 10",
+			"SELECT a.name FROM users a NATURAL JOIN users b LIMIT 10",
+			"SELECT a.name FROM users a JOIN users b USING (email) LIMIT 10",
+			"WITH c AS (SELECT email FROM users) SELECT x.email FROM c x JOIN c y ON x.email = y.email LIMIT 10",
 		}
 		if d == sqlclass.MySQL {
 			refused = append(refused, "SELECT name FROM users WHERE email <=> email LIMIT 10")
@@ -300,11 +309,11 @@ func TestAdvSelfComparison(t *testing.T) {
 				t.Errorf("%s %q: got %v, want a self-comparison refusal", d, sql, err)
 			}
 		}
+		wantRefused(t, d, "SELECT name FROM users WHERE email IN (email) LIMIT 10")
 		for _, sql := range []string{
 			"SELECT u.name FROM users u JOIN contacts c ON u.email = c.email LIMIT 10",
-			"SELECT a.name FROM users a JOIN users b ON a.email = b.email LIMIT 10",
-			"WITH c AS (SELECT email FROM users) SELECT x.email FROM c x JOIN c y ON x.email = y.email LIMIT 10",
-			"SELECT name FROM users u WHERE u.email IN (SELECT v.email FROM users v) LIMIT 10",
+			"SELECT u.name FROM users u JOIN contacts c USING (email) LIMIT 10",
+			"SELECT name FROM users u WHERE u.email IN (SELECT c.email FROM contacts c) LIMIT 10",
 		} {
 			if _, err := analyze(t, d, sql); err != nil {
 				t.Errorf("%s %q: %v", d, sql, err)

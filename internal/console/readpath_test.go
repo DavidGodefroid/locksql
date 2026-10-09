@@ -382,7 +382,7 @@ func TestNoReferenceUnderAgentLiteralFilter(t *testing.T) {
 		"SELECT email FROM users GROUP BY email HAVING email = 'victim@x.com' LIMIT 5",
 		"SELECT email FROM users INTERSECT SELECT email FROM users WHERE email = 'victim@x.com' LIMIT 5",
 		"SELECT email FROM users UNION SELECT email FROM users WHERE email = 'victim@x.com' LIMIT 5",
-		"SELECT b.email FROM users a JOIN users b ON a.email = b.email WHERE a.email = 'victim@x.com' LIMIT 5",
+		"SELECT u.email FROM users u JOIN orders o ON o.user_id = u.id WHERE u.email = 'victim@x.com' LIMIT 5",
 		"SELECT email FROM users WHERE id IN (SELECT id FROM users WHERE email = 'victim@x.com') LIMIT 5",
 		"SELECT email FROM users WHERE email IN ('${r9.1.1}', 'victim@x.com') LIMIT 5",
 	} {
