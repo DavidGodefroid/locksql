@@ -363,6 +363,12 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		assertNoLeak(t, s, sqlclass.MySQL, pii.Rules{Mask: []string{"app.big.email"}}, writeLeakQueries(sqlclass.MySQL))
 	})
 
+	t.Run("placeholder and reference round trip", func(t *testing.T) {
+		id := insertObrien(t, connectMySQL(t, m, srv, "rw", config.TierWrite, 5*time.Second), "big")
+		s := connectMySQL(t, m, srv, "ro", config.TierRead, 5*time.Second)
+		assertPlaceholderRoundTrip(t, s, pii.Rules{Mask: []string{"app.big.email"}}, id)
+	})
+
 	t.Run("tls when the server offers it", func(t *testing.T) {
 		s := connectMySQL(t, m, srv, "ro", config.TierRead, 5*time.Second)
 		r := mustRun(t, s, "SHOW SESSION STATUS LIKE 'Ssl_cipher'")

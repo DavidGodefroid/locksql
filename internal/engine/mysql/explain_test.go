@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -197,6 +198,26 @@ func TestParsePlanShapes(t *testing.T) {
 		if got := shape(p.Root); got != c.want {
 			t.Errorf("%s:\n got %s\nwant %s", c.name, got, c.want)
 		}
+	}
+}
+
+// MariaDB writes a quote inside a string of its JSON plan as \', which JSON
+// does not know: the plan of a statement with such a literal must parse.
+func TestParsePlanMariaDBQuoteEscape(t *testing.T) {
+	raw := `{"query_block":{"table":{"table_name":"big","access_type":"ALL","rows":5,"attached_condition":"big.email = 'o\'brien@example.org' and big.note = 'a\\'"}}}`
+	p, err := ParsePlan([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := shape(p.Root); got != "{big:full:5}" {
+		t.Errorf("shape %s", got)
+	}
+	var top map[string]map[string]map[string]any
+	if err := json.Unmarshal(p.Raw, &top); err != nil {
+		t.Fatalf("Raw is not JSON: %v", err)
+	}
+	if got := top["query_block"]["table"]["attached_condition"]; got != `big.email = 'o'brien@example.org' and big.note = 'a\'` {
+		t.Errorf("condition %q", got)
 	}
 }
 

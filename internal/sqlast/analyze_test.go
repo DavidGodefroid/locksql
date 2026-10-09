@@ -310,3 +310,73 @@ func TestStatementTextViewsRefusedPostgres(t *testing.T) {
 		}
 	}
 }
+
+// A recursive CTE whose recursive arm brings a literal keeps Lit on its
+// column: the fixpoint must not stop on a provenance that only lost it.
+func TestRecursiveCTELiteralKeepsLit(t *testing.T) {
+	for _, sql := range []string{
+		"WITH RECURSIVE c(e, n) AS (SELECT email, 1 FROM users UNION ALL SELECT 'x', n+1 FROM c WHERE n < 2) SELECT e FROM c LIMIT 5",
+		"WITH RECURSIVE c(e, n) AS (SELECT salary, 1 FROM users UNION ALL SELECT 'x', n+1 FROM c WHERE n < 2) SELECT e FROM c LIMIT 5",
+	} {
+		a, err := analyze(t, sqlclass.MySQL, sql)
+		if err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		if p := a.Outputs[0].Prov; !p.Lit || !p.Sensitive {
+			t.Errorf("%s: provenance %+v, want Lit and Sensitive", sql, p)
+		}
+	}
+	// Without a literal the column stays literal-free.
+	a, err := analyze(t, sqlclass.MySQL, "WITH RECURSIVE c(e, n) AS (SELECT email, 1 FROM users UNION ALL SELECT e, n+1 FROM c WHERE n < 2) SELECT e FROM c LIMIT 5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Outputs[0].Prov.Lit {
+		t.Errorf("plain recursive column marked Lit: %+v", a.Outputs[0].Prov)
+	}
+}
+
+// LitFilter marks a statement that filters a PII column with a literal the
+// agent wrote, wherever it sits; placeholders and IS NULL do not count.
+func TestLitFilter(t *testing.T) {
+	cases := map[string]bool{
+		"SELECT email FROM users WHERE email = 'v@x.com' LIMIT 5":                                          true,
+		"SELECT email FROM users WHERE email IN ('v@x.com', 'b@x.com') LIMIT 5":                            true,
+		"SELECT email FROM users GROUP BY email HAVING email = 'v@x.com' LIMIT 5":                          true,
+		"SELECT email FROM users INTERSECT SELECT email FROM users WHERE email = 'v@x.com' LIMIT 5":        true,
+		"SELECT b.email FROM users a JOIN users b ON a.email = b.email WHERE a.email = 'v@x.com' LIMIT 5":  true,
+		"SELECT email FROM users WHERE id IN (SELECT id FROM users WHERE email = 'v@x.com') LIMIT 5":       true,
+		"SELECT email FROM users WHERE email IN ('${email}', 'v@x.com') LIMIT 5":                           true,
+		"SELECT email FROM users LIMIT 5":                                                                  false,
+		"SELECT email FROM users WHERE id = 1 LIMIT 5":                                                     false,
+		"SELECT email FROM users WHERE email IS NULL LIMIT 5":                                              false,
+		"SELECT email FROM users WHERE email = '${email}' LIMIT 5":                                         false,
+		"SELECT email FROM users WHERE email IN ('${email}', '${other}') LIMIT 5":                          false,
+		"SELECT b.email FROM users a JOIN users b ON a.email = b.email WHERE a.email = '${email}' LIMIT 5": false,
+	}
+	for sql, want := range cases {
+		a, err := analyze(t, sqlclass.MySQL, sql)
+		if err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		if a.LitFilter != want {
+			t.Errorf("%s: LitFilter %v, want %v", sql, a.LitFilter, want)
+		}
+	}
+}
+
+// A recursive CTE whose provenance does not converge within the fixpoint
+// bound is refused: its last iteration may still miss a literal.
+func TestRecursiveCTENotConvergedRefused(t *testing.T) {
+	sql := "WITH RECURSIVE c(a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,n) AS (SELECT email,'victim@x.com',email,email,email,email,email,email,email,email,1 FROM users UNION ALL SELECT a10,a2,a2,a3,a4,a5,a6,a7,a8,a9,n+1 FROM c WHERE n < 12) SELECT a1 FROM c WHERE n >= 10 LIMIT 50"
+	_, err := analyze(t, sqlclass.MySQL, sql)
+	var r *sqlclass.Refusal
+	if !errors.As(err, &r) || !strings.Contains(r.Reason, "too deep") {
+		t.Fatalf("got %v, want a refusal", err)
+	}
+	// Modes stay deduplicated through unions.
+	p := union(Prov{Modes: []string{"redact", "partial"}}, Prov{Modes: []string{"partial", "redact"}})
+	if len(p.Modes) != 2 {
+		t.Errorf("modes %v", p.Modes)
+	}
+}

@@ -281,3 +281,155 @@ func TestReferenceRoundTrip(t *testing.T) {
 		t.Error("the value reached the audit log")
 	}
 }
+
+// A column that may hold a literal the agent wrote gets no reference on any
+// row: a reference to it would be a lookup of a chosen value without the
+// k-anonymity check.
+func TestNoReferenceForLiteralColumn(t *testing.T) {
+	for _, op := range []string{"UNION ALL", "INTERSECT"} {
+		h := newHarness(t, uatProfile())
+		h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"alice@example.com"}, {"john@x.com"}}}
+		pr := h.plan(t, "SELECT email FROM users "+op+" SELECT 'john@x.com' LIMIT 50", false)
+		h.io.answers = []string{"y"}
+		var rr ipc.RunResult
+		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+		for _, row := range rr.Rows {
+			if row[0] != "<redacted>" {
+				t.Errorf("%s: row %v", op, row)
+			}
+		}
+	}
+}
+
+// The plan of EXPLAIN quotes the statement's literals: with a placeholder
+// it would hand the agent the value behind it.
+func TestExplainWithPlaceholderRefused(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	pr := h.plan(t, "SELECT id, email, note FROM users WHERE id = 1 LIMIT 1", false)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	for _, q := range []string{
+		"EXPLAIN SELECT id FROM users WHERE email = '${r1.1.2}' LIMIT 1",
+		"EXPLAIN SELECT id FROM users WHERE email = '${email}' LIMIT 1",
+	} {
+		resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
+		wantCode(t, resp, ipc.CodeRefused)
+		if !strings.Contains(resp.Error.Message, "EXPLAIN") {
+			t.Errorf("%s: refusal %q", q, resp.Error.Message)
+		}
+	}
+}
+
+// A UNION arm of an unmasked column, or an aggregate of a PII column, gets
+// no reference: the agent may know the value behind it.
+func TestNoReferenceForMixedOrAggregateColumn(t *testing.T) {
+	for _, q := range []string{
+		"SELECT email FROM users UNION ALL SELECT note FROM users LIMIT 50",
+		"SELECT email FROM users UNION ALL SELECT CAST(id AS char) FROM users LIMIT 50",
+		"SELECT group_concat(email SEPARATOR 'x') AS email FROM users LIMIT 50",
+	} {
+		h := newHarness(t, uatProfile())
+		h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"alice@example.com"}, {"7"}}}
+		h.sess.count = &engine.Result{Columns: []engine.ResultColumn{{Label: "n"}}, Rows: [][]any{{int64(100)}}}
+		pr := h.plan(t, q, false)
+		h.io.answers = []string{"y"}
+		var rr ipc.RunResult
+		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+		for _, row := range rr.Rows {
+			if row[0] != "<redacted>" {
+				t.Errorf("%s: row %v", q, row)
+			}
+		}
+	}
+	// A plain column keeps its references.
+	h := newHarness(t, uatProfile())
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"alice@example.com"}}}
+	pr := h.plan(t, "SELECT email FROM users WHERE id = 1 LIMIT 5", false)
+	h.io.answers = []string{"y"}
+	var rr ipc.RunResult
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	if rr.Rows[0][0] != "<redacted:r1.1.1>" {
+		t.Errorf("plain column: %v", rr.Rows[0])
+	}
+}
+
+// A recursive CTE whose recursive arm adds a literal gets no reference.
+func TestNoReferenceForRecursiveCTELiteral(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "e"}}, Rows: [][]any{{"alice@example.com"}, {"x"}}}
+	pr := h.plan(t, "WITH RECURSIVE c(e, n) AS (SELECT email, 1 FROM users UNION ALL SELECT 'x', n+1 FROM c WHERE n < 2) SELECT e FROM c LIMIT 5", false)
+	h.io.answers = []string{"y"}
+	var rr ipc.RunResult
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	for _, row := range rr.Rows {
+		if row[0] != "<redacted>" {
+			t.Errorf("row %v", row)
+		}
+	}
+}
+
+// A statement that filters a PII column with a literal the agent wrote gets
+// no reference on any column: the agent chose the value behind it, and a
+// reference would let it look that value up without the k-anonymity check.
+func TestNoReferenceUnderAgentLiteralFilter(t *testing.T) {
+	for _, q := range []string{
+		"SELECT email FROM users WHERE email = 'victim@x.com' LIMIT 50",
+		"SELECT email FROM users WHERE email IN ('victim@x.com', 'b@x.com') LIMIT 50",
+		"SELECT email FROM users GROUP BY email HAVING email = 'victim@x.com' LIMIT 5",
+		"SELECT email FROM users INTERSECT SELECT email FROM users WHERE email = 'victim@x.com' LIMIT 5",
+		"SELECT email FROM users UNION SELECT email FROM users WHERE email = 'victim@x.com' LIMIT 5",
+		"SELECT b.email FROM users a JOIN users b ON a.email = b.email WHERE a.email = 'victim@x.com' LIMIT 5",
+		"SELECT email FROM users WHERE id IN (SELECT id FROM users WHERE email = 'victim@x.com') LIMIT 5",
+		"SELECT email FROM users WHERE email IN ('${r9.1.1}', 'victim@x.com') LIMIT 5",
+	} {
+		h := newHarness(t, uatProfile())
+		h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"victim@x.com"}}}
+		h.sess.count = &engine.Result{Columns: []engine.ResultColumn{{Label: "n"}}, Rows: [][]any{{int64(100)}}}
+		if strings.Contains(q, "r9.1.1") {
+			// A reference to a known cell, mixed with a literal.
+			pr := h.plan(t, "SELECT email FROM users WHERE id = 1 LIMIT 1", false)
+			h.io.answers = []string{"y"}
+			h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+			q = strings.Replace(q, "r9.1.1", "r1.1.1", 1)
+		}
+		pr := h.plan(t, q, false)
+		h.io.answers = []string{"y"}
+		var rr ipc.RunResult
+		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+		if len(rr.Rows) == 0 || rr.Rows[0][0] != "<redacted>" {
+			t.Errorf("%s: rows %v", q, rr.Rows)
+		}
+	}
+}
+
+// A plain fetch, and a fetch filtered by a reference or a typed value, keep
+// their references: the agent chose none of the values.
+func TestReferenceUnderPlaceholderFilter(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"alice@example.com"}}}
+	run := func(q string) ipc.RunResult {
+		t.Helper()
+		pr := h.plan(t, q, false)
+		h.io.answers = []string{"y"}
+		var rr ipc.RunResult
+		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+		return rr
+	}
+	if rr := run("SELECT email FROM users LIMIT 5"); rr.Rows[0][0] != "<redacted:r1.1.1>" {
+		t.Errorf("plain fetch: %v", rr.Rows)
+	}
+	if rr := run("SELECT email FROM users WHERE email = '${r1.1.1}' LIMIT 5"); rr.Rows[0][0] != "<redacted:r2.1.1>" {
+		t.Errorf("reference filter: %v", rr.Rows)
+	}
+	h.io.secrets = []string{"alice@example.com"}
+	if rr := run("SELECT email FROM users WHERE email IN ('${email}', '${r1.1.1}') LIMIT 5"); rr.Rows[0][0] != "<redacted:r3.1.1>" {
+		t.Errorf("typed value filter: %v", rr.Rows)
+	}
+}
+
+// A recursive CTE too deep for the fixpoint is refused, not referenced.
+func TestRecursiveCTENotConvergedRefused(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "WITH RECURSIVE c(a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,n) AS (SELECT email,'victim@x.com',email,email,email,email,email,email,email,email,1 FROM users UNION ALL SELECT a10,a2,a2,a3,a4,a5,a6,a7,a8,a9,n+1 FROM c WHERE n < 12) SELECT a1 FROM c WHERE n >= 10 LIMIT 50"})
+	wantCode(t, resp, ipc.CodeRefused)
+}

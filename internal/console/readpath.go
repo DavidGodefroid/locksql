@@ -174,7 +174,8 @@ func (s *Server) astEnv(ctx context.Context, sess engine.Session, db string, unm
 			if kind == sqlast.ValueRef {
 				return s.refs.get(name)
 			}
-			return "", false // typed values: Task 3
+			tv, ok := s.typed[name]
+			return tv.value, ok
 		},
 	}
 }
@@ -192,6 +193,38 @@ func splitExplain(d sqlclass.Dialect, sql string) (string, bool) {
 // readPlan parses and analyses a read statement, then weighs it and its
 // k-anonymity checks with EXPLAIN. The plan keeps the analysis for the run.
 func (s *Server) readPlan(ctx context.Context, sess engine.Session, pl *plan, sql string) (string, bool, error) {
+	if reason, refused, err := s.analyzeRead(ctx, sess, pl, sql); err != nil || refused {
+		return reason, refused, err
+	}
+	an := pl.an
+	ep, err := sess.Explain(ctx, pl.db, pl.runSQL)
+	if err != nil {
+		if errors.Is(err, engine.ErrConnLost) {
+			return "", false, err
+		}
+		s.println("EXPLAIN failed: " + s.errText(err, pl.runSQL, false, pl))
+		return "EXPLAIN failed: " + genericFailure, true, nil
+	}
+	pl.explain = &ep
+	for _, k := range an.KChecks {
+		kp, err := sess.Explain(ctx, pl.db, k.SQL)
+		if err != nil {
+			if errors.Is(err, engine.ErrConnLost) {
+				return "", false, err
+			}
+			s.println("EXPLAIN of the k-anonymity check failed: " + s.errText(err, k.SQL, false, pl))
+			return "the k-anonymity check of this statement cannot be planned: " + genericFailure, true, nil
+		}
+		if v := weight.Assess(kp, s.profile.Limits, s.profile.Production); v.Level == weight.Refuse {
+			return "weight check of the k-anonymity count: " + strings.Join(v.Reasons, "; "), true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// analyzeRead parses and analyses a read statement and sets the plan's
+// analysis and the statement that runs (placeholder values substituted).
+func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan, sql string) (string, bool, error) {
 	parsed, err := sqlast.Parse(s.dialect, sql)
 	if err != nil {
 		return err.Error(), true, nil
@@ -218,28 +251,6 @@ func (s *Server) readPlan(ctx context.Context, sess engine.Session, pl *plan, sq
 		body = parsed.SQL[parsed.Query.Sp.Pos:parsed.Query.Sp.End]
 	}
 	pl.runSQL = an.RunSQL(body)
-	ep, err := sess.Explain(ctx, pl.db, pl.runSQL)
-	if err != nil {
-		if errors.Is(err, engine.ErrConnLost) {
-			return "", false, err
-		}
-		s.println("EXPLAIN failed: " + s.errText(err, pl.runSQL, false))
-		return "EXPLAIN failed: " + genericFailure, true, nil
-	}
-	pl.explain = &ep
-	for _, k := range an.KChecks {
-		kp, err := sess.Explain(ctx, pl.db, k.SQL)
-		if err != nil {
-			if errors.Is(err, engine.ErrConnLost) {
-				return "", false, err
-			}
-			s.println("EXPLAIN of the k-anonymity check failed: " + s.errText(err, k.SQL, false))
-			return "the k-anonymity check of this statement cannot be planned: " + genericFailure, true, nil
-		}
-		if v := weight.Assess(kp, s.profile.Limits, s.profile.Production); v.Level == weight.Refuse {
-			return "weight check of the k-anonymity count: " + strings.Join(v.Reasons, "; "), true, nil
-		}
-	}
 	return "", false, nil
 }
 
@@ -268,7 +279,7 @@ func (s *Server) kCheck(ctx context.Context, sess engine.Session, pl *plan) (str
 			if errors.Is(err, engine.ErrConnLost) || ctx.Err() != nil {
 				return "", err
 			}
-			s.println("k-anonymity check failed: " + s.errText(err, c.SQL, false))
+			s.println("k-anonymity check failed: " + s.errText(err, c.SQL, false, pl))
 			return "the k-anonymity check could not run: " + genericFailure, nil
 		}
 		if len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
@@ -359,7 +370,12 @@ func (s *Server) maskRead(res *engine.Result, pl *plan, sess engine.Session) err
 		pii.MaskResult(res, pii.Rules{}, s.detectors, false)
 		return nil
 	}
-	n := s.refs.begin()
-	cell := func(row, col int, v any) string { return s.refs.put(n, row, col, pii.CellText(v)) }
+	// A PII filter on a literal of the agent: the agent chose the value
+	// behind every cell it selects, so no cell gets a reference.
+	var cell func(row, col int, v any) string
+	if !pl.an.LitFilter {
+		n := s.refs.begin()
+		cell = func(row, col int, v any) string { return s.refs.put(n, row, col, pii.CellText(v)) }
+	}
 	return pii.MaskOutputs(res, pl.an.Outputs, s.rules, s.detectors, cell, sess.OriginColumns())
 }

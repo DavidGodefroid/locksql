@@ -85,6 +85,10 @@ type Limits struct {
 	// KAnonymity is the smallest number of rows a PII filter, a grouping
 	// on a PII column or an aggregate of one may cover.
 	KAnonymity int `toml:"k_anonymity" json:"k_anonymity,omitempty"`
+	// ReferenceProbe is how many distinct cells of one result the agent may
+	// filter on, one statement each, before the console warns of equality
+	// probing; raising it is a loosening.
+	ReferenceProbe int `toml:"reference_probe" json:"reference_probe,omitempty"`
 }
 
 // Profile is one named database target with its policy.
@@ -222,6 +226,7 @@ type rawLimits struct {
 	MaxOutputBytes    int     `toml:"max_output_bytes"`
 	ExplainCostRefuse float64 `toml:"explain_cost_refuse"`
 	KAnonymity        int     `toml:"k_anonymity"`
+	ReferenceProbe    int     `toml:"reference_probe"`
 }
 
 type rawProfile struct {
@@ -370,6 +375,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 			ExplainRowsWarn: r.Limits.ExplainRowsWarn, ExplainRowsRefuse: r.Limits.ExplainRowsRefuse,
 			MaxRows: r.Limits.MaxRows, MaxCellChars: r.Limits.MaxCellChars, MaxOutputBytes: r.Limits.MaxOutputBytes,
 			ExplainCostRefuse: r.Limits.ExplainCostRefuse, KAnonymity: r.Limits.KAnonymity,
+			ReferenceProbe: r.Limits.ReferenceProbe,
 		},
 	}
 
@@ -444,6 +450,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		{"max_cell_chars", int64(p.Limits.MaxCellChars)},
 		{"max_output_bytes", int64(p.Limits.MaxOutputBytes)},
 		{"k_anonymity", int64(p.Limits.KAnonymity)},
+		{"reference_probe", int64(p.Limits.ReferenceProbe)},
 	} {
 		if f.val < 0 {
 			return Profile{}, errf("limits.%s must not be negative", f.key)

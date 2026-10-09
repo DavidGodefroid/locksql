@@ -15,7 +15,7 @@ import (
 
 // ParsePlan normalises the output of EXPLAIN FORMAT=JSON, in either the
 // MariaDB or the MySQL 8 shape, into an engine.Plan whose Raw is the
-// server's plan unchanged.
+// server's plan, unchanged but for MariaDB's \' escapes (see validJSON).
 //
 // Both shapes nest a "query_block" holding the tables of one SELECT, either
 // as "table" or as an ordered "nested_loop" list, wrapped in operation
@@ -30,6 +30,7 @@ import (
 // "dependent": true, MariaDB's expression_cache / subquery_cache wrapper
 // (the cache only exists for dependent subqueries).
 func ParsePlan(raw []byte) (engine.Plan, error) {
+	raw = validJSON(raw)
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var top map[string]any
@@ -387,4 +388,27 @@ func rowsOf(t map[string]any) int64 {
 		return math.MaxInt64
 	}
 	return int64(math.Round(f))
+}
+
+// validJSON rewrites the \' escape MariaDB writes for a quote inside a
+// string of its JSON plan (in attached_condition, from a literal such as
+// 'o”brien') as a plain quote, which JSON accepts. Other escapes are kept
+// whole, so \\' stays an escaped backslash followed by a quote.
+func validJSON(raw []byte) []byte {
+	if !bytes.Contains(raw, []byte(`\'`)) {
+		return raw
+	}
+	out := make([]byte, 0, len(raw))
+	for i := 0; i < len(raw); i++ {
+		if raw[i] == '\\' && i+1 < len(raw) {
+			if raw[i+1] != '\'' {
+				out = append(out, raw[i])
+			}
+			out = append(out, raw[i+1])
+			i++
+			continue
+		}
+		out = append(out, raw[i])
+	}
+	return out
 }

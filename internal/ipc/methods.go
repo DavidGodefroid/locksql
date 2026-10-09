@@ -74,6 +74,9 @@ type PlanResult struct {
 	Summary string   `json:"summary"`
 	Reasons []string `json:"reasons,omitempty"`
 	Unmask  bool     `json:"unmask,omitempty"`
+	// Values are the placeholder names the human typed in this console
+	// session: '${name}' reuses a value without a prompt.
+	Values []string `json:"values,omitempty"`
 }
 
 // RunParams runs an approved plan.

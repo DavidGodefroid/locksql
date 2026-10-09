@@ -94,9 +94,10 @@ func TestWriteCopiesRuleColumnRound4(t *testing.T) {
 		}
 	}
 	allowed := []dsql{
-		{sqlclass.Postgres, "UPDATE users SET firstname = 'x' WHERE id = 1 RETURNING id"},
-		{sqlclass.Postgres, "UPDATE users SET (firstname, id) = ('x', 2) WHERE id = 1 RETURNING id"},
-		{sqlclass.Postgres, "INSERT INTO users (id, firstname) VALUES (1, 'x') RETURNING id"},
+		// A rule column may only be set to NULL or DEFAULT (planted_test.go).
+		{sqlclass.Postgres, "UPDATE users SET firstname = NULL WHERE id = 1 RETURNING id"},
+		{sqlclass.Postgres, "UPDATE users SET (firstname, id) = (NULL, 2) WHERE id = 1 RETURNING id"},
+		{sqlclass.Postgres, "INSERT INTO users (id, firstname) VALUES (1, DEFAULT) RETURNING id"},
 		{sqlclass.Postgres, "UPDATE big SET status = 'x' WHERE email LIKE '%x' RETURNING id, email"},
 		{sqlclass.Postgres, "UPDATE small SET label = 'x' WHERE id IN (SELECT id FROM big WHERE email LIKE 'a%') RETURNING id"},
 		{sqlclass.Postgres, "DELETE FROM big WHERE email LIKE '%x' RETURNING id"},

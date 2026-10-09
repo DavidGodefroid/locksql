@@ -266,6 +266,12 @@ func testPostgresServer(t *testing.T, version string, srv Server) {
 		assertNoLeak(t, s, sqlclass.Postgres, pii.Rules{Mask: []string{"public.big.email"}}, writeLeakQueries(sqlclass.Postgres))
 	})
 
+	t.Run("placeholder and reference round trip", func(t *testing.T) {
+		id := insertObrien(t, connectPG(t, srv, "rw", config.TierWrite, 5*time.Second), "big")
+		s := connectPG(t, srv, "ro", config.TierRead, 5*time.Second)
+		assertPlaceholderRoundTrip(t, s, pii.Rules{Mask: []string{"public.big.email"}}, id)
+	})
+
 	t.Run("origins follow a rename by another session", func(t *testing.T) {
 		admin := connectPG(t, srv, "postgres", config.TierAdmin, 5*time.Second)
 		ddl := func(q string) {

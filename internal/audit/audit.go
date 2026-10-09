@@ -30,22 +30,23 @@ const (
 // Record is one audit event. It has no field able to hold a password or row
 // data: Error must already be sanitised by the caller.
 type Record struct {
-	Event      string `json:"event"`
-	Profile    string `json:"profile,omitempty"`
-	Engine     string `json:"engine,omitempty"`
-	Host       string `json:"host,omitempty"`
-	DB         string `json:"db,omitempty"`
-	DBUser     string `json:"db_user,omitempty"`
-	Class      string `json:"class,omitempty"`
-	SQL        string `json:"sql,omitempty"`
-	Verdict    string `json:"verdict,omitempty"`
-	Decision   string `json:"decision,omitempty"`
-	Error      string `json:"error,omitempty"`
-	Rows       int64  `json:"rows,omitempty"`
-	Affected   int64  `json:"affected,omitempty"`
-	DurationMS int64  `json:"duration_ms,omitempty"`
-	Truncated  bool   `json:"truncated,omitempty"`
-	Unmasked   bool   `json:"unmasked,omitempty"`
+	Event      string   `json:"event"`
+	Profile    string   `json:"profile,omitempty"`
+	Engine     string   `json:"engine,omitempty"`
+	Host       string   `json:"host,omitempty"`
+	DB         string   `json:"db,omitempty"`
+	DBUser     string   `json:"db_user,omitempty"`
+	Class      string   `json:"class,omitempty"`
+	SQL        string   `json:"sql,omitempty"`
+	Verdict    string   `json:"verdict,omitempty"`
+	Decision   string   `json:"decision,omitempty"`
+	Error      string   `json:"error,omitempty"`
+	Rows       int64    `json:"rows,omitempty"`
+	Affected   int64    `json:"affected,omitempty"`
+	DurationMS int64    `json:"duration_ms,omitempty"`
+	Truncated  bool     `json:"truncated,omitempty"`
+	Unmasked   bool     `json:"unmasked,omitempty"`
+	Warnings   []string `json:"warnings,omitempty"`
 }
 
 // line is the on-disk shape: the timestamp first, then the record.

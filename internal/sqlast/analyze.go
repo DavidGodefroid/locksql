@@ -124,7 +124,13 @@ type Analysis struct {
 	KChecks []KCheck
 	// PIIFilter is set when a PII column is compared with a constant: row
 	// estimates must not reach the agent.
-	PIIFilter    bool
+	PIIFilter bool
+	// LitFilter is set when a PII column is compared for equality with a
+	// literal the agent wrote (not a placeholder, not IS NULL), anywhere in
+	// the statement. Its results carry no cell references: the agent chose
+	// the value behind them, and the rows it selected may be linked to the
+	// literal through any join, subquery or set operation.
+	LitFilter    bool
 	Replacements []Replacement
 	// Values are the placeholders compared with PII columns.
 	Values []ValueUse
@@ -347,12 +353,13 @@ func union(a, b Prov) Prov {
 		Sources:   mergeSources(a.Sources, b.Sources),
 		Kind:      k,
 		Sensitive: a.Sensitive || b.Sensitive,
-		Modes:     append(slices.Clone(a.Modes), b.Modes...),
+		Modes:     mergeSources(a.Modes, b.Modes),
 		Lit:       a.Lit || b.Lit || a.Kind == KindConst || b.Kind == KindConst,
 	}
 }
 
-func mergeSources(a, b []Source) []Source {
+// mergeSources appends to a the elements of b it lacks (sources, modes).
+func mergeSources[T comparable](a, b []T) []T {
 	out := slices.Clone(a)
 	for _, s := range b {
 		if !slices.Contains(out, s) {
@@ -397,6 +404,7 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 	}
 	an.inRecCTE++
 	defer func() { an.inRecCTE-- }()
+	converged := false
 	for i := 0; i < 8; i++ {
 		def.selfCols = cur
 		an.dry++
@@ -413,9 +421,15 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 			next[k].prov = union(next[k].prov, cur[k].prov)
 		}
 		if sameCols(cur, next) {
+			converged = true
 			break
 		}
 		cur = next
+	}
+	if !converged {
+		// The last iteration may still miss a literal or a source a few
+		// hops away: refuse rather than mask on a partial provenance.
+		return refusef("recursive CTE %s is too deep to analyse: its columns pass values to each other through too many steps", strings.ToLower(c.Name))
 	}
 	def.selfCols = cur
 	if _, err := an.query(c.Query, parent); err != nil { // final pass, with findings
@@ -425,12 +439,32 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 	return nil
 }
 
+// sameCols reports whether a recursive CTE's provenance has converged:
+// every field that decides masking and references (kind, sensitivity,
+// literals, sources, modes) is unchanged.
 func sameCols(a, b []column) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if a[i].prov.Kind != b[i].prov.Kind || a[i].prov.Sensitive != b[i].prov.Sensitive || len(a[i].prov.Sources) != len(b[i].prov.Sources) {
+		p, q := a[i].prov, b[i].prov
+		if p.Kind != q.Kind || p.Sensitive != q.Sensitive || p.Lit != q.Lit || !sameSet(p.Sources, q.Sources) || !sameSet(p.Modes, q.Modes) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameSet reports whether a and b hold the same elements, ignoring order
+// and repeats.
+func sameSet[T comparable](a, b []T) bool {
+	for _, x := range a {
+		if !slices.Contains(b, x) {
+			return false
+		}
+	}
+	for _, x := range b {
+		if !slices.Contains(a, x) {
 			return false
 		}
 	}
@@ -1320,6 +1354,22 @@ func (an *analyzer) filter(e Expr, sc *scope, clause string, pos bool) error {
 		}
 	case *In:
 		return an.inFilter(e, sc, clause, pos)
+	case *Between:
+		// Checked as a value (a PII operand is refused there); a positive
+		// range between constants on a plain column is a key filter.
+		p, err := an.value(e, sc, clause)
+		if err != nil {
+			return err
+		}
+		if ref, ok := e.X.(*ColumnRef); ok && !e.Not && !p.Sensitive {
+			// Resolved again: a plain column, so no side effect repeats.
+			x, err := an.value(ref, sc, clause)
+			if err != nil {
+				return err
+			}
+			an.keyFilterOf(x, clause, pos, e.Lo, e.Hi)
+		}
+		return nil
 	case *Exists:
 		// The subquery is a node of its own: its filters start positive
 		// and its k-anonymity checks run on their own.
@@ -1455,6 +1505,11 @@ func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human boo
 		}
 		q, err := quoteLiteral(an.d, value)
 		if err != nil {
+			if kind == ValueRef {
+				// The agent never saw this value: the refusal must not
+				// tell it what the value holds.
+				return false, refusef("reference %s cannot be substituted", name)
+			}
 			return false, err
 		}
 		if an.dry == 0 {
@@ -1474,10 +1529,15 @@ func (an *analyzer) humanFilter(clause string) error {
 	return nil
 }
 
+// litFilter notes a PII filter on a literal the agent wrote.
+func (an *analyzer) litFilter() {
+	an.a.LitFilter = an.a.LitFilter || an.dry == 0
+}
+
 // keyFilter records a non-PII column compared with = and a literal in
 // WHERE.
 func (an *analyzer) keyFilter(op string, l, r Prov, le, re Expr, clause string, pos bool) {
-	if an.dry > 0 || clause != "where" || !pos || op != "=" {
+	if op != "=" {
 		return
 	}
 	col := l
@@ -1485,8 +1545,20 @@ func (an *analyzer) keyFilter(op string, l, r Prov, le, re Expr, clause string, 
 		col = r
 		re = le
 	}
-	if col.Kind != KindIdentity || !isConstant(re) {
+	an.keyFilterOf(col, clause, pos, re)
+}
+
+// keyFilterOf records col as a key filter when the positive WHERE atom
+// pins it to constants: = a literal, IN (literals) or BETWEEN two
+// constants all narrow it to as few rows as a unique key holds values.
+func (an *analyzer) keyFilterOf(col Prov, clause string, pos bool, consts ...Expr) {
+	if an.dry > 0 || clause != "where" || !pos || col.Kind != KindIdentity || col.Sensitive || len(consts) == 0 {
 		return
+	}
+	for _, c := range consts {
+		if !isConstant(c) {
+			return
+		}
 	}
 	for _, s := range col.Sources {
 		if !slices.Contains(an.a.KeyFilters, s) {
@@ -1498,31 +1570,64 @@ func (an *analyzer) keyFilter(op string, l, r Prov, le, re Expr, clause string, 
 // strayPlaceholders refuses a placeholder that did not end up compared
 // with a PII column: anywhere else its value could come back unmasked.
 func (an *analyzer) strayPlaceholders() error {
-	toks, err := sqlclass.Lex(an.d, an.st.SQL)
+	lits, err := placeholderLits(an.d, an.st.SQL)
 	if err != nil {
 		return refuse("the statement could not be checked for placeholders")
 	}
-	for _, t := range toks {
-		if t.Kind != sqlclass.TokString {
-			continue
-		}
-		body, ok := unquote(an.d, t.Text)
-		if !ok {
+	for _, l := range lits {
+		if !l.plain {
 			// E'...', $$...$$ and the like are never substituted: a
 			// placeholder written that way is malformed.
-			if strings.Contains(t.Text, "${") {
-				return refusef("malformed placeholder %s: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}' as a plain single-quoted string", t.Text)
-			}
-			continue
+			return refusef("malformed placeholder %s: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}' as a plain single-quoted string", l.text)
 		}
-		if _, _, isPH, _ := ParsePlaceholder(body); !isPH {
-			continue
-		}
-		if !slices.ContainsFunc(an.a.Values, func(v ValueUse) bool { return v.Span.Pos == t.Pos }) {
+		if !slices.ContainsFunc(an.a.Values, func(v ValueUse) bool { return v.Span.Pos == l.pos }) {
 			return refuse("a placeholder may only be compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")
 		}
 	}
 	return nil
+}
+
+// HasPlaceholder reports whether sql holds a placeholder: a plain string
+// literal '${...}', or "${" in any other string form. A statement that
+// cannot be lexed is reported as holding one.
+func HasPlaceholder(d sqlclass.Dialect, sql string) bool {
+	lits, err := placeholderLits(d, sql)
+	return err != nil || len(lits) > 0
+}
+
+// phLit is a string literal of a statement that is or may be a placeholder.
+type phLit struct {
+	pos  int
+	text string
+	// plain is set for a plain single-quoted string whose body has the
+	// '${...}' shape; otherwise the literal is another string form that
+	// holds "${".
+	plain bool
+}
+
+// placeholderLits lists the string literals of sql that are placeholders.
+func placeholderLits(d sqlclass.Dialect, sql string) ([]phLit, error) {
+	toks, err := sqlclass.Lex(d, sql)
+	if err != nil {
+		return nil, err
+	}
+	var out []phLit
+	for _, t := range toks {
+		if t.Kind != sqlclass.TokString {
+			continue
+		}
+		body, ok := unquote(d, t.Text)
+		if !ok {
+			if strings.Contains(t.Text, "${") {
+				out = append(out, phLit{pos: t.Pos, text: t.Text})
+			}
+			continue
+		}
+		if _, _, isPH, _ := ParsePlaceholder(body); isPH {
+			out = append(out, phLit{pos: t.Pos, text: t.Text, plain: true})
+		}
+	}
+	return out, nil
 }
 
 // quoteIdent quotes a catalog name as an identifier of the dialect.
@@ -1584,6 +1689,7 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 		if human {
 			return an.humanFilter(clause)
 		}
+		an.litFilter()
 		return an.constFilter(sc, clause, col, op+" "+an.frag(otherExpr.Span()))
 	case KindIdentity:
 		if !other.Sensitive {
@@ -1682,6 +1788,9 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 		listProv = an.mix(listProv, p)
 	}
 	if !an.env.Masking || !x.Sensitive && !listProv.Sensitive {
+		if !e.Not && !listProv.Sensitive {
+			an.keyFilterOf(x, clause, pos, e.List...)
+		}
 		return nil
 	}
 	if x.Sensitive && x.Kind != KindIdentity || listProv.Sensitive {
@@ -1706,6 +1815,7 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 	if human {
 		return an.humanFilter(clause)
 	}
+	an.litFilter()
 	for _, it := range e.List {
 		items = append(items, an.frag(it.Span()))
 	}
@@ -1718,6 +1828,29 @@ func unquote(d sqlclass.Dialect, text string) (string, bool) {
 		return "", false
 	}
 	return strings.ReplaceAll(text[1:len(text)-1], "''", "'"), true
+}
+
+// StringValue returns the value of a string-literal token ('...', "..." in
+// MySQL, E'...', N'...', $tag$...$tag$), or false for any other text. Unlike
+// the substitution path it does not refuse backslashes: it serves warnings.
+func StringValue(d sqlclass.Dialect, text string) (string, bool) {
+	if len(text) >= 2 && text[0] == '$' {
+		if i := strings.Index(text[1:], "$"); i >= 0 {
+			tag := text[:i+2]
+			if len(text) >= 2*len(tag) && strings.HasSuffix(text, tag) {
+				return text[len(tag) : len(text)-len(tag)], true
+			}
+		}
+		return "", false
+	}
+	if len(text) >= 3 && strings.ContainsRune("eEnN", rune(text[0])) && text[1] == '\'' {
+		text = text[1:]
+	}
+	if len(text) < 2 || text[len(text)-1] != text[0] || text[0] != '\'' && !(text[0] == '"' && d == sqlclass.MySQL) {
+		return "", false
+	}
+	q := string(text[0])
+	return strings.ReplaceAll(text[1:len(text)-1], q+q, q), true
 }
 
 // quoteLiteral quotes a value as a string literal of the dialect. Values

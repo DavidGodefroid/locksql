@@ -162,4 +162,63 @@ func TestKeyFilters(t *testing.T) {
 	if len(a.KeyFilters) != 1 || a.KeyFilters[0] != (Source{DB: "app", Table: "users", Column: "id"}) {
 		t.Errorf("KeyFilters = %+v", a.KeyFilters)
 	}
+	// IN (literals) and BETWEEN constants pin a row as well as =.
+	env := valueEnv(map[string]string{"r1.1.2": "a@b.example"})
+	for _, w := range []string{"id IN (57)", "id IN (57, 58)", "id BETWEEN 57 AND 57", "(id BETWEEN 1 AND 2)"} {
+		a, err := analyzeWith(t, "SELECT id FROM users WHERE "+w+" AND email = '${r1.1.2}' LIMIT 1", env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(a.KeyFilters) != 1 || a.KeyFilters[0].Column != "id" {
+			t.Errorf("%s: KeyFilters = %+v", w, a.KeyFilters)
+		}
+	}
+	// Negated, disjunctive or non-constant: not a key filter.
+	for _, w := range []string{"id NOT IN (57)", "NOT id IN (57)", "id NOT BETWEEN 1 AND 2", "(id IN (57) OR id = 3)", "id BETWEEN id AND 57", "id IN (id)"} {
+		a, err := analyzeWith(t, "SELECT id FROM users WHERE "+w+" AND email = '${r1.1.2}' LIMIT 1", env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(a.KeyFilters) != 0 {
+			t.Errorf("%s: KeyFilters = %+v", w, a.KeyFilters)
+		}
+	}
+}
+
+func TestHasPlaceholder(t *testing.T) {
+	for _, c := range []struct {
+		d    sqlclass.Dialect
+		sql  string
+		want bool
+	}{
+		{sqlclass.MySQL, "UPDATE users SET email = '${email}' WHERE id = 7", true},
+		{sqlclass.MySQL, "DELETE FROM users WHERE email = '${r1.1.2}'", true},
+		{sqlclass.MySQL, "UPDATE users SET email = '${bad name}'", true},
+		{sqlclass.MySQL, `INSERT INTO users (email) VALUES ("${email}")`, true},
+		{sqlclass.Postgres, "INSERT INTO users (email) VALUES (E'${email}')", true},
+		{sqlclass.Postgres, "INSERT INTO users (email) VALUES ($$${email}$$)", true},
+		{sqlclass.MySQL, "UPDATE users SET note = 'cost: ${x}' WHERE id = 1", false},
+		{sqlclass.MySQL, "UPDATE `${email}` SET note = 'x'", false},
+		// Comments do not lex: reported as holding one (fail closed).
+		{sqlclass.MySQL, "UPDATE users SET note = 'x' -- c", true},
+	} {
+		if got := HasPlaceholder(c.d, c.sql); got != c.want {
+			t.Errorf("%s: got %v", c.sql, got)
+		}
+	}
+}
+
+// A referenced value that cannot be substituted is refused without a word
+// about the value: the agent never saw it. A typed value keeps the reason.
+func TestUnsubstitutableValueRefusal(t *testing.T) {
+	for _, v := range []string{`a\b@example.com`, "a\x00b"} {
+		_, err := analyzeWith(t, "SELECT id FROM users WHERE email = '${r1.1.2}' LIMIT 1", valueEnv(map[string]string{"r1.1.2": v}))
+		if err == nil || err.Error() != "reference r1.1.2 cannot be substituted" {
+			t.Errorf("%q: err = %v", v, err)
+		}
+	}
+	_, err := analyzeWith(t, "SELECT id FROM users WHERE email = '${email}' LIMIT 1", valueEnv(map[string]string{"email": `a\b`}))
+	if err == nil || !strings.Contains(err.Error(), "backslash") {
+		t.Errorf("typed: err = %v", err)
+	}
 }

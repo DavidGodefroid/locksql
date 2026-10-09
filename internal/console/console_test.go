@@ -37,8 +37,10 @@ type fakeSession struct {
 	extra    []string // ExtraPrivileges warnings
 	closed   bool
 	// count answers the k-anonymity row counts (nil: the default result).
-	count *engine.Result
-	cols  []engine.ColumnInfo // appended to the catalog Columns answers
+	count   *engine.Result
+	indexes []engine.IndexDesc
+	cols    []engine.ColumnInfo // appended to the catalog Columns answers
+	colsErr error               // answers the catalog Columns calls
 }
 
 func (f *fakeSession) ServerVersion() string { return "11.4.0-MariaDB" }
@@ -58,9 +60,12 @@ func (f *fakeSession) Describe(_ context.Context, db, table string) (engine.Tabl
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.catalog++
-	return engine.TableInfo{DB: db, Table: table, Columns: []engine.ColumnDesc{{Name: "id", Type: "int"}}, EstRows: 3}, nil
+	return engine.TableInfo{DB: db, Table: table, Columns: []engine.ColumnDesc{{Name: "id", Type: "int"}}, Indexes: f.indexes, EstRows: 3}, nil
 }
 func (f *fakeSession) Columns(_ context.Context, db string) ([]engine.ColumnInfo, error) {
+	if f.colsErr != nil {
+		return nil, f.colsErr
+	}
 	var out []engine.ColumnInfo
 	for _, c := range []struct{ t, c string }{
 		{"users", "id"}, {"users", "email"}, {"users", "note"}, {"users", "status"},
@@ -121,6 +126,8 @@ type fakeIO struct {
 	blocked chan struct{}
 	// onAsk, when set, runs before each scripted answer (e.g. to let time pass).
 	onAsk func()
+	// secrets answer AskSecret, in order; none left fails the prompt.
+	secrets []string
 }
 
 func (f *fakeIO) Println(s string) {
@@ -156,8 +163,16 @@ func (f *fakeIO) Ask(ctx context.Context, prompt string, _ time.Duration) (strin
 	return a, true
 }
 
-func (f *fakeIO) AskSecret(context.Context, string) ([]byte, error) {
-	return []byte("not-used"), nil
+func (f *fakeIO) AskSecret(_ context.Context, prompt string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prompts = append(f.prompts, prompt)
+	if len(f.secrets) == 0 {
+		return nil, errors.New("no answer")
+	}
+	s := f.secrets[0]
+	f.secrets = f.secrets[1:]
+	return []byte(s), nil
 }
 
 func (f *fakeIO) promptCount() int {
