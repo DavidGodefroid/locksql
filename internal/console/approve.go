@@ -10,31 +10,80 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
+	"github.com/DavidGodefroid/locksql/internal/ui"
 )
 
-// ANSI colours for the approval screen.
+// ANSI colours of the console, which always runs in a terminal.
 const (
-	red   = "\x1b[1;31m"
-	green = "\x1b[32m"
-	bold  = "\x1b[1m"
-	reset = "\x1b[0m"
+	red   = ui.Red
+	green = ui.Green
+	bold  = ui.Bold
+	reset = ui.Reset
 )
 
-// screen prints the approval screen of a plan (spec §6).
+// paint styles console lines.
+var paint = ui.Painter{On: true}
+
+// screen prints the approval screen of a plan (spec §6): a frame, red on
+// a production profile, that the approval prompt closes (see frameEnd).
 func (s *Server) screen(ctx context.Context, pl *plan) {
 	db := pl.db
 	if db == "" {
 		db = "(default)"
 	}
+	var lines []string
+	add := func(l string) { lines = append(lines, l) }
+	s.screenBody(ctx, pl, add)
+	if pl.an != nil {
+		s.readDetails(pl, add)
+	}
+	if pl.unmask {
+		add(red + "PII: UNMASKED" + reset)
+	} else {
+		add(fmt.Sprintf("PII: masked (%d column rules; detectors: %s)",
+			len(s.rules.Mask), strings.Join(s.profile.Detectors, ", ")))
+	}
+	frame := s.frameColour()
+	sep := paint.Dim(" · ")
 	s.println("")
-	s.println(fmt.Sprintf("%s━━ %s ━━ %s / %s ━━ user %s ━━ tier %s%s",
-		bold, strings.ToUpper(s.profile.Name), safeText(s.host(), false), safeText(db, false), safeText(s.cfg.DBUser, false), s.profile.Tier, reset))
+	head := paint.Paint(frame, "╭─ ") + paint.Paint(bold+frame, strings.ToUpper(s.profile.Name)) + sep +
+		safeText(s.host(), false) + " / " + safeText(db, false)
+	if s.cfg.DBUser != "" {
+		head += sep + "user " + safeText(s.cfg.DBUser, false)
+	}
+	s.println(head + sep + "tier " + s.profile.Tier.String() + " " + paint.Paint(frame, "─────"))
+	for _, l := range lines {
+		if l == "" {
+			s.println(paint.Paint(frame, "│"))
+			continue
+		}
+		s.println(paint.Paint(frame, "│ ") + l)
+	}
+}
+
+// frameColour is the colour of the approval frame.
+func (s *Server) frameColour() string {
+	if s.profile.Production {
+		return ui.Red
+	}
+	return ui.Violet
+}
+
+// frameEnd closes the approval frame in front of text (the prompt).
+func (s *Server) frameEnd(text string) string {
+	return paint.Paint(s.frameColour(), "╰─ ") + text
+}
+
+// screenBody is the requester, the statement and the verdict.
+func (s *Server) screenBody(ctx context.Context, pl *plan, add func(string)) {
 	if who := peerText(ctx); who != "" {
-		s.println("requested by " + safeText(who, false))
+		add(paint.Dim("requested by " + safeText(who, false)))
 	}
+	add("")
 	for _, line := range strings.Split(s.highlight(pl), "\n") {
-		s.println(line)
+		add("  " + line)
 	}
+	add("")
 	class := strings.ToUpper(pl.st.Class.String())
 	if pl.st.Class != sqlclass.Read {
 		class = red + class + reset
@@ -43,34 +92,25 @@ func (s *Server) screen(ctx context.Context, pl *plan) {
 	if verdict != "OK" {
 		verdict = red + verdict + reset
 	}
-	s.println(fmt.Sprintf("class %s · EXPLAIN: %s · verdict %s", class, safeText(pl.summary, false), verdict))
+	add(fmt.Sprintf("class %s · EXPLAIN: %s · verdict %s", class, safeText(pl.summary, false), verdict))
 	for _, r := range pl.reasons {
-		s.println("  - " + safeText(r, false))
-	}
-	if pl.an != nil {
-		s.readDetails(pl)
-	}
-	if pl.unmask {
-		s.println(red + "PII: UNMASKED" + reset)
-	} else {
-		s.println(fmt.Sprintf("PII: masked (%d column rules; detectors: %s)",
-			len(s.rules.Mask), strings.Join(s.profile.Detectors, ", ")))
+		add("  - " + safeText(r, false))
 	}
 }
 
 // readDetails explains a read plan to the human: what it reads, which PII
 // columns it touches and where, how each output is masked, the k-anonymity
 // counts that run first and the token values substituted.
-func (s *Server) readDetails(pl *plan) {
+func (s *Server) readDetails(pl *plan, add func(string)) {
 	an := pl.an
 	if pl.isExplain {
-		s.println(bold + "EXPLAIN only: the statement does not run; the plan is returned" + reset)
+		add(bold + "EXPLAIN only: the statement does not run; the plan is returned" + reset)
 	}
 	if len(an.Relations) > 0 {
-		s.println("reads: " + safeText(strings.Join(an.Relations, ", "), false))
+		add("reads: " + safeText(strings.Join(an.Relations, ", "), false))
 	}
 	if pl.st.Limit >= 0 {
-		s.println(fmt.Sprintf("returns at most %d rows", min(pl.st.Limit, s.profile.Limits.MaxRows)))
+		add(fmt.Sprintf("returns at most %d rows", min(pl.st.Limit, s.profile.Limits.MaxRows)))
 	}
 	if len(an.Uses) > 0 {
 		var order []string
@@ -86,7 +126,7 @@ func (s *Server) readDetails(pl *plan) {
 		for _, k := range order {
 			parts = append(parts, k+" ("+strings.Join(where[k], ", ")+")")
 		}
-		s.println(red + "PII columns touched: " + safeText(strings.Join(parts, "; "), false) + reset)
+		add(red + "PII columns touched: " + safeText(strings.Join(parts, "; "), false) + reset)
 	}
 	if !pl.unmask {
 		var masks []string
@@ -101,18 +141,18 @@ func (s *Server) readDetails(pl *plan) {
 			masks = append(masks, name+" → "+o.Mask)
 		}
 		if len(masks) > 0 {
-			s.println("masked outputs: " + safeText(strings.Join(masks, ", "), false))
+			add("masked outputs: " + safeText(strings.Join(masks, ", "), false))
 		}
 		if k := s.profile.Limits.KAnonymity; k > 1 {
 			for _, c := range an.KChecks {
-				s.println(fmt.Sprintf("k-anonymity check (k=%d) runs first: %s", k, safeText(c.SQL, false)))
+				add(fmt.Sprintf("k-anonymity check (k=%d) runs first: %s", k, safeText(c.SQL, false)))
 			}
 		}
 		if n := len(an.Replacements); n > 0 {
-			s.println(fmt.Sprintf("%d token(s) stand for values from earlier results: the console substitutes them in the statement that runs", n))
+			add(fmt.Sprintf("%d token(s) stand for values from earlier results: the console substitutes them in the statement that runs", n))
 		}
 		if an.PIIFilter {
-			s.println("row estimates are hidden from the agent: the statement filters on a PII column")
+			add("row estimates are hidden from the agent: the statement filters on a PII column")
 		}
 	}
 }

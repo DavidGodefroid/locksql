@@ -179,7 +179,7 @@ func (r *rpc) call(method string, params, out any) *ipc.RPCError {
 	return resp.Error
 }
 
-var socketLine = regexp.MustCompile(`socket (\S+\.sock)`)
+var socketLine = regexp.MustCompile(`socket\s+(?:\x1b\[[0-9;]*m)*(\S+\.sock)`)
 
 func TestConsoleInPTY(t *testing.T) {
 	srv := startMySQL(t, mysqlTarget{engine.FlavorMariaDB, "11.4"})

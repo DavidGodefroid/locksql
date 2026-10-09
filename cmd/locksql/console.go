@@ -32,6 +32,8 @@ func runConsole(e env, args []string) int {
 		fmt.Fprintln(e.stderr, "locksql console: must run in a terminal: it asks the human for credentials and approvals")
 		return exitUsage
 	}
+	fmt.Fprint(e.stdout, e.paint.Banner(version))
+	fmt.Fprintln(e.stdout)
 	term := console.NewTerminal(os.Stdin, e.stdout)
 	name := *profile
 	if name == "" {

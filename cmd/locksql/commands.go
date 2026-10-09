@@ -16,6 +16,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/sysconf"
+	"github.com/DavidGodefroid/locksql/internal/ui"
 )
 
 // env is what a command reads and writes; tests replace it.
@@ -31,6 +32,8 @@ type env struct {
 	sys func() (*sysconf.Config, error)
 	// euid is the effective user id; nil means os.Geteuid.
 	euid func() int
+	// paint colours human-facing output on stdout; the zero value is plain.
+	paint ui.Painter
 }
 
 // usageError is a usage or configuration error (exit 3).
