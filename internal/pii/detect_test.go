@@ -11,7 +11,7 @@ func TestPropose(t *testing.T) {
 	var cols []engine.ColumnInfo
 	for _, c := range [][2]string{
 		{"email", "varchar(255)"}, {"prenom", "varchar(50)"}, {"voornaam", "varchar(50)"},
-		{"telefoon", "varchar(20)"}, {"street_name", "varchar(100)"}, {"birth_date", "date"},
+		{"telefoon", "varchar(20)"}, {"street_name", "varchar(100)"},
 		{"template_name", "varchar(50)"}, {"mail_id", "bigint"}, {"status", "varchar(10)"},
 		{"ip_address", "inet"},
 	} {
@@ -19,7 +19,7 @@ func TestPropose(t *testing.T) {
 	}
 	got := Propose(cols)
 	want := []string{
-		"app.users.birth_date", "app.users.email", "app.users.ip_address", "app.users.prenom",
+		"app.users.email", "app.users.ip_address", "app.users.prenom",
 		"app.users.street_name", "app.users.telefoon", "app.users.voornaam",
 	}
 	if !slices.Equal(got, want) {
@@ -30,8 +30,8 @@ func TestPropose(t *testing.T) {
 func TestProposeMore(t *testing.T) {
 	sensitive := []string{
 		"EmailAddress", "recipientName", "customer_name", "nom_client", "last_name", "lastname", "achternaam",
-		"Nachname", "apellido", "mail_address", "courriel", "gsm", "mobile_number", "zip_code", "postcode",
-		"city", "iban", "niss", "national_id", "rijksregisternummer", "dob", "date_naissance", "geboortedatum",
+		"Nachname", "apellido", "mail_address", "courriel", "gsm", "mobile_number",
+		"city", "iban", "niss", "national_id", "rijksregisternummer",
 		"client_ip", "card_number", "password_hash",
 		"phone_num", "tel_num", "card_num", "account_num", "card_no", "account_nr", "mobile_num",
 	}
@@ -59,5 +59,42 @@ func TestProposeMore(t *testing.T) {
 	// Names that would break the pattern syntax become wildcards.
 	if got := Propose([]engine.ColumnInfo{{DB: "my.db", Table: "t", Column: "email", Type: "text"}}); !slices.Equal(got, []string{"*.t.email"}) {
 		t.Errorf("Propose(dotted) = %v", got)
+	}
+}
+
+func TestProposeQuasi(t *testing.T) {
+	quasi := []string{"birth_date", "dob", "date_naissance", "geboortedatum", "geburtsdatum", "zip_code",
+		"postcode", "postal_code", "code_postal", "plz", "gender", "sex", "sexe", "geslacht", "geschlecht"}
+	neutral := []string{"id", "email", "birth_date_verified", "zip_code_id", "status"}
+	var cols []engine.ColumnInfo
+	for _, c := range append(slices.Clone(quasi), neutral...) {
+		cols = append(cols, engine.ColumnInfo{DB: "app", Table: "t", Column: c, Type: "varchar"})
+	}
+	got := ProposeQuasi(cols)
+	for _, c := range quasi {
+		if !slices.Contains(got, "app.t."+c) {
+			t.Errorf("%s not proposed as a quasi-identifier", c)
+		}
+	}
+	for _, c := range neutral {
+		if slices.Contains(got, "app.t."+c) {
+			t.Errorf("%s proposed as a quasi-identifier", c)
+		}
+	}
+}
+
+func TestQuasiNeverAlsoPII(t *testing.T) {
+	var cols []engine.ColumnInfo
+	for _, c := range []string{"birth_name", "birth_date", "email", "zip_code", "customer_name"} {
+		cols = append(cols, engine.ColumnInfo{DB: "app", Table: "t", Column: c, Type: "varchar"})
+	}
+	pii, quasi := Propose(cols), ProposeQuasi(cols)
+	for _, p := range quasi {
+		if slices.Contains(pii, p) {
+			t.Errorf("%s is in both lists", p)
+		}
+	}
+	if !slices.Contains(pii, "app.t.birth_name") {
+		t.Error("birth_name (a name) not proposed as PII")
 	}
 }

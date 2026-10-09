@@ -564,12 +564,21 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 		}
 		proposals = append(proposals, pat)
 	}
-	if !firstRun && len(proposals) == 0 {
+	var quasi []string
+	for _, pat := range pii.ProposeQuasi(cols) {
+		seg := strings.SplitN(pat, ".", 3)
+		if len(seg) == 3 && rules.Covered(seg[0], seg[1], seg[2]) {
+			continue
+		}
+		quasi = append(quasi, pat)
+	}
+	if !firstRun && len(proposals) == 0 && len(quasi) == 0 {
 		return ap, nil
 	}
-	if len(proposals) == 0 {
+	if len(proposals) == 0 && len(quasi) == 0 {
 		st.io.Println(paint.OK("PII: no personal-data columns found in the schema"))
-	} else {
+	}
+	if len(proposals) > 0 {
 		if firstRun {
 			st.io.Println(bold + "PII: these columns look like personal data and would be masked:" + reset)
 		} else {
@@ -611,6 +620,25 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 			st.io.Println("PII: no rules added; add them later with locksql pii add")
 		}
 	}
+	allowed := false
+	if len(quasi) > 0 {
+		st.io.Println(bold + "PII scan: these columns can identify a person together (quasi-identifiers); they are not masked unless you say so:" + reset)
+		for _, pat := range quasi {
+			a, ok := st.io.Ask(ctx, "Mask "+safeText(pat, false)+"? ("+pii.QuasiLimit+") [y/N] ", ApprovalTimeout)
+			if ctx.Err() != nil {
+				return ap, ctx.Err()
+			}
+			if !ok {
+				continue // asked again at the next start
+			}
+			if strings.TrimSpace(strings.ToLower(a)) == "y" {
+				_ = rules.Add(pat)
+			} else {
+				_ = rules.AddAllow(pat)
+				allowed = true
+			}
+		}
+	}
 	next := config.NewPolicy(ap.Profile, rules.Mask, rules.Allow).WithModes(rules.Modes)
 	switch {
 	case firstRun:
@@ -633,6 +661,13 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 				}
 			}
 		}
+		for _, pat := range rules.Allow {
+			if !slices.Contains(ap.PIIAllow, pat) {
+				if err := onDisk.AddAllow(pat); err != nil {
+					return ap, err
+				}
+			}
+		}
 		if err := pii.SaveRulesFile(rulesPath, onDisk); err != nil {
 			return ap, err
 		}
@@ -642,7 +677,11 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 		if err := config.SaveApproved(stateDir, key, next); err != nil {
 			return ap, err
 		}
-		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "tightened"})
+		decision := "tightened"
+		if allowed {
+			decision = "approved" // the human declined to mask a quasi-identifier, in the console
+		}
+		st.audit(audit.Record{Event: audit.EventPolicy, Decision: decision})
 		st.io.Println(paint.OK(fmt.Sprintf("PII: %d mask rules in %s", len(next.PIIMask), rulesPath)))
 	}
 	return next, nil

@@ -93,7 +93,7 @@ func LoadRulesFile(path string) (Rules, error) {
 		}
 	}
 	for _, e := range f.Allow {
-		if err := r.addAllow(e.Column); err != nil {
+		if err := r.AddAllow(e.Column); err != nil {
 			return Rules{}, fmt.Errorf("pii: %s: %w", name, err)
 		}
 	}
@@ -229,7 +229,8 @@ func (r Rules) combine(match func(string) bool) string {
 	return mode
 }
 
-func (r *Rules) addAllow(pattern string) error {
+// AddAllow adds an allow pattern after validating it. Adding an existing pattern is a no-op.
+func (r *Rules) AddAllow(pattern string) error {
 	p, err := parsePattern(pattern)
 	if err != nil {
 		return err
