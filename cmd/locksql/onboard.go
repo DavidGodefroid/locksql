@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
@@ -179,16 +178,4 @@ func runOnboard(e env) int {
 	}
 	fmt.Fprint(e.stdout, "\n"+separatedSteps(e))
 	return code
-}
-
-// tildePath shows p with the home directory as ~.
-func tildePath(p string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return p
-	}
-	if r, err := filepath.Rel(home, p); err == nil && r != ".." && !strings.HasPrefix(r, ".."+string(filepath.Separator)) {
-		return "~/" + filepath.ToSlash(r)
-	}
-	return p
 }
