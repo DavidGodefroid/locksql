@@ -214,7 +214,8 @@ func (s *Server) failedPlan(id int64, what string, err error, pl *plan) ipc.Resp
 }
 
 // checkDB resolves the database of a request: the given one, or the
-// profile's. A named database must be one the session listed.
+// profile's. A named database must be one the console serves: the
+// profile's alone when it names one, else one the session listed.
 func (s *Server) checkDB(id int64, db string) (string, *ipc.Response) {
 	if db == "" {
 		db = s.profile.Database
@@ -222,7 +223,11 @@ func (s *Server) checkDB(id int64, db string) (string, *ipc.Response) {
 	if db == "" || slices.Contains(s.cfg.Databases, db) {
 		return db, nil
 	}
-	r := errResp(id, ipc.CodeRefused, fmt.Sprintf("unknown database %q; databases: %s", db, strings.Join(s.cfg.Databases, ", ")))
+	msg := fmt.Sprintf("unknown database %q; databases: %s", db, strings.Join(s.cfg.Databases, ", "))
+	if s.profile.Database != "" {
+		msg = fmt.Sprintf("database %q is not served: this profile serves %q only (set database = \"\" to serve every database the account can see)", db, s.profile.Database)
+	}
+	r := errResp(id, ipc.CodeRefused, msg)
 	return "", &r
 }
 

@@ -405,7 +405,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `host`, `port` | required host; port 3306 / 5432 | a host starting with `/` is a Unix socket (MariaDB/MySQL) |
 | `path` | required for sqlite | relative to the project root; the file is never created |
 | `user` | asked at start | |
-| `database` | none | the default database for queries |
+| `database` | none | the only database served (and scanned for PII); empty: every database the account can see, chosen per query with `--db` |
 | `credentials` | `ask` | `keychain` offers to save the secret after the first successful login; `locksql forget --profile P` removes it |
 | `credentials_ttl` | none | a duration of at least `1m` (`"20m"`, `"1h"`): the connection is closed and the secret asked again once it is that old |
 | `tier` | `read` | highest statement class allowed |

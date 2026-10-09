@@ -254,6 +254,7 @@ func Run(ctx context.Context, o Options) error {
 		closeSess()
 		return fmt.Errorf("console: listing databases: %s", secrets.Sanitize(err))
 	}
+	dbs = servedDatabases(p.Database, dbs)
 	o.IO.Println(paint.OK("databases: " + safeText(strings.Join(dbs, ", "), false)))
 	health := &ipc.Health{Separated: iso.sys != nil, Display: iso.display.Kind, Privileges: nonNil(st.privWarns),
 		ReadOnly: p.Tier == config.TierRead}
@@ -580,12 +581,8 @@ func (st *starter) privileges(ctx context.Context, sess engine.Session) error {
 func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []string, rulesPath, stateDir, key string, ap config.Policy) (config.Policy, error) {
 	_, statErr := os.Stat(rulesPath)
 	firstRun := errors.Is(statErr, fs.ErrNotExist)
-	scan := dbs
-	if st.profile.Database != "" {
-		scan = []string{st.profile.Database}
-	}
 	var cols []engine.ColumnInfo
-	for _, db := range scan {
+	for _, db := range servedDatabases(st.profile.Database, dbs) {
 		c, err := sess.Columns(ctx, db)
 		if err != nil {
 			st.io.Println("PII scan of " + safeText(db, false) + " skipped: " + safeText(secrets.Sanitize(err), false))
@@ -761,4 +758,14 @@ func readyLines(socket, root string, showResults bool) []string {
 		out = append(out, "  "+paint.Dim("results  ")+paint.Yellow("shown in clear in this console (--show-results)"))
 	}
 	return append(out, "  "+paint.Dim("commands ")+paint.Accent(":review")+"  "+paint.Accent(":status")+"  "+paint.Accent(":quit")+paint.Dim(" · Ctrl-C ends the session"))
+}
+
+// servedDatabases is what the console serves: the profile's database alone
+// when it names one (the PII scan covers that database only), else every
+// database the account lists.
+func servedDatabases(profileDB string, listed []string) []string {
+	if profileDB != "" {
+		return []string{profileDB}
+	}
+	return listed
 }

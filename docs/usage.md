@@ -456,7 +456,8 @@ The console needs an interactive terminal. At start it:
    (removing that allow later is a tightening). Any other answer, or none
    within the timeout, writes nothing, and the column is asked again at the
    next start. Proposed personal-data rules use mode `redact`.
-7. Lists the databases and prints `Listening…`.
+7. Lists the databases it serves (the profile's `database` alone when it names
+   one, else every database the account can see) and prints `Listening…`.
 
 Between requests you can type:
 
@@ -573,7 +574,8 @@ locksql doctor   [--profile P]
 
 - `--profile` may be left out when exactly one profile is configured. Without
   it and with several profiles, `status` reports every profile.
-- `--db` defaults to the profile's `database`.
+- `--db` defaults to the profile's `database`. A profile that names one
+  serves that database only: another `--db` is refused.
 - `--json` gives machine-readable output on every client command. A failure
   prints `{"error": {"kind": ..., "message": ...}}`.
 - Exit codes: 0 ok · 1 refused, denied or failed · 2 no console running (the

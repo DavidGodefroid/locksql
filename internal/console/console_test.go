@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -751,6 +752,68 @@ func TestHelloStatusLogout(t *testing.T) {
 	h.ok(t, ipc.MethodLogout, nil, nil)
 	if reason, ended := h.s.Ended(); !ended || reason != "logout" {
 		t.Fatalf("logout did not end the session: %q %v", reason, ended)
+	}
+}
+
+// A profile that sets database serves that database only: the PII scan
+// covers it alone, so another database the account can see would be read
+// without its rules.
+func TestProfileDatabaseServedOnly(t *testing.T) {
+	p := uatProfile()
+	p.Database = "app"
+	h := newHarness(t, p)
+	const want = `database "other" is not served: this profile serves "app" only (set database = "" to serve every database the account can see)`
+	for _, c := range []struct {
+		method string
+		params any
+	}{
+		{ipc.MethodCatalogList, ipc.TablesParams{DB: "other"}},
+		{ipc.MethodCatalogDescribe, ipc.DescribeParams{DB: "other", Table: "users"}},
+		{ipc.MethodQueryPlan, ipc.PlanParams{DB: "other", SQL: "SELECT id FROM users LIMIT 5"}},
+	} {
+		resp := h.call(t, c.method, c.params)
+		wantCode(t, resp, ipc.CodeRefused)
+		if resp.Error.Message != want {
+			t.Errorf("%s: %q", c.method, resp.Error.Message)
+		}
+	}
+	// A qualified name does not reach the other database either.
+	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT email FROM other.users LIMIT 5"})
+	wantCode(t, resp, ipc.CodeRefused)
+	if !strings.Contains(resp.Error.Message, "unknown table other.users") {
+		t.Errorf("qualified name: %q", resp.Error.Message)
+	}
+	if n := len(h.sess.explains) + h.sess.catalog; n != 0 {
+		t.Errorf("session reached %d times, want 0", n)
+	}
+	var st ipc.StatusResult
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if !slices.Equal(st.Databases, []string{"app"}) {
+		t.Errorf("status databases = %v, want [app]", st.Databases)
+	}
+	h.ok(t, ipc.MethodCatalogList, ipc.TablesParams{DB: "app"}, nil)
+	h.ok(t, ipc.MethodCatalogList, ipc.TablesParams{}, nil)
+
+	// Without a profile database, every listed database is served.
+	h = newHarness(t, uatProfile())
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if !slices.Equal(st.Databases, []string{"app", "other"}) {
+		t.Errorf("status databases = %v, want [app other]", st.Databases)
+	}
+	for _, db := range []string{"app", "other"} {
+		h.ok(t, ipc.MethodCatalogList, ipc.TablesParams{DB: db}, nil)
+		h.ok(t, ipc.MethodCatalogDescribe, ipc.DescribeParams{DB: db, Table: "users"}, nil)
+		h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: db, SQL: "SELECT id FROM users LIMIT 5"}, nil)
+	}
+}
+
+func TestServedDatabases(t *testing.T) {
+	listed := []string{"app", "other"}
+	if got := servedDatabases("app", listed); !slices.Equal(got, []string{"app"}) {
+		t.Errorf("profile database: %v", got)
+	}
+	if got := servedDatabases("", listed); !slices.Equal(got, listed) {
+		t.Errorf("no profile database: %v", got)
 	}
 }
 

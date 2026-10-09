@@ -196,6 +196,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	cfg.Databases = servedDatabases(cfg.Policy.Profile.Database, cfg.Databases)
 	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, probes: map[int]map[string]bool{}, keys: map[string]bool{}, quantum: cfg.Quantum}
 	if err := s.apply(cfg.Policy); err != nil {
 		return nil, err
