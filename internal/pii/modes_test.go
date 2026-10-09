@@ -121,13 +121,14 @@ func TestMaskOutputsReferences(t *testing.T) {
 		Columns: []engine.ResultColumn{{Label: "id"}, {Label: "email"}, {Label: "name"}},
 		Rows:    [][]any{{int64(1), "alice@example.com", "Alice"}, {int64(2), "alice@example.com", nil}},
 	}
-	outs := []sqlast.Output{{Label: "ID"}, {Label: "EMAIL", Mask: ModeRedact}, {Label: "NAME", Mask: ModePartial}}
+	emailProv := sqlast.Prov{Kind: sqlast.KindIdentity, Sources: []sqlast.Source{{DB: "app", Table: "users", Column: "email"}}}
+	outs := []sqlast.Output{{Label: "ID"}, {Label: "EMAIL", Mask: ModeRedact, Prov: emailProv}, {Label: "NAME", Mask: ModePartial}}
 	var got []string
 	cell := func(row, col int, v any) string {
 		got = append(got, fmt.Sprintf("%d.%d=%v", row, col, v))
 		return fmt.Sprintf("r7.%d.%d", row+1, col+1)
 	}
-	if err := MaskOutputs(&res, outs, Rules{}, nil, cell, true); err != nil {
+	if err := MaskOutputs(&res, outs, Rules{Mask: []string{"app.users.email"}}, nil, cell, true); err != nil {
 		t.Fatal(err)
 	}
 	if res.Rows[0][1] != "<redacted:r7.1.2>" || res.Rows[1][1] != "<redacted:r7.2.2>" {
@@ -154,9 +155,9 @@ func TestMaskOutputsNoReferenceForLiteralOrOrigin(t *testing.T) {
 		Rows: [][]any{{"alice@example.com", "bob@example.com", "carol@example.com"}, {"john@x.com", "john@x.com", "dave@example.com"}},
 	}
 	outs := []sqlast.Output{
-		{Label: "EMAIL", Mask: ModeRedact, Prov: sqlast.Prov{Kind: sqlast.KindIdentity, Lit: true}},
+		{Label: "EMAIL", Mask: ModeRedact, Prov: sqlast.Prov{Kind: sqlast.KindIdentity, Lit: true, Sources: []sqlast.Source{{DB: "app", Table: "users", Column: "email"}}}},
 		{Label: "X"},
-		{Label: "E", Mask: ModeRedact, Prov: sqlast.Prov{Kind: sqlast.KindIdentity}},
+		{Label: "E", Mask: ModeRedact, Prov: sqlast.Prov{Kind: sqlast.KindIdentity, Sources: []sqlast.Source{{DB: "app", Table: "users", Column: "email"}}}},
 	}
 	r := Rules{Mask: []string{"app.users.email"}}
 	cell := func(row, col int, v any) string { return fmt.Sprintf("r1.%d.%d", row+1, col+1) }
@@ -169,6 +170,45 @@ func TestMaskOutputsNoReferenceForLiteralOrOrigin(t *testing.T) {
 		}
 		if row[2] != RedactedRef(fmt.Sprintf("r1.%d.3", ri+1)) {
 			t.Errorf("row %d: plain column lost its reference: %v", ri, row)
+		}
+	}
+}
+
+// A reference goes only to a plain column every source of which is under a
+// mask rule: a UNION arm of an unmasked column, or an aggregate, could put a
+// value the agent knows behind it.
+func TestMaskOutputsReferenceNeedsMaskedIdentity(t *testing.T) {
+	email := sqlast.Source{DB: "app", Table: "users", Column: "email"}
+	note := sqlast.Source{DB: "app", Table: "users", Column: "note"}
+	id := sqlast.Source{DB: "app", Table: "users", Column: "id"}
+	vEmail := sqlast.Source{DB: "app", Table: "v", Column: "email", View: true}
+	vOther := sqlast.Source{DB: "app", Table: "v", Column: "x", View: true}
+	r := Rules{Mask: []string{"app.users.email", "*.*.email"}}
+	for _, c := range []struct {
+		name string
+		prov sqlast.Prov
+		ref  bool
+	}{
+		{"plain column", sqlast.Prov{Kind: sqlast.KindIdentity, Sources: []sqlast.Source{email}}, true},
+		{"view column under a name rule", sqlast.Prov{Kind: sqlast.KindIdentity, Sources: []sqlast.Source{vEmail}}, true},
+		{"union with note", sqlast.Prov{Kind: sqlast.KindIdentity, Sources: []sqlast.Source{email, note}}, false},
+		{"union with cast(id)", sqlast.Prov{Kind: sqlast.KindExpr, Sources: []sqlast.Source{email, id}}, false},
+		{"string_agg", sqlast.Prov{Kind: sqlast.KindAggregate, Sources: []sqlast.Source{email}}, false},
+		{"view column without a rule", sqlast.Prov{Kind: sqlast.KindIdentity, Sources: []sqlast.Source{email, vOther}}, false},
+		{"no source", sqlast.Prov{Kind: sqlast.KindIdentity}, false},
+	} {
+		res := engine.Result{Columns: []engine.ResultColumn{{Label: "e"}}, Rows: [][]any{{"alice@example.com"}}}
+		outs := []sqlast.Output{{Label: "E", Mask: ModeRedact, Prov: c.prov}}
+		cell := func(row, col int, v any) string { return "r1.1.1" }
+		if err := MaskOutputs(&res, outs, r, nil, cell, true); err != nil {
+			t.Fatal(err)
+		}
+		want := any(Redacted)
+		if c.ref {
+			want = RedactedRef("r1.1.1")
+		}
+		if res.Rows[0][0] != want {
+			t.Errorf("%s: cell %v, want %v", c.name, res.Rows[0][0], want)
 		}
 	}
 }

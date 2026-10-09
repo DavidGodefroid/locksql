@@ -380,7 +380,7 @@ column = "app.templates.name"
 
 | Mode | Output | Notes |
 |---|---|---|
-| `redact` (default) | `<redacted:rN.R.C>` (result, row, column: a reference the agent can filter on; plain `<redacted>` if the console cannot hold the cell, or for a column that may hold a literal of the statement); `partial`, `email` and detector-masked cells carry no reference | a rule without `mode` is `redact` |
+| `redact` (default) | `<redacted:rN.R.C>` (result, row, column: a reference the agent can filter on; plain `<redacted>` if the console cannot hold the cell, or for any column but a plain one whose every source is under a mask rule); `partial`, `email` and detector-masked cells carry no reference | a rule without `mode` is `redact` |
 | `partial` | `j***(12)` | first character and length |
 | `email` | `j***@example.com` | first character and domain; other values as `partial` |
 

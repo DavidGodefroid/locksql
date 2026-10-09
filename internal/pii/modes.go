@@ -53,10 +53,12 @@ func RedactedRef(name string) string { return "<redacted:" + name + ">" }
 // cells go through the detectors.
 //
 // cell, when not nil, stores the value of a cell masked in mode redact and
-// returns its reference name, or "" for none. It is called only for a column
-// the analysis masks and whose values cannot be literals of the statement: a
-// reference to a value the agent chose (a UNION with a constant, say) would
-// let it look up one row without the k-anonymity check. A column masked by
+// returns its reference name, or "" for none. It is called only for a plain
+// column the analysis masks in mode redact, whose values cannot be literals
+// of the statement and all of whose sources are under a mask rule
+// (referenceable): anywhere else the agent may know the value behind the
+// reference (a constant, an unmasked UNION arm, an aggregate) and could
+// look up one row on it without the k-anonymity check. A column masked by
 // its engine-reported origin alone gets plain <redacted> too.
 //
 // The result must have exactly the analysed columns, and the columns the
@@ -75,7 +77,7 @@ func MaskOutputs(res *engine.Result, outs []sqlast.Output, r Rules, ds []Detecto
 			return fmt.Errorf("result column %d is labelled %q where %q was expected", i+1, c.Label, strings.ToLower(o.Label))
 		}
 		modes[i] = o.Mask
-		refs[i] = o.Mask == ModeRedact && !o.Prov.Lit
+		refs[i] = o.Mask == ModeRedact && referenceable(o.Prov, r)
 		if modes[i] == "" && origin && c.HasOrigin() {
 			if m, ok := r.Mode(c.OriginDB, c.OriginTable, c.OriginColumn); ok {
 				modes[i] = m
@@ -101,4 +103,25 @@ func MaskOutputs(res *engine.Result, outs []sqlast.Output, r Rules, ds []Detecto
 		}
 	}
 	return nil
+}
+
+// referenceable reports a plain, literal-free column whose every source is
+// under a mask rule: its cells hold only values the agent never saw. A view
+// source counts only when a rule matches it by name (fail closed).
+func referenceable(p sqlast.Prov, r Rules) bool {
+	if p.Kind != sqlast.KindIdentity || p.Lit || len(p.Sources) == 0 {
+		return false
+	}
+	for _, s := range p.Sources {
+		var ok bool
+		if s.View {
+			_, ok = r.ModeByName(s.Column)
+		} else {
+			_, ok = r.Mode(s.DB, s.Table, s.Column)
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
 }

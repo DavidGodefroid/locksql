@@ -319,3 +319,36 @@ func TestExplainWithPlaceholderRefused(t *testing.T) {
 		}
 	}
 }
+
+// A UNION arm of an unmasked column, or an aggregate of a PII column, gets
+// no reference: the agent may know the value behind it.
+func TestNoReferenceForMixedOrAggregateColumn(t *testing.T) {
+	for _, q := range []string{
+		"SELECT email FROM users UNION ALL SELECT note FROM users LIMIT 50",
+		"SELECT email FROM users UNION ALL SELECT CAST(id AS char) FROM users LIMIT 50",
+		"SELECT group_concat(email SEPARATOR 'x') AS email FROM users LIMIT 50",
+	} {
+		h := newHarness(t, uatProfile())
+		h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"alice@example.com"}, {"7"}}}
+		h.sess.count = &engine.Result{Columns: []engine.ResultColumn{{Label: "n"}}, Rows: [][]any{{int64(100)}}}
+		pr := h.plan(t, q, false)
+		h.io.answers = []string{"y"}
+		var rr ipc.RunResult
+		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+		for _, row := range rr.Rows {
+			if row[0] != "<redacted>" {
+				t.Errorf("%s: row %v", q, row)
+			}
+		}
+	}
+	// A plain column keeps its references.
+	h := newHarness(t, uatProfile())
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"alice@example.com"}}}
+	pr := h.plan(t, "SELECT email FROM users WHERE id = 1 LIMIT 5", false)
+	h.io.answers = []string{"y"}
+	var rr ipc.RunResult
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	if rr.Rows[0][0] != "<redacted:r1.1.1>" {
+		t.Errorf("plain column: %v", rr.Rows[0])
+	}
+}
