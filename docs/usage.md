@@ -91,6 +91,15 @@ comes back (for Claude, with its permissions). A permission you remove from
 back. `locksql console --profile P` never wires agents; use it to keep an
 agent unwired.
 
+Instructions written by an earlier version describe `tok_` token values,
+which no longer exist (mask mode `hash` is gone). Existing instructions are
+never overwritten, so regenerate them: delete
+`~/.claude/skills/locksql/SKILL.md` and the marked block in
+`~/.codex/AGENTS.md` and `~/.gemini/GEMINI.md`, then run bare `locksql`. In
+project mode, delete `.claude/skills/locksql/SKILL.md`,
+`.cursor/rules/locksql.mdc` and the marked block in `AGENTS.md` and
+`GEMINI.md`, then run `locksql init <agent>` again.
+
 #### Adding an entry by hand
 
 When locksql cannot write a file, add its entry yourself.

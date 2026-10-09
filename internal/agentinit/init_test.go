@@ -487,6 +487,19 @@ func TestTemplatesCarryTheRules(t *testing.T) {
 	}
 }
 
+// Token masking is gone: no generated instruction may teach tok_ values.
+func TestTemplatesHaveNoTokens(t *testing.T) {
+	for name, body := range map[string]string{
+		"skill.md":        mustTemplate(t, "templates/skill.md"),
+		"agents.md":       mustTemplate(t, "templates/agents.md"),
+		"cursor-rule.mdc": cursorRule(),
+	} {
+		if strings.Contains(body, "tok_") {
+			t.Errorf("%s still describes tok_ tokens", name)
+		}
+	}
+}
+
 func mustTemplate(t *testing.T, name string) string {
 	t.Helper()
 	b, err := templates.ReadFile(name)

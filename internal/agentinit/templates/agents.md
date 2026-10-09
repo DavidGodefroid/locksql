@@ -31,8 +31,6 @@ What a statement may do (the console parses it and resolves every column to its 
   them.
   Filters, groups and aggregates on them must cover at least k rows (k-anonymity): a refusal for k
   rows is final, do not work around it.
-- Token-masked columns return `tok_...` values, stable within the console session: join, group or
-  filter on them (`WHERE col = 'tok_...'`).
 - Database errors come back generic; the human sees the details in the console.
 
 Rules:

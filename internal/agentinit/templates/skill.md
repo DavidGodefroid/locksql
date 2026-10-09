@@ -53,9 +53,6 @@ an alias, a subquery or a CTE never hides a PII column.
   under `NOT`/`OR`, no `ORDER BY` or window clauses on them.
 - A filter, `GROUP BY` or aggregate on a PII column must cover at least k rows (k-anonymity, k in
   `status` limits). A refusal for k rows is final: do not narrow or split the query around it.
-- Columns masked as tokens return `tok_...` values: the same value gives the same token within this
-  console session. Join, group, count, or filter with `WHERE col = 'tok_...'`; the console puts the
-  real value back in the statement that runs. Tokens die with the console session.
 - Database errors come back as a generic message (the human sees the details in the console); row
   estimates are hidden when a statement filters on a PII column.
 
