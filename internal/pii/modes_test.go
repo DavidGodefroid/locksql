@@ -1,6 +1,7 @@
 package pii
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,7 +99,7 @@ func TestMaskOutputs(t *testing.T) {
 	outs := []sqlast.Output{{Label: "X", Mask: ModeRedact}, {Label: "NOTE"}, {}}
 	r := Rules{Mask: []string{"app.users.email"}}
 	ds, _ := Detectors([]string{"email"})
-	if err := MaskOutputs(&res, outs, r, ds, true); err != nil {
+	if err := MaskOutputs(&res, outs, r, ds, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	row := res.Rows[0]
@@ -107,10 +108,35 @@ func TestMaskOutputs(t *testing.T) {
 	}
 	// A label the analysis did not expect: refused.
 	res = engine.Result{Columns: []engine.ResultColumn{{Label: "y"}}, Rows: [][]any{{"v"}}}
-	if err := MaskOutputs(&res, []sqlast.Output{{Label: "X"}}, r, ds, true); err == nil {
+	if err := MaskOutputs(&res, []sqlast.Output{{Label: "X"}}, r, ds, nil, true); err == nil {
 		t.Error("unexpected label accepted")
 	}
-	if err := MaskOutputs(&res, nil, r, ds, true); err == nil {
+	if err := MaskOutputs(&res, nil, r, ds, nil, true); err == nil {
 		t.Error("column count mismatch accepted")
+	}
+}
+
+func TestMaskOutputsReferences(t *testing.T) {
+	res := engine.Result{
+		Columns: []engine.ResultColumn{{Label: "id"}, {Label: "email"}, {Label: "name"}},
+		Rows:    [][]any{{int64(1), "alice@example.com", "Alice"}, {int64(2), "alice@example.com", nil}},
+	}
+	outs := []sqlast.Output{{Label: "ID"}, {Label: "EMAIL", Mask: ModeRedact}, {Label: "NAME", Mask: ModePartial}}
+	var got []string
+	cell := func(row, col int, v any) string {
+		got = append(got, fmt.Sprintf("%d.%d=%v", row, col, v))
+		return fmt.Sprintf("r7.%d.%d", row+1, col+1)
+	}
+	if err := MaskOutputs(&res, outs, Rules{}, nil, cell, true); err != nil {
+		t.Fatal(err)
+	}
+	if res.Rows[0][1] != "<redacted:r7.1.2>" || res.Rows[1][1] != "<redacted:r7.2.2>" {
+		t.Errorf("rows %v", res.Rows)
+	}
+	if res.Rows[0][2] != "A***(5)" || res.Rows[1][2] != nil {
+		t.Errorf("partial cell got a reference or NULL was masked: %v", res.Rows)
+	}
+	if strings.Join(got, ",") != "0.1=alice@example.com,1.1=alice@example.com" {
+		t.Errorf("cell calls %v", got)
 	}
 }

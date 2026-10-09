@@ -141,6 +141,9 @@ type Server struct {
 	sess      engine.Session
 	now       func() time.Time
 
+	// refs keeps the values behind the references of redacted cells.
+	refs refStore
+
 	plans    map[string]*plan
 	started  time.Time
 	lastSeen time.Time

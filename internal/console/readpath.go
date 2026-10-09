@@ -170,6 +170,12 @@ func (s *Server) astEnv(ctx context.Context, sess engine.Session, db string, unm
 			return s.rules.Mode(src.DB, src.Table, src.Column)
 		},
 		Masking: !unmask,
+		Value: func(kind sqlast.ValueKind, name string) (string, bool) {
+			if kind == sqlast.ValueRef {
+				return s.refs.get(name)
+			}
+			return "", false // typed values: Task 3
+		},
 	}
 }
 
@@ -353,5 +359,7 @@ func (s *Server) maskRead(res *engine.Result, pl *plan, sess engine.Session) err
 		pii.MaskResult(res, pii.Rules{}, s.detectors, false)
 		return nil
 	}
-	return pii.MaskOutputs(res, pl.an.Outputs, s.rules, s.detectors, sess.OriginColumns())
+	n := s.refs.begin()
+	cell := func(row, col int, v any) string { return s.refs.put(n, row, col, pii.CellText(v)) }
+	return pii.MaskOutputs(res, pl.an.Outputs, s.rules, s.detectors, cell, sess.OriginColumns())
 }

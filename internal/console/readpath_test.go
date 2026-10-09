@@ -250,3 +250,34 @@ func TestStatementTextViewsRefused(t *testing.T) {
 	resp = h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT processlist_info FROM performance_schema.threads LIMIT 1"})
 	wantCode(t, resp, ipc.CodeRefused)
 }
+
+func TestReferenceRoundTrip(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	pr := h.plan(t, "SELECT id, email, note FROM users WHERE id = 1 LIMIT 1", false)
+	h.io.answers = []string{"y"}
+	var rr ipc.RunResult
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	if rr.Rows[0][1] != "<redacted:r1.1.2>" || strings.Contains(rr.Text, "alice@") {
+		t.Fatalf("row %v", rr.Rows[0])
+	}
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{int64(1)}}}
+	q := "SELECT id FROM users WHERE email = '${r1.1.2}' LIMIT 1"
+	pr = h.plan(t, q, false)
+	if pr.SQL != q {
+		t.Errorf("the plan shows %q", pr.SQL)
+	}
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	last := h.sess.runs[len(h.sess.runs)-1]
+	if last != "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1" {
+		t.Errorf("ran %q", last)
+	}
+	for _, r := range h.sess.runs {
+		if strings.HasPrefix(r, "SELECT COUNT(*)") {
+			t.Errorf("k-check ran for a reference: %q", r)
+		}
+	}
+	if strings.Contains(h.auditLog(t), "alice@example.com") {
+		t.Error("the value reached the audit log")
+	}
+}

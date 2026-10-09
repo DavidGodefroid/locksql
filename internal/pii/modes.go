@@ -29,7 +29,8 @@ func MaskValue(v any, mode string) any {
 	return maskCell(v)
 }
 
-func cellText(v any) string {
+// CellText is the text of a cell value, as compared and substituted.
+func CellText(v any) string {
 	switch x := v.(type) {
 	case []byte:
 		return string(x)
@@ -41,17 +42,24 @@ func cellText(v any) string {
 	return fmt.Sprint(v)
 }
 
+// RedactedRef is a redacted cell that carries a reference to its value,
+// which the console alone keeps.
+func RedactedRef(name string) string { return "<redacted:" + name + ">" }
+
 // MaskOutputs masks res in place following the analysed outputs of its
 // statement: each column whose resolved sources are under a rule is masked
 // in the output's mode. As a second line of defence a column whose engine-
 // reported origin matches a rule is masked too. The other text and integer
 // cells go through the detectors.
 //
+// cell, when not nil, stores the value of a cell masked in mode redact and
+// returns its reference name, or "" for none.
+//
 // The result must have exactly the analysed columns, and the columns the
 // analysis expects by name (plain references, aliases, star expansions)
 // must carry that label: otherwise masking by position could hit the wrong
 // column, and the result is refused.
-func MaskOutputs(res *engine.Result, outs []sqlast.Output, r Rules, ds []Detector, origin bool) error {
+func MaskOutputs(res *engine.Result, outs []sqlast.Output, r Rules, ds []Detector, cell func(row, col int, v any) string, origin bool) error {
 	if len(res.Columns) != len(outs) {
 		return fmt.Errorf("the result has %d columns where the statement was analysed with %d", len(res.Columns), len(outs))
 	}
@@ -68,12 +76,18 @@ func MaskOutputs(res *engine.Result, outs []sqlast.Output, r Rules, ds []Detecto
 			}
 		}
 	}
-	for _, row := range res.Rows {
+	for ri, row := range res.Rows {
 		for i, v := range row {
 			if v == nil || i >= len(modes) {
 				continue
 			}
 			if modes[i] != "" {
+				if modes[i] == ModeRedact && cell != nil {
+					if name := cell(ri, i, v); name != "" {
+						row[i] = RedactedRef(name)
+						continue
+					}
+				}
 				row[i] = MaskValue(v, modes[i])
 				continue
 			}

@@ -289,7 +289,7 @@ production = true
 		if err := json.Unmarshal(resp.Result, &rr); err != nil {
 			t.Fatal(err)
 		}
-		if len(rr.Rows) != 1 || rr.Rows[0][1] != "<redacted>" {
+		if len(rr.Rows) != 1 || !strings.HasPrefix(fmt.Sprint(rr.Rows[0][1]), "<redacted") {
 			t.Fatalf("rows: %+v", rr.Rows)
 		}
 

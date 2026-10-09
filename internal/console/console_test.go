@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -336,13 +337,13 @@ func TestApprovedRunReturnsMaskedRows(t *testing.T) {
 	if len(rr.Rows) != 1 || len(rr.Columns) != 3 {
 		t.Fatalf("run result: %+v", rr)
 	}
-	if got := rr.Rows[0][1]; got != pii.Redacted {
+	if got := rr.Rows[0][1]; !strings.HasPrefix(fmt.Sprint(got), "<redacted") {
 		t.Errorf("email column not masked by rule: %v", got)
 	}
 	if got := rr.Rows[0][2]; got == "write to bob@example.org" || !strings.Contains(got.(string), "b***(") {
 		t.Errorf("email detector not applied: %v", got)
 	}
-	if strings.Contains(rr.Text, "alice@example.com") || !strings.Contains(rr.Text, pii.Redacted) {
+	if strings.Contains(rr.Text, "alice@example.com") || !strings.Contains(rr.Text, "<redacted") {
 		t.Errorf("text rendering not masked: %q", rr.Text)
 	}
 	prompt := strings.Join(h.io.prompts, "\n")
@@ -442,7 +443,7 @@ func TestSkipPermissions(t *testing.T) {
 		if h.io.promptCount() != 0 {
 			t.Fatal("skip-permissions prompted on uat")
 		}
-		if rr.Rows[0][1] != pii.Redacted {
+		if !strings.HasPrefix(fmt.Sprint(rr.Rows[0][1]), "<redacted") {
 			t.Errorf("auto-approved rows not masked: %v", rr.Rows[0][1])
 		}
 		if !strings.Contains(h.auditLog(t), `"decision":"auto"`) {
@@ -529,7 +530,7 @@ func TestAliasMaskedByProvenance(t *testing.T) {
 		h.io.answers = []string{"y"}
 		var rr ipc.RunResult
 		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
-		if got := rr.Rows[0][0]; got != pii.Redacted {
+		if got := rr.Rows[0][0]; !strings.HasPrefix(fmt.Sprint(got), "<redacted") {
 			t.Errorf("origin=%v: aliased PII column not masked: %v", origin, got)
 		}
 	}

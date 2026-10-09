@@ -1,12 +1,13 @@
 package console
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
-	"github.com/DavidGodefroid/locksql/internal/pii"
 )
 
 // A write whose RETURNING list moves a PII column under another label is
@@ -35,7 +36,7 @@ func TestWriteReturningPIIRefusedBeforeRun(t *testing.T) {
 	pr := h.plan(t, "WITH c AS (SELECT email FROM users) SELECT (SELECT * FROM c LIMIT 1) AS x LIMIT 5", false)
 	var rr ipc.RunResult
 	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
-	if got := rr.Rows[0][0]; got != pii.Redacted {
+	if got := rr.Rows[0][0]; !strings.HasPrefix(fmt.Sprint(got), "<redacted") {
 		t.Errorf("nested PII source not masked: %v", got)
 	}
 }
