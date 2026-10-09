@@ -364,3 +364,19 @@ func TestLitFilter(t *testing.T) {
 		}
 	}
 }
+
+// A recursive CTE whose provenance does not converge within the fixpoint
+// bound is refused: its last iteration may still miss a literal.
+func TestRecursiveCTENotConvergedRefused(t *testing.T) {
+	sql := "WITH RECURSIVE c(a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,n) AS (SELECT email,'victim@x.com',email,email,email,email,email,email,email,email,1 FROM users UNION ALL SELECT a10,a2,a2,a3,a4,a5,a6,a7,a8,a9,n+1 FROM c WHERE n < 12) SELECT a1 FROM c WHERE n >= 10 LIMIT 50"
+	_, err := analyze(t, sqlclass.MySQL, sql)
+	var r *sqlclass.Refusal
+	if !errors.As(err, &r) || !strings.Contains(r.Reason, "too deep") {
+		t.Fatalf("got %v, want a refusal", err)
+	}
+	// Modes stay deduplicated through unions.
+	p := union(Prov{Modes: []string{"redact", "partial"}}, Prov{Modes: []string{"partial", "redact"}})
+	if len(p.Modes) != 2 {
+		t.Errorf("modes %v", p.Modes)
+	}
+}

@@ -353,12 +353,13 @@ func union(a, b Prov) Prov {
 		Sources:   mergeSources(a.Sources, b.Sources),
 		Kind:      k,
 		Sensitive: a.Sensitive || b.Sensitive,
-		Modes:     append(slices.Clone(a.Modes), b.Modes...),
+		Modes:     mergeSources(a.Modes, b.Modes),
 		Lit:       a.Lit || b.Lit || a.Kind == KindConst || b.Kind == KindConst,
 	}
 }
 
-func mergeSources(a, b []Source) []Source {
+// mergeSources appends to a the elements of b it lacks (sources, modes).
+func mergeSources[T comparable](a, b []T) []T {
 	out := slices.Clone(a)
 	for _, s := range b {
 		if !slices.Contains(out, s) {
@@ -403,6 +404,7 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 	}
 	an.inRecCTE++
 	defer func() { an.inRecCTE-- }()
+	converged := false
 	for i := 0; i < 8; i++ {
 		def.selfCols = cur
 		an.dry++
@@ -419,9 +421,15 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 			next[k].prov = union(next[k].prov, cur[k].prov)
 		}
 		if sameCols(cur, next) {
+			converged = true
 			break
 		}
 		cur = next
+	}
+	if !converged {
+		// The last iteration may still miss a literal or a source a few
+		// hops away: refuse rather than mask on a partial provenance.
+		return refusef("recursive CTE %s is too deep to analyse: its columns pass values to each other through too many steps", strings.ToLower(c.Name))
 	}
 	def.selfCols = cur
 	if _, err := an.query(c.Query, parent); err != nil { // final pass, with findings

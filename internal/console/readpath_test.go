@@ -426,3 +426,10 @@ func TestReferenceUnderPlaceholderFilter(t *testing.T) {
 		t.Errorf("typed value filter: %v", rr.Rows)
 	}
 }
+
+// A recursive CTE too deep for the fixpoint is refused, not referenced.
+func TestRecursiveCTENotConvergedRefused(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "WITH RECURSIVE c(a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,n) AS (SELECT email,'victim@x.com',email,email,email,email,email,email,email,email,1 FROM users UNION ALL SELECT a10,a2,a2,a3,a4,a5,a6,a7,a8,a9,n+1 FROM c WHERE n < 12) SELECT a1 FROM c WHERE n >= 10 LIMIT 50"})
+	wantCode(t, resp, ipc.CodeRefused)
+}
