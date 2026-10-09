@@ -36,6 +36,8 @@ type Record struct {
 	Host       string   `json:"host,omitempty"`
 	DB         string   `json:"db,omitempty"`
 	DBUser     string   `json:"db_user,omitempty"`
+	SSHHost    string   `json:"ssh_host,omitempty"`
+	SSHHostKey string   `json:"ssh_host_key,omitempty"`
 	Class      string   `json:"class,omitempty"`
 	SQL        string   `json:"sql,omitempty"`
 	Verdict    string   `json:"verdict,omitempty"`

@@ -21,7 +21,7 @@ func TestRegistered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Connect(context.Background(), config.Profile{Engine: config.EngineMySQL}, nil); err == nil {
+	if _, err := e.Connect(context.Background(), config.Profile{Engine: config.EngineMySQL}, nil, nil); err == nil {
 		t.Error("connected a mysql profile")
 	}
 }
@@ -47,7 +47,7 @@ func TestConnConfigIgnoresTheEnvironment(t *testing.T) {
 		t.Error("environment hooks kept")
 	}
 	if cfg.TLSConfig == nil {
-		t.Error("PGSSLMODE=disable overrode sslmode=prefer")
+		t.Error("PGSSLMODE=disable overrode the profile's tls mode")
 	}
 	if cfg.DefaultQueryExecMode != pgx.QueryExecModeExec {
 		t.Errorf("exec mode = %v", cfg.DefaultQueryExecMode)
@@ -208,5 +208,45 @@ func TestFailKeepsTheSessionOnLocalErrors(t *testing.T) {
 	}
 	if s.dead.Load() {
 		t.Error("a local error killed the session")
+	}
+}
+
+func TestConnConfigFallbacks(t *testing.T) {
+	base := config.Profile{Engine: config.EnginePostgres, Host: "db.example", User: "u"}
+	cases := []struct {
+		mode          string
+		wantTLS       bool
+		wantFallbacks int // plain fallbacks
+	}{
+		{config.TLSDisable, false, 0},
+		{config.TLSPrefer, true, 1},
+		{config.TLSRequire, true, 0},
+		{config.TLSVerifyFull, true, 0},
+	}
+	for _, c := range cases {
+		p := base
+		p.TLS = c.mode
+		cfg, err := connConfig(p, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", c.mode, err)
+		}
+		if (cfg.TLSConfig != nil) != c.wantTLS {
+			t.Errorf("%s: TLSConfig = %v", c.mode, cfg.TLSConfig)
+		}
+		plain := 0
+		for _, fb := range cfg.Fallbacks {
+			if fb.TLSConfig == nil {
+				plain++
+			}
+		}
+		if plain != c.wantFallbacks {
+			t.Errorf("%s: %d plain fallbacks, want %d", c.mode, plain, c.wantFallbacks)
+		}
+	}
+	p := base
+	p.TLS = config.TLSVerifyFull
+	cfg, _ := connConfig(p, nil)
+	if cfg.TLSConfig.ServerName != "db.example" || cfg.TLSConfig.InsecureSkipVerify {
+		t.Errorf("verify-full: %+v", cfg.TLSConfig)
 	}
 }

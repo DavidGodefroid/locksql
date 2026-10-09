@@ -186,6 +186,93 @@ project's directory, and `locksql doctor`. Both
 `.locksql/config.toml` and `.locksql/pii.toml` hold no secret and are meant
 to be committed.
 
+### Reaching a remote server through SSH
+
+A profile whose database is only reachable from a bastion gets an `ssh`
+table. The console opens the SSH connection itself (no `ssh` binary, no
+`ssh -L`) and the driver talks to the database through it:
+
+```toml
+[profiles.prod]
+engine = "postgres"
+host = "db.internal"        # as seen from the bastion
+port = 5432
+user = "reporting"
+credentials = "keychain"
+production = true
+
+[profiles.prod.ssh]
+host = "bastion.example.com"
+port = 22                   # default 22
+user = "deploy"
+auth = "key"                # key | agent | password
+key = "~/.ssh/id_ed25519"   # auth = "key" only; console account's home
+credentials = "ask"         # passphrase / ssh password; default: the profile's
+```
+
+- `host` and `port` of the profile are the database as seen from the bastion:
+  a host name is resolved on the bastion, and `127.0.0.1` is the bastion
+  itself. `ssh` is refused on SQLite and on a Unix socket `host`.
+- `auth` is required:
+  - `key`: the private key file `key`. It must be a regular file that
+    neither the group nor others can read (`chmod 600`), as OpenSSH requires.
+    An encrypted key asks `Passphrase for <key>:`.
+  - `agent`: the SSH agent at `SSH_AUTH_SOCK` in the console's environment;
+    the console stops with an error naming the variable when it is unset.
+  - `password`: asks `SSH password for <user>@<host>:`.
+- `credentials` (`ask` or `keychain`, default the profile's own) governs the
+  passphrase or SSH password like the database password. With `keychain` the
+  secret is the OS keychain item of account `<profile>@ssh:<ssh host>`,
+  separate from the database's. When the bastion refuses the keychain secret
+  (or it does not decrypt the key), the console asks once and offers
+  `Replace the SSH secret stored in the OS keychain? [y/N]`; other failures
+  (bastion unreachable, host key refused) are reported without asking.
+  `locksql forget --profile P` removes both secrets.
+- `key` and `known_hosts` belong to the **console account** (section 2):
+  `~` is its home, and the bastion's host key is checked against its
+  `~/.ssh/known_hosts`. Nothing needs to be prepared there: the first
+  connection shows the key and asks.
+
+  ```
+  The authenticity of bastion.example.com:22 can't be established.
+  ssh-ed25519 key fingerprint is SHA256:abc...
+  Trust this key and add it to /home/locksql/.ssh/known_hosts? [yes/N]
+  ```
+
+  Type `yes` to trust it; on a `production` profile the prompt asks for the
+  last 8 characters of the fingerprint instead, so check it against the one
+  your administrator gave you. The console negotiates the key types already
+  recorded for the bastion (Ed25519 first when none is), and compares host
+  names in lower case. A key that differs from the recorded one is refused
+  with both fingerprints and no override: edit `known_hosts` once you know
+  why it changed. Certificate host keys (`@cert-authority`) are not
+  supported.
+- While a host key or SSH password prompt waits, the connection has no
+  deadline while you answer; the prompt itself times out as the console's
+  other prompts do. Ctrl-C aborts it.
+- No local port is opened: the tunnel is a channel inside the console
+  process, which other local accounts cannot use. A keepalive is sent every
+  30 s; after 3 missed answers the tunnel closes and the next query
+  reconnects (asking again for any secret not in the keychain).
+- `~/.ssh/config`, `ProxyJump` chains and forwarding to a Unix socket on the
+  bastion are not supported: the profile is the only input.
+- The SSH leg is encrypted and the bastion verified; the leg from the bastion
+  to the database is protected only by `tls` (section 3), whose default is
+  decided on `host` as seen from the bastion (`127.0.0.1` gives `prefer`, a
+  remote name `verify-full`). When that leg is not verified the console
+  says `encrypted by SSH to <bastion>; NOT encrypted (or not verified) from
+  the bastion to <db host>: ...`, except for a loopback `host` (the database
+  runs on the bastion). `production = true` accepts `tls = "prefer"` only for
+  such a loopback `host`.
+- Any change of the `ssh` table, adding or removing it, loosens the policy
+  and waits for your approval (section 3), except `ssh.credentials` set back
+  to `ask`.
+- The audit log records each tunnel as a `login` record with
+  `"decision":"tunnel"`, `ssh_host` and `ssh_host_key` (the SHA256
+  fingerprint), and a key trusted on first use as
+  `"decision":"hostkey-added"`. `locksql doctor` shows the bastion and
+  reports a key file others can read.
+
 ## 2. Separate the console from the agent
 
 The console runs only in an account of its own: an agent in the console's
@@ -291,6 +378,7 @@ each; the exit code is 1 when any check fails.
 | socket directory | missing, wrong owner or group, a mode other than 0710/0750, or no setgid on Linux; shows the mode with setgid (`/run/locksql 2710 locksql:locksql-clients`) |
 | binary | the running binary can be changed by a non-root account (fails in separated mode) |
 | secret store | separated mode with a secret for the profile left in the agent's keychain; keychain unavailable |
+| tls, ssh, ssh key (per profile) | a remote database that verifies nothing (through a bastion: the bastion-to-database leg); an `ssh.key` that is missing or readable by group or others (not checked from the agent's account in a separated setup) |
 | console (per profile) | not running; then, from its `health`: not separated, an X11 display, database privileges beyond the tier, EXPLAIN failing |
 
 ## 3. Start the console
@@ -382,6 +470,30 @@ The session ends on Ctrl-C, `:quit`, `locksql logout`, after 20 minutes
 without activity, or after 4 hours. Each end closes the connection, removes
 the socket and is audited.
 
+### TLS to the database
+
+`tls` and `tls_ca` set the transport security of a network profile:
+
+```toml
+[profiles.prod]
+engine = "postgres"
+host   = "db.example.com"
+tls    = "verify-full"          # disable | prefer | require | verify-ca | verify-full
+tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
+```
+
+- Default: `verify-full` for a remote host, `prefer` for a Unix socket or a
+  loopback host. A remote profile that must keep an unverified connection
+  needs an explicit `tls = "require"`.
+- `tls_ca` is refused with `disable` and `prefer`. With `require`, as in libpq,
+  it verifies the chain against `tls_ca` (as `verify-ca`), not the host name.
+- `production = true` refuses `disable` and `prefer` on a remote host.
+- Through an `ssh` bastion, `tls` protects the leg from the bastion to the
+  database, and its default follows `host` as seen from the bastion (see
+  [Reaching a remote server through SSH](#reaching-a-remote-server-through-ssh)).
+- `locksql doctor` warns when a remote profile verifies nothing. See
+  [Transport security](security-model.md#out-of-scope-and-limitations) for the modes.
+
 ### Approving a query
 
 ```
@@ -426,13 +538,16 @@ The console watches the config and PII files while it runs.
 - A change that loosens it (higher tier, `production = true → false`, larger
   limits, a smaller `k_anonymity`, a larger `reference_probe`, a higher or
   removed `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
-  host, port, engine, user or database, `ask → keychain`, a removed mask rule or detector, a mask mode
+  host, port, engine, user or database, a weaker `tls` or any change of `tls_ca`,
+  any change of the `ssh` table (except `ssh.credentials` set to `ask`),
+  `ask → keychain`, a removed mask rule or detector, a mask mode
   changed to anything but `redact`, a new allow rule) waits for you. Plans are
   refused with `policy_pending` until you run `:review` and answer
   `Apply these changes? [y/N]`.
 - If you refuse, the last approved policy stays in force.
 - If an applied change alters the connection target (engine, host, port,
-  path, user or database), the session ends: restart the console.
+  path, user or database) or its transport (`tls`, `tls_ca` or the `ssh`
+  table), the session ends: restart the console.
 
 The approved policy is stored outside the repository, in
 `<user state dir>/locksql/approved/`.

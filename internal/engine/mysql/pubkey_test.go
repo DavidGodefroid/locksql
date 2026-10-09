@@ -133,7 +133,7 @@ func TestRefusesPublicKeyAuthWithoutTLS(t *testing.T) {
 		}
 		const secret = "S3cr3t-pa55word"
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_, err = Engine{}.Connect(ctx, p, []byte(secret))
+		_, err = Engine{}.Connect(ctx, p, []byte(secret), nil)
 		cancel()
 		ln.Close()
 		f.done.Wait()

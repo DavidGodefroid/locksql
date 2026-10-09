@@ -100,7 +100,7 @@ func connectPG(t *testing.T, srv Server, user string, tier config.Tier, timeout 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	s, err := e.Connect(ctx, pgProfile(srv, user, tier, timeout), []byte(pgPassword(user)))
+	s, err := e.Connect(ctx, pgProfile(srv, user, tier, timeout), []byte(pgPassword(user)), nil)
 	if err != nil {
 		t.Fatalf("connect %s: %v", user, err)
 	}
@@ -573,7 +573,7 @@ func testPostgresServer(t *testing.T, version string, srv Server) {
 
 	t.Run("bad password is not echoed", func(t *testing.T) {
 		e, _ := engine.Get(config.EnginePostgres)
-		_, err := e.Connect(ctx, pgProfile(srv, "ro", config.TierRead, time.Second), []byte("wrong-secret-xyz"))
+		_, err := e.Connect(ctx, pgProfile(srv, "ro", config.TierRead, time.Second), []byte("wrong-secret-xyz"), nil)
 		if err == nil || strings.Contains(err.Error(), "wrong-secret-xyz") {
 			t.Errorf("err = %v", err)
 		}

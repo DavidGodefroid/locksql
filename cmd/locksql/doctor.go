@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
@@ -342,6 +343,54 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 		add(checkOK, "credentials", "asked at start, again every "+p.CredentialsTTL.String(), "")
 	} else {
 		add(checkOK, "credentials", "asked at every console start", "")
+	}
+
+	if p.Engine != config.EngineSQLite && !strings.HasPrefix(p.Host, "/") {
+		switch {
+		case config.TLSVerifiesChain(p.TLS, p.TLSCA):
+			add(checkOK, "tls", "tls = \""+p.TLS+"\": the server certificate is verified", "")
+		case p.SSH != nil && config.IsLoopback(p.Host):
+			add(checkOK, "tls", "the database is on the bastion: the ssh tunnel encrypts the whole path (tls = \""+p.TLS+"\")", "")
+		case config.IsLoopback(p.Host):
+			add(checkOK, "tls", "loopback host: tls = \""+p.TLS+"\"", "")
+		case p.SSH != nil:
+			add(checkWarn, "tls", "tls = \""+p.TLS+"\": encrypted by ssh to "+p.SSH.Host+", but an attacker on the bastion's network can read the traffic or obtain the password",
+				"set tls = \"verify-full\" (and tls_ca if the server's CA is private)")
+		default:
+			add(checkWarn, "tls", "tls = \""+p.TLS+"\": an attacker on the path can read the traffic or obtain the password",
+				"set tls = \"verify-full\" (and tls_ca if the server's CA is private), or reach the server through an ssh tunnel")
+		}
+	}
+
+	if s := p.SSH; s != nil {
+		add(checkOK, "ssh", "reached through "+s.User+"@"+s.Host+":"+strconv.Itoa(s.Port)+" ("+s.Auth+")", "")
+		if s.Auth == config.SSHAuthKey {
+			path := s.Key
+			if rest, ok := strings.CutPrefix(path, "~/"); ok {
+				home := "~"
+				if sys != nil {
+					home = "the console account's home"
+				} else if h, err := os.UserHomeDir(); err == nil {
+					home = h
+				}
+				path = filepath.Join(home, rest)
+			}
+			if st, err := d.stat(path); err != nil {
+				if sys == nil {
+					var pe *fs.PathError
+					if errors.As(err, &pe) {
+						err = pe.Err // the path is already in the detail
+					}
+					add(checkFail, "ssh key", path+": "+err.Error(), "check ssh.key")
+				}
+				// In a separated setup the key lives in the console account's
+				// home, which this account cannot read: nothing to check here.
+			} else if st.Mode().Perm()&0o077 != 0 {
+				add(checkFail, "ssh key", path+" is readable by others", "chmod 600 "+path)
+			} else {
+				add(checkOK, "ssh key", path+" is private", "")
+			}
+		}
 	}
 
 	st, err := d.status(cwd, p.Name)

@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
@@ -174,8 +175,14 @@ type Noticer interface {
 	Notices() []string
 }
 
+// DialFunc opens the network connection to the database server. nil is a
+// direct TCP or Unix socket connection.
+type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
 // Engine opens sessions for one engine name. secret is the password, or nil
-// when the engine needs none; it is never stored past Connect.
+// when the engine needs none; it is never stored past Connect. dial, when not
+// nil, opens every network connection of the session (main, control and
+// cancel connections).
 type Engine interface {
-	Connect(ctx context.Context, p config.Profile, secret []byte) (Session, error)
+	Connect(ctx context.Context, p config.Profile, secret []byte, dial DialFunc) (Session, error)
 }

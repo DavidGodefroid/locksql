@@ -109,7 +109,7 @@ func connectMySQL(t *testing.T, m mysqlTarget, srv Server, user string, tier con
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	s, err := e.Connect(ctx, mysqlProfile(m, srv, user, tier, timeout), []byte(pw))
+	s, err := e.Connect(ctx, mysqlProfile(m, srv, user, tier, timeout), []byte(pw), nil)
 	if err != nil {
 		t.Fatalf("connect %s: %v", user, err)
 	}
@@ -534,7 +534,7 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 
 	t.Run("bad password is not echoed", func(t *testing.T) {
 		e, _ := engine.Get(string(m.flavor))
-		_, err := e.Connect(ctx, mysqlProfile(m, srv, "ro", config.TierRead, time.Second), []byte("wrong-secret-xyz"))
+		_, err := e.Connect(ctx, mysqlProfile(m, srv, "ro", config.TierRead, time.Second), []byte("wrong-secret-xyz"), nil)
 		if err == nil || strings.Contains(err.Error(), "wrong-secret-xyz") {
 			t.Errorf("err = %v", err)
 		}

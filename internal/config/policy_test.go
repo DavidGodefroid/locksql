@@ -56,7 +56,7 @@ func TestDiffLoosening(t *testing.T) {
 func fullPolicy() Policy {
 	return NewPolicy(Profile{
 		Name: "uat", Engine: EngineMariaDB, Host: "db", Port: 3306, Database: "app", User: "ro",
-		Credentials: CredentialsAsk, Tier: TierWrite, Production: true,
+		Credentials: CredentialsAsk, Tier: TierWrite, Production: true, TLS: TLSVerifyFull,
 		Detectors: []string{"email", "phone"},
 		Limits:    DefaultLimits(true),
 	}, []string{"app.users.email", "app.users.phone"}, []string{"app.t.name"})
@@ -95,6 +95,11 @@ func TestDiffEveryRule(t *testing.T) {
 		{"database", "database", func(p *Policy) { p.Profile.Database = "other" }, true},
 		{"path", "path", func(p *Policy) { p.Profile.Path = "/tmp/x.db" }, true},
 		{"user", "user", func(p *Policy) { p.Profile.User = "admin" }, true},
+		{"tls down", "tls", func(p *Policy) { p.Profile.TLS = TLSRequire }, true},
+		{"tls ca changed", "tls_ca", func(p *Policy) { p.Profile.TLSCA = "/other.pem" }, true},
+		{"ssh added", "ssh", func(p *Policy) {
+			p.Profile.SSH = &SSHProfile{Host: "b", Port: 22, User: "u", Auth: SSHAuthAgent, Credentials: CredentialsAsk}
+		}, true},
 		{"ask->keychain", "credentials", func(p *Policy) { p.Profile.Credentials = CredentialsKeychain }, true},
 	}
 	for _, c := range cases {
@@ -301,5 +306,76 @@ func TestDiffModesAndNewLimits(t *testing.T) {
 	}
 	if ch := field(Diff(cost, a), "limits.explain_cost_refuse"); ch == nil || !ch.Loosens {
 		t.Errorf("cost 1000 → off: %+v", ch)
+	}
+}
+
+func TestDiffTLSUpTightens(t *testing.T) {
+	a := fullPolicy()
+	a.Profile.TLS = TLSRequire
+	c := fullPolicy()
+	c.Profile.TLS = TLSVerifyFull
+	ch := Diff(a, c)
+	if len(ch) != 1 || ch[0].Field != "tls" || ch[0].Loosens {
+		t.Fatalf("changes = %+v", ch)
+	}
+}
+
+func TestDiffLegacyApprovedPolicy(t *testing.T) {
+	legacy := fullPolicy()
+	legacy.Profile.TLS = "" // approved before the setting existed
+	cur := fullPolicy()
+	cur.Profile.TLS = TLSPrefer
+	if ch := Diff(legacy, cur); len(ch) != 0 {
+		t.Errorf("prefer vs legacy: %+v", ch)
+	}
+	cur.Profile.TLS = TLSVerifyFull
+	if ch := Diff(legacy, cur); len(ch) != 1 || ch[0].Loosens {
+		t.Errorf("verify-full vs legacy: %+v", ch)
+	}
+}
+
+func TestDiffSSH(t *testing.T) {
+	withSSH := func(mut func(*SSHProfile)) Policy {
+		p := fullPolicy()
+		s := SSHProfile{Host: "b", Port: 22, User: "u", Auth: SSHAuthKey, Key: "~/.ssh/k", Credentials: CredentialsAsk}
+		if mut != nil {
+			mut(&s)
+		}
+		p.Profile.SSH = &s
+		return p
+	}
+	a := withSSH(nil)
+	for _, c := range []struct {
+		field   string
+		mut     func(*SSHProfile)
+		loosens bool
+	}{
+		{"ssh.host", func(s *SSHProfile) { s.Host = "evil" }, true},
+		{"ssh.port", func(s *SSHProfile) { s.Port = 2222 }, true},
+		{"ssh.user", func(s *SSHProfile) { s.User = "root" }, true},
+		{"ssh.auth", func(s *SSHProfile) { s.Auth = SSHAuthAgent; s.Key = "" }, true},
+		{"ssh.key", func(s *SSHProfile) { s.Key = "/tmp/k" }, true},
+		{"ssh.credentials", func(s *SSHProfile) { s.Credentials = CredentialsKeychain }, true},
+	} {
+		ch := Diff(a, withSSH(c.mut))
+		found := false
+		for _, x := range ch {
+			if x.Field == c.field {
+				found = true
+				if x.Loosens != c.loosens {
+					t.Errorf("%s: loosens = %v", c.field, x.Loosens)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: not reported in %+v", c.field, ch)
+		}
+	}
+	removed := fullPolicy()
+	if ch := Diff(a, removed); len(ch) != 1 || ch[0].Field != "ssh" || !ch[0].Loosens {
+		t.Errorf("ssh removed: %+v", ch)
+	}
+	if ch := Diff(fullPolicy(), fullPolicy()); len(ch) != 0 {
+		t.Errorf("no ssh both sides: %+v", ch)
 	}
 }

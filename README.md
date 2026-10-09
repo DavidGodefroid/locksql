@@ -330,6 +330,12 @@ A project profile wins over a user profile of the same name. No file ever
 holds a secret: keys named like `password`, `passwd`, `pwd`, `secret` or
 `token`, and DSNs with an embedded password, are refused.
 
+> **Breaking change.** A remote profile with no `tls` setting now verifies
+> the server certificate (`tls = "verify-full"`). A server with a private CA
+> needs `tls_ca`; to keep encryption without verification, set
+> `tls = "require"`. Until then its connection fails with an error that
+> names both settings.
+
 ```toml
 [profiles.uat]
 engine      = "mariadb"             # mariadb | mysql | postgres | sqlite
@@ -338,6 +344,8 @@ port        = 3306                  # default 3306, or 5432 for postgres
 user        = ""                    # empty: asked at console start
 database    = ""                    # empty: chosen per query (--db)
 credentials = "ask"                 # ask | keychain
+tls         = "verify-full"         # disable | prefer | require | verify-ca | verify-full
+tls_ca      = ""                    # optional PEM bundle replacing the system roots
 credentials_ttl = "20m"             # optional: ask for the secret again
 tier        = "read"                # read | write | ddl | admin
 production  = false
@@ -352,6 +360,30 @@ max_cell_chars      = 200
 max_output_bytes    = 65536
 k_anonymity         = 5
 explain_cost_refuse = 0             # engine cost units; 0 = off
+```
+
+A database reachable only from a bastion gets an `ssh` table: the console
+opens the SSH connection itself, with no local listening port, and verifies
+the bastion against the console account's `~/.ssh/known_hosts` (asking on
+first use, refusing a changed key). `host` is then the database as seen from
+the bastion; keep `tls = "verify-full"` unless the database runs on the
+bastion itself. See
+[Reaching a remote server through SSH](docs/usage.md#reaching-a-remote-server-through-ssh).
+
+```toml
+[profiles.prod]
+engine      = "postgres"
+host        = "db.internal"         # as seen from the bastion
+tls         = "verify-full"
+production  = true
+
+[profiles.prod.ssh]
+host        = "bastion.example.com"
+port        = 22                    # default 22
+user        = "deploy"
+auth        = "key"                 # key | agent | password
+key         = "~/.ssh/id_ed25519"   # auth = "key" only; the console account's home
+credentials = "ask"                 # passphrase or SSH password; default: the profile's
 ```
 
 <details>
@@ -378,6 +410,10 @@ explain_cost_refuse = 0             # engine cost units; 0 = off
 | `limits.k_anonymity` | 5 (production 10) | smallest row count a PII filter, a group or an aggregate of a PII column may cover; lowering it is a loosening |
 | `limits.reference_probe` | 5 | distinct cells of one result the agent may filter on one by one before the console warns (an `IN` list counts once); raising it is a loosening |
 | `limits.explain_cost_refuse` | 0 (off) | refuse plans above this total cost, in the engine's own units; SQLite reports no cost and is not checked |
+| `ssh.host`, `ssh.port`, `ssh.user` | required host and user; port 22 | the bastion; not with sqlite or a Unix socket `host` |
+| `ssh.auth` | required | `key`, `agent` (`SSH_AUTH_SOCK` of the console) or `password` |
+| `ssh.key` | required with `auth = "key"` | private key of the console account, mode 0600 |
+| `ssh.credentials` | the profile's `credentials` | `ask` or `keychain` for the passphrase or SSH password; `locksql forget --profile P` removes it too |
 
 </details>
 
@@ -469,22 +505,23 @@ iteration, and it is deliberately narrow:
   for an unmasked run) the clear rows stay in the scrollback of the console's
   terminal, visible to anyone who sees that screen (screen sharing, recording,
   a terminal that logs its output). locksql does not clear it.
-- **TLS is not configurable yet.** PostgreSQL, MariaDB and MySQL connect like
-  PostgreSQL's `sslmode=prefer`: encrypted when the server offers TLS, plain
-  otherwise, and the certificate is not verified, so an active attacker on the
-  path can intercept or downgrade the connection. A plain TCP connection is
-  reported as a warning. This mode gives no protection against such an
-  attacker, the password included: over the unverified TLS connection the
-  attacker can ask for it in clear (MySQL and MariaDB `mysql_clear_password`
-  or a `caching_sha2_password` full authentication), and PostgreSQL sends
-  it in clear to a server that asks for cleartext authentication, with or
-  without TLS. On a plain MySQL/MariaDB TCP connection locksql refuses the
-  authentications that would hand the password over (clear text, or RSA
-  encryption with a key the server sends: `sha256_password` and a
-  `caching_sha2_password` full authentication), so a MySQL 8 account on a
-  server without TLS can log in only while the server's authentication cache
-  holds it. Use an SSH tunnel (`ssh -L`) or a Unix socket for remote
-  servers.
+- **Transport security depends on `tls`.** A remote profile defaults to
+  `tls = "verify-full"`; `prefer` is the default only for a Unix socket or a
+  loopback host. `production = true` refuses `disable` and `prefer` on a
+  remote host. Below `verify-ca` an active attacker on the path can intercept
+  or downgrade the connection, and obtain the password: the clear-text guard
+  protects plain TCP connections only, and go-mysql answers
+  `mysql_clear_password`, `sha256_password` and a `caching_sha2_password`
+  full authentication (the MySQL 8 default) in clear over any TLS, so an
+  attacker terminating TLS gets the MySQL/MariaDB password; PostgreSQL sends
+  it in clear to a server that asks for cleartext authentication. On plain
+  TCP (`disable`, or `prefer` after a fallback) the guard refuses a full
+  authentication, so a MySQL 8 account logs in only while the server's
+  authentication cache holds it. `verify-ca`
+  and `verify-full` prevent the impersonation. Through an `ssh` bastion the
+  SSH leg is encrypted and verified, but the bastion-to-database leg is
+  protected only by `tls`, unless the database runs on the bastion. See
+  [Transport security](docs/security-model.md#out-of-scope-and-limitations).
 - One console per profile and project, one request at a time. No remote or
   shared consoles, no data export.
 

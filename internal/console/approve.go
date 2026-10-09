@@ -335,8 +335,8 @@ func loosens(changes []config.Change) bool {
 }
 
 // adopt records p as the approved policy and enforces it. A change of the
-// connection settings ends the session: the open connection no longer
-// matches the policy.
+// connection settings, the transport (tls, tls_ca, the ssh table) included,
+// ends the session: the open connection no longer matches the policy.
 func (s *Server) adopt(p config.Policy, decision string) error {
 	if s.cfg.StateDir != "" && s.cfg.ApprovedKey != "" {
 		if err := config.SaveApproved(s.cfg.StateDir, s.cfg.ApprovedKey, p); err != nil {
@@ -362,11 +362,21 @@ func (s *Server) adopt(p config.Policy, decision string) error {
 		}
 	}
 	if old.Engine != n.Engine || old.Host != n.Host || old.Port != n.Port || old.Path != n.Path ||
-		old.User != n.User || old.Database != n.Database {
+		old.User != n.User || old.Database != n.Database ||
+		old.TLS != n.TLS || old.TLSCA != n.TLSCA || !sameSSH(old.SSH, n.SSH) {
 		s.println("connection settings changed: the session ends; start the console again")
 		s.End("connection settings changed")
 	}
 	return nil
+}
+
+// sameSSH reports two ssh tables that reach the database the same way;
+// nil is no tunnel.
+func sameSSH(a, b *config.SSHProfile) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // formatChanges renders a policy diff, loosenings in red. Every value is
@@ -412,6 +422,16 @@ func describePolicy(p config.Policy) []string {
 			l.StatementTimeout, l.ExplainRowsWarn, l.ExplainRowsRefuse, l.MaxRows, l.MaxCellChars, l.MaxOutputBytes),
 		"  detectors: " + safeText(strings.Join(pr.Detectors, ", "), false),
 		fmt.Sprintf("  PII rules: %d mask, %d allow", len(p.PIIMask), len(p.PIIAllow)),
+	}
+	if pr.Engine != config.EngineSQLite {
+		mode := pr.TLS
+		if mode == "" {
+			mode = config.TLSPrefer
+		}
+		lines = append(lines, "  tls: "+safeText(mode, false))
+	}
+	if pr.SSH != nil {
+		lines = append(lines, "  ssh: "+safeText(config.SSHString(pr.SSH), false))
 	}
 	for _, a := range p.PIIAllow {
 		lines = append(lines, red+"  allow "+safeText(a, false)+reset)

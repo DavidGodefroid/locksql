@@ -129,15 +129,65 @@ Records contain the SQL and metadata, never secrets and never row data.
 - **The console account.** Malware running as `locksql` or as root, and an
   agent account that can become either, are out of scope. So is an X11
   session on a non-production profile with `x11 = "warn"`.
-- **Transport security.** TLS to the database is not configurable yet.
-  PostgreSQL, MariaDB and MySQL connect like PostgreSQL's `sslmode=prefer`:
-  encrypted when the server offers TLS, plain otherwise, and the certificate
-  is not verified. A plain TCP connection is reported on the console and in
-  the audit log (`"decision":"notice"`). MariaDB and MySQL refuse a server
-  that asks for the password in clear text (`mysql_clear_password`) on an
-  unencrypted connection. An active attacker on the path can still strip TLS
-  or intercept the unverified handshake. Use an SSH tunnel to reach remote
-  servers.
+- **Transport security.** The profile's `tls` setting picks the mode:
+
+  | Mode | Encrypts | Verifies chain | Verifies host name |
+  |---|---|---|---|
+  | `disable` | no | no | no |
+  | `prefer` | if offered | no | no |
+  | `require` | yes, else refuse | only with `tls_ca` | no |
+  | `verify-ca` | yes, else refuse | yes | no |
+  | `verify-full` | yes, else refuse | yes | yes (`host`) |
+
+  The default is `verify-full`, except `prefer` when `host` is a Unix socket
+  path or a loopback host (`localhost` or a loopback IP literal).
+  `production = true` refuses `disable` and `prefer` unless the host is
+  loopback or a socket path. `tls_ca` is a PEM bundle that replaces the
+  system roots; it is refused with `disable` and `prefer`, and with
+  `require` it verifies the chain, as libpq does. A weaker `tls` or
+  any change of `tls_ca` loosens the approved policy and needs the human's
+  confirmation.
+
+  Below `verify-ca` an active attacker on the path can intercept or downgrade
+  the connection, and obtain the password. The MariaDB/MySQL clear-text guard
+  protects plain TCP connections only: over TLS, go-mysql answers
+  `mysql_clear_password`, `sha256_password` and a `caching_sha2_password`
+  full authentication (the MySQL 8 default) in clear, so an attacker
+  terminating TLS gets the password. On plain TCP (`disable`, or `prefer`
+  after a fallback) the guard refuses a full authentication, so a MySQL 8
+  account logs in only while the server's authentication cache holds it.
+  PostgreSQL likewise sends the password to a server that asks for
+  cleartext authentication. `verify-ca` and
+  `verify-full` prevent the impersonation. A plain connection is reported on
+  the console and in the audit log (`"decision":"notice"`) as `the connection
+  is NOT encrypted (tls = ...)`; unverified TLS on a non-loopback host as
+  `the server certificate is not verified (tls = ...)`.
+
+  A profile with an `ssh` table reaches its database through a bastion. The
+  console opens the SSH connection in its own process
+  (`golang.org/x/crypto/ssh`): no `ssh` binary, no secret in argv, and no
+  local listening port, so another local account (the agent's included)
+  cannot use the tunnel; the driver dials the database through an SSH
+  channel and the bastion resolves the database's host name. The bastion's
+  host key is checked against the console account's `~/.ssh/known_hosts`,
+  negotiating only the key types recorded there (Ed25519 first when none is):
+  an unknown key is shown with its SHA256 fingerprint and trusted only when
+  the human types `yes` (on a production profile, the fingerprint's last 8
+  characters), and a changed key is refused with no override. The key
+  passphrase or SSH password follows the same rules as the database password
+  (`ask` or the keychain item `ssh:<host>`, never in argv, environment, files
+  or logs). The SSH leg is encrypted and the bastion authenticated; the leg
+  from the bastion to the database is protected only by `tls`, unless the
+  database runs on the bastion (`host` loopback). The `tls` default is
+  decided on `host` as seen from the bastion, and when that leg is not
+  verified the notice reads `encrypted by SSH to <bastion>; NOT encrypted
+  (or not verified) from the bastion to <db host>: ...`. Each tunnel is
+  audited (`"decision":"tunnel"` with `ssh_host` and `ssh_host_key`), as is
+  a key trusted on first use (`"decision":"hostkey-added"`). Adding,
+  removing or changing the `ssh` table loosens the approved policy (except
+  `ssh.credentials` set to `ask`). Out of scope: `ProxyJump`
+  chains, `~/.ssh/config` (never read), certificate host keys
+  (`@cert-authority`) and forwarding to a Unix socket on the bastion.
 - **Write tiers.** Above tier `read`, the human's approval is the gate. The
   classifier assigns the class shown on the screen, but the server does not
   restrict what an approved write statement does within the account's

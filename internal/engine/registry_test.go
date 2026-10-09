@@ -10,7 +10,9 @@ import (
 
 type fakeEngine struct{}
 
-func (fakeEngine) Connect(context.Context, config.Profile, []byte) (Session, error) { return nil, nil }
+func (fakeEngine) Connect(context.Context, config.Profile, []byte, DialFunc) (Session, error) {
+	return nil, nil
+}
 
 func TestRegistry(t *testing.T) {
 	Register("fake-test", fakeEngine{})

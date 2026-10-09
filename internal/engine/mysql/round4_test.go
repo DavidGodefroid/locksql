@@ -70,7 +70,7 @@ func TestRefusesSplitGreetingForgedOK(t *testing.T) {
 	const secret = "S3cr3t-pa55word"
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	s, err := Engine{}.Connect(ctx, p, []byte(secret))
+	s, err := Engine{}.Connect(ctx, p, []byte(secret), nil)
 	if err == nil {
 		s.Close()
 		t.Error("connect succeeded")

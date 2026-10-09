@@ -21,6 +21,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/secrets"
+	"github.com/DavidGodefroid/locksql/internal/tunnel"
 	"github.com/DavidGodefroid/locksql/internal/ui"
 )
 
@@ -50,6 +51,9 @@ func (st *starter) audit(rec audit.Record) {
 	rec.Host = st.profile.Host
 	if st.profile.Engine == config.EngineSQLite {
 		rec.Host = st.profile.Path
+	}
+	if st.profile.SSH != nil && rec.SSHHost == "" {
+		rec.SSHHost = st.profile.SSH.Host
 	}
 	if err := st.log.Write(rec); err != nil {
 		st.io.Println("audit log write failed: " + err.Error())
@@ -413,10 +417,32 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 	}
 	prof := p
 	prof.User = st.user
+	var dial engine.DialFunc
+	var tun *tunnel.Tunnel
+	if p.SSH != nil {
+		t, err := st.openTunnel(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		tun, dial = t, t.Dial
+	}
+	// Every return without a session closes the tunnel opened for it; a
+	// session takes the tunnel over and closes it with itself.
+	connected := false
+	defer func() {
+		if !connected && tun != nil {
+			tun.Close()
+		}
+	}()
 	open := func(secret []byte) (engine.Session, error) {
 		cctx, cancel := context.WithTimeout(ctx, connectTimeout)
 		defer cancel()
-		return eng.Connect(cctx, prof, secret)
+		sess, err := eng.Connect(cctx, prof, secret, dial)
+		if err != nil || tun == nil {
+			return sess, err
+		}
+		connected = true
+		return &tunneledSession{Session: sess, closeTunnel: tun.Close, bastion: p.SSH.Host, dbHost: p.Host}, nil
 	}
 	if p.Engine == config.EngineSQLite {
 		sess, err := open(nil)
@@ -478,11 +504,17 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 }
 
 func (st *starter) offerSave(ctx context.Context, secret []byte, prompt string) {
+	st.offerSaveAs(ctx, st.profile.Host, secret, prompt)
+}
+
+// offerSaveAs offers to store secret in the OS keychain under the
+// profile's name and host.
+func (st *starter) offerSaveAs(ctx context.Context, host string, secret []byte, prompt string) {
 	ans, ok := st.io.Ask(ctx, prompt, ApprovalTimeout)
 	if !ok || strings.TrimSpace(ans) != "y" {
 		return
 	}
-	if err := secrets.KeychainSet(st.profile.Name, st.profile.Host, secret); err != nil {
+	if err := secrets.KeychainSet(st.profile.Name, host, secret); err != nil {
 		st.io.Println("not saved: " + secrets.Sanitize(err, secret))
 		return
 	}

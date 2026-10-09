@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -94,18 +96,24 @@ type Limits struct {
 // Profile is one named database target with its policy.
 // It never holds a secret.
 type Profile struct {
-	Name        string   `json:"name"`
-	Engine      string   `json:"engine"`
-	Host        string   `json:"host"`
-	Path        string   `json:"path"`
-	User        string   `json:"user"`
-	Database    string   `json:"database"`
-	Credentials string   `json:"credentials"`
-	Port        int      `json:"port"`
-	Tier        Tier     `json:"tier"`
-	Production  bool     `json:"production"`
-	Detectors   []string `json:"detectors"`
-	Limits      Limits   `json:"limits"`
+	Name        string `json:"name"`
+	Engine      string `json:"engine"`
+	Host        string `json:"host"`
+	Path        string `json:"path"`
+	User        string `json:"user"`
+	Database    string `json:"database"`
+	Credentials string `json:"credentials"`
+	// TLS is the transport mode (TLSDisable ... TLSVerifyFull) and TLSCA an
+	// optional PEM bundle that replaces the system roots.
+	TLS   string `json:"tls,omitempty"`
+	TLSCA string `json:"tls_ca,omitempty"`
+	// SSH, when set, is the bastion the profile is reached through.
+	SSH        *SSHProfile `json:"ssh,omitempty"`
+	Port       int         `json:"port"`
+	Tier       Tier        `json:"tier"`
+	Production bool        `json:"production"`
+	Detectors  []string    `json:"detectors"`
+	Limits     Limits      `json:"limits"`
 	// CredentialsTTL makes the console ask for the secret again (and
 	// reconnect) once the connection is that old; 0 keeps it for the
 	// session. It suits short-lived secrets from a vault.
@@ -237,6 +245,9 @@ type rawProfile struct {
 	User        string    `toml:"user"`
 	Database    string    `toml:"database"`
 	Credentials string    `toml:"credentials"`
+	TLS         string    `toml:"tls"`
+	TLSCA       string    `toml:"tls_ca"`
+	SSH         *rawSSH   `toml:"ssh"`
 	Tier        string    `toml:"tier"`
 	Production  bool      `toml:"production"`
 	Detectors   []string  `toml:"detectors"`
@@ -351,7 +362,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	errf := func(format string, a ...any) error {
 		return fmt.Errorf("profile %q: "+format, append([]any{name}, a...)...)
 	}
-	for _, f := range []struct{ key, val string }{{"host", r.Host}, {"path", r.Path}, {"user", r.User}, {"database", r.Database}} {
+	for _, f := range []struct{ key, val string }{{"host", r.Host}, {"path", r.Path}, {"user", r.User}, {"database", r.Database}, {"tls_ca", r.TLSCA}} {
 		if embedsPassword(f.val) {
 			return Profile{}, errf("%s looks like a DSN with an embedded password; locksql never reads secrets from config files", f.key)
 		}
@@ -370,6 +381,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	p := Profile{
 		Name: name, Engine: r.Engine, Host: r.Host, Path: r.Path, Port: r.Port,
 		User: r.User, Database: r.Database, Credentials: r.Credentials,
+		TLS: r.TLS, TLSCA: r.TLSCA,
 		Production: r.Production, Detectors: r.Detectors,
 		Limits: Limits{
 			ExplainRowsWarn: r.Limits.ExplainRowsWarn, ExplainRowsRefuse: r.Limits.ExplainRowsRefuse,
@@ -402,6 +414,16 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	}
 	if p.Port < 0 || p.Port > 65535 {
 		return Profile{}, errf("port %d out of range", p.Port)
+	}
+	if p.Engine == EngineSQLite && (p.TLS != "" || p.TLSCA != "") {
+		return Profile{}, errf("tls and tls_ca are not used by sqlite")
+	}
+	if p.TLS != "" && TLSRank(p.TLS) < 0 {
+		return Profile{}, errf("unknown tls mode %q (want disable, prefer, require, verify-ca or verify-full)", p.TLS)
+	}
+	socket := strings.HasPrefix(p.Host, "/")
+	if socket && TLSRank(p.TLS) > TLSRank(TLSPrefer) {
+		return Profile{}, errf("tls %q needs a TCP host; a Unix socket is not encrypted", p.TLS)
 	}
 
 	if r.Tier != "" {
@@ -457,7 +479,22 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		}
 	}
 
+	if r.SSH != nil {
+		s, err := buildSSH(*r.SSH, p, errf)
+		if err != nil {
+			return Profile{}, err
+		}
+		p.SSH = s
+	}
+
 	applyDefaults(&p, detectorsSet)
+	// After the defaults: a remote host without tls is verify-full.
+	if p.TLSCA != "" && TLSRank(p.TLS) < TLSRank(TLSRequire) {
+		return Profile{}, errf("tls_ca needs tls = \"require\", \"verify-ca\" or \"verify-full\"")
+	}
+	if p.Production && TLSRank(p.TLS) < TLSRank(TLSRequire) && !strings.HasPrefix(p.Host, "/") && !IsLoopback(p.Host) {
+		return Profile{}, errf("a production profile on a remote host needs tls = \"require\" or stronger, or an ssh tunnel to the database's own host")
+	}
 	if p.Limits.ExplainRowsWarn > p.Limits.ExplainRowsRefuse {
 		return Profile{}, errf("limits.explain_rows_warn (%d) is above limits.explain_rows_refuse (%d)", p.Limits.ExplainRowsWarn, p.Limits.ExplainRowsRefuse)
 	}
@@ -469,4 +506,123 @@ func resolveSQLitePath(path, baseDir string) string {
 		return path
 	}
 	return filepath.Join(baseDir, path)
+}
+
+// TLS modes of a network profile, as libpq's sslmode, in increasing
+// strength.
+const (
+	TLSDisable    = "disable"
+	TLSPrefer     = "prefer"
+	TLSRequire    = "require"
+	TLSVerifyCA   = "verify-ca"
+	TLSVerifyFull = "verify-full"
+)
+
+var tlsModes = []string{TLSDisable, TLSPrefer, TLSRequire, TLSVerifyCA, TLSVerifyFull}
+
+// TLSRank orders TLS modes by strength. "" is prefer, the mode of profiles
+// approved before the setting existed; an unknown mode ranks -1.
+func TLSRank(mode string) int {
+	if mode == "" {
+		mode = TLSPrefer
+	}
+	return slices.Index(tlsModes, mode)
+}
+
+// TLSVerifiesChain reports a tls mode that verifies the server's certificate
+// chain: verify-ca and verify-full, and require with tls_ca, as libpq.
+func TLSVerifiesChain(mode, ca string) bool {
+	return TLSRank(mode) >= TLSRank(TLSVerifyCA) || (mode == TLSRequire && ca != "")
+}
+
+// IsLoopback reports a host that names this machine: "localhost" or a
+// loopback IP literal. Any other name, even one that resolves to loopback,
+// is remote.
+func IsLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// SSH authentication methods.
+const (
+	SSHAuthKey      = "key"
+	SSHAuthAgent    = "agent"
+	SSHAuthPassword = "password"
+)
+
+// SSHProfile is the bastion a network profile is reached through. Host and
+// Port of the profile are then seen from the bastion. It never holds a
+// secret: a key passphrase or an SSH password follows Credentials.
+type SSHProfile struct {
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	User        string `json:"user"`
+	Auth        string `json:"auth"`
+	Key         string `json:"key,omitempty"`
+	Credentials string `json:"credentials"`
+}
+
+type rawSSH struct {
+	Host        string `toml:"host"`
+	Port        int    `toml:"port"`
+	User        string `toml:"user"`
+	Auth        string `toml:"auth"`
+	Key         string `toml:"key"`
+	Credentials string `toml:"credentials"`
+}
+
+func buildSSH(r rawSSH, p Profile, errf func(string, ...any) error) (*SSHProfile, error) {
+	if p.Engine == EngineSQLite {
+		return nil, errf("ssh is not used by sqlite")
+	}
+	if strings.HasPrefix(p.Host, "/") {
+		return nil, errf("ssh needs a TCP host; forwarding to a Unix socket is not supported")
+	}
+	for _, f := range []struct{ key, val string }{{"ssh.host", r.Host}, {"ssh.user", r.User}, {"ssh.key", r.Key}} {
+		if embedsPassword(f.val) {
+			return nil, errf("%s looks like a DSN with an embedded password; locksql never reads secrets from config files", f.key)
+		}
+		if strings.IndexFunc(f.val, unsafeRune) >= 0 {
+			return nil, errf("%s holds a control or formatting character", f.key)
+		}
+	}
+	switch {
+	case r.Host == "":
+		return nil, errf("ssh.host is required")
+	case r.User == "":
+		return nil, errf("ssh.user is required")
+	case r.Port < 0 || r.Port > 65535:
+		return nil, errf("ssh.port %d out of range", r.Port)
+	}
+	switch r.Auth {
+	case SSHAuthKey:
+		if r.Key == "" {
+			return nil, errf("ssh.key is required with ssh.auth = \"key\"")
+		}
+	case SSHAuthAgent, SSHAuthPassword:
+		if r.Key != "" {
+			return nil, errf("ssh.key is only used with ssh.auth = \"key\"")
+		}
+	default:
+		return nil, errf("ssh.auth must be key, agent or password")
+	}
+	switch r.Credentials {
+	case "", CredentialsAsk, CredentialsKeychain:
+	default:
+		return nil, errf("unknown ssh.credentials mode %q (want ask or keychain)", r.Credentials)
+	}
+	s := &SSHProfile{Host: r.Host, Port: r.Port, User: r.User, Auth: r.Auth, Key: r.Key, Credentials: r.Credentials}
+	if s.Port == 0 {
+		s.Port = 22
+	}
+	if s.Credentials == "" {
+		s.Credentials = p.Credentials
+		if s.Credentials == "" {
+			s.Credentials = CredentialsAsk
+		}
+	}
+	return s, nil
 }
