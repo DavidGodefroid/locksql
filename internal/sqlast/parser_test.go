@@ -172,4 +172,20 @@ func TestParseMySQLDoubleQuotedPrefix(t *testing.T) {
 			}
 		}
 	}
+	// PostgreSQL and SQLite quote names with double quotes: X"email" is the
+	// column x aliased email there, as before.
+	for _, d := range []sqlclass.Dialect{pg, sl} {
+		for _, w := range []string{"X", "B", "N"} {
+			sql := `SELECT ` + w + `"email" FROM users LIMIT 1`
+			st, err := Parse(d, sql)
+			if err != nil {
+				t.Errorf("%s: Parse(%q): %v", d, sql, err)
+				continue
+			}
+			it := st.Query.Body.(*Select).Items[0]
+			if c, ok := it.Expr.(*ColumnRef); !ok || len(c.Parts) != 1 || c.Parts[0] != w || it.Alias != "EMAIL" {
+				t.Errorf("%s: Parse(%q): item %#v alias %q, want column %s aliased email", d, sql, it.Expr, it.Alias, w)
+			}
+		}
+	}
 }
