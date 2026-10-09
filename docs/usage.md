@@ -311,6 +311,15 @@ The console needs an interactive terminal. At start it:
    `<current dir>/.locksql/pii.toml` from an earlier version is no longer
    read: the console says so once while the new file does not exist; copy it
    there to keep its rules.
+
+   Quasi-identifiers (birth date, postal code, gender; multilingual names) are
+   listed apart, after the personal-data columns, one prompt each:
+   `Mask <db.table.column>? (masking blocks range filters, LIKE and ORDER BY
+   on this column) [y/N]`. `y` adds a `redact` mask rule; any other answer
+   adds an `[[allow]]` rule so the column is not asked about again (removing
+   that allow later is a tightening). No answer within the timeout writes
+   nothing, and the column is asked again at the next start. Proposed
+   personal-data rules use mode `redact`.
 7. Lists the databases and prints `Listening…`.
 
 Between requests you can type:
@@ -345,8 +354,7 @@ Approve? [y/N]
 - The screen names the requesting uid, pid and process (as the kernel reports
   them), the relations read, the PII columns touched and in which clause
   (highlighted in red in the SQL), each masked output and its mode, the
-  k-anonymity counts that run first, the number of token substitutions and
-  the row cap.
+  k-anonymity counts that run first and the row cap.
 - Statement classes other than READ, a WARN verdict, PII columns and
   `PII: UNMASKED` are printed in red.
 - On a production profile you type the profile name instead of `y`.
@@ -436,14 +444,15 @@ locksql doctor   [--profile P]
   `describe`.
 - A READ statement ends with a top-level `LIMIT n` (or PostgreSQL
   `FETCH FIRST n ROWS ONLY`) with `n <= max_rows`. locksql never rewrites
-  SQL: what you approve is what runs, except that a session token is
-  replaced by the value it stands for (shown on the approval screen).
+  SQL: what you approve is what runs.
 - The parser is fail-closed: syntax it does not know is refused. Functions
   must be in the allowlist (`internal/sqlast/funcs.go`: common string,
   numeric, date and JSON functions, aggregates and window functions;
   schema-qualified functions are refused). System schemas and relations
   (`information_schema`, `pg_catalog`, `mysql`, `performance_schema`, `sys`,
-  SQLite internals) are refused. Every table and column must resolve
+  SQLite internals) are refused, and so are `pg_stat_statements` and
+  `pg_stat_activity` while mask rules exist (they hold the text of past
+  statements). Every table and column must resolve
   against the catalog.
 - Every output column is traced to its source columns, so an alias, a CTE or
   a subquery does not hide a PII column: `SELECT e FROM (SELECT email AS e
@@ -469,10 +478,6 @@ PII columns (columns under a mask rule) may be used as follows:
   `FROM`, `WHERE`, `GROUP BY` and `HAVING` text. Fewer than `k_anonymity`
   rows in any count, or in the smallest group, refuses the statement.
 - `EXPLAIN` of a statement that filters, groups or aggregates PII is refused.
-- With mode `hash`, filter on a token from an earlier result:
-  `WHERE customer_ref = 'tok_...'` or `IN ('tok_...', ...)`. A token is valid
-  only in the console session that issued it and only against a column
-  masked as `hash`; an unknown token is refused.
 - Ask for unmasked values with `--unmask`: the PII usage rules and the
   k-anonymity checks no longer apply, the approval screen shows
   `PII: UNMASKED` in red, and it is never auto-approved.
@@ -513,10 +518,11 @@ finds the project's consoles.
 - Caps: `max_rows` rows, `max_cell_chars` per cell (cut with `…`) and
   `max_output_bytes` in total (cut with a marker).
 - Control and bidirectional characters are escaped. NULL prints as `NULL`.
-- Masked cells follow the rule's mode: `partial` keeps the first character
-  and the length (`a***(17)`), `redact` gives `<redacted>`, `email` keeps the
-  first character and the domain (`a***@example.com`), `hash` gives a
-  per-session token (`tok_...`). Masked binary cells in `partial` mode
+- Masked cells follow the rule's mode: `redact` (the default for a rule
+  without `mode`) gives `<redacted>`, `partial` keeps the first character
+  and the length (`a***(17)`), `email` keeps the first character and the
+  domain (`a***@example.com`). Several rules with different modes on one
+  column give `redact`. Masked binary cells in `partial` mode
   become `<masked bytes:N>`.
 - A result whose column count or labels differ from the analysis is dropped,
   since masking by position could hit the wrong column.

@@ -89,7 +89,7 @@ Reads are parsed in full; unknown syntax is refused.
 
 **🕶️ PII masking**<br>
 Every output column is traced to its source through aliases, CTEs, unions and
-joins, then masked (`partial`, `redact`, `email`, `hash` tokens).
+joins, then masked (`redact` by default, `partial` or `email`).
 
 </td>
 </tr>
@@ -181,7 +181,7 @@ sequenceDiagram
    reads: app.customers
    returns at most 20 rows
    PII columns touched: customers.email (select)
-   masked outputs: email → partial
+   masked outputs: email → redact
    PII: masked (4 column rules; detectors: email, phone, iban, card)
    Approve? [y/N]
    ```
@@ -260,8 +260,14 @@ only guide the agent; the console's checks are the guarantee.
   and `*`, and masked on that source, not on its label; the engine's origin
   metadata is a second check, and a result whose columns do not match the
   analysis is dropped. Value detectors (email, phone, IBAN, card, opt-in
-  national ids) mask the other cells. Mask modes: `partial`, `redact`,
-  `email`, `hash` (per-session tokens that keep joins and equality filters).
+  national ids) mask the other cells. Mask modes: `redact` (the default),
+  `partial`, `email`. Quasi-identifiers (birth date, postal code, gender) are
+  never masked unless you accept them one by one, since masking blocks range
+  filters, `LIKE` and `ORDER BY` on the column.
+- **Statement text.** While mask rules exist, `pg_stat_statements` and
+  `pg_stat_activity` are refused, since they hold the text of past statements.
+  The MySQL and MariaDB system schemas (`performance_schema`, `sys`,
+  `information_schema`) are outside the console's catalog and refused.
 - **PII usage.** PII columns may be selected, counted, joined with `=` and
   filtered with `=`, `IN (literals)` or `IS NULL`. Expressions over them,
   `LIKE`, ranges and `ORDER BY` are refused. A filter, grouping or aggregate on
@@ -348,24 +354,24 @@ column = "app.users.email"            # db.table.column, * per segment
 mode   = "email"                      # j***@example.com
 [[mask]]
 column = "app.users.customer_ref"
-mode   = "hash"                       # tok_... per console session
+mode   = "partial"                    # j***(12)
 [[mask]]
-column = "*.*.recipient_reference"    # mode "partial" by default: j***(12)
+column = "*.*.recipient_reference"    # <redacted> (default)
 [[allow]]                             # explicit exception: never mask
 column = "app.templates.name"
 ```
 
 | Mode | Output | Notes |
 |---|---|---|
-| `partial` (default) | `j***(12)` | first character and length |
-| `redact` | `<redacted>` | |
+| `redact` (default) | `<redacted>` | a rule without `mode` is `redact` |
+| `partial` | `j***(12)` | first character and length |
 | `email` | `j***@example.com` | first character and domain; other values as `partial` |
-| `hash` | `tok_` + 20 characters | keyed HMAC with a random key per console session: equal values give equal tokens, so the agent can join, group and count, and filter with `WHERE col = 'tok_...'` (the console substitutes the value in the statement that runs) |
 
-Only columns explicitly configured with `mode = "hash"` get tokens, and a
-token is accepted only against such a column. A column covered by several
-rules with different modes is redacted. Changing a mode is a loosening unless
+A column covered by several rules with different modes is redacted. Changing a mode is a loosening unless
 the new mode is `redact`.
+
+`mode = "hash"` is no longer a mode: a rules file that uses it is rejected
+(`unknown mode "hash" (want redact, partial or email)`).
 
 On PostgreSQL the first segment is the schema (`public.users.email`).
 

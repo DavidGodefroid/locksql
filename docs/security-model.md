@@ -58,12 +58,12 @@ root.
 | Statement smuggling | The classifier refuses several statements, comments, variables, bind parameters and unbalanced quotes, and classifies by keywords outside literals per dialect. Reads are limited to `SELECT`, `WITH ... SELECT` and `EXPLAIN SELECT` and parsed in full by a fail-closed parser: unknown syntax is refused. Multi-statements are off in every driver; PostgreSQL uses the extended protocol only. Tier `read` is also enforced by a read-only session and transaction on the server. |
 | Dangerous functions and statements | Reads may call only allowlisted functions (`internal/sqlast/funcs.go`); schema-qualified (possibly user-defined) functions and system schemas and relations are refused. At every tier: file and OS access, engine escape hatches (`ATTACH`, `load_extension`, `dblink`), SQLite raw storage tables (`sqlite_dbpage`, `dbstat`), sleeps, benchmarks, advisory locks, `FOR UPDATE`, session tampering (`SET ROLE`, `set_config`, guarded `SET` targets) and statements carrying credentials are refused. |
 | Server overload | READ statements need `LIMIT n <= max_rows`; `EXPLAIN` estimates the rows examined and refuses heavy plans, and `explain_cost_refuse` caps the engine's total cost (not on SQLite); k-anonymity counts are weighed too; a server-side timeout plus a client-side cancel; one request at a time. |
-| PII exposure | Column rules proposed from the schema at every start; per-rule mask modes; value detectors with checksums; unmasking is per query, shown in red and never auto-approved. |
+| PII exposure | Column rules proposed from the schema at every start; per-rule mask modes (`redact` by default); quasi-identifiers proposed apart and masked only on acceptance; value detectors with checksums; unmasking is per query, shown in red and never auto-approved. |
 | Alias or expression bypass | Every output column of a read is resolved to its base source columns through aliases, functions, subqueries, CTEs (recursive ones by fixpoint), set operations, joins and `*`, and masked on that source, not on its label. Expressions and functions over PII columns are refused; aggregates other than `COUNT`, `MIN` and `MAX` are redacted. The result's column count and labels must match the analysis or the result is dropped; the engine's origin metadata is a second check. |
 | Predicate oracles | A PII column may only be compared for equality with a literal (`=`, `IN (literals)`, `IS NULL`) in `WHERE`/`HAVING`, or joined with `=` (also `IN (subquery)`, `USING`, `NATURAL`) to another PII column: a join with an unmasked column would copy its values where no mask applies. These atoms must be positive and reached through `AND` only: a PII atom under `NOT`, `OR` or `XOR`, and `<>`, `!=`, `NOT IN`, `IS NOT NULL`, `IS DISTINCT FROM` on a PII column, would select the complement of what the k-anonymity check counts and are refused. A scalar subquery returning a PII value cannot be a filter operand. `LIKE`, ranges, functions over it, `ORDER BY`, window `PARTITION BY`/`ORDER BY`, `FILTER`, `DISTINCT ON` and constant comparisons in `JOIN ... ON` are refused, so a query cannot compare it character by character with generated values. |
 | Inference through aggregates and filters | A filter, grouping or aggregate on a PII column runs console-built `COUNT` queries (from the statement's own `FROM`, `WHERE`, `GROUP BY` and `HAVING`, shown on the approval screen) after approval and before the statement; fewer than `k_anonymity` rows (default 5, production 10) refuses it. Row estimates are hidden from the agent and `EXPLAIN` is refused for such statements, since the planner's figures would answer the same question. |
 | Timing and error channels | Clients get a generic failure message, never the server's text (shown on the console, redacted in the audit log). No timings are returned, and `query.run` answers on a 250 ms quantum, success or failure. |
-| Hash-mode tokens | Tokens are a keyed HMAC with a random key per console session: equal values give equal tokens within a session and nothing across sessions; no order, prefix or length leaks. A token is substituted only when compared with a column configured as `hash`; an unknown token, or one from another session, is refused. |
+| Statement text | `pg_stat_statements` and `pg_stat_activity` hold the text of past statements, literals included, so they are refused while mask rules exist, in the read path and in the write path. MySQL and MariaDB system schemas are not in the console's catalog and are refused. |
 | Prompt injection through data | Rows are framed as untrusted data in every output; the generated agent instructions say so; control and bidirectional characters are escaped in client output and on the console screen, so data cannot spoof the approval prompt. |
 | Type-ahead approval | Pending input is flushed before each prompt (`tcflush`). |
 | The agent mimics the human | In separated mode the console refuses to start as any account but `service_user`, when that account may also connect as a client, when started through `sudo`/`su` from another login session (`loginuid`), or when its terminal belongs to another uid. An X11 session, where any client can read and inject input, is refused on production profiles and with `x11 = "refuse"`, and warned about otherwise. The binary and `system.toml` are root-owned; `doctor` fails on password-less `sudo` for the agent's account. |
@@ -78,12 +78,9 @@ root.
   requesting uid, pid and process, the exact SQL with the PII columns it
   touches highlighted, its class, the EXPLAIN summary and verdict, the
   relations read, the PII columns touched and in which clause, the masked
-  outputs and their modes, the k-anonymity counts, the token
-  substitutions, the row cap and the PII state.
+  outputs and their modes, the k-anonymity counts, the row cap and the PII state.
 - Approval comes only from the console terminal.
-- locksql never rewrites SQL: what the human approves is what runs, except
-  that session tokens are replaced by their values (announced on the
-  screen).
+- locksql never rewrites SQL: what the human approves is what runs.
 - Production profiles need the profile name typed, not `y`.
 - REFUSE verdicts cannot be overridden from the console; the human has to
   raise the limits, which is itself a confirmed loosening.
@@ -141,9 +138,8 @@ Records contain the SQL and metadata, never secrets and never row data.
   reveal that row's other columns. The approval screen shows each PII filter
   so the human can spot such sequences; `--unmask` queries skip the check.
 - **Equality still leaks equality.** A filter `WHERE email = 'x@example.com'`
-  tells the agent whether that value exists among at least `k` rows, and a
-  `hash` token tells it which rows share a value. That is the purpose of
-  these features.
+  tells the agent whether that value exists among at least `k` rows. That is
+  the purpose of this feature.
 - **Relations that project another relation.** A view, a materialized view
   or a foreign table is masked by column name only: a view that renames a
   rule column (`firstname AS contact`) needs its own rule for the new name.
@@ -167,5 +163,5 @@ Where you control the schema, store personal data encrypted at rest with a
 blind index: the application encrypts the value with a key the database
 never holds, and stores next to it a keyed HMAC of the normalised value for
 equality lookups and joins. The database then holds no plaintext to leak.
-locksql's `hash` mode applies the same idea to query results: a keyed HMAC
-that keeps equality and hides everything else.
+locksql's masks are the downstream half of the same idea: they hide values in
+query results, whatever the database stores.
