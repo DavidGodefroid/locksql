@@ -352,3 +352,18 @@ func TestNoReferenceForMixedOrAggregateColumn(t *testing.T) {
 		t.Errorf("plain column: %v", rr.Rows[0])
 	}
 }
+
+// A recursive CTE whose recursive arm adds a literal gets no reference.
+func TestNoReferenceForRecursiveCTELiteral(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "e"}}, Rows: [][]any{{"alice@example.com"}, {"x"}}}
+	pr := h.plan(t, "WITH RECURSIVE c(e, n) AS (SELECT email, 1 FROM users UNION ALL SELECT 'x', n+1 FROM c WHERE n < 2) SELECT e FROM c LIMIT 5", false)
+	h.io.answers = []string{"y"}
+	var rr ipc.RunResult
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	for _, row := range rr.Rows {
+		if row[0] != "<redacted>" {
+			t.Errorf("row %v", row)
+		}
+	}
+}

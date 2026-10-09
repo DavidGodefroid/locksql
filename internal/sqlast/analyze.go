@@ -425,12 +425,32 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 	return nil
 }
 
+// sameCols reports whether a recursive CTE's provenance has converged:
+// every field that decides masking and references (kind, sensitivity,
+// literals, sources, modes) is unchanged.
 func sameCols(a, b []column) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if a[i].prov.Kind != b[i].prov.Kind || a[i].prov.Sensitive != b[i].prov.Sensitive || len(a[i].prov.Sources) != len(b[i].prov.Sources) {
+		p, q := a[i].prov, b[i].prov
+		if p.Kind != q.Kind || p.Sensitive != q.Sensitive || p.Lit != q.Lit || !sameSet(p.Sources, q.Sources) || !sameSet(p.Modes, q.Modes) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameSet reports whether a and b hold the same elements, ignoring order
+// and repeats.
+func sameSet[T comparable](a, b []T) bool {
+	for _, x := range a {
+		if !slices.Contains(b, x) {
+			return false
+		}
+	}
+	for _, x := range b {
+		if !slices.Contains(a, x) {
 			return false
 		}
 	}

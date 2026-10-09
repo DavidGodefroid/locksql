@@ -310,3 +310,28 @@ func TestStatementTextViewsRefusedPostgres(t *testing.T) {
 		}
 	}
 }
+
+// A recursive CTE whose recursive arm brings a literal keeps Lit on its
+// column: the fixpoint must not stop on a provenance that only lost it.
+func TestRecursiveCTELiteralKeepsLit(t *testing.T) {
+	for _, sql := range []string{
+		"WITH RECURSIVE c(e, n) AS (SELECT email, 1 FROM users UNION ALL SELECT 'x', n+1 FROM c WHERE n < 2) SELECT e FROM c LIMIT 5",
+		"WITH RECURSIVE c(e, n) AS (SELECT salary, 1 FROM users UNION ALL SELECT 'x', n+1 FROM c WHERE n < 2) SELECT e FROM c LIMIT 5",
+	} {
+		a, err := analyze(t, sqlclass.MySQL, sql)
+		if err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		if p := a.Outputs[0].Prov; !p.Lit || !p.Sensitive {
+			t.Errorf("%s: provenance %+v, want Lit and Sensitive", sql, p)
+		}
+	}
+	// Without a literal the column stays literal-free.
+	a, err := analyze(t, sqlclass.MySQL, "WITH RECURSIVE c(e, n) AS (SELECT email, 1 FROM users UNION ALL SELECT e, n+1 FROM c WHERE n < 2) SELECT e FROM c LIMIT 5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Outputs[0].Prov.Lit {
+		t.Errorf("plain recursive column marked Lit: %+v", a.Outputs[0].Prov)
+	}
+}
