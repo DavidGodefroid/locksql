@@ -240,7 +240,7 @@ func (s *Server) catalog(ctx context.Context, req ipc.Request) ipc.Response {
 // refuse audits and reports a refused plan.
 func (s *Server) refuse(id int64, db, sql, class, verdict, reason string) ipc.Response {
 	s.audit(audit.Record{Event: audit.EventRefused, DB: db, SQL: sql, Class: class, Verdict: verdict, Error: reason})
-	s.println("refused: " + reason)
+	s.println(paint.Fail("refused: " + reason))
 	return errResp(id, ipc.CodeRefused, reason)
 }
 
@@ -427,7 +427,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	s.screen(ctx, pl)
 	if s.autoApprove() && !pl.unmask {
 		rec.Event, rec.Decision = audit.EventAuto, "auto"
-		s.println("auto-approved (--skip-permissions)")
+		s.println(s.frameEnd(paint.Yellow("auto-approved") + " (--skip-permissions)"))
 	} else {
 		if r := s.approve(ctx, req.ID, pl, rec); r != nil {
 			return *r
@@ -437,7 +437,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		if s.now().Sub(pl.created) > PlanTTL {
 			rec.Event, rec.Decision = audit.EventTimeout, "expired"
 			s.audit(rec)
-			s.println("plan expired while waiting for approval: not run")
+			s.println(paint.Fail("plan expired while waiting for approval: not run"))
 			return errResp(req.ID, ipc.CodeNoSuchPlan, "the plan expired while waiting for approval; plan the query again")
 		}
 		rec.Event, rec.Decision = audit.EventApproved, "approved"
@@ -477,7 +477,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		// The audit log never holds row data, even for an unmask run.
 		rec.Error = s.errText(err, pl.st.SQL, false)
 		s.audit(rec)
-		s.println("failed: " + rec.Error)
+		s.println(paint.Fail("failed: " + rec.Error))
 		if errors.Is(err, engine.ErrConnLost) {
 			return s.failed(req.ID, "statement failed", err)
 		}
@@ -489,7 +489,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	}
 	if !pl.unmask && pl.an != nil {
 		if err := s.maskRead(&res, pl, sess); err != nil {
-			s.println("result dropped: " + err.Error())
+			s.println(paint.Fail("result dropped: " + err.Error()))
 			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, "the result could not be masked with certainty and was dropped: "+err.Error())
 		}
 	} else if !pl.unmask {
@@ -510,13 +510,13 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	rec.Rows, rec.Affected, rec.Truncated = int64(len(out.Rows)), res.Affected, out.Truncated
 	s.audit(rec)
 	if len(res.Columns) == 0 {
-		s.println(fmt.Sprintf("done: %d rows affected in %d ms", res.Affected, rec.DurationMS))
+		s.println(paint.OK(fmt.Sprintf("done: %d rows affected in %d ms", res.Affected, rec.DurationMS)))
 	} else {
 		more := ""
 		if out.Truncated {
 			more = " (truncated)"
 		}
-		s.println(fmt.Sprintf("done: %d rows%s in %d ms", len(out.Rows), more, rec.DurationMS))
+		s.println(paint.OK(fmt.Sprintf("done: %d rows%s in %d ms", len(out.Rows), more, rec.DurationMS)))
 	}
 	return okResp(req.ID, out)
 }
@@ -529,20 +529,20 @@ func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Reco
 		expected = s.profile.Name
 		prompt = fmt.Sprintf("Type the profile name %q to approve: ", s.profile.Name)
 	}
-	ans, ok := s.cfg.IO.Ask(ctx, prompt, ApprovalTimeout)
+	ans, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold(prompt)), ApprovalTimeout)
 	var r ipc.Response
 	switch {
 	case !ok && ctx.Err() != nil:
 		rec.Event, rec.Decision = audit.EventAbandoned, "abandoned"
-		s.println("client gone: request cancelled")
+		s.println(paint.Fail("client gone: request cancelled"))
 		r = errResp(id, ipc.CodeDenied, "the request was cancelled")
 	case !ok:
 		rec.Event, rec.Decision = audit.EventTimeout, "timeout"
-		s.println("no answer: denied")
+		s.println(paint.Fail("no answer: denied"))
 		r = errResp(id, ipc.CodeTimeout, "no answer from the human within the approval timeout; do not retry unless asked")
 	case strings.TrimSpace(ans) != expected:
 		rec.Event, rec.Decision = audit.EventDenied, "denied"
-		s.println("denied")
+		s.println(paint.Fail("denied"))
 		r = errResp(id, ipc.CodeDenied, "denied by the human; do not retry unless asked")
 	default:
 		return nil

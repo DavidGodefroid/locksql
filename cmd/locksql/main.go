@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"golang.org/x/term"
 
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
 	"github.com/DavidGodefroid/locksql/internal/sysconf"
+	"github.com/DavidGodefroid/locksql/internal/ui"
 )
 
 // Exit codes shared by every subcommand.
@@ -24,38 +26,85 @@ const (
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-const usageText = `usage: locksql <command> [arguments]
+// helpSection is one titled group of commands in the help.
+type helpSection struct {
+	title string
+	rows  []helpRow
+	notes []string
+}
 
-Human commands:
-  locksql                                     wire agents, add a database if none, start the console
-  add                                         add a database profile to the user config
-  console  [--profile P] [--project DIR] [--skip-permissions]
-                                              run the approval console
-  forget   --profile P                        remove the keychain secret
-  install  [--client USER] [--print]          separate the console from the agent (sudo)
-  doctor   [--profile P]                      check that this machine is safe-ready
-  init     [claude|codex|cursor|gemini ...]   write agent integration files into the project
-                                              (default: the agents found on this machine)
+// helpRow is one command: its name, its arguments and what it does, with
+// continuation lines for the description.
+type helpRow struct{ name, args, desc string }
 
-Client commands:
-  status   [--profile P]
-  tables   --profile P --db D
-  describe --profile P --db D TABLE
-  plan     --profile P --db D [--unmask] "SQL" | -
-  run      --profile P PLAN_ID
-  pii      list|add --profile P [COLUMN]
-  request  --profile P "tier=write" | "limits.max_rows=500" | "allow=app.t.c"
-  logout   --profile P
-  mcp      [--profile P]
-  Client commands accept --json. --profile may be left out when exactly
-  one profile is configured.
+var helpSections = []helpSection{
+	{title: "Human commands", rows: []helpRow{
+		{"locksql", "", "wire agents, add a database if none, start the console"},
+		{"add", "", "add a database profile to the user config"},
+		{"console", "[--profile P] [--project DIR] [--skip-permissions]", "run the approval console"},
+		{"forget", "--profile P", "remove the keychain secret"},
+		{"install", "[--client USER] [--print]", "separate the console from the agent (sudo)"},
+		{"doctor", "[--profile P]", "check that this machine is safe-ready"},
+		{"init", "[claude|codex|cursor|gemini ...]", "write agent integration files into the project\n(default: the agents found on this machine)"},
+	}},
+	{title: "Client commands", rows: []helpRow{
+		{"status", "[--profile P]", ""},
+		{"tables", "--profile P --db D", ""},
+		{"describe", "--profile P --db D TABLE", ""},
+		{"plan", `--profile P --db D [--unmask] "SQL" | -`, ""},
+		{"run", "--profile P PLAN_ID", ""},
+		{"pii", "list|add --profile P [COLUMN]", ""},
+		{"request", `--profile P "tier=write" | "limits.max_rows=500" | "allow=app.t.c"`, ""},
+		{"logout", "--profile P", ""},
+		{"mcp", "[--profile P]", ""},
+	}, notes: []string{
+		"Client commands accept --json. --profile may be left out when exactly",
+		"one profile is configured.",
+	}},
+	{title: "Other", rows: []helpRow{
+		{"version", "", "print the version"},
+		{"help", "", "print this help"},
+	}},
+}
 
-Exit codes: 0 ok, 1 refused/denied/failed, 2 no console, 3 usage/config error.
+// usage is the help text, coloured by p.
+func usage(p ui.Painter) string {
+	const nameW, argsW = 9, 35
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s locksql %s\n", p.Bold("usage:"), p.Dim("<command> [arguments]"))
+	for _, sec := range helpSections {
+		b.WriteString("\n" + p.Heading(sec.title, 72) + "\n")
+		for _, r := range sec.rows {
+			head := "  " + p.Accent(fmt.Sprintf("%-*s", nameW, r.name)) + p.Dim(r.args)
+			if r.desc == "" {
+				b.WriteString(head + "\n")
+				continue
+			}
+			// Descriptions start in one column; arguments too long for it
+			// push the description to the next line.
+			w, col := 2+nameW+len(r.args), 2+nameW+argsW
+			if w+2 > col {
+				b.WriteString(head + "\n")
+				head, w = "", 0
+			}
+			for _, d := range strings.Split(r.desc, "\n") {
+				b.WriteString(head + strings.Repeat(" ", col-w) + d + "\n")
+				head, w = "", 0
+			}
+		}
+		if len(sec.notes) > 0 {
+			b.WriteString("\n")
+		}
+		for _, n := range sec.notes {
+			b.WriteString("  " + p.Dim(n) + "\n")
+		}
+	}
+	b.WriteString("\n" + p.Bold("Exit codes") + "  0 ok · 1 refused/denied/failed · 2 no console · 3 usage/config error\n")
+	return b.String()
+}
 
-Other:
-  version                                     print the version
-  help                                        print this help
-`
+// usageText is the plain help, for errors and pipes.
+var usageText = usage(ui.Painter{})
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -73,6 +122,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		tty:      term.IsTerminal(int(os.Stdin.Fd())),
 		agentEnv: agentinit.SystemEnv,
 		sys:      sysconf.Load,
+		paint:    ui.For(os.Stdout),
 	}, args)
 }
 
@@ -91,7 +141,11 @@ func runEnv(e env, args []string) int {
 		fmt.Fprintf(stdout, "locksql %s\n", version)
 		return exitOK
 	case "help", "-h", "--help":
-		fmt.Fprint(stdout, usageText)
+		if e.paint.On {
+			fmt.Fprint(stdout, e.paint.Banner(version))
+			fmt.Fprintln(stdout)
+		}
+		fmt.Fprint(stdout, usage(e.paint))
 		return exitOK
 	case "console":
 		return runConsole(e, args[1:])

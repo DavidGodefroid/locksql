@@ -107,7 +107,7 @@ func wireAgents(e env) {
 	if len(lines) == 0 {
 		return
 	}
-	fmt.Fprintf(e.stdout, "Agents found: %s\n", strings.Join(found, ", "))
+	fmt.Fprintf(e.stdout, "Agents found: %s\n", e.paint.Bold(strings.Join(found, ", ")))
 	for _, l := range lines {
 		fmt.Fprintln(e.stdout, l)
 	}
@@ -163,7 +163,7 @@ func addProfile(e env, io setup.IO) (string, error) {
 	if err := setup.AppendProfile(path, a); err != nil {
 		return "", err
 	}
-	fmt.Fprintf(e.stdout, "  created  %s (profile %s)\n", tildePath(path), a.Name)
+	fmt.Fprintln(e.stdout, e.paint.OK(fmt.Sprintf("created %s (profile %s)", tildePath(path), a.Name)))
 	return a.Name, nil
 }
 
@@ -213,6 +213,8 @@ func runOnboard(e env) int {
 	if separated {
 		return runConsole(e, nil)
 	}
+	fmt.Fprint(e.stdout, e.paint.Banner(version))
+	fmt.Fprintln(e.stdout)
 	wireAgents(e)
 	term := console.NewTerminal(os.Stdin, e.stdout)
 	name, err := chooseProfile(e, term)
@@ -223,7 +225,7 @@ func runOnboard(e env) int {
 	if err != nil {
 		return onboardFail(e, err)
 	}
-	fmt.Fprintln(e.stdout, "\nStarting the console. Keep this terminal open; use your agents in any other.")
+	fmt.Fprintln(e.stdout, "\n"+e.paint.Step("Starting the console. Keep this terminal open; use your agents in any other."))
 	return openConsole(e, name, false, "", term)
 }
 

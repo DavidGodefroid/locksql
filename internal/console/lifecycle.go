@@ -21,6 +21,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/secrets"
+	"github.com/DavidGodefroid/locksql/internal/ui"
 )
 
 // ErrConfig marks usage and configuration errors (exit code 3).
@@ -179,7 +180,7 @@ func Run(ctx context.Context, o Options) error {
 	// 2. Production banner and typed profile name.
 	if p.Production {
 		o.IO.Println(red + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + reset)
-		o.IO.Println(red + "  PRODUCTION profile " + p.Name + " (" + st.where() + ")" + reset)
+		o.IO.Println(red + "  " + ui.MarkWarn + " PRODUCTION profile " + p.Name + " (" + st.where() + ")" + reset)
 		o.IO.Println(red + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + reset)
 		ans, ok := o.IO.Ask(ctx, fmt.Sprintf("Type the profile name %q to continue: ", p.Name), ApprovalTimeout)
 		if !ok || strings.TrimSpace(ans) != p.Name {
@@ -191,7 +192,7 @@ func Run(ctx context.Context, o Options) error {
 	}
 
 	// 3. Host (confirmed with the policy) and user.
-	o.IO.Println(fmt.Sprintf("profile %s · %s %s (approved policy)", p.Name, p.Engine, st.where()))
+	o.IO.Println(paint.OK(fmt.Sprintf("profile %s · %s %s %s", paint.Bold(p.Name), p.Engine, st.where(), paint.Dim("(approved policy)"))))
 	st.user = p.User
 	if st.user == "" && p.Engine != config.EngineSQLite {
 		ans, ok := o.IO.Ask(ctx, "Database user: ", ApprovalTimeout)
@@ -214,7 +215,7 @@ func Run(ctx context.Context, o Options) error {
 	}
 
 	// 5. Version and privilege audit.
-	o.IO.Println(fmt.Sprintf("connected: %s %s", sess.Flavor(), safeText(sess.ServerVersion(), false)))
+	o.IO.Println(paint.OK(fmt.Sprintf("connected: %s %s", sess.Flavor(), safeText(sess.ServerVersion(), false))))
 	if err := st.privileges(ctx, sess); err != nil {
 		closeSess()
 		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
@@ -227,7 +228,7 @@ func Run(ctx context.Context, o Options) error {
 		closeSess()
 		return fmt.Errorf("console: listing databases: %s", secrets.Sanitize(err))
 	}
-	o.IO.Println("databases: " + safeText(strings.Join(dbs, ", "), false))
+	o.IO.Println(paint.OK("databases: " + safeText(strings.Join(dbs, ", "), false)))
 	health := &ipc.Health{Separated: iso.sys != nil, Display: iso.display.Kind, Privileges: nonNil(st.privWarns),
 		ReadOnly: p.Tier == config.TierRead}
 	probeDB := p.Database
@@ -237,7 +238,7 @@ func Run(ctx context.Context, o Options) error {
 	if _, err := sess.Explain(ctx, probeDB, "SELECT 1"); err == nil {
 		health.ExplainOK = true
 	} else {
-		o.IO.Println(red + "warning: EXPLAIN does not work on this server: " + safeText(secrets.Sanitize(err), false) + reset)
+		o.IO.Println(paint.Warn(red + "warning: EXPLAIN does not work on this server: " + safeText(secrets.Sanitize(err), false) + reset))
 	}
 
 	// 7. PII first-run proposal.
@@ -272,13 +273,16 @@ func Run(ctx context.Context, o Options) error {
 	}
 	s.refused = refusedFP
 	s.audit(audit.Record{Event: audit.EventLogin, Decision: "ok"})
-	o.IO.Println("socket " + path)
+	o.IO.Println("")
+	o.IO.Println(paint.Heading("Ready", 60))
+	o.IO.Println("  " + paint.Dim("socket   ") + path)
 	if cfg.ProjectRoot != "" {
 		// Only agents working under this root dial this socket.
-		o.IO.Println("serving agents in " + safeText(cfg.ProjectRoot, false))
+		o.IO.Println("  " + paint.Dim("serving  ") + "agents in " + safeText(cfg.ProjectRoot, false))
 	}
-	o.IO.Println("console commands: :review  :status  :quit · Ctrl-C ends the session")
-	s.println("Listening…")
+	o.IO.Println("  " + paint.Dim("commands ") + paint.Accent(":review") + "  " + paint.Accent(":status") + "  " + paint.Accent(":quit") + paint.Dim(" · Ctrl-C ends the session"))
+	o.IO.Println("")
+	s.println(paint.Step("Listening…"))
 
 	var lines <-chan string
 	if ls, ok := o.IO.(LineSource); ok {
@@ -290,7 +294,7 @@ func Run(ctx context.Context, o Options) error {
 	}
 	reason, _ := s.Ended()
 	s.audit(audit.Record{Event: audit.EventLogout, Decision: reason})
-	o.IO.Println("session ended: " + reason)
+	o.IO.Println(paint.Step("session ended: " + reason))
 	return serveErr
 }
 
@@ -448,7 +452,7 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 	}
 	if n, ok := sess.(engine.Noticer); ok {
 		for _, msg := range n.Notices() {
-			st.io.Println(red + "warning: " + msg + reset)
+			st.io.Println(paint.Warn(red + "warning: " + msg + reset))
 			st.audit(audit.Record{Event: audit.EventLogin, Decision: "notice", Error: msg})
 		}
 	}
@@ -464,7 +468,7 @@ func (st *starter) offerSave(ctx context.Context, secret []byte, prompt string) 
 		st.io.Println("not saved: " + secrets.Sanitize(err, secret))
 		return
 	}
-	st.io.Println("saved in the OS keychain")
+	st.io.Println(paint.OK("saved in the OS keychain"))
 }
 
 // reconnect opens a new session after a lost connection and runs the
@@ -499,10 +503,10 @@ func (st *starter) privileges(ctx context.Context, sess engine.Session) error {
 	}
 	st.privWarns = warns
 	if len(warns) == 0 {
-		st.io.Println("privileges: nothing beyond tier " + p.Tier.String())
+		st.io.Println(paint.OK("privileges: nothing beyond tier " + p.Tier.String()))
 		return nil
 	}
-	st.io.Println(red + "the account can do more than tier " + p.Tier.String() + " needs:" + reset)
+	st.io.Println(paint.Warn(red + "the account can do more than tier " + p.Tier.String() + " needs:" + reset))
 	for _, w := range warns {
 		st.io.Println(red + "  - " + safeText(w, false) + reset)
 	}
@@ -552,7 +556,7 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 		return ap, nil
 	}
 	if len(proposals) == 0 {
-		st.io.Println("PII: no personal-data columns found in the schema")
+		st.io.Println(paint.OK("PII: no personal-data columns found in the schema"))
 	} else {
 		if firstRun {
 			st.io.Println(bold + "PII: these columns look like personal data and would be masked:" + reset)
@@ -627,7 +631,7 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 			return ap, err
 		}
 		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "tightened"})
-		st.io.Println(fmt.Sprintf("PII: %d mask rules in %s", len(next.PIIMask), rulesPath))
+		st.io.Println(paint.OK(fmt.Sprintf("PII: %d mask rules in %s", len(next.PIIMask), rulesPath)))
 	}
 	return next, nil
 }

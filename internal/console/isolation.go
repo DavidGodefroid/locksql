@@ -86,7 +86,7 @@ func checkIsolation(io IO, env isolationEnv, p config.Profile) (*isolation, erro
 	}
 
 	if sys == nil {
-		io.Println(red + "same-user mode: the agent runs as your account, so it could read this console's terminal or type into it; run `locksql doctor`, then `sudo locksql install` to separate them" + reset)
+		io.Println(paint.Warn(red + "same-user mode: the agent runs as your account, so it could read this console's terminal or type into it; run `locksql doctor`, then `sudo locksql install` to separate them" + reset))
 		if on, known := env.tiocsti(); known && on {
 			io.Println(red + "warning: the kernel allows TIOCSTI (dev.tty.legacy_tiocsti = 1): a process of your account can type into this terminal" + reset)
 		}

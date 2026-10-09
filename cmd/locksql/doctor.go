@@ -21,13 +21,14 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/secrets"
 	"github.com/DavidGodefroid/locksql/internal/sysconf"
+	"github.com/DavidGodefroid/locksql/internal/ui"
 )
 
 // Check outcomes.
 const (
-	checkOK   = "✅"
-	checkWarn = "⚠️ "
-	checkFail = "❌"
+	checkOK   = ui.MarkOK
+	checkWarn = ui.MarkWarn
+	checkFail = ui.MarkFail
 )
 
 type check struct {
@@ -109,19 +110,30 @@ func runDoctor(e env, args []string) int {
 		return exitUsage
 	}
 	checks := doctor(realDoctorEnv(), e.cwd, *profile)
-	failed := false
+	p := e.paint
+	counts := map[string]int{}
 	for _, c := range checks {
-		fmt.Fprintf(e.stdout, "%s %s", c.state, c.title)
+		counts[c.state]++
+		var line string
+		switch c.state {
+		case checkOK:
+			line = p.OK(c.title)
+		case checkWarn:
+			line = p.Warn(p.Bold(c.title))
+		default:
+			line = p.Fail(p.Bold(c.title))
+		}
 		if c.detail != "" {
-			fmt.Fprintf(e.stdout, " — %s", c.detail)
+			line += p.Dim(" — " + c.detail)
 		}
-		fmt.Fprintln(e.stdout)
+		fmt.Fprintln(e.stdout, line)
 		if c.fix != "" && c.state != checkOK {
-			fmt.Fprintf(e.stdout, "   → %s\n", c.fix)
+			fmt.Fprintf(e.stdout, "  %s %s\n", p.Accent("→"), c.fix)
 		}
-		failed = failed || c.state == checkFail
 	}
-	if failed {
+	fmt.Fprintf(e.stdout, "\n%s passed · %s warnings · %s failed\n",
+		p.Green(strconv.Itoa(counts[checkOK])), p.Yellow(strconv.Itoa(counts[checkWarn])), p.Red(strconv.Itoa(counts[checkFail])))
+	if counts[checkFail] > 0 {
 		return exitFail
 	}
 	return exitOK

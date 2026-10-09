@@ -269,9 +269,9 @@ others: the console refuses to start in one on a production profile or with
 locksql doctor [--profile P]
 ```
 
-Run it from both accounts. Each check prints ✅, ⚠️ or ❌, with a
-remediation under each one that is not ✅; the exit code is 1 when any check
-fails.
+Run it from both accounts. Each check prints ✓ (ok), ▲ (warning) or ✗
+(failed), with a remediation under each one that is not ✓, then a count of
+each; the exit code is 1 when any check fails.
 
 | Check | Fails or warns when |
 |---|---|
