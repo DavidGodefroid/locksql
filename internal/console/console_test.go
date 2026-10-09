@@ -235,7 +235,7 @@ func newHarness(t *testing.T, p config.Profile, opts ...hopt) *harness {
 	}
 	cfg := ServerConfig{
 		Policy:      config.NewPolicy(p, []string{"app.users.email"}, nil),
-		Root:        h.root,
+		RulesPath:   filepath.Join(h.root, pii.RulesFile),
 		StateDir:    h.state,
 		ApprovedKey: config.ApprovedKey(h.root, p.Name),
 		Session:     h.sess,
@@ -629,7 +629,7 @@ func TestLooseningFileEditBlocksUntilReviewed(t *testing.T) {
 	}
 	h := newHarness(t, initial.Profile, func(c *ServerConfig) {
 		c.Policy = initial
-		c.Root = root
+		c.RulesPath = filepath.Join(root, pii.RulesFile)
 		c.ApprovedKey = config.ApprovedKey(root, "uat")
 		c.LoadPolicy = load
 	})

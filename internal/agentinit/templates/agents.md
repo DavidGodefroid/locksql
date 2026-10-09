@@ -1,16 +1,17 @@
 ## Database access (locksql)
 
-This project gives agents database access only through locksql: every query is approved by the human
+Agents get database access only through locksql: every query is approved by the human
 in their `locksql console`, a separate terminal that holds the credentials and the only database
 connection. Use it for debugging and finding facts, one targeted question at a time, and only on the
 user's explicit request. If a database fact would merely help, propose the query and wait.
 
-Workflow (MCP tools `locksql_*`, or the `locksql` CLI from the project directory):
+Workflow (MCP tools `locksql_*`, or the `locksql` CLI from any directory):
 
 1. Prefer a non-production profile unless the question is about real production data. Find the
    database and table from the code first.
 2. `locksql_status` (CLI `locksql status`). If no console runs (CLI exit code 2), ask the user to
-   start `locksql console --profile P` in a separate terminal and stop. Never start one yourself.
+   run the command the status gives in a separate terminal (`locksql` outside a project, the exact
+   `locksql console ... --project DIR` inside one) and stop. Never start one yourself.
 3. `locksql_list_tables` / `locksql_describe` if needed (no approval).
 4. `locksql_plan` with one narrow statement: indexed predicates, an explicit `LIMIT`, no comments, no
    variables. Use `unmask` only if the user asked to see personal data in clear.

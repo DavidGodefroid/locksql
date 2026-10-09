@@ -133,11 +133,17 @@ var secretWords = map[string]bool{"password": true, "passwd": true, "pwd": true,
 // config (<user config dir>/locksql/config.toml). On a profile name present
 // in both, the project profile wins as a whole.
 func Load(cwd string) (*Config, error) {
-	userPath := ""
-	if dir, err := os.UserConfigDir(); err == nil {
-		userPath = filepath.Join(dir, appDirName, configFile)
-	}
+	userPath, _ := UserConfigPath()
 	return LoadFrom(cwd, userPath)
+}
+
+// UserConfigPath returns <user config dir>/locksql/config.toml.
+func UserConfigPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, appDirName, configFile), nil
 }
 
 // LoadFrom is Load with an explicit user config path ("" for none).
@@ -238,39 +244,45 @@ type rawFile struct {
 	Profiles map[string]rawProfile `toml:"profiles"`
 }
 
-// loadFile decodes one config file. Relative sqlite paths are resolved
-// against baseDir. Errors never quote config values that could be secrets.
+// loadFile decodes one config file; see ParseProfiles.
 func loadFile(path, baseDir string) (map[string]Profile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	return ParseProfiles(data, path, baseDir)
+}
+
+// ParseProfiles decodes and validates config data. name labels errors.
+// Relative sqlite paths are resolved against baseDir. Errors never quote
+// config values that could be secrets.
+func ParseProfiles(data []byte, name, baseDir string) (map[string]Profile, error) {
 	var raw rawFile
 	md, err := toml.Decode(string(data), &raw)
 	if err != nil {
-		return nil, sanitizeDecodeError(path, err)
+		return nil, sanitizeDecodeError(name, err)
 	}
 	for _, key := range md.Keys() {
 		if secretKey(key) {
-			return nil, fmt.Errorf("config: %s: key %q looks like a secret; locksql never reads secrets from config files (the console asks for them)", path, key.String())
+			return nil, fmt.Errorf("config: %s: key %q looks like a secret; locksql never reads secrets from config files (the console asks for them)", name, key.String())
 		}
 	}
 	if und := md.Undecoded(); len(und) > 0 {
-		return nil, fmt.Errorf("config: %s: unknown key %q", path, und[0].String())
+		return nil, fmt.Errorf("config: %s: unknown key %q", name, und[0].String())
 	}
 
 	out := make(map[string]Profile, len(raw.Profiles))
 	names := make([]string, 0, len(raw.Profiles))
-	for name := range raw.Profiles {
-		names = append(names, name)
+	for pn := range raw.Profiles {
+		names = append(names, pn)
 	}
 	sort.Strings(names)
-	for _, name := range names {
-		p, err := buildProfile(name, raw.Profiles[name], md.IsDefined("profiles", name, "detectors"), baseDir)
+	for _, pn := range names {
+		p, err := buildProfile(pn, raw.Profiles[pn], md.IsDefined("profiles", pn, "detectors"), baseDir)
 		if err != nil {
-			return nil, fmt.Errorf("config: %s: %w", path, err)
+			return nil, fmt.Errorf("config: %s: %w", name, err)
 		}
-		out[name] = p
+		out[pn] = p
 	}
 	return out, nil
 }

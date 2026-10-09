@@ -328,8 +328,13 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 	st, err := d.status(cwd, p.Name)
 	if err != nil {
 		if errors.Is(err, client.ErrNoConsole) {
+			start := client.StartCommand(p.Name, "")
+			var nc *client.NoConsoleError
+			if errors.As(err, &nc) {
+				start = nc.Command()
+			}
 			add(checkWarn, "console", "not running: connectivity, privileges and EXPLAIN are checked by a running console",
-				"start it: "+client.StartCommand(p.Name))
+				"start it: "+start)
 		} else {
 			add(checkFail, "console", err.Error(), "")
 		}

@@ -588,14 +588,14 @@ func (s *Server) piiAdd(req ipc.Request) ipc.Response {
 	pattern := probe.Mask[0]
 	// Add to the file as it is on disk, so that unconfirmed edits of the
 	// human are neither lost nor applied.
-	onDisk, err := pii.LoadRules(s.cfg.Root)
+	onDisk, err := pii.LoadRulesFile(s.cfg.RulesPath)
 	if err != nil {
 		return errResp(req.ID, ipc.CodeInternal, err.Error())
 	}
 	if err := onDisk.Add(pattern); err != nil {
 		return errResp(req.ID, ipc.CodeInvalidParams, err.Error())
 	}
-	if err := pii.SaveRules(s.cfg.Root, onDisk); err != nil {
+	if err := pii.SaveRulesFile(s.cfg.RulesPath, onDisk); err != nil {
 		return errResp(req.ID, ipc.CodeInternal, err.Error())
 	}
 	next := s.approved

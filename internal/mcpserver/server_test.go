@@ -299,6 +299,22 @@ func TestDefaultProgressIntervalIsUnderTenSeconds(t *testing.T) {
 	}
 }
 
+func TestNoConsoleInProjectHintNamesProject(t *testing.T) {
+	o := Options{
+		Profile: "uat",
+		Dial: func(p string) (Conn, error) {
+			return nil, &client.NoConsoleError{Profile: p, Project: "/work/app", Socket: "/x.sock", Err: errors.New("connect")}
+		},
+	}
+	cs := connect(t, o, nil)
+	for _, name := range []string{"locksql_status", "locksql_list_tables"} {
+		got := text(call(t, cs, name, map[string]any{}))
+		if !strings.Contains(got, "locksql console --profile uat --project /work/app") || strings.Contains(got, "run `locksql`") {
+			t.Errorf("%s: hint does not name the project:\n%s", name, got)
+		}
+	}
+}
+
 func TestNoConsoleErrorCarriesStartCommand(t *testing.T) {
 	o := Options{
 		Profile: "uat",
@@ -498,5 +514,13 @@ func TestExactCellKeepsLargeIntegersExact(t *testing.T) {
 	}
 	if rows := exactRows(nil); rows == nil {
 		t.Fatal("exactRows(nil) is nil")
+	}
+}
+
+func TestInstructionsCarryAgentRules(t *testing.T) {
+	for _, want := range []string{"never start one yourself", "Never edit the locksql config", "psql", "k-anonymity", "tok_"} {
+		if !strings.Contains(instructions, want) {
+			t.Errorf("instructions lack %q", want)
+		}
 	}
 }

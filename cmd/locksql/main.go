@@ -6,6 +6,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"golang.org/x/term"
+
+	"github.com/DavidGodefroid/locksql/internal/agentinit"
+	"github.com/DavidGodefroid/locksql/internal/sysconf"
 )
 
 // Exit codes shared by every subcommand.
@@ -22,12 +27,15 @@ var version = "dev"
 const usageText = `usage: locksql <command> [arguments]
 
 Human commands:
-  console  --profile P [--project DIR] [--skip-permissions]
+  locksql                                     wire agents, add a database if none, start the console
+  add                                         add a database profile to the user config
+  console  [--profile P] [--project DIR] [--skip-permissions]
                                               run the approval console
   forget   --profile P                        remove the keychain secret
   install  [--client USER] [--print]          separate the console from the agent (sudo)
   doctor   [--profile P]                      check that this machine is safe-ready
-  init     claude|codex|cursor|gemini [...]   write agent integration files
+  init     [claude|codex|cursor|gemini ...]   write agent integration files into the project
+                                              (default: the agents found on this machine)
 
 Client commands:
   status   [--profile P]
@@ -60,13 +68,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "locksql:", err)
 		return exitFail
 	}
-	return runEnv(env{stdin: os.Stdin, stdout: stdout, stderr: stderr, cwd: cwd}, args)
+	return runEnv(env{
+		stdin: os.Stdin, stdout: stdout, stderr: stderr, cwd: cwd,
+		tty:      term.IsTerminal(int(os.Stdin.Fd())),
+		agentEnv: agentinit.SystemEnv,
+		sys:      sysconf.Load,
+	}, args)
 }
 
 // runEnv is run with an explicit environment.
 func runEnv(e env, args []string) int {
 	stdout, stderr := e.stdout, e.stderr
 	if len(args) == 0 {
+		if e.tty {
+			return runOnboard(e)
+		}
 		fmt.Fprint(stderr, usageText)
 		return exitUsage
 	}
@@ -78,7 +94,9 @@ func runEnv(e env, args []string) int {
 		fmt.Fprint(stdout, usageText)
 		return exitOK
 	case "console":
-		return runConsole(args[1:], stdout, stderr)
+		return runConsole(e, args[1:])
+	case "add":
+		return runAdd(e, args[1:])
 	case "status":
 		return runStatus(e, args[1:])
 	case "forget":

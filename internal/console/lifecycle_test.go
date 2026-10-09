@@ -27,6 +27,7 @@ func (c *columnsSession) Columns(context.Context, string) ([]engine.ColumnInfo, 
 // file on disk.
 func TestPIIScanAtEveryStart(t *testing.T) {
 	root, state := t.TempDir(), t.TempDir()
+	rulesPath := filepath.Join(root, pii.RulesFile)
 	log, err := audit.Open(state)
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +44,7 @@ func TestPIIScanAtEveryStart(t *testing.T) {
 
 	// First run: the file is written.
 	io.answers = []string{"a"}
-	ap, err = st.piiBootstrap(context.Background(), sess, []string{"app"}, root, state, key, ap)
+	ap, err = st.piiBootstrap(context.Background(), sess, []string{"app"}, rulesPath, state, key, ap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +53,7 @@ func TestPIIScanAtEveryStart(t *testing.T) {
 	}
 
 	// The human edits the file meanwhile (a comment and a new allow rule).
-	path := filepath.Join(root, pii.RulesFile)
+	path := rulesPath
 	b, _ := os.ReadFile(path)
 	if err := os.WriteFile(path, append(b, []byte("\n[[allow]]\ncolumn = \"app.users.nickname\"\n")...), 0o644); err != nil {
 		t.Fatal(err)
@@ -60,7 +61,7 @@ func TestPIIScanAtEveryStart(t *testing.T) {
 
 	// Next start: nothing new, no prompt.
 	io.prompts = nil
-	if _, err := st.piiBootstrap(context.Background(), sess, []string{"app"}, root, state, key, ap); err != nil {
+	if _, err := st.piiBootstrap(context.Background(), sess, []string{"app"}, rulesPath, state, key, ap); err != nil {
 		t.Fatal(err)
 	}
 	if len(io.prompts) != 0 {
@@ -71,14 +72,14 @@ func TestPIIScanAtEveryStart(t *testing.T) {
 	sess.cols = append(sess.cols, engine.ColumnInfo{DB: "app", Table: "users", Column: "phone_number", Type: "varchar"},
 		engine.ColumnInfo{DB: "app", Table: "users", Column: "nickname", Type: "varchar"})
 	io.answers = []string{"a"}
-	ap, err = st.piiBootstrap(context.Background(), sess, []string{"app"}, root, state, key, ap)
+	ap, err = st.piiBootstrap(context.Background(), sess, []string{"app"}, rulesPath, state, key, ap)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(strings.Join(ap.PIIMask, ","), "app.users.phone_number") {
 		t.Fatalf("new column not masked: %v", ap.PIIMask)
 	}
-	onDisk, err := pii.LoadRules(root)
+	onDisk, err := pii.LoadRulesFile(rulesPath)
 	if err != nil {
 		t.Fatal(err)
 	}

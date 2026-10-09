@@ -265,3 +265,24 @@ func TestProjectKey(t *testing.T) {
 		t.Errorf("ProjectKey outside a project = %q, want user", got)
 	}
 }
+
+func TestParseProfilesValidates(t *testing.T) {
+	ok := []byte("[profiles.\"dev\"]\nengine = \"postgres\"\nhost = \"127.0.0.1\"\n")
+	ps, err := ParseProfiles(ok, "x.toml", t.TempDir())
+	if err != nil || ps["dev"].Port != 5432 {
+		t.Fatalf("ParseProfiles = %+v, %v", ps, err)
+	}
+	if _, err := ParseProfiles([]byte("[profiles.dev]\nengine = \"oracle\"\nhost = \"h\"\n"), "x.toml", "/"); err == nil {
+		t.Fatal("unknown engine accepted")
+	}
+}
+
+func TestUserConfigPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("HOME", dir)
+	p, err := UserConfigPath()
+	if err != nil || !strings.HasSuffix(p, filepath.Join("locksql", "config.toml")) {
+		t.Fatalf("UserConfigPath = %q, %v", p, err)
+	}
+}

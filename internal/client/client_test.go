@@ -109,8 +109,37 @@ func TestDialWithoutConsoleIsErrNoConsole(t *testing.T) {
 	if !strings.Contains(err.Error(), "locksql console --profile uat") {
 		t.Fatalf("message lacks the start command: %q", err.Error())
 	}
-	if StartCommand("uat") != "locksql console --profile uat" {
-		t.Fatalf("StartCommand = %q", StartCommand("uat"))
+	if StartCommand("uat", "") != "locksql console --profile uat" {
+		t.Fatalf("StartCommand = %q", StartCommand("uat", ""))
+	}
+	if !strings.Contains(err.Error(), "run `locksql`") || nc.Project != "" {
+		t.Fatalf("outside a project: %q (project %q)", err.Error(), nc.Project)
+	}
+}
+
+// Inside a project the socket key is the project's: the hint names the
+// project, since a bare `locksql` elsewhere would serve the user key.
+func TestDialWithoutConsoleInProjectNamesProject(t *testing.T) {
+	runtimeDir(t)
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, ".locksql"), 0o755)
+	os.WriteFile(filepath.Join(root, ".locksql", "config.toml"), nil, 0o644)
+	sub := filepath.Join(root, "pkg")
+	os.Mkdir(sub, 0o755)
+	_, err := Dial(sub, "uat")
+	var nc *NoConsoleError
+	if !errors.As(err, &nc) || nc.Project != root {
+		t.Fatalf("err = %#v", err)
+	}
+	want := "locksql console --profile uat --project " + root
+	if nc.Command() != want || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "run `locksql`") {
+		t.Fatalf("hint %q / command %q", err.Error(), nc.Command())
+	}
+	if got := DescribeError(err).Start; got != want {
+		t.Fatalf("json start = %q", got)
+	}
+	if got := StartCommand("uat", "/a b/it's"); got != `locksql console --profile uat --project '/a b/it'\''s'` {
+		t.Fatalf("quoting: %s", got)
 	}
 }
 

@@ -3,6 +3,7 @@ package pii
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -82,5 +83,17 @@ func TestLoadRulesRefusesBadFiles(t *testing.T) {
 		if _, err := LoadRules(root); err == nil {
 			t.Errorf("%s: LoadRules accepted", name)
 		}
+	}
+}
+
+func TestRulesFileRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "locksql", "pii.toml")
+	r := Rules{Mask: []string{"app.users.email"}}
+	if err := SaveRulesFile(path, r); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadRulesFile(path)
+	if err != nil || !slices.Equal(got.Mask, r.Mask) {
+		t.Fatalf("got %+v, %v", got, err)
 	}
 }

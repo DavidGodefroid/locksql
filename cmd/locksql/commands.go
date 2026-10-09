@@ -11,9 +11,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/DavidGodefroid/locksql/internal/agentinit"
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
+	"github.com/DavidGodefroid/locksql/internal/sysconf"
 )
 
 // env is what a command reads and writes; tests replace it.
@@ -21,6 +23,14 @@ type env struct {
 	stdin          io.Reader
 	stdout, stderr io.Writer
 	cwd            string
+	// tty reports whether stdin is a terminal.
+	tty bool
+	// agentEnv is the account the agents are wired for; nil means none.
+	agentEnv func() (agentinit.Env, error)
+	// sys loads the separated-mode setup; nil means same-user mode.
+	sys func() (*sysconf.Config, error)
+	// euid is the effective user id; nil means os.Geteuid.
+	euid func() int
 }
 
 // usageError is a usage or configuration error (exit 3).
@@ -189,11 +199,21 @@ func resolveProfile(e env, name string) (string, error) {
 	}
 	switch len(names) {
 	case 0:
-		return "", usagef("no profile is configured; add one to .locksql/config.toml")
+		return "", usagef("no profile is configured; run `locksql` (or `locksql add`) to add one, or, in a project, add one to .locksql/config.toml")
 	case 1:
 		return names[0], nil
 	}
 	return "", usagef("several profiles are configured (%s): pass --profile", strings.Join(names, ", "))
+}
+
+// startCommandOf is the command that starts the console err found
+// missing.
+func startCommandOf(err error, profile string) string {
+	var nc *client.NoConsoleError
+	if errors.As(err, &nc) {
+		return nc.Command()
+	}
+	return client.StartCommand(profile, "")
 }
 
 func profileNames(cfg *config.Config) []string {
@@ -354,7 +374,7 @@ func statusAll(e env, names []string, asJSON bool) int {
 		c, err := client.Dial(e.cwd, n)
 		switch {
 		case errors.Is(err, client.ErrNoConsole):
-			ps.Start = client.StartCommand(n)
+			ps.Start = startCommandOf(err, n)
 		case err != nil:
 			ps.Error = err.Error()
 		default:

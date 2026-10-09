@@ -117,21 +117,24 @@ every peer on the socket.
 # 1. Install (see Install below for packages, checksums and signatures)
 curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh
 
-# 2. In your project: wire your agent and get an example config
-locksql init claude                             # or codex, cursor, gemini
+# 2. Wire your agents, add a database, start the console (keep this terminal open)
+locksql
 
-# 3. Uncomment and adapt the profile in .locksql/config.toml, then in a
-#    second terminal that you keep in view:
-locksql console --profile dev
-
-# 4. Optional, recommended: run the console under its own OS account
-#    (Linux, macOS), then check the machine
-locksql install
-locksql doctor
-
-# 5. Ask your agent: "how many orders were placed yesterday on dev?"
+# 3. In your agent, anywhere: "how many orders were placed yesterday on dev?"
 #    Approve or deny each query in the console.
 ```
+
+Bare `locksql` in a terminal does three things. It wires every installed
+agent (Claude Code, Codex, Gemini CLI, Cursor) for your user account, so
+that they work from any directory. When no database is configured it asks
+for one (a URL first) and saves a profile to your user config. Then it starts
+the console. Later runs only wire agents installed since, then start the
+console.
+
+Separated mode (`sudo locksql install`, then `locksql doctor`) and project
+mode (`.locksql/config.toml` committed with the repository, `locksql init
+<agent>`) are described in [docs/usage.md](docs/usage.md). Separated mode
+always uses a project config, read by both accounts.
 
 ## How it works
 
@@ -329,7 +332,9 @@ explain_cost_refuse = 0             # engine cost units; 0 = off
 
 ### PII rules
 
-PII column rules live in `.locksql/pii.toml`:
+PII column rules live in `.locksql/pii.toml` inside a project, and in
+`<user config dir>/locksql/pii.toml` (`~/.config/locksql/pii.toml` on Linux)
+elsewhere:
 
 ```toml
 [[mask]]
@@ -422,22 +427,33 @@ PATH), then installs `/usr/local/bin/locksql`, with `sudo` if needed:
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh
 less install.sh                     # read it first
-sh install.sh                       # LOCKSQL_VERSION=v0.1.0 to pin a version
+sh install.sh                       # LOCKSQL_VERSION=v0.1.1 to pin a version
 ```
 
 `LOCKSQL_INSTALL_DIR=~/.local/bin` installs without `sudo`, but the binary is
 then owned by your account and `locksql doctor` warns: in separated mode, the
 console must run a binary the agent cannot replace (`sudo locksql install`
-copies it to `/usr/local/bin`).
+copies it to `/usr/local/bin`). To upgrade, run the script again.
 
-**Debian, Ubuntu, Fedora, RHEL, Alpine.** Download the package from the
-[releases page](https://github.com/DavidGodefroid/locksql/releases), then:
+**Debian, Ubuntu, Fedora, RHEL, Alpine.** Packages install
+`/usr/bin/locksql`, owned by root. Copy-paste, the latest version and your
+architecture are detected:
 
 ```sh
-sudo apt install ./locksql_<version>_linux_amd64.deb     # Debian, Ubuntu
-sudo dnf install ./locksql_<version>_linux_amd64.rpm     # Fedora, RHEL
-sudo apk add --allow-untrusted ./locksql_<version>_linux_amd64.apk   # Alpine
+V=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/DavidGodefroid/locksql/releases/latest); V=${V##*/v}
+A=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+U=https://github.com/DavidGodefroid/locksql/releases/download/v$V/locksql_${V}_linux_$A
+
+# Debian, Ubuntu
+curl -fsSLO $U.deb && sudo apt install ./locksql_${V}_linux_$A.deb
+# Fedora, RHEL
+sudo dnf install $U.rpm
+# Alpine
+curl -fsSLO $U.apk && sudo apk add --allow-untrusted ./locksql_${V}_linux_$A.apk
 ```
+
+To upgrade, run the same lines again; to remove, `sudo apt remove locksql`
+(or `dnf remove`, `apk del`).
 
 **By hand.** Download `locksql_<version>_<os>_<arch>.tar.gz`, `checksums.txt`
 and `checksums.txt.sigstore.json`, then:

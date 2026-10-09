@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func assertNoLeak(t *testing.T, s engine.Session, d sqlclass.Dialect, rules pii.
 	p := config.Profile{Name: "it", Engine: eng, Host: "127.0.0.1", Tier: config.TierWrite, Credentials: config.CredentialsAsk,
 		Limits: config.DefaultLimits(false), Detectors: []string{}}
 	srv, err := console.NewServer(console.ServerConfig{
-		Policy: config.NewPolicy(p, rules.Mask, rules.Allow), Root: t.TempDir(), Session: nopClose{s},
+		Policy: config.NewPolicy(p, rules.Mask, rules.Allow), RulesPath: filepath.Join(t.TempDir(), pii.RulesFile), Session: nopClose{s},
 		DBUser: "it", Databases: []string{"app"}, Audit: log, IO: yesIO{t}, Version: "it",
 	})
 	if err != nil {

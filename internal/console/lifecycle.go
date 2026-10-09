@@ -55,6 +55,33 @@ func (st *starter) audit(rec audit.Record) {
 	}
 }
 
+// rulesPathFor is the PII rules file: in the project when there is one,
+// else next to the user config.
+func rulesPathFor(projectRoot, userConfigPath string) string {
+	if projectRoot != "" {
+		return filepath.Join(projectRoot, pii.RulesFile)
+	}
+	return filepath.Join(filepath.Dir(userConfigPath), filepath.Base(pii.RulesFile))
+}
+
+// legacyRulesNotice is one line when, outside a project, cwd holds a
+// .locksql/pii.toml (where rules lived before the user-dir file) and the
+// user-dir rules file does not exist yet; "" otherwise. Nothing is copied:
+// the human decides.
+func legacyRulesNotice(cwd, projectRoot, rulesPath string) string {
+	if projectRoot != "" {
+		return ""
+	}
+	old := filepath.Join(cwd, pii.RulesFile)
+	if st, err := os.Stat(old); err != nil || !st.Mode().IsRegular() {
+		return ""
+	}
+	if _, err := os.Stat(rulesPath); err == nil {
+		return ""
+	}
+	return fmt.Sprintf("note: %s is no longer read outside a project; PII rules now live in %s (copy it there to keep its rules)", old, rulesPath)
+}
+
 // Run is `locksql console`: the start-up sequence of spec §6, then the
 // request loop until Ctrl-C, logout, :quit or a timeout.
 func Run(ctx context.Context, o Options) error {
@@ -97,11 +124,15 @@ func Run(ctx context.Context, o Options) error {
 		sort.Strings(names)
 		return fmt.Errorf("%w: no profile %q (profiles: %s)", ErrConfig, o.Profile, strings.Join(names, ", "))
 	}
-	piiRoot := cfg.ProjectRoot
-	if piiRoot == "" {
-		if piiRoot, err = filepath.Abs(o.Cwd); err != nil {
+	var ucp string
+	if cfg.ProjectRoot == "" {
+		if ucp, err = config.UserConfigPath(); err != nil {
 			return err
 		}
+	}
+	rulesPath := rulesPathFor(cfg.ProjectRoot, ucp)
+	if n := legacyRulesNotice(o.Cwd, cfg.ProjectRoot, rulesPath); n != "" {
+		o.IO.Println(safeText(n, false))
 	}
 	key := config.ApprovedKey(cfg.ProjectRoot, p.Name)
 	log, err := audit.Open(o.StateDir)
@@ -119,7 +150,7 @@ func Run(ctx context.Context, o Options) error {
 		if !ok {
 			return config.Policy{}, fmt.Errorf("profile %q is no longer in the config", o.Profile)
 		}
-		r, err := pii.LoadRules(piiRoot)
+		r, err := pii.LoadRulesFile(rulesPath)
 		if err != nil {
 			return config.Policy{}, err
 		}
@@ -210,7 +241,7 @@ func Run(ctx context.Context, o Options) error {
 	}
 
 	// 7. PII first-run proposal.
-	approved, err = st.piiBootstrap(ctx, sess, dbs, piiRoot, o.StateDir, key, approved)
+	approved, err = st.piiBootstrap(ctx, sess, dbs, rulesPath, o.StateDir, key, approved)
 	if err != nil {
 		closeSess()
 		return err
@@ -229,7 +260,7 @@ func Run(ctx context.Context, o Options) error {
 	}
 
 	s, err := NewServer(ServerConfig{
-		Policy: approved, Root: piiRoot, StateDir: o.StateDir, ApprovedKey: key,
+		Policy: approved, RulesPath: rulesPath, StateDir: o.StateDir, ApprovedKey: key,
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Now: o.Now,
 		SkipPermissions: o.SkipPermissions, Version: o.Version, LoadPolicy: loadPolicy,
 		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health,
@@ -242,6 +273,10 @@ func Run(ctx context.Context, o Options) error {
 	s.refused = refusedFP
 	s.audit(audit.Record{Event: audit.EventLogin, Decision: "ok"})
 	o.IO.Println("socket " + path)
+	if cfg.ProjectRoot != "" {
+		// Only agents working under this root dial this socket.
+		o.IO.Println("serving agents in " + safeText(cfg.ProjectRoot, false))
+	}
 	o.IO.Println("console commands: :review  :status  :quit · Ctrl-C ends the session")
 	s.println("Listening…")
 
@@ -488,8 +523,8 @@ func (st *starter) privileges(ctx context.Context, sess engine.Session) error {
 // the columns that look like personal data and that no rule names yet
 // (neither a mask nor an allow rule). It returns the policy including the
 // accepted rules, which only tighten it.
-func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []string, root, stateDir, key string, ap config.Policy) (config.Policy, error) {
-	_, statErr := os.Stat(filepath.Join(root, pii.RulesFile))
+func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []string, rulesPath, stateDir, key string, ap config.Policy) (config.Policy, error) {
+	_, statErr := os.Stat(rulesPath)
 	firstRun := errors.Is(statErr, fs.ErrNotExist)
 	scan := dbs
 	if st.profile.Database != "" {
@@ -565,13 +600,13 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 	case firstRun:
 		// Write the file even when empty, so that the first-run proposal
 		// runs once.
-		if err := pii.SaveRules(root, rules); err != nil {
+		if err := pii.SaveRulesFile(rulesPath, rules); err != nil {
 			return ap, err
 		}
 	case config.Fingerprint(next) != config.Fingerprint(ap):
 		// Add the accepted rules to the file as it is on disk, so that
 		// unconfirmed edits are neither lost nor applied.
-		onDisk, err := pii.LoadRules(root)
+		onDisk, err := pii.LoadRulesFile(rulesPath)
 		if err != nil {
 			return ap, err
 		}
@@ -582,7 +617,7 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 				}
 			}
 		}
-		if err := pii.SaveRules(root, onDisk); err != nil {
+		if err := pii.SaveRulesFile(rulesPath, onDisk); err != nil {
 			return ap, err
 		}
 	}
@@ -592,7 +627,7 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 			return ap, err
 		}
 		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "tightened"})
-		st.io.Println(fmt.Sprintf("PII: %d mask rules in %s", len(next.PIIMask), pii.RulesFile))
+		st.io.Println(fmt.Sprintf("PII: %d mask rules in %s", len(next.PIIMask), rulesPath))
 	}
 	return next, nil
 }
