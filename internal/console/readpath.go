@@ -199,6 +199,13 @@ func (s *Server) readPlan(ctx context.Context, sess engine.Session, pl *plan, sq
 		return "", false, err
 	}
 	pl.an = an
+	if len(s.rules.Mask) > 0 {
+		for _, rel := range an.Relations {
+			if name := rel[strings.LastIndexByte(rel, '.')+1:]; pii.StatementTextRelation(name) {
+				return name + " holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist", true, nil
+			}
+		}
+	}
 	pl.isExplain = parsed.Explain
 	body := parsed.SQL
 	if parsed.Explain {

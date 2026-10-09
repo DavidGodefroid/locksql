@@ -237,3 +237,16 @@ func TestSocketCannotAnswerThePrompt(t *testing.T) {
 		t.Fatal("a statement ran")
 	}
 }
+
+func TestStatementTextViewsRefused(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.sess.cols = append(h.sess.cols, engine.ColumnInfo{DB: "app", Table: "pg_stat_statements", Column: "query", View: true})
+	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT query FROM pg_stat_statements LIMIT 1"})
+	wantCode(t, resp, ipc.CodeRefused)
+	if !strings.Contains(resp.Error.Message, "text of past statements") {
+		t.Errorf("refusal: %q", resp.Error.Message)
+	}
+	// MySQL/MariaDB system schemas are not in the catalog: refused as unknown.
+	resp = h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT processlist_info FROM performance_schema.threads LIMIT 1"})
+	wantCode(t, resp, ipc.CodeRefused)
+}

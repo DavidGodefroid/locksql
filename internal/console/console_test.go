@@ -37,6 +37,7 @@ type fakeSession struct {
 	closed   bool
 	// count answers the k-anonymity row counts (nil: the default result).
 	count *engine.Result
+	cols  []engine.ColumnInfo // appended to the catalog Columns answers
 }
 
 func (f *fakeSession) ServerVersion() string { return "11.4.0-MariaDB" }
@@ -66,6 +67,7 @@ func (f *fakeSession) Columns(_ context.Context, db string) ([]engine.ColumnInfo
 	} {
 		out = append(out, engine.ColumnInfo{DB: db, Table: c.t, Column: c.c, Type: "text"})
 	}
+	out = append(out, f.cols...)
 	return out, nil
 }
 func (f *fakeSession) Explain(_ context.Context, _ string, sql string) (engine.Plan, error) {

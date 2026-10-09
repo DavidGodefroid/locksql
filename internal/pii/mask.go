@@ -260,10 +260,26 @@ var statsRelations = map[string]bool{
 	"SQLITE_STAT3": true, "SQLITE_STAT4": true,
 }
 
+// statementTextRelations hold the text of past statements, and so the
+// values the console substituted for placeholders and cell references.
+// MySQL and MariaDB keep theirs in system schemas the console's catalog
+// does not list (performance_schema, sys, information_schema).
+var statementTextRelations = map[string]bool{
+	"PG_STAT_STATEMENTS": true, "PG_STAT_ACTIVITY": true,
+}
+
+// StatementTextRelation reports a relation that holds the text of past
+// statements.
+func StatementTextRelation(name string) bool {
+	return statementTextRelations[strings.ToUpper(name)]
+}
+
 // StatsViolation refuses, while mask rules exist, a statement that names a
 // planner statistics relation (pg_stats, pg_statistic, mysql.column_stats,
 // information_schema.COLUMN_STATISTICS, sqlite_stat4, ...): they hold real
 // values of the columns, rule columns included, which no rule can match.
+// It refuses a statement-text relation (pg_stat_statements, pg_stat_activity)
+// the same way.
 func StatsViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
 	if len(r.Mask) == 0 {
 		return nil
@@ -276,6 +292,9 @@ func StatsViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
 	for i := range toks {
 		if n := a.name(i); statsRelations[n] {
 			return &sqlclass.Refusal{Reason: fmt.Sprintf("%s holds sample values of table columns, PII columns included, that could not be masked; it cannot be read while PII mask rules exist", strings.ToLower(n))}
+		}
+		if n := a.name(i); statementTextRelations[n] {
+			return &sqlclass.Refusal{Reason: fmt.Sprintf("%s holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist", strings.ToLower(n))}
 		}
 	}
 	return nil
