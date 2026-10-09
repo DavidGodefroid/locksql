@@ -184,14 +184,14 @@ func TestKAnonymityChecks(t *testing.T) {
 			{SQL: "SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM users u WHERE status = 'x' GROUP BY status) AS locksql_k", Grouped: true},
 		}},
 		{"WITH c AS (SELECT * FROM users) SELECT count(*) FROM c WHERE email IN ('a', 'b') LIMIT 1", []KCheck{
-			{SQL: `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" IN ('a', 'b')`},
+			{SQL: `SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM "app"."users" WHERE "app"."users"."email" = 'a' UNION ALL SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" = 'b') AS locksql_k`},
 			{SQL: "WITH c AS (SELECT * FROM users) SELECT COUNT(*) FROM c WHERE email IN ('a', 'b')"},
 		}},
 		// The subjects are counted in the column's own table, whatever the
 		// join multiplies.
 		{"SELECT o.id FROM users u JOIN orders o ON o.user_id = u.id WHERE u.email IS NULL AND u.salary IN (1, 2) LIMIT 1", []KCheck{
 			{SQL: `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" IS NULL`},
-			{SQL: `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."salary" IN (1, 2)`},
+			{SQL: `SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM "app"."users" WHERE "app"."users"."salary" = 1 UNION ALL SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."salary" = 2) AS locksql_k`},
 			{SQL: "SELECT COUNT(*) FROM users u JOIN orders o ON o.user_id = u.id WHERE u.email IS NULL AND u.salary IN (1, 2)"},
 		}},
 		{"SELECT u.id FROM users u JOIN contacts c ON c.email = u.email LIMIT 1", nil},
@@ -222,6 +222,51 @@ func TestKCheckQuoting(t *testing.T) {
 		if len(a.KChecks) == 0 || a.KChecks[0].SQL != want {
 			t.Errorf("%s: checks %+v, want first %q", d, a.KChecks, want)
 		}
+	}
+}
+
+// An IN list is an OR: its subjects are counted per value and the smallest
+// count is checked, so a list of values known to exist cannot carry a probe
+// through the check. Placeholder values are the human's and are not counted.
+func TestKCheckINCountsEachValue(t *testing.T) {
+	for d, want := range map[sqlclass.Dialect]string{
+		sqlclass.Postgres: `SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM "app"."users" WHERE "app"."users"."email" = 'a' UNION ALL SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" = 'b') AS locksql_k`,
+		sqlclass.SQLite:   `SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM "app"."users" WHERE "app"."users"."email" = 'a' UNION ALL SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" = 'b') AS locksql_k`,
+		sqlclass.MySQL:    "SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM `app`.`users` WHERE `app`.`users`.`email` = 'a' UNION ALL SELECT COUNT(*) FROM `app`.`users` WHERE `app`.`users`.`email` = 'b') AS locksql_k",
+	} {
+		a, err := analyze(t, d, "SELECT id FROM users WHERE email IN ('a', 'b') LIMIT 1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(a.KChecks) == 0 || a.KChecks[0] != (KCheck{SQL: want}) {
+			t.Errorf("%s: checks %+v, want first %q", d, a.KChecks, want)
+		}
+	}
+	cases := map[string]string{
+		// One value: the shape of = 'a'.
+		"SELECT id FROM users WHERE email IN ('a') LIMIT 1": `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" = 'a'`,
+		// A value repeated is counted once.
+		"SELECT id FROM users WHERE email IN ('a', 'a') LIMIT 1": `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" = 'a'`,
+		// Placeholders mixed with literals: only the literals are counted.
+		"SELECT id FROM users WHERE email IN ('${e}', 'a', 'b') LIMIT 1": `SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM "app"."users" WHERE "app"."users"."email" = 'a' UNION ALL SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" = 'b') AS locksql_k`,
+		"SELECT id FROM users WHERE email IN ('${e}', 'a') LIMIT 1":      `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" = 'a'`,
+	}
+	for sql, want := range cases {
+		a, err := analyze(t, sqlclass.Postgres, sql)
+		if err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		if len(a.KChecks) != 2 || a.KChecks[0] != (KCheck{SQL: want}) {
+			t.Errorf("%s:\n got %+v\nwant first %q", sql, a.KChecks, want)
+		}
+	}
+	// Placeholders only: no check.
+	a, err := analyze(t, sqlclass.Postgres, "SELECT id FROM users WHERE email IN ('${e}', '${f}') LIMIT 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.KChecks) != 0 {
+		t.Errorf("placeholder-only IN list: checks %+v, want none", a.KChecks)
 	}
 }
 

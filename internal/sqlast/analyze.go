@@ -1542,14 +1542,21 @@ func isSubquery(e Expr) bool {
 	return ok
 }
 
-// constFilter notes a PII column compared with constants in a clause: pred
-// is the comparison as it applies to the column ("= 'x'", "IN (1, 2)", "IS
-// NULL"), with its token replacements applied. Besides the k-anonymity check
-// of the node (kCheck), the subjects of every masked source of the column
-// are counted in its own base table: a join cannot multiply them.
-func (an *analyzer) constFilter(sc *scope, clause string, col Prov, pred string) error {
+// constFilter notes a PII column compared with constants in a clause: preds
+// are the comparisons as they apply to the column ("= 'x'", "IS NULL"), with
+// their token replacements applied; an IN list gives one "= v" per literal
+// the agent wrote. Besides the k-anonymity check of the node (kCheck), the
+// subjects of every masked source of the column are counted in its own base
+// table: a join cannot multiply them. Several preds are counted apart and
+// the smallest count is checked, since an IN list is an OR: one count over
+// the whole list would pass on the values the agent knows exist and tell
+// whether the last one does.
+func (an *analyzer) constFilter(sc *scope, clause string, col Prov, preds ...string) error {
 	if clause == "join" {
 		return refuse("compare PII columns with constants in WHERE, not in a JOIN condition")
+	}
+	if len(preds) == 0 {
+		return refusef("a PII column (%s) has no value the k-anonymity check could count", piiNames(col))
 	}
 	var checks []string
 	for _, s := range col.Sources {
@@ -1563,7 +1570,20 @@ func (an *analyzer) constFilter(sc *scope, clause string, col Prov, pred string)
 		if s.DB == "" {
 			table = an.quoteIdent(s.Table)
 		}
-		checks = append(checks, "SELECT COUNT(*) FROM "+table+" WHERE "+table+"."+an.quoteIdent(s.Column)+" "+pred)
+		where := " WHERE " + table + "." + an.quoteIdent(s.Column) + " "
+		if len(preds) == 1 {
+			checks = append(checks, "SELECT COUNT(*) FROM "+table+where+preds[0])
+			continue
+		}
+		arms := make([]string, len(preds))
+		for i, p := range preds {
+			count := "COUNT(*)"
+			if i == 0 {
+				count += " AS locksql_n"
+			}
+			arms[i] = "SELECT " + count + " FROM " + table + where + p
+		}
+		checks = append(checks, "SELECT MIN(locksql_n) FROM ("+strings.Join(arms, " UNION ALL ")+") AS locksql_k")
 	}
 	if len(checks) == 0 {
 		return refusef("a PII column (%s) has no base column the k-anonymity check could count", piiNames(col))
@@ -1587,8 +1607,9 @@ func (an *analyzer) constFilter(sc *scope, clause string, col Prov, pred string)
 // valueLiterals records the placeholders among lits, compared with the PII
 // column col, and plans the substitution of those whose value is known.
 // human reports that every literal is a placeholder: the agent chose none
-// of the values, so the filter needs no k-anonymity check.
-func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human bool, err error) {
+// of the values, so the filter needs no k-anonymity check. agent are the
+// literals that are not placeholders, the values the agent chose.
+func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human bool, agent []Expr, err error) {
 	human = len(lits) > 0
 	var target Source
 	for _, s := range col.Sources {
@@ -1597,7 +1618,8 @@ func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human boo
 			break
 		}
 	}
-	for _, e := range lits {
+	for _, lit := range lits {
+		e := lit
 		for {
 			p, ok := e.(*Paren)
 			if !ok {
@@ -1608,20 +1630,23 @@ func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human boo
 		l, ok := e.(*Literal)
 		if !ok || l.Kind != LitString {
 			human = false
+			agent = append(agent, lit)
 			continue
 		}
 		body, ok := unquote(an.d, l.Text)
 		if !ok {
 			human = false
+			agent = append(agent, lit)
 			continue
 		}
 		kind, name, isPH, valid := ParsePlaceholder(body)
 		if !isPH {
 			human = false
+			agent = append(agent, lit)
 			continue
 		}
 		if !valid {
-			return false, refusef("malformed placeholder %q: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}'", body)
+			return false, nil, refusef("malformed placeholder %q: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}'", body)
 		}
 		if an.dry == 0 {
 			an.a.Values = append(an.a.Values, ValueUse{Kind: kind, Name: name, Column: target, InList: inList, Span: l.Sp})
@@ -1629,7 +1654,7 @@ func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human boo
 		value, known := an.env.Value(kind, name)
 		if !known {
 			if kind == ValueRef {
-				return false, refusef("unknown reference %s: it is not from this console session, or its result is too old", name)
+				return false, nil, refusef("unknown reference %s: it is not from this console session, or its result is too old", name)
 			}
 			continue // the console asks the human before the run
 		}
@@ -1638,15 +1663,15 @@ func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human boo
 			if kind == ValueRef {
 				// The agent never saw this value: the refusal must not
 				// tell it what the value holds.
-				return false, refusef("reference %s cannot be substituted", name)
+				return false, nil, refusef("reference %s cannot be substituted", name)
 			}
-			return false, err
+			return false, nil, err
 		}
 		if an.dry == 0 {
 			an.a.Replacements = append(an.a.Replacements, Replacement{Span: l.Sp, Text: q})
 		}
 	}
-	return human, nil
+	return human, agent, nil
 }
 
 // humanFilter is a PII filter whose values all come from placeholders: no
@@ -1812,7 +1837,7 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 		if !isConstant(otherExpr) {
 			return refusef("a PII column (%s) may only be compared with a literal", piiNames(col))
 		}
-		human, err := an.valueLiterals(col, []Expr{otherExpr}, false)
+		human, _, err := an.valueLiterals(col, []Expr{otherExpr}, false)
 		if err != nil {
 			return err
 		}
@@ -1938,13 +1963,12 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 	if isSubquery(e.X) {
 		return scalarPII(x)
 	}
-	var items []string
 	for _, it := range e.List {
 		if !isConstant(it) {
 			return refusef("a PII column (%s) may only be tested against a list of literals", piiNames(x))
 		}
 	}
-	human, err := an.valueLiterals(x, e.List, true)
+	human, agent, err := an.valueLiterals(x, e.List, true)
 	if err != nil {
 		return err
 	}
@@ -1952,10 +1976,15 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 		return an.humanFilter(clause)
 	}
 	an.litFilter()
-	for _, it := range e.List {
-		items = append(items, an.frag(it.Span()))
+	// Each value the agent wrote is counted apart; placeholder values are
+	// the human's.
+	var preds []string
+	for _, it := range agent {
+		if p := "= " + an.frag(it.Span()); !slices.Contains(preds, p) {
+			preds = append(preds, p)
+		}
 	}
-	return an.constFilter(sc, clause, x, "IN ("+strings.Join(items, ", ")+")")
+	return an.constFilter(sc, clause, x, preds...)
 }
 
 // unquote returns the value of a plain single-quoted string literal.

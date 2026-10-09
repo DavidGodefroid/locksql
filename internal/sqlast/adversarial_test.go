@@ -25,9 +25,9 @@ func wantRefused(t *testing.T, d sqlclass.Dialect, sql string) {
 // the PII column; a FROM-less node had no check at all.
 func TestAdvJoinAmplification(t *testing.T) {
 	quoted := map[sqlclass.Dialect]string{
-		sqlclass.Postgres: `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."salary" IN (50000, 50001, 50002)`,
-		sqlclass.SQLite:   `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."salary" IN (50000, 50001, 50002)`,
-		sqlclass.MySQL:    "SELECT COUNT(*) FROM `app`.`users` WHERE `app`.`users`.`salary` IN (50000, 50001, 50002)",
+		sqlclass.Postgres: `SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM "app"."users" WHERE "app"."users"."salary" = 50000 UNION ALL SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."salary" = 50001 UNION ALL SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."salary" = 50002) AS locksql_k`,
+		sqlclass.SQLite:   `SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM "app"."users" WHERE "app"."users"."salary" = 50000 UNION ALL SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."salary" = 50001 UNION ALL SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."salary" = 50002) AS locksql_k`,
+		sqlclass.MySQL:    "SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM `app`.`users` WHERE `app`.`users`.`salary` = 50000 UNION ALL SELECT COUNT(*) FROM `app`.`users` WHERE `app`.`users`.`salary` = 50001 UNION ALL SELECT COUNT(*) FROM `app`.`users` WHERE `app`.`users`.`salary` = 50002) AS locksql_k",
 	}
 	for d, want := range quoted {
 		sql := "SELECT o.id FROM users u, orders o WHERE u.id = 3 AND u.salary IN (50000, 50001, 50002) LIMIT 1"

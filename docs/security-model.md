@@ -212,9 +212,12 @@ Records contain the SQL and metadata, never secrets and never row data.
   constant PII filter is counted twice: the subjects of the column in its own
   base table (a join cannot multiply them; a column of a view, which has no
   base table to count in, cannot be filtered on), and the rows the
-  statement's own `FROM`/`WHERE` selects. A join still multiplies the second
+  statement's own `FROM`/`WHERE` selects. `IN (literals)` counts each value
+  apart and takes the smallest count: an `IN` list is an `OR`, and one count
+  over the whole list would pass on values the agent knows exist and tell
+  whether one more does. A join still multiplies the second
   count: `WHERE u.id = 3 AND u.salary IN (...)` joined with a large table
-  passes when at least `k` users earn one of those salaries, and tells the
+  passes when at least `k` users earn each of those salaries, and tells the
   agent that user 3 is among them. It does
   not stop differencing attacks: two approved queries whose sets differ by
   one row (all customers of a city, then the same minus one email) still

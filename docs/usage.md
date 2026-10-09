@@ -649,7 +649,10 @@ PII columns (columns under a mask rule) may be used as follows:
   (shown on the approval screen). Each constant filter on a PII column counts
   the subjects of that column in its own base table
   (`SELECT COUNT(*) FROM db.table WHERE db.table.col = 'literal'`), so a
-  join cannot multiply them; another count is built from the statement's own
+  join cannot multiply them. `IN (literals)` counts each value apart and
+  takes the smallest count (`SELECT MIN(locksql_n) FROM (... UNION ALL ...)`),
+  so a value absent from the table refuses the list; placeholder values in
+  the list are not counted. Another count is built from the statement's own
   `FROM`, `WHERE`, `GROUP BY` and `HAVING` text. Fewer than `k_anonymity`
   rows in any count, or in the smallest group, refuses the statement.
 - `EXPLAIN` of a statement that filters, groups or aggregates PII is refused.

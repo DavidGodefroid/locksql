@@ -3,6 +3,7 @@ package console
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
+	"github.com/DavidGodefroid/locksql/internal/engine/sqlite"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 )
 
@@ -65,6 +67,59 @@ func TestKAnonymityRefusesSmallSets(t *testing.T) {
 	pr = h.plan(t, "SELECT email, count(*) FROM users GROUP BY email LIMIT 5", false)
 	h.io.answers = []string{"y"}
 	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+}
+
+// An IN list is an OR over its values: with k = 2, two values that exist
+// twice each must not carry a third, absent one through the check. Each value
+// is counted apart on a real SQLite database and the smallest count decides.
+func TestKAnonymityINCountsEachValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, note TEXT)`,
+		`INSERT INTO users (email, note) VALUES ('a@example.com', 'n'), ('a@example.com', 'n'), ('b@example.com', 'n'), ('b@example.com', 'n')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	p := config.Profile{
+		Name: "lite", Engine: config.EngineSQLite, Path: path, Tier: config.TierRead,
+		Detectors: []string{"email"}, Limits: config.DefaultLimits(false),
+	}
+	p.Limits.KAnonymity = 2
+	sess, err := sqlite.Engine{}.Connect(context.Background(), p, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sess.Close() })
+	h := newHarness(t, p, func(c *ServerConfig) {
+		c.Policy = config.NewPolicy(p, []string{"main.users.email"}, nil)
+		c.Session, c.Databases = sess, []string{"main"}
+	})
+	run := func(q string) ipc.Response {
+		t.Helper()
+		var pr ipc.PlanResult
+		h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "main", SQL: q}, &pr)
+		h.io.answers = []string{"y"}
+		return h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	}
+	resp := run("SELECT id FROM users WHERE email IN ('a@example.com', 'b@example.com', 'absent@example.com') LIMIT 5")
+	wantCode(t, resp, ipc.CodeRefused)
+	if !strings.Contains(resp.Error.Message, "fewer than 2 rows") {
+		t.Errorf("refusal: %q", resp.Error.Message)
+	}
+	if out := h.io.output(); !strings.Contains(out, "SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM") {
+		t.Errorf("approval screen does not show the per-value count:\n%s", out)
+	}
+	// The values that exist pass.
+	if resp := run("SELECT id FROM users WHERE email IN ('a@example.com', 'b@example.com') LIMIT 5"); resp.Error != nil {
+		t.Errorf("existing values refused: %d %q", resp.Error.Code, resp.Error.Message)
+	}
 }
 
 func TestResponseIsLevelled(t *testing.T) {
