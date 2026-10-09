@@ -13,7 +13,8 @@ import (
 
 // TLSConfig builds the client TLS configuration of a network profile's tls
 // mode, as libpq's sslmode: nil for disable and for a Unix socket; prefer and
-// require encrypt without verifying; verify-ca checks the chain against
+// require encrypt without verifying, except require with tls_ca, which is
+// verify-ca as in libpq; verify-ca checks the chain against
 // tls_ca (or the system roots); verify-full checks the chain and that the
 // certificate names host. "" is prefer, the mode of policies approved before
 // the setting existed.
@@ -26,6 +27,9 @@ func TLSConfig(p config.Profile) (*tls.Config, error) {
 		return nil, nil
 	}
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if mode == config.TLSRequire && p.TLSCA != "" {
+		mode = config.TLSVerifyCA // as libpq: require with a root CA verifies the chain
+	}
 	switch mode {
 	case config.TLSPrefer, config.TLSRequire:
 		cfg.InsecureSkipVerify = true // encrypt, do not verify

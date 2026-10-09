@@ -529,6 +529,12 @@ func TLSRank(mode string) int {
 	return slices.Index(tlsModes, mode)
 }
 
+// TLSVerifiesChain reports a tls mode that verifies the server's certificate
+// chain: verify-ca and verify-full, and require with tls_ca, as libpq.
+func TLSVerifiesChain(mode, ca string) bool {
+	return TLSRank(mode) >= TLSRank(TLSVerifyCA) || (mode == TLSRequire && ca != "")
+}
+
 // IsLoopback reports a host that names this machine: "localhost" or a
 // loopback IP literal. Any other name, even one that resolves to loopback,
 // is remote.

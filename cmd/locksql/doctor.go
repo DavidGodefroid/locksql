@@ -347,7 +347,7 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 
 	if p.Engine != config.EngineSQLite && !strings.HasPrefix(p.Host, "/") {
 		switch {
-		case config.TLSRank(p.TLS) >= config.TLSRank(config.TLSVerifyCA):
+		case config.TLSVerifiesChain(p.TLS, p.TLSCA):
 			add(checkOK, "tls", "tls = \""+p.TLS+"\": the server certificate is verified", "")
 		case p.SSH != nil && config.IsLoopback(p.Host):
 			add(checkOK, "tls", "the database is on the bastion: the ssh tunnel encrypts the whole path (tls = \""+p.TLS+"\")", "")

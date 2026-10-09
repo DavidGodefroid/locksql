@@ -85,6 +85,8 @@ func TestTLSConfigModes(t *testing.T) {
 	}{
 		{"prefer any cert", p(config.TLSPrefer, "db.example", ""), otherCA, true},
 		{"require any cert", p(config.TLSRequire, "db.example", ""), otherCA, true},
+		{"require with ca good, wrong name", p(config.TLSRequire, "other.name", caFile), good, true},
+		{"require with ca unknown CA", p(config.TLSRequire, "db.example", caFile), otherCA, false},
 		{"verify-ca good", p(config.TLSVerifyCA, "other.name", caFile), good, true},
 		{"verify-ca unknown CA", p(config.TLSVerifyCA, "db.example", caFile), otherCA, false},
 		{"verify-full good", p(config.TLSVerifyFull, "db.example", caFile), good, true},

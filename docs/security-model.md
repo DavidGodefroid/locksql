@@ -135,7 +135,7 @@ Records contain the SQL and metadata, never secrets and never row data.
   |---|---|---|---|
   | `disable` | no | no | no |
   | `prefer` | if offered | no | no |
-  | `require` | yes, else refuse | no | no |
+  | `require` | yes, else refuse | only with `tls_ca` | no |
   | `verify-ca` | yes, else refuse | yes | no |
   | `verify-full` | yes, else refuse | yes | yes (`host`) |
 
@@ -143,7 +143,8 @@ Records contain the SQL and metadata, never secrets and never row data.
   path or a loopback host (`localhost` or a loopback IP literal).
   `production = true` refuses `disable` and `prefer` unless the host is
   loopback or a socket path. `tls_ca` is a PEM bundle that replaces the
-  system roots; it is refused with `disable` and `prefer`. A weaker `tls` or
+  system roots; it is refused with `disable` and `prefer`, and with
+  `require` it verifies the chain, as libpq does. A weaker `tls` or
   any change of `tls_ca` loosens the approved policy and needs the human's
   confirmation.
 

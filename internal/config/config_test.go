@@ -390,3 +390,17 @@ func TestSSHCredentialsDefaultToProfile(t *testing.T) {
 		t.Errorf("ssh.credentials = %q", ps["p"].SSH.Credentials)
 	}
 }
+
+func TestTLSVerifiesChain(t *testing.T) {
+	for _, c := range []struct {
+		mode, ca string
+		want     bool
+	}{
+		{"", "", false}, {TLSPrefer, "", false}, {TLSRequire, "", false},
+		{TLSRequire, "/ca.pem", true}, {TLSVerifyCA, "", true}, {TLSVerifyFull, "", true},
+	} {
+		if got := TLSVerifiesChain(c.mode, c.ca); got != c.want {
+			t.Errorf("TLSVerifiesChain(%q, %q) = %v, want %v", c.mode, c.ca, got, c.want)
+		}
+	}
+}

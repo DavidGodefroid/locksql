@@ -113,6 +113,11 @@ func TestDoctorTLSMode(t *testing.T) {
 	if !hasCheck(profileChecks(d, strong, nil, t.TempDir()), checkOK, "tls") {
 		t.Error("verify-full not reported ok")
 	}
+	withCA := weak
+	withCA.TLSCA = "/ca.pem"
+	if !hasCheck(profileChecks(d, withCA, nil, t.TempDir()), checkOK, "tls") {
+		t.Error("require with tls_ca, which verifies the chain, not reported ok")
+	}
 }
 
 func TestDoctorSSHKeyFile(t *testing.T) {

@@ -484,7 +484,8 @@ tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
 - Default: `verify-full` for a remote host, `prefer` for a Unix socket or a
   loopback host. A remote profile that must keep an unverified connection
   needs an explicit `tls = "require"`.
-- `tls_ca` is refused with `disable` and `prefer`.
+- `tls_ca` is refused with `disable` and `prefer`. With `require`, as in libpq,
+  it verifies the chain against `tls_ca` (as `verify-ca`), not the host name.
 - `production = true` refuses `disable` and `prefer` on a remote host.
 - Through an `ssh` bastion, `tls` protects the leg from the bastion to the
   database, and its default follows `host` as seen from the bastion (see
