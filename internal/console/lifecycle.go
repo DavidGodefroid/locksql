@@ -416,7 +416,7 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 	open := func(secret []byte) (engine.Session, error) {
 		cctx, cancel := context.WithTimeout(ctx, connectTimeout)
 		defer cancel()
-		return eng.Connect(cctx, prof, secret)
+		return eng.Connect(cctx, prof, secret, nil)
 	}
 	if p.Engine == config.EngineSQLite {
 		sess, err := open(nil)

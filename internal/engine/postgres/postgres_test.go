@@ -21,7 +21,7 @@ func TestRegistered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Connect(context.Background(), config.Profile{Engine: config.EngineMySQL}, nil); err == nil {
+	if _, err := e.Connect(context.Background(), config.Profile{Engine: config.EngineMySQL}, nil, nil); err == nil {
 		t.Error("connected a mysql profile")
 	}
 }

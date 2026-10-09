@@ -89,7 +89,7 @@ func DriverOptions() []client.Option {
 
 // Connect opens the main and the control connections, detects the server
 // flavour and applies the session settings of the profile's tier.
-func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (engine.Session, error) {
+func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte, dialFn engine.DialFunc) (engine.Session, error) {
 	if p.Engine != config.EngineMariaDB && p.Engine != config.EngineMySQL {
 		return nil, fmt.Errorf("mysql: profile engine is %q", p.Engine)
 	}
@@ -103,15 +103,15 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (eng
 		return nil, fmt.Errorf("mysql: %w", err)
 	}
 	socket := strings.HasPrefix(p.Host, "/")
-	conn, err := dial(ctx, addr, p.User, pw, p.Database, 0, tlsCfg)
+	conn, err := dial(ctx, addr, p.User, pw, p.Database, 0, tlsCfg, dialFn)
 	if err != nil && tlsCfg != nil && config.TLSRank(p.TLS) <= config.TLSRank(config.TLSPrefer) && noServerTLS(err) {
 		tlsCfg = nil // prefer: the server offers no TLS, fall back to plain
-		conn, err = dial(ctx, addr, p.User, pw, p.Database, 0, nil)
+		conn, err = dial(ctx, addr, p.User, pw, p.Database, 0, nil, dialFn)
 	}
 	if err != nil {
 		return nil, connectError(err, pw)
 	}
-	ctl, err := dial(ctx, addr, p.User, pw, "", killTimeout, tlsCfg)
+	ctl, err := dial(ctx, addr, p.User, pw, "", killTimeout, tlsCfg, dialFn)
 	if err != nil {
 		conn.Close()
 		return nil, connectError(err, pw)
@@ -149,16 +149,23 @@ func (s *session) modeName() string {
 
 // dial connects with a deadline covering the TCP connect and the handshake
 // (the driver has none for the handshake). readTimeout > 0 bounds every
-// later read and write too. A nil tlsCfg dials plain, and a plain TCP
+// later read and write too. dialFn, when not nil, opens the network
+// connection instead of a direct dial. A nil tlsCfg dials plain, and a plain TCP
 // connection is guarded against a server asking for the password.
-func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duration, tlsCfg *tls.Config) (*client.Conn, error) {
+func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duration, tlsCfg *tls.Config, dialFn engine.DialFunc) (*client.Conn, error) {
 	deadline := time.Now().Add(connectTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
 	var guard *clearTextGuard
 	dialer := func(ctx context.Context, network, address string) (net.Conn, error) {
-		nc, err := (&net.Dialer{Deadline: deadline}).DialContext(ctx, network, address)
+		var nc net.Conn
+		var err error
+		if dialFn != nil {
+			nc, err = dialFn(ctx, network, address)
+		} else {
+			nc, err = (&net.Dialer{Deadline: deadline}).DialContext(ctx, network, address)
+		}
 		if err != nil {
 			return nil, err
 		}

@@ -21,7 +21,7 @@ var fakeNext *fakeSession
 
 type fakeEngine struct{}
 
-func (fakeEngine) Connect(context.Context, config.Profile, []byte) (engine.Session, error) {
+func (fakeEngine) Connect(context.Context, config.Profile, []byte, engine.DialFunc) (engine.Session, error) {
 	return fakeNext, nil
 }
 

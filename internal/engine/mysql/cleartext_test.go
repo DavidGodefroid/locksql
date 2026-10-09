@@ -106,7 +106,7 @@ func TestRefusesClearTextAuthSwitchWithoutTLS(t *testing.T) {
 	const secret = "S3cr3t-pa55word"
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err = Engine{}.Connect(ctx, p, []byte(secret))
+	_, err = Engine{}.Connect(ctx, p, []byte(secret), nil)
 	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("clear text")) {
 		t.Fatalf("connect error = %v, want the clear-text refusal", err)
 	}

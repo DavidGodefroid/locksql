@@ -25,7 +25,7 @@ func TestRequireNeverFallsBack(t *testing.T) {
 	for _, mode := range []string{config.TLSRequire, config.TLSVerifyCA, config.TLSVerifyFull} {
 		p := config.Profile{Engine: config.EngineMySQL, Host: "127.0.0.1", Port: port, User: "u", TLS: mode}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, err := Engine{}.Connect(ctx, p, []byte("pw"))
+		_, err := Engine{}.Connect(ctx, p, []byte("pw"), nil)
 		cancel()
 		if err == nil || !strings.Contains(err.Error(), "TLS") {
 			t.Errorf("%s: err = %v, want a TLS refusal", mode, err)

@@ -109,13 +109,19 @@ func (s *session) modeName() string {
 
 // Connect opens the connection to the profile's database and applies the
 // session settings of the profile's tier.
-func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (engine.Session, error) {
+func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte, dial engine.DialFunc) (engine.Session, error) {
 	if p.Engine != config.EnginePostgres {
 		return nil, fmt.Errorf("postgres: profile engine is %q", p.Engine)
 	}
 	cfg, err := connConfig(p, secret)
 	if err != nil {
 		return nil, err
+	}
+	if dial != nil {
+		cfg.DialFunc = pgconn.DialFunc(dial)
+		// The host name is the dialer's to resolve (it may only exist on the
+		// far side of a tunnel): hand it through untouched.
+		cfg.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }
 	}
 	s := &session{cfg: cfg, conns: map[string]*dbConn{}, tier: p.Tier, timeout: p.Limits.StatementTimeout, tlsMode: p.TLS, host: p.Host}
 	dc, err := s.open(ctx, p.Database)

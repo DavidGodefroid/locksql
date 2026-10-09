@@ -139,7 +139,7 @@ func TestLexSingle(t *testing.T) {
 }
 
 func TestConnectRefusesOtherEngines(t *testing.T) {
-	_, err := Engine{}.Connect(t.Context(), config.Profile{Engine: config.EngineSQLite}, nil)
+	_, err := Engine{}.Connect(t.Context(), config.Profile{Engine: config.EngineSQLite}, nil, nil)
 	if err == nil {
 		t.Error("sqlite profile accepted")
 	}
