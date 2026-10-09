@@ -50,6 +50,10 @@ type Prov struct {
 	// Lit is set when some values may be literals of the statement (a
 	// UNION of a column and a constant, for instance).
 	Lit bool
+	// inst are the FROM bindings (relation instances) a plain value is
+	// read from: two values with the same single source and the same
+	// single instance are one column of one row.
+	inst []int
 }
 
 // Table is one relation of the catalog.
@@ -213,6 +217,10 @@ type analyzer struct {
 	inRecCTE  int
 	relations map[string]bool
 	uses      map[Use]bool
+	// nbind numbers the relation instances; rekeyed maps a (CTE
+	// reference, instance in its body) pair to its instance.
+	nbind   int
+	rekeyed map[[2]int]int
 }
 
 // Analyze resolves the provenance of every output column of st, checks the
@@ -225,7 +233,7 @@ func Analyze(st *Statement, env Env) (*Analysis, error) {
 	if env.Value == nil {
 		env.Value = func(ValueKind, string) (string, bool) { return "", false }
 	}
-	an := &analyzer{env: env, st: st, d: st.Dialect, a: &Analysis{}, relations: map[string]bool{}, uses: map[Use]bool{}}
+	an := &analyzer{env: env, st: st, d: st.Dialect, a: &Analysis{}, relations: map[string]bool{}, uses: map[Use]bool{}, rekeyed: map[[2]int]int{}}
 	cols, err := an.query(st.Query, nil)
 	if err != nil {
 		return nil, err
@@ -401,7 +409,51 @@ func union(a, b Prov) Prov {
 		Sensitive: a.Sensitive || b.Sensitive,
 		Modes:     mergeSources(a.Modes, b.Modes),
 		Lit:       a.Lit || b.Lit || a.Kind == KindConst || b.Kind == KindConst,
+		inst:      mergeSources(a.inst, b.inst),
 	}
+}
+
+// sameColumn reports two values that are one source column read from one
+// relation instance: comparing them only tests the column for NULL.
+func sameColumn(a, b Prov) bool {
+	return a.Kind == KindIdentity && b.Kind == KindIdentity && len(a.Sources) == 1 && len(b.Sources) == 1 &&
+		a.Sources[0] == b.Sources[0] && len(a.inst) == 1 && len(b.inst) == 1 && a.inst[0] == b.inst[0]
+}
+
+// selfComparison refuses a PII column compared with itself.
+func selfComparison() error {
+	return refuse("a PII column compared with itself selects the rows the k-anonymity check does not count")
+}
+
+// bind gives the columns of a FROM binding a fresh relation instance. A
+// CTE is analysed once for all its references: its columns are re-keyed
+// per reference, keeping apart the instances inside its body.
+func (an *analyzer) bind(cols []column) []column {
+	an.nbind++
+	b := an.nbind
+	out := slices.Clone(cols)
+	for i := range out {
+		p := &out[i].prov
+		if p.Kind != KindIdentity || len(p.Sources) == 0 {
+			continue
+		}
+		var inst []int
+		for _, k := range p.inst {
+			key := [2]int{b, k}
+			id, ok := an.rekeyed[key]
+			if !ok {
+				an.nbind++
+				id = an.nbind
+				an.rekeyed[key] = id
+			}
+			inst = append(inst, id)
+		}
+		if len(p.inst) == 0 {
+			inst = []int{b}
+		}
+		p.inst = inst
+	}
+	return out
 }
 
 // mergeSources appends to a the elements of b it lacks (sources, modes).
@@ -839,7 +891,7 @@ func (an *analyzer) tableName(t *TableName) (*relation, error) {
 			if err != nil {
 				return nil, err
 			}
-			return &relation{name: binding, cols: cols}, nil
+			return &relation{name: binding, cols: an.bind(cols)}, nil
 		}
 	}
 	if an.d == sqlclass.MySQL && len(t.Parts) == 1 && t.Parts[0] == "DUAL" {
@@ -898,6 +950,7 @@ func (an *analyzer) tableName(t *TableName) (*relation, error) {
 		}
 		r.cols = cols
 	}
+	r.cols = an.bind(r.cols)
 	return r, nil
 }
 
@@ -1247,6 +1300,7 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 			return arg, nil
 		}
 		arg.Kind = max(arg.Kind, KindIdentity)
+		arg.inst = nil // a value of the group, not of one row
 		return arg, nil
 	}
 	if arg.Kind == KindConst {
@@ -1759,6 +1813,9 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 		if l.Lit || r.Lit {
 			return litPartner(mixProv(l, r))
 		}
+		if sameColumn(l, r) {
+			return selfComparison()
+		}
 		return nil
 	}
 	return refusef("a PII column (%s) may only be compared with a constant or another PII column", piiNames(col))
@@ -1835,6 +1892,9 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 			}
 			if !sub.Sensitive {
 				return unmaskedPartner(x, sub)
+			}
+			if sameColumn(x, sub) {
+				return selfComparison()
 			}
 			return nil
 		}
