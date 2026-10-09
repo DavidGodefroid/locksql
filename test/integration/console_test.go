@@ -273,10 +273,13 @@ production = true
 			t.Fatalf("type-ahead run: want denied, got %+v", resp)
 		}
 
-		// A typed answer approves; the email column comes back masked.
+		// A typed answer approves; the email column comes back redacted,
+		// the default mode of a proposed rule.
 		id = plan()
 		cl.send(ipc.MethodQueryRun, ipc.RunParams{PlanID: id})
-		c.expect("Approve? [y/N] ")
+		if seen := c.expect("Approve? [y/N] "); !strings.Contains(seen, "masked outputs: email → redact") {
+			t.Errorf("approval screen lacks the mask mode: %q", seen)
+		}
 		c.send("y\n")
 		resp, err = cl.recv(30 * time.Second)
 		if err != nil || resp.Error != nil {
@@ -286,7 +289,7 @@ production = true
 		if err := json.Unmarshal(resp.Result, &rr); err != nil {
 			t.Fatal(err)
 		}
-		if len(rr.Rows) != 1 || rr.Rows[0][1] != "u***(17)" {
+		if len(rr.Rows) != 1 || rr.Rows[0][1] != "<redacted>" {
 			t.Fatalf("rows: %+v", rr.Rows)
 		}
 
