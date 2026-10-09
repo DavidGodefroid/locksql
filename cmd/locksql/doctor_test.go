@@ -207,6 +207,9 @@ func TestLinuxInstallScriptSetgidSocketDir(t *testing.T) {
 	for _, want := range []string{
 		`printf 'd /run/locksql 2710 locksql locksql-clients -\n' > /etc/tmpfiles.d/locksql.conf`,
 		"|| install -d -m 2710 -o locksql -g locksql-clients /run/locksql",
+		// A system without systemd has no /etc/tmpfiles.d: the fallback
+		// must still be reached.
+		"install -d -m 0755 -o root -g root /etc/tmpfiles.d\nprintf",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("install script lacks %q:\n%s", want, s)

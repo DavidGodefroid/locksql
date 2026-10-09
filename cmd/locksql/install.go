@@ -143,6 +143,7 @@ cat > /etc/locksql/system.toml <<'LOCKSQL'
 %[5]sLOCKSQL
 chown root:root /etc/locksql/system.toml
 chmod 0644 /etc/locksql/system.toml
+install -d -m 0755 -o root -g root /etc/tmpfiles.d
 printf 'd %[6]s 2710 %[2]s %[3]s -\n' > /etc/tmpfiles.d/locksql.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/locksql.conf 2>/dev/null || install -d -m 2710 -o %[2]s -g %[3]s %[6]s
 `, client, svc, group, shellQuote(bin), systemToml(svc, group, dir), dir)
