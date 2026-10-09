@@ -35,6 +35,11 @@ func TestDetectorMasks(t *testing.T) {
 		contains string   // optional substring of the output
 	}{
 		{det: "email", in: `{"to":"jean.dupont@example.com","status":"sent"}`, masked: []string{"jean.dupont@example.com"}, kept: []string{`"status":"sent"`, `{"to":"`}, contains: "j***(23)"},
+		{det: "email", in: "to jöhn@example.com.", masked: []string{"öhn", "@example"}, kept: []string{"to ", "."}, contains: "to j***(16)."},
+		{det: "email", in: "rené.dupont@example.com", masked: []string{"ené", "dupont"}, contains: "r***(23)"},
+		{det: "email", in: "john@exämple.com", masked: []string{"ohn", "exämple"}, contains: "j***(16)"},
+		{det: "email", in: "rene\u0301.dupont@example.com", masked: []string{"ene", "\u0301", "dupont"}, contains: "r***(24)"}, // decomposed é
+		{det: "email", in: "ÉLÈVE_42@école.fr", masked: []string{"LÈVE", "école"}, contains: "É***(17)"},
 		{det: "be_niss", in: "ref 85073003328 ok", masked: []string{"85073003328"}, contains: "ref 8***(11) ok"},
 		{det: "be_niss", in: "ref 85.07.30-033.28 ok", masked: []string{"033"}},
 		{det: "be_niss", in: "ref 85 07 30 033 28 ok", masked: []string{"033"}},
