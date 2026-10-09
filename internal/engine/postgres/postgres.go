@@ -83,15 +83,28 @@ type session struct {
 	major   int
 	tier    config.Tier
 	timeout time.Duration
-	plain   bool // TCP without TLS (sslmode=prefer fell back)
+	plain   bool // TCP without TLS (tls = prefer fell back)
+	tlsMode string
+	host    string
 }
 
-// Notices reports a TCP connection that is not encrypted.
+// Notices reports a connection an attacker on the path could read or stand
+// in for: plain TCP, or TLS whose certificate is not verified.
 func (s *session) Notices() []string {
-	if s.plain {
-		return []string{"the connection is NOT encrypted: the server offers no TLS (use an SSH tunnel for a remote server)"}
+	switch {
+	case s.plain:
+		return []string{"the connection is NOT encrypted (tls = \"" + s.modeName() + "\"); set tls = \"verify-full\" or use an ssh tunnel"}
+	case config.TLSRank(s.tlsMode) < config.TLSRank(config.TLSVerifyCA) && !strings.HasPrefix(s.host, "/") && !config.IsLoopback(s.host):
+		return []string{"the server certificate is not verified (tls = \"" + s.modeName() + "\"); set tls = \"verify-full\""}
 	}
 	return nil
+}
+
+func (s *session) modeName() string {
+	if s.tlsMode == "" {
+		return config.TLSPrefer
+	}
+	return s.tlsMode
 }
 
 // Connect opens the connection to the profile's database and applies the
@@ -104,7 +117,7 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte) (eng
 	if err != nil {
 		return nil, err
 	}
-	s := &session{cfg: cfg, conns: map[string]*dbConn{}, tier: p.Tier, timeout: p.Limits.StatementTimeout}
+	s := &session{cfg: cfg, conns: map[string]*dbConn{}, tier: p.Tier, timeout: p.Limits.StatementTimeout, tlsMode: p.TLS, host: p.Host}
 	dc, err := s.open(ctx, p.Database)
 	if err != nil {
 		return nil, err
@@ -137,18 +150,23 @@ func connConfig(p config.Profile, secret []byte) (*pgx.ConnConfig, error) {
 		kv("user", p.User),
 		kv("dbname", db),
 		kv("passfile", ""),
-		// prefer, as libpq's default: TLS when the server offers it. An
-		// active attacker can strip it, read the queries and results, and
-		// ask for the password in clear (AuthenticationCleartextPassword,
-		// which pgx honours); a profile setting to require verified TLS is
-		// a follow-up, the spec has none.
-		"sslmode=prefer",
+		"sslmode=disable", // TLS is set below from the profile's tls mode
 	}
 	cfg, err := pgx.ParseConfig(strings.Join(settings, " "))
 	if err != nil {
 		return nil, fmt.Errorf("postgres: invalid connection settings: %s", redact(err.Error(), string(secret)))
 	}
 	cfg.Password = string(secret)
+	tlsCfg, err := engine.TLSConfig(p)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: %w", err)
+	}
+	cfg.TLSConfig = tlsCfg
+	cfg.Fallbacks = nil
+	if tlsCfg != nil && config.TLSRank(p.TLS) <= config.TLSRank(config.TLSPrefer) {
+		// prefer: retry in plain when the server refuses TLS.
+		cfg.Fallbacks = []*pgconn.FallbackConfig{{Host: cfg.Host, Port: cfg.Port}}
+	}
 	cfg.ConnectTimeout = connectTimeout
 	cfg.RuntimeParams = map[string]string{"application_name": "locksql", "client_encoding": "UTF8"}
 	cfg.ValidateConnect = nil
