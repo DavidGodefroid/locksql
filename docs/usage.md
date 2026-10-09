@@ -613,8 +613,9 @@ locksql doctor   [--profile P]
 - The parser is fail-closed: syntax it does not know is refused. Functions
   must be in the allowlist (`internal/sqlast/funcs.go`: common string,
   numeric, date and JSON functions, aggregates and window functions;
-  schema-qualified functions are refused). System schemas and relations
-  (`information_schema`, `pg_catalog`, `mysql`, `performance_schema`, `sys`,
+  schema-qualified functions are refused). `REPEAT`, `LPAD`, `RPAD`,
+  `SPACE` and `ZEROBLOB` take a literal length of at most 65 536. System
+  schemas and relations (`information_schema`, `pg_catalog`, `mysql`, `performance_schema`, `sys`,
   SQLite internals) are refused, and so are `pg_stat_statements` and
   `pg_stat_activity` while mask rules exist (they hold the text of past
   statements). Every table and column must resolve

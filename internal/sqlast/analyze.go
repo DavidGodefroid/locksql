@@ -1222,6 +1222,9 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 	if !funcAllowed(an.d, f.Name) {
 		return Prov{}, refusef("function %s is not in the allowlist", strings.ToLower(f.Name))
 	}
+	if err := checkSizeArg(f); err != nil {
+		return Prov{}, err
+	}
 	if f.Over != nil {
 		for _, e := range f.Over.PartitionBy {
 			if err := an.noPIIValue(e, sc, "window PARTITION BY"); err != nil {

@@ -1,6 +1,7 @@
 package sqlast
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
@@ -74,6 +75,29 @@ var dialectFuncs = map[sqlclass.Dialect]set{
 		"TYPEOF", "LIKELIHOOD", "LIKELY", "UNLIKELY", "RANDOM", "JSON", "JSON_EXTRACT", "JSON_ARRAY",
 		"JSON_OBJECT", "JSON_TYPE", "JSON_VALID", "JSON_ARRAY_LENGTH", "JSON_QUOTE",
 	),
+}
+
+// maxSizeArg caps the length argument of the functions that build a value
+// of a given size: the result is allocated per cell, and an EXPLAIN plan
+// does not show its cost.
+const maxSizeArg = 65536
+
+// sizeArg is, per size function, the index of its length argument.
+var sizeArg = map[string]int{"REPEAT": 1, "LPAD": 1, "RPAD": 1, "SPACE": 0, "ZEROBLOB": 0}
+
+// checkSizeArg refuses a size function whose length argument is not an
+// integer literal of at most maxSizeArg.
+func checkSizeArg(f *FuncCall) error {
+	i, ok := sizeArg[f.Name]
+	if !ok || i >= len(f.Args) {
+		return nil
+	}
+	if l, ok := f.Args[i].(*Literal); ok && l.Kind == LitNumber && l.Text != "" && strings.Trim(l.Text, "0123456789") == "" {
+		if n, err := strconv.Atoi(l.Text); err == nil && n <= maxSizeArg {
+			return nil
+		}
+	}
+	return refusef("%s: the length argument must be an integer literal at most %d", strings.ToLower(f.Name), maxSizeArg)
 }
 
 // funcAllowed reports whether the function name may be called.

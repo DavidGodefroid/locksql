@@ -2,6 +2,7 @@ package sqlast
 
 import (
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 
@@ -304,6 +305,57 @@ func TestAdvSelfComparison(t *testing.T) {
 			"SELECT a.name FROM users a JOIN users b ON a.email = b.email LIMIT 10",
 			"WITH c AS (SELECT email FROM users) SELECT x.email FROM c x JOIN c y ON x.email = y.email LIMIT 10",
 			"SELECT name FROM users u WHERE u.email IN (SELECT v.email FROM users v) LIMIT 10",
+		} {
+			if _, err := analyze(t, d, sql); err != nil {
+				t.Errorf("%s %q: %v", d, sql, err)
+			}
+		}
+	}
+}
+
+// Size functions allocate their result per cell: an unbounded length
+// passes the EXPLAIN gate with a constant-cost plan and exhausts memory.
+func TestAdvSizeFunctionCap(t *testing.T) {
+	const msg = ": the length argument must be an integer literal at most 65536"
+	shapes := func(call string) []string {
+		return []string{
+			strings.ReplaceAll(call, "N", "1073741823"),
+			strings.ReplaceAll(call, "N", "65537"),
+			strings.ReplaceAll(call, "N", "-1"),
+			strings.ReplaceAll(call, "N", "id"),
+			strings.ReplaceAll(call, "N", "10 * 10"),
+			strings.ReplaceAll(call, "N", "1.5"),
+			strings.ReplaceAll(call, "N", "'10'"),
+			strings.ReplaceAll(call, "N", "(SELECT 10)"),
+		}
+	}
+	funcs := map[string]string{"repeat": "repeat(name, N)", "lpad": "lpad(name, N, '0')", "rpad": "rpad(name, N, '0')"}
+	for _, d := range []sqlclass.Dialect{sqlclass.MySQL, sqlclass.Postgres, sqlclass.SQLite} {
+		all := maps.Clone(funcs)
+		switch d {
+		case sqlclass.MySQL:
+			all["space"] = "space(N)"
+		case sqlclass.SQLite:
+			all["zeroblob"] = "zeroblob(N)"
+		}
+		for name, call := range all {
+			for _, expr := range shapes(call) {
+				sql := "SELECT " + expr + " FROM users LIMIT 1"
+				_, err := analyze(t, d, sql)
+				if err == nil || !strings.Contains(err.Error(), name+msg) {
+					t.Errorf("%s %q: got %v, want a length refusal", d, sql, err)
+				}
+			}
+			sql := "SELECT " + strings.ReplaceAll(call, "N", "65536") + " FROM users LIMIT 1"
+			if _, err := analyze(t, d, sql); err != nil {
+				t.Errorf("%s %q: %v", d, sql, err)
+			}
+		}
+		wantRefused(t, d, "SELECT repeat('x', 1073741823), repeat('y', 1073741823) LIMIT 1")
+		for _, sql := range []string{
+			"SELECT lpad(name, 10, '0') FROM users LIMIT 1",
+			"SELECT rpad(name, 0, '0') FROM users LIMIT 1",
+			"SELECT repeat('-', 3) FROM users LIMIT 1",
 		} {
 			if _, err := analyze(t, d, sql); err != nil {
 				t.Errorf("%s %q: %v", d, sql, err)
