@@ -174,16 +174,18 @@ sequenceDiagram
    screen and waits:
 
    ```
-   ━━ DEV ━━ 127.0.0.1 / app ━━ user alice ━━ tier read
-   requested by uid 1000 (alice) · pid 48211 (claude)
-   SELECT id, email FROM customers WHERE country = 'BE' LIMIT 20
-   class READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
-   reads: app.customers
-   returns at most 20 rows
-   PII columns touched: customers.email (select)
-   masked outputs: email → redact
-   PII: masked (4 column rules; detectors: email, phone, iban, card)
-   Approve? [y/N]
+   ╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
+   │ requested by uid 1000 (alice) · pid 48211 (claude)
+   │
+   │   SELECT id, email FROM customers WHERE country = 'BE' LIMIT 20
+   │
+   │ class READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
+   │ reads: app.customers
+   │ returns at most 20 rows
+   │ PII columns touched: customers.email (select)
+   │ masked outputs: email → redact
+   │ PII: masked (4 column rules; detectors: email, phone, iban, card)
+   ╰─ Approve? [y/N]
    ```
 
 3. On approval the console runs its k-anonymity counts when the statement

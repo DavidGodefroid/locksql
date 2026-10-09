@@ -346,18 +346,20 @@ the socket and is audited.
 ### Approving a query
 
 ```
-━━ DEV ━━ 127.0.0.1 / app ━━ user alice ━━ tier read
-requested by uid 1000 (alice) · pid 48211 (claude)
-SELECT country, COUNT(*) FROM customers WHERE email = 'a@example.com' GROUP BY country LIMIT 20
-class READ · EXPLAIN: customers ref ~1 · est. 1 rows examined · verdict OK
-reads: app.customers
-returns at most 20 rows
-PII columns touched: customers.email (where)
-k-anonymity check (k=5) runs first: SELECT COUNT(*) FROM `app`.`customers` WHERE `app`.`customers`.`email` = 'a@example.com'
-k-anonymity check (k=5) runs first: SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM customers WHERE email = 'a@example.com' GROUP BY country) AS locksql_k
-row estimates are hidden from the agent: the statement filters on a PII column
-PII: masked (4 column rules; detectors: email, phone, iban, card)
-Approve? [y/N]
+╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
+│ requested by uid 1000 (alice) · pid 48211 (claude)
+│
+│   SELECT country, COUNT(*) FROM customers WHERE email = 'a@example.com' GROUP BY country LIMIT 20
+│
+│ class READ · EXPLAIN: customers ref ~1 · est. 1 rows examined · verdict OK
+│ reads: app.customers
+│ returns at most 20 rows
+│ PII columns touched: customers.email (where)
+│ k-anonymity check (k=5) runs first: SELECT COUNT(*) FROM `app`.`customers` WHERE `app`.`customers`.`email` = 'a@example.com'
+│ k-anonymity check (k=5) runs first: SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM customers WHERE email = 'a@example.com' GROUP BY country) AS locksql_k
+│ row estimates are hidden from the agent: the statement filters on a PII column
+│ PII: masked (4 column rules; detectors: email, phone, iban, card)
+╰─ Approve? [y/N]
 ```
 
 - The screen names the requesting uid, pid and process (as the kernel reports

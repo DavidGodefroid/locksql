@@ -102,16 +102,18 @@
   <h2 id="approve">See what you approve</h2>
   <p class="prose">When the agent calls <code>locksql run PLAN_ID</code>, the console shows you this screen and waits. The statement runs only after you approve it.</p>
   <figure>
-    <pre tabindex="0"><code>━━ DEV ━━ 127.0.0.1 / app ━━ user alice ━━ tier read
-requested by uid 1000 (alice) · pid 48211 (claude)
-SELECT id, email FROM customers WHERE country = 'BE' LIMIT 20
-class READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
-reads: app.customers
-returns at most 20 rows
-PII columns touched: customers.email (select)
-masked outputs: email → redact
-PII: masked (4 column rules; detectors: email, phone, iban, card)
-Approve? [y/N]</code></pre>
+    <code>╭─ <pre tabindex="0"> · DEV · 127.0.0.1 / app · user alice · tier read ─────
+    │ ested by uid 1000 (alice) · pid 48211 (claude)
+    │
+    │   CT id, email FROM customers WHERE country = 'BE' LIMIT 20
+    │
+    │ s READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
+    │ s: app.customers
+    │ rns at most 20 rows
+    │ columns touched: customers.email (select)
+    │ ed outputs: email → redact
+    │  masked (4 column rules; detectors: email, phone, iban, card)
+    ╰─ ove? [y/N]</code></pre>
     <figcaption>On approval the console runs its k-anonymity counts when the statement filters, groups or aggregates PII, then the statement itself, masks PII, caps the output and hands the rows back to the agent, framed as untrusted data.</figcaption>
   </figure>
   <p class="prose">On a production profile you type the profile name, not <code>y</code>. No answer within 5 minutes means denied.</p>

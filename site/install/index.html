@@ -150,7 +150,7 @@ explain_cost_refuse = 0             # engine cost units; 0 = off</code></pre>
 
   <h3 id="doctor">Check the machine</h3>
   <pre tabindex="0"><code>locksql doctor [--profile P]</code></pre>
-  <p class="prose">Run it from both accounts. Each check prints ✅, ⚠️ or ❌, with a remediation under each one that is not ✅; the exit code is 1 when any check fails. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#locksql-doctor">More on <code>locksql doctor</code></a>.</p>
+  <p class="prose">Run it from both accounts. Each check prints ✓ (ok), ▲ (warning) or ✗ (failed), with a remediation under each one that is not ✓, then a count of each; the exit code is 1 when any check fails. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#locksql-doctor">More on <code>locksql doctor</code></a>.</p>
 
   <h3 id="console">Start the console</h3>
   <p class="prose">In a terminal you keep in view, in the <code>locksql</code> session:</p>

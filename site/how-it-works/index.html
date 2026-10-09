@@ -96,29 +96,33 @@
 <section aria-labelledby="screen">
   <h2 id="screen">The approval screen</h2>
   <h3 id="plain-read">A plain read</h3>
-  <pre tabindex="0"><code>━━ DEV ━━ 127.0.0.1 / app ━━ user alice ━━ tier read
-requested by uid 1000 (alice) · pid 48211 (claude)
-SELECT id, email FROM customers WHERE country = 'BE' LIMIT 20
-class READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
-reads: app.customers
-returns at most 20 rows
-PII columns touched: customers.email (select)
-masked outputs: email → redact
-PII: masked (4 column rules; detectors: email, phone, iban, card)
-Approve? [y/N]</code></pre>
+  <code>╭─ <pre tabindex="0"> · DEV · 127.0.0.1 / app · user alice · tier read ─────
+  │ quested by uid 1000 (alice) · pid 48211 (claude)
+  │
+  │   LECT id, email FROM customers WHERE country = 'BE' LIMIT 20
+  │
+  │ ass READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
+  │ ads: app.customers
+  │ turns at most 20 rows
+  │ I columns touched: customers.email (select)
+  │ sked outputs: email → redact
+  │ I: masked (4 column rules; detectors: email, phone, iban, card)
+  ╰─ prove? [y/N]</code></pre>
   <h3 id="pii-read">A read that filters on personal data</h3>
-  <pre tabindex="0"><code>━━ DEV ━━ 127.0.0.1 / app ━━ user alice ━━ tier read
-requested by uid 1000 (alice) · pid 48211 (claude)
-SELECT country, COUNT(*) FROM customers WHERE email = 'a@example.com' GROUP BY country LIMIT 20
-class READ · EXPLAIN: customers ref ~1 · est. 1 rows examined · verdict OK
-reads: app.customers
-returns at most 20 rows
-PII columns touched: customers.email (where)
-k-anonymity check (k=5) runs first: SELECT COUNT(*) FROM `app`.`customers` WHERE `app`.`customers`.`email` = 'a@example.com'
-k-anonymity check (k=5) runs first: SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM customers WHERE email = 'a@example.com' GROUP BY country) AS locksql_k
-row estimates are hidden from the agent: the statement filters on a PII column
-PII: masked (4 column rules; detectors: email, phone, iban, card)
-Approve? [y/N]</code></pre>
+  <code>╭─ <pre tabindex="0"> · DEV · 127.0.0.1 / app · user alice · tier read ─────
+  │ quested by uid 1000 (alice) · pid 48211 (claude)
+  │
+  │   LECT country, COUNT(*) FROM customers WHERE email = 'a@example.com' GROUP BY country LIMIT 20
+  │
+  │ ass READ · EXPLAIN: customers ref ~1 · est. 1 rows examined · verdict OK
+  │ ads: app.customers
+  │ turns at most 20 rows
+  │ I columns touched: customers.email (where)
+  │ anonymity check (k=5) runs first: SELECT COUNT(*) FROM `app`.`customers` WHERE `app`.`customers`.`email` = 'a@example.com'
+  │ anonymity check (k=5) runs first: SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM customers WHERE email = 'a@example.com' GROUP BY country) AS locksql_k
+  │ w estimates are hidden from the agent: the statement filters on a PII column
+  │ I: masked (4 column rules; detectors: email, phone, iban, card)
+  ╰─ prove? [y/N]</code></pre>
   <h3 id="approval-rules">Approval rules</h3>
   <ul class="prose">
     <li>The screen names the requesting uid, pid and process (as the kernel reports them), the relations read, the PII columns touched and in which clause (highlighted in red in the SQL), each masked output and its mode, the k-anonymity counts that run first and the row cap.</li>
