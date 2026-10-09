@@ -260,7 +260,7 @@ func (t *tools) profile(arg string) (string, error) {
 	}
 	switch len(names) {
 	case 0:
-		return "", errors.New("no profile is configured; the human must add one: `locksql` (or `locksql add`) in a terminal, or, in a project, an entry in .locksql/config.toml")
+		return "", errors.New("no profile is configured; the human must add an entry in the project's .locksql/config.toml")
 	case 1:
 		return names[0], nil
 	}

@@ -143,7 +143,8 @@ type answerIO struct {
 	asked  bool
 }
 
-func (a *answerIO) Println(string) {}
+func (a *answerIO) Println(string)                                    {}
+func (a *answerIO) AskSecret(context.Context, string) ([]byte, error) { return nil, nil }
 func (a *answerIO) Ask(context.Context, string, time.Duration) (string, bool) {
 	if a.answer == "" {
 		a.t.Fatal("asked with a single profile")
@@ -170,44 +171,6 @@ func TestChooseProfile(t *testing.T) {
 	}
 	if n, err := chooseProfile(e, &answerIO{t: t, answer: "a"}); err != nil || n != "a" {
 		t.Fatalf("by name: %q %v", n, err)
-	}
-}
-
-func TestAddProfileWritesUserConfig(t *testing.T) {
-	e, out, _ := onboardEnv(t)
-	name, err := addProfile(e, &scriptIO{answers: []string{"sqlite://./x.db", "", "", "", ""}})
-	if err != nil || name != "dev" {
-		t.Fatalf("%q %v\n%s", name, err, out)
-	}
-	data, err := os.ReadFile(userConfig(t))
-	if err != nil || !strings.Contains(string(data), `[profiles."dev"]`) {
-		t.Fatalf("%v\n%s", err, data)
-	}
-	if !strings.Contains(out.String(), "(profile dev)") {
-		t.Fatalf("output:\n%s", out)
-	}
-
-	// A second profile gets a free default name; Ctrl-D writes nothing.
-	if name, err := addProfile(e, &scriptIO{answers: []string{"sqlite://./y.db", "", "", "", ""}}); err != nil || name != "dev2" {
-		t.Fatalf("%q %v", name, err)
-	}
-	before, _ := os.ReadFile(userConfig(t))
-	if _, err := addProfile(e, &scriptIO{answers: []string{"sqlite://./z.db"}}); err == nil {
-		t.Fatal("aborted prompts succeeded")
-	}
-	if after, _ := os.ReadFile(userConfig(t)); !bytes.Equal(before, after) {
-		t.Fatal("aborted prompts wrote")
-	}
-}
-
-func TestAddUsage(t *testing.T) {
-	e, out, _ := onboardEnv(t)
-	if code := runEnv(e, []string{"add", "extra"}); code != exitUsage {
-		t.Fatalf("args: code %d\n%s", code, out)
-	}
-	e.tty = false
-	if code := runEnv(e, []string{"add"}); code != exitUsage || !strings.Contains(out.String(), "terminal") {
-		t.Fatalf("no tty: code %d\n%s", code, out)
 	}
 }
 
@@ -259,19 +222,6 @@ func TestSeparatedClientGetsProjectSteps(t *testing.T) {
 	}
 }
 
-func TestSeparatedAddDisabledForEveryAccount(t *testing.T) {
-	for _, set := range []func(*env){separatedClient, separatedService} {
-		e, out, _ := onboardEnv(t)
-		set(&e)
-		if code := runEnv(e, []string{"add"}); code != exitUsage || !strings.Contains(out.String(), ".locksql/config.toml") {
-			t.Fatalf("code %d\n%s", code, out)
-		}
-		if _, err := os.Stat(userConfig(t)); err == nil {
-			t.Fatal("add wrote a profile in separated mode")
-		}
-	}
-}
-
 func TestSeparatedServiceBareIsConsoleWithoutPrompts(t *testing.T) {
 	e, out, home := onboardEnv(t, "codex")
 	separatedService(&e)
@@ -294,7 +244,7 @@ func TestSeparatedServiceBareIsConsoleWithoutPrompts(t *testing.T) {
 }
 
 func TestSysconfErrorStopsEarly(t *testing.T) {
-	for _, args := range [][]string{nil, {"add"}, {"console"}} {
+	for _, args := range [][]string{nil, {"console"}} {
 		e, out, home := onboardEnv(t, "codex")
 		e.sys = func() (*sysconf.Config, error) {
 			return nil, errors.New("sysconf: /etc/locksql/system.toml: not owned by root")
@@ -339,5 +289,74 @@ func TestWireAgentsSkippedAsRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex")); err == nil {
 		t.Fatal("wired as root")
+	}
+}
+
+// installSpy replaces the install step of the onboarding.
+func installSpy(e *env, answer string) *[]string {
+	var calls []string
+	e.stdin = strings.NewReader(answer)
+	e.install = func(args []string) int {
+		calls = append(calls, strings.Join(args, " "))
+		return exitOK
+	}
+	return &calls
+}
+
+func TestOnboardSameUserOffersInstall(t *testing.T) {
+	e, out, home := onboardEnv(t, "codex")
+	calls := installSpy(&e, "y\n")
+	if code := runOnboard(e); code != exitOK {
+		t.Fatalf("code %d\n%s", code, out)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("install calls %v", *calls)
+	}
+	for _, want := range []string{"~/.codex/config.toml", "separate account", ".locksql/config.toml", "locksql console --project"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "config.toml")); err != nil {
+		t.Fatal("agents not wired:", err)
+	}
+	if _, err := os.Stat(userConfig(t)); err == nil {
+		t.Fatal("onboarding wrote a user profile")
+	}
+}
+
+func TestOnboardSameUserInstallDeclined(t *testing.T) {
+	for _, answer := range []string{"n\n", "\n", ""} {
+		e, out, _ := onboardEnv(t)
+		calls := installSpy(&e, answer)
+		if code := runOnboard(e); code != exitOK {
+			t.Fatalf("answer %q: code %d\n%s", answer, code, out)
+		}
+		if len(*calls) != 0 {
+			t.Fatalf("answer %q ran install", answer)
+		}
+		if !strings.Contains(out.String(), "sudo locksql install") || !strings.Contains(out.String(), "locksql console --project") {
+			t.Fatalf("answer %q: no steps:\n%s", answer, out)
+		}
+	}
+}
+
+func TestOnboardSameUserExistingProfileNotUsed(t *testing.T) {
+	e, out, _ := onboardEnv(t)
+	os.MkdirAll(filepath.Dir(userConfig(t)), 0o700)
+	os.WriteFile(userConfig(t), []byte("[profiles.dev]\nengine = \"sqlite\"\npath = \"/tmp/x.db\"\n"), 0o600)
+	installSpy(&e, "n\n")
+	if code := runOnboard(e); code != exitOK {
+		t.Fatalf("code %d\n%s", code, out)
+	}
+	if !strings.Contains(out.String(), ".locksql/config.toml") {
+		t.Fatalf("no pointer to the project config:\n%s", out)
+	}
+}
+
+func TestAddIsGone(t *testing.T) {
+	e, out, _ := onboardEnv(t)
+	if code := runEnv(e, []string{"add"}); code != exitUsage || !strings.Contains(out.String(), "unknown command") {
+		t.Fatalf("code %d\n%s", code, out)
 	}
 }

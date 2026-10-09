@@ -83,6 +83,6 @@ func runInit(e env, args []string) int {
 // project has a .locksql/config.toml now, so its agents dial the project's
 // socket key: only a console started on the project serves them.
 func initNextSteps(root string) string {
-	return fmt.Sprintf("Next: add the database profile to %s (or run `locksql add`),\nthen run this in a separate terminal and keep it open while the agent works:\n  %s\n",
+	return fmt.Sprintf("Next: add the database profile to %s,\nthen run this in a separate terminal and keep it open while the agent works:\n  %s\n",
 		filepath.Join(root, ".locksql", "config.toml"), client.StartCommand("", root))
 }

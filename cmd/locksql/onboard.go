@@ -1,21 +1,15 @@
 package main
 
 import (
-	"context"
-	"errors"
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/console"
-	"github.com/DavidGodefroid/locksql/internal/setup"
 	"github.com/DavidGodefroid/locksql/internal/sysconf"
 )
 
@@ -113,60 +107,6 @@ func wireAgents(e env) {
 	}
 }
 
-// chooseProfile returns the only profile, asks among several, or returns
-// "" when none is configured.
-func chooseProfile(e env, io setup.IO) (string, error) {
-	cfg, err := config.Load(e.cwd)
-	if err != nil {
-		return "", usageError{err.Error()}
-	}
-	names := profileNames(cfg)
-	switch len(names) {
-	case 0:
-		return "", nil
-	case 1:
-		return names[0], nil
-	}
-	for i, n := range names {
-		io.Println(fmt.Sprintf("  %d) %s", i+1, n))
-	}
-	for {
-		l, ok := io.Ask(context.Background(), "Profile: ", 30*time.Minute)
-		if !ok {
-			return "", setup.ErrAborted
-		}
-		l = strings.TrimSpace(l)
-		if n, err := strconv.Atoi(l); err == nil && n >= 1 && n <= len(names) {
-			return names[n-1], nil
-		}
-		if slices.Contains(names, l) {
-			return l, nil
-		}
-		io.Println(fmt.Sprintf("  answer a number from 1 to %d or a profile name", len(names)))
-	}
-}
-
-// addProfile runs the prompts and appends the profile to the user config.
-func addProfile(e env, io setup.IO) (string, error) {
-	cfg, err := config.Load(e.cwd)
-	if err != nil {
-		return "", usageError{err.Error()}
-	}
-	a, err := setup.Prompt(context.Background(), io, e.cwd, profileNames(cfg))
-	if err != nil {
-		return "", err
-	}
-	path, err := config.UserConfigPath()
-	if err != nil {
-		return "", err
-	}
-	if err := setup.AppendProfile(path, a); err != nil {
-		return "", err
-	}
-	fmt.Fprintln(e.stdout, e.paint.OK(fmt.Sprintf("created %s (profile %s)", tildePath(path), a.Name)))
-	return a.Name, nil
-}
-
 // projectDirHint names the project of cwd, or a placeholder outside one.
 func projectDirHint(e env) string {
 	if root, ok := config.FindProjectRoot(e.cwd); ok {
@@ -193,76 +133,50 @@ Agents working in that project then reach the console.
 `, account, dir, account, dir)
 }
 
-// separatedNoAdd is why the database prompts are off in separated mode.
-const separatedNoAdd = "separated mode: a profile in the user config is seen by one account only; put it in the project's .locksql/config.toml (locksql init <agent> writes an example) and run locksql console --project DIR in the locksql session"
+// sameUserSteps is printed when no separated setup exists: the console
+// refuses to run in the agent's account.
+const sameUserSteps = `The console must run in a separate account, apart from your agents: it alone
+holds the database password, and the agent's account cannot read its terminal.
+`
 
-// runOnboard is bare `locksql` in a terminal: wire the agents, add a
-// database when none is configured, start the console. In separated mode
-// a client account gets the project-mode steps, and the service account
-// the console without prompts.
+// offerInstall asks whether to run locksql install now. It never fails:
+// any answer but y continues with the steps.
+func offerInstall(e env) {
+	fmt.Fprint(e.stdout, "Set it up now with sudo locksql install? [y/N] ")
+	// One reader for both prompts: install must not lose buffered input.
+	br := bufio.NewReader(e.stdin)
+	e.stdin = br
+	ans, _ := br.ReadString('\n')
+	if strings.TrimSpace(strings.ToLower(ans)) != "y" {
+		fmt.Fprintln(e.stdout, "\nLater: run sudo locksql install, then locksql doctor.")
+		return
+	}
+	run := e.install
+	if run == nil {
+		run = func(args []string) int { return runInstall(e, args) }
+	}
+	run(nil)
+}
+
+// runOnboard is bare `locksql` in a terminal: wire the agents, then lead
+// to the separated setup. The service account gets the console.
 func runOnboard(e env) int {
 	if code, failed := sysFail(e, ""); failed {
 		return code
 	}
 	separated, service := isServiceAccount(e)
-	if separated && !service {
-		wireAgents(e)
-		fmt.Fprint(e.stdout, "\n"+separatedSteps(e))
-		return exitOK
-	}
-	if separated {
+	if separated && service {
 		return runConsole(e, nil)
 	}
 	fmt.Fprint(e.stdout, e.paint.Banner(version))
 	fmt.Fprintln(e.stdout)
 	wireAgents(e)
-	term := console.NewTerminal(os.Stdin, e.stdout)
-	name, err := chooseProfile(e, term)
-	if err == nil && name == "" {
-		fmt.Fprintln(e.stdout)
-		name, err = addProfile(e, term)
+	if !separated {
+		fmt.Fprint(e.stdout, "\n"+sameUserSteps)
+		offerInstall(e)
 	}
-	if err != nil {
-		return onboardFail(e, err)
-	}
-	fmt.Fprintln(e.stdout, "\n"+e.paint.Step("Starting the console. Keep this terminal open; use your agents in any other."))
-	return openConsole(e, name, false, "", term)
-}
-
-// runAdd is `locksql add`: the database prompts only.
-func runAdd(e env, args []string) int {
-	const usage = "locksql add"
-	if len(args) > 0 {
-		return usageFail(e, "add", usage, "takes no arguments")
-	}
-	if code, failed := sysFail(e, " add"); failed {
-		return code
-	}
-	if separated, _ := isServiceAccount(e); separated {
-		return usageFail(e, "add", usage, separatedNoAdd)
-	}
-	if !e.tty {
-		return usageFail(e, "add", usage, "must run in a terminal: it asks questions")
-	}
-	if _, err := addProfile(e, console.NewTerminal(os.Stdin, e.stdout)); err != nil {
-		return onboardFail(e, err)
-	}
+	fmt.Fprint(e.stdout, "\n"+separatedSteps(e))
 	return exitOK
-}
-
-// onboardFail reports an onboarding error: exit 3 for a configuration
-// error, 1 otherwise.
-func onboardFail(e env, err error) int {
-	if errors.Is(err, setup.ErrAborted) {
-		fmt.Fprintln(e.stderr, "locksql: aborted, no profile written")
-		return exitFail
-	}
-	fmt.Fprintln(e.stderr, "locksql:", err)
-	var ue usageError
-	if errors.As(err, &ue) {
-		return exitUsage
-	}
-	return exitFail
 }
 
 // tildePath shows p with the home directory as ~.
