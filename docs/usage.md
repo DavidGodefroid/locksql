@@ -519,7 +519,9 @@ PII columns (columns under a mask rule) may be used as follows:
   `locksql console --allow-unmask` (`locksql status` shows `unmask allowed`
   or `off`). When allowed, the PII usage rules and the k-anonymity checks no
   longer apply, the approval screen shows `PII: UNMASKED` in red, and it is
-  never auto-approved.
+  never auto-approved. Once it has run, the console prints the clear result
+  under `PII: UNMASKED result`, so you see what the agent received; the audit
+  log still holds no row data.
 - At tiers above `read`, a write's `RETURNING` list (or a data-modifying CTE)
   must not alias or transform a masked column.
 - While mask rules exist, a write may store into a column under a mask rule

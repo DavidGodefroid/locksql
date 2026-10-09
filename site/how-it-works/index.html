@@ -250,7 +250,7 @@ account that cannot read what the agent must never see.</p>
 <section aria-labelledby="unmask">
   <h2 id="unmask">Raw values: <code>--allow-unmask</code></h2>
   <div class="prose">
-    <p>An agent can ask for unmasked PII output only when the human started the console with <code>locksql console --allow-unmask</code>. Without it, every unmask request is refused before anything runs, and the refusal is audited. It is a console flag only: no client or config file can turn it on. With it, each unmasked query still needs the human's approval, shown as <code>PII: UNMASKED</code> in red, and is never auto-approved.</p>
+    <p>An agent can ask for unmasked PII output only when the human started the console with <code>locksql console --allow-unmask</code>. Without it, every unmask request is refused before anything runs, and the refusal is audited. It is a console flag only: no client or config file can turn it on. With it, each unmasked query still needs the human's approval, shown as <code>PII: UNMASKED</code> in red, and is never auto-approved. The console then prints the clear result, so you see exactly what the agent received; the audit log still holds no row data.</p>
   </div>
 </section>
 

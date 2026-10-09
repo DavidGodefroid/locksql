@@ -497,6 +497,12 @@ func TestSkipPermissions(t *testing.T) {
 		if !strings.Contains(h.io.output(), "UNMASKED") {
 			t.Error("approval screen does not say UNMASKED")
 		}
+		if !strings.Contains(h.io.output(), "PII: UNMASKED result") || !strings.Contains(h.io.output(), "alice@example.com") {
+			t.Errorf("unmasked result not shown in the console:\n%s", h.io.output())
+		}
+		if strings.Contains(h.auditLog(t), "alice@example.com") {
+			t.Error("unmasked value in the audit log")
+		}
 		if !strings.Contains(h.auditLog(t), `"unmasked":true`) {
 			t.Error("unmask not audited")
 		}
@@ -965,5 +971,16 @@ func TestUnmaskOffByDefault(t *testing.T) {
 	h.ok(t, ipc.MethodStatus, nil, &st)
 	if !st.AllowUnmask {
 		t.Error("status does not report unmask allowed")
+	}
+}
+
+// A masked run never prints its rows in the console.
+func TestMaskedResultNotShownInConsole(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	if strings.Contains(h.io.output(), "alice@example.com") || strings.Contains(h.io.output(), "UNMASKED result") {
+		t.Errorf("masked run printed rows:\n%s", h.io.output())
 	}
 }

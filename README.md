@@ -400,7 +400,9 @@ console with `locksql console --allow-unmask`. Without it, the console
 refuses every unmask request before anything runs and audits the refusal.
 Like `--skip-permissions`, it is a console flag only: no client or config
 file can turn it on. With it, each unmasked query still needs the human's
-approval, shown as `PII: UNMASKED` in red, and is never auto-approved.
+approval, shown as `PII: UNMASKED` in red, and is never auto-approved. The
+console then prints the clear result, so you see exactly what the agent
+received (the audit log still holds no row data).
 
 ## `--skip-permissions`
 

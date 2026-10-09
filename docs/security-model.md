@@ -93,7 +93,8 @@ Unmasked output is off unless the human starts the console with
 `--allow-unmask`, a console-only flag: no client or config file can turn it
 on, so an agent cannot ask for raw PII values by itself. Without it, an
 unmask request is refused before parsing and audited; with it, each unmasked
-query is still approved by the human and never auto-approved.
+query is still approved by the human and never auto-approved, and its clear
+result is printed in the console, never in the audit log.
 
 ## `--skip-permissions`
 
