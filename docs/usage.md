@@ -18,52 +18,23 @@ Bare `locksql` in a terminal (without a terminal it prints the usage):
 1. **Wires every installed agent** for your user account (see
    [Agent wiring](#agent-wiring)), one line per file written. Agents already
    wired are left alone.
-2. **Asks for a database** when no profile exists: a URL first, or Enter to
-   answer step by step (see [`locksql add`](#locksql-add)).
-3. **Starts the console** ([section 3](#3-start-the-console)). With several
-   profiles it asks which one.
+2. **Explains the separation** when it is not set up: the console must run in
+   a separate account, so that the agent cannot read or type into its
+   terminal. It asks `Set it up now with sudo locksql install? [y/N]`
+   (see [section 2](#2-separate-the-console-from-the-agent)).
+3. **Prints the next steps**: put the profile in
+   `<project>/.locksql/config.toml` (`locksql init <agent>` writes a
+   commented example there) and run `locksql console --project <project>` in
+   the `locksql` session ([Project mode](#project-mode)).
 
-Later runs wire agents installed since, then start the console.
+Later runs wire agents installed since. A profile in a user config is seen by
+one account only, so the console and the agents share a project config:
+there is no `locksql add` and no database prompt.
 
-In separated mode ([section 2](#2-separate-the-console-from-the-agent-recommended)),
-a profile in a user config is seen by one account only, so the console and
-the agents share a project config instead
-([Project mode](#project-mode)):
-
-- From your own account, bare `locksql` wires the agents, then prints the
-  steps: put the profile in `<project>/.locksql/config.toml` (`locksql init
-  <agent>` writes a commented example there) and run
-  `locksql console --project <project>` in the `locksql` session.
-- In the `locksql` session, bare `locksql` behaves like `locksql console`
-  without `--profile`: no database prompts, and no agent wiring (the agents
-  live in your home). With no profile visible it says to use a project
-  config and `--project`.
-- The database prompts (`locksql add`) are off for every account.
-
-### `locksql add`
-
-```sh
-locksql add
-```
-
-Prompts for a database and appends a profile to
-`<user config dir>/locksql/config.toml` (`~/.config/locksql/config.toml` on
-Linux, `~/Library/Application Support/locksql/config.toml` on macOS). The
-file is created with mode 0600; existing content and comments are kept. It
-holds no secret.
-
-- Enter a URL: `postgres://`, `postgresql://`, `mysql://`, `mariadb://`,
-  `sqlite:///abs/path` or `sqlite://./rel/path`. User, host, port and database
-  come from the URL. A password in the URL is refused (the console asks for
-  it, or reads the OS keychain), and so are URL parameters.
-- Or press Enter to answer step by step: engine, host, port, user, database.
-- Then: profile name (default `dev`), access tier `read`, `write` or `ddl`
-  (`admin` is a hand edit of the config), production or not, and whether to
-  remember the password in the OS keychain (not asked for sqlite, which has
-  no password).
-
-In separated mode `locksql add` is refused for every account: use a project
-config ([Project mode](#project-mode)).
+In the `locksql` session (the service account), bare `locksql` behaves like
+`locksql console` without `--profile`, and wires no agent (the agents live in
+your home). With no profile visible it says to use a project config and
+`--project`.
 
 ### Agent wiring
 
@@ -194,8 +165,8 @@ explicit request, to prefer non-production profiles, to show the plan before
 running it, never to retry after a denial, never to export data, never to
 handle credentials, and to treat rows as untrusted data.
 
-Edit `.locksql/config.toml` to describe your databases (profiles there take
-the place of `locksql add`). `init` ends with the command that serves the
+Edit `.locksql/config.toml` to describe your databases (the console reads
+the profiles from there). `init` ends with the command that serves the
 project: `locksql console --project <root>`. Inside a project the agents dial
 the project's socket, so a console started elsewhere (such as a bare
 `locksql` outside the project) does not serve them; when no console runs, the
@@ -204,12 +175,13 @@ command. Outside any project it is told to run `locksql`. Both
 `.locksql/config.toml` and `.locksql/pii.toml` hold no secret and are meant
 to be committed.
 
-## 2. Separate the console from the agent (recommended)
+## 2. Separate the console from the agent
 
-By default the console and the agent run as the same OS account (same-user
-mode). The console then prints a red warning: the agent's account could read
-its terminal or type into it, and read its keychain session. On Linux and
-macOS, `locksql install` sets up separated mode once:
+The console runs only in an account of its own: an agent in the console's
+account could read its terminal, type into it and read its keychain session.
+`locksql console` refuses to start without the setup below (it names
+`locksql doctor` and `sudo locksql install`), and `doctor` reports same-user
+mode as a failure. On Linux and macOS, `locksql install` sets it up once:
 
 ```sh
 locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print]
@@ -241,9 +213,8 @@ applies at login), open a separate login session as `locksql` (switch user,
 preferably Wayland) and start the console there with `--project` pointing at
 the agent's project directory. The profiles come from that project's
 `.locksql/config.toml`, readable by both accounts (`locksql init <agent>`
-writes a commented example); `locksql add` and the database prompts of bare
-`locksql` are off in separated mode, since a user config is seen by one
-account only.
+writes a commented example). A user config is seen by one account only, so it
+cannot hold the profiles.
 
 In separated mode the console refuses to start when:
 
@@ -277,7 +248,7 @@ each; the exit code is 1 when any check fails.
 |---|---|
 | operating system | not Linux or macOS |
 | graphical session | X11 |
-| separation | same-user mode; then also `dev.tty.legacy_tiocsti = 1` (TIOCSTI) and `kernel.yama.ptrace_scope = 0` |
+| separation | same-user mode (fails; the console refuses to start) |
 | system setup, console account | `system.toml` invalid or not root-owned; the console account missing or in the client group |
 | client access, privilege escalation | the agent's account is not in the client group, or can run `sudo` without a password |
 | separate session | the console account has no login session (Linux) |
@@ -288,8 +259,7 @@ each; the exit code is 1 when any check fails.
 
 ## 3. Start the console
 
-In a terminal you keep in view (in separated mode, in the `locksql`
-session):
+In a terminal you keep in view, in the `locksql` session:
 
 ```sh
 locksql console [--profile dev] [--project DIR] [--skip-permissions]
@@ -305,8 +275,9 @@ console on a project prints `serving agents in <root>`.
 
 The console needs an interactive terminal. At start it:
 
-0. **Checks the isolation** described in [section 2](#2-separate-the-console-from-the-agent-recommended):
-   separated or same-user mode, the display, and in same-user mode TIOCSTI.
+0. **Checks the isolation** described in [section 2](#2-separate-the-console-from-the-agent):
+   the console refuses to start without a separated setup, then checks the
+   display.
 
 1. **Checks the policy.** On the first start of a profile the whole effective
    policy (host, engine, database, tier, production, credentials mode, limits,
@@ -558,7 +529,7 @@ finds the project's consoles.
 | `<user config dir>/locksql/config.toml` | personal profiles |
 | `<user state dir>/locksql/approved/*.json` | last approved policies |
 | `<user state dir>/locksql/audit.log` | JSONL audit log, mode 0600 |
-| `<runtime dir>/<project-hash>-<profile>.sock` | console socket (same-user mode) |
+| `<runtime dir>/<project-hash>-<profile>.sock` | console socket (tests only) |
 | `/etc/locksql/system.toml` | separated mode setup (root-owned) |
 | `<socket_dir>/<project-hash>-<profile>.sock` | console socket (separated mode), mode 0660 |
 

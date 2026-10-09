@@ -20,15 +20,18 @@ mode:
 
 | Mode | Console runs as | Agent runs as | Boundary |
 |---|---|---|---|
-| Separated (`locksql install`, `/etc/locksql/system.toml`) | the `locksql` account, in its own login session | its own account, member of `locksql-clients` | the kernel: separate uids, peer credentials on the socket, a root-owned binary and system file |
-| Same-user (no `system.toml`) | the human's account | the same account | process separation only; the console prints a warning at start |
+| Separated (`sudo locksql install`, `/etc/locksql/system.toml`) | the `locksql` account, in its own login session | its own account, member of `locksql-clients` | the kernel: separate uids, peer credentials on the socket, a root-owned binary and system file |
 
-In separated mode the agent's account is assumed to have no password-less
-`sudo` (`locksql doctor` fails otherwise) and no other way to become
-`locksql` or root. In same-user mode a process of the agent's account can
-read the console's terminal, type into it where the kernel allows
-(TIOCSTI, ptrace) and read the keychain session: see
-[Out of scope and limitations](#out-of-scope-and-limitations).
+Separation is mandatory. Without `system.toml` the console refuses to start
+and names `locksql doctor` and `sudo locksql install`; `doctor` reports
+same-user mode as a failure. Same-user threats (an agent reading the
+console's terminal, typing into it through TIOCSTI, attaching with ptrace or
+reading the keychain session) are therefore excluded, not mitigated by a
+warning.
+
+The agent's account is assumed to have no password-less `sudo`
+(`locksql doctor` fails otherwise) and no other way to become `locksql` or
+root.
 
 ## Principles
 
@@ -67,7 +70,7 @@ read the console's terminal, type into it where the kernel allows
 | Approval spoofing through the socket | Approval comes only from the console terminal; no socket method approves, and no socket method loosens policy. The approval screen names the requesting uid, pid and process as the kernel reports them. |
 | A client stuck or killed during an approval | The approval is abandoned or times out after 5 minutes; the socket keeps serving. |
 | A fake console | In separated mode clients check through peer credentials that the socket is served by `service_user`, and the socket directory is owned by it. |
-| Another local user | Same-user mode: the socket lives in a private directory (mode 0700, owner checked), and each peer's uid must match the console's. Separated mode: the socket directory is `service_user:client_group` mode 0710, the socket 0660, and each peer is checked with `SO_PEERCRED` (Linux) or `LOCAL_PEERCRED` (macOS): the console's own uid, a member of `client_group` or an `allowed_uids` entry. |
+| Another local user | The socket directory is `service_user:client_group` mode 0710, the socket 0660, and each peer is checked with `SO_PEERCRED` (Linux) or `LOCAL_PEERCRED` (macOS): the console's own uid, a member of `client_group` or an `allowed_uids` entry. |
 
 ## Approval
 
@@ -100,12 +103,10 @@ Records contain the SQL and metadata, never secrets and never row data.
 
 ## Out of scope and limitations
 
-- **Same-user mode is weaker.** Without `locksql install`, the agent runs as
-  the console's account: it can read the user's keychain session, attach to
-  the console process where the OS allows it (`kernel.yama.ptrace_scope =
-  0`), or type into the terminal (`dev.tty.legacy_tiocsti = 1`). The console
-  warns at start and `doctor` reports these settings, but locksql does not
-  defend against it.
+- **Same-user mode is excluded.** The console refuses to start without a
+  separated setup, so an agent running as the console's account (reading its
+  keychain session, attaching with ptrace, typing into its terminal) is not a
+  supported configuration.
 - **The console account.** Malware running as `locksql` or as root, and an
   agent account that can become either, are out of scope. So is an X11
   session on a non-production profile with `x11 = "warn"`.

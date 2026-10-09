@@ -117,24 +117,30 @@ every peer on the socket.
 # 1. Install (see Install below for packages, checksums and signatures)
 curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh
 
-# 2. Wire your agents, add a database, start the console (keep this terminal open)
+# 2. Wire your agents and set up the console account
 locksql
 
-# 3. In your agent, anywhere: "how many orders were placed yesterday on dev?"
+# 3. In the locksql session (a separate login), start the console
+#    (keep this terminal open)
+locksql console --project DIR
+
+# 4. In your agent, anywhere: "how many orders were placed yesterday on dev?"
 #    Approve or deny each query in the console.
 ```
 
-Bare `locksql` in a terminal does three things. It wires every installed
-agent (Claude Code, Codex, Gemini CLI, Cursor) for your user account, so
-that they work from any directory. When no database is configured it asks
-for one (a URL first) and saves a profile to your user config. Then it starts
-the console. Later runs only wire agents installed since, then start the
-console.
+Bare `locksql` in a terminal wires every installed agent (Claude Code, Codex,
+Gemini CLI, Cursor) for your user account, so that they work from any
+directory. The console must run in a separate account, so when that is not
+set up yet it explains why and offers to run `sudo locksql install`. It then
+prints the next steps: put your database profile in the project's
+`.locksql/config.toml` (`locksql init <agent>` writes a commented example)
+and run `locksql console --project DIR` in the `locksql` session. Later runs
+only wire agents installed since. Run in the service account, bare `locksql`
+starts the console.
 
-Separated mode (`sudo locksql install`, then `locksql doctor`) and project
-mode (`.locksql/config.toml` committed with the repository, `locksql init
-<agent>`) are described in [docs/usage.md](docs/usage.md). Separated mode
-always uses a project config, read by both accounts.
+The setup is described in [docs/usage.md](docs/usage.md) (`sudo locksql
+install`, then `locksql doctor`; project mode with `.locksql/config.toml`
+committed with the repository). Both accounts read the project config.
 
 ## How it works
 
@@ -229,8 +235,8 @@ only guide the agent; the console's checks are the guarantee.
 - **OS separation.** `locksql install` creates a `locksql` console account
   and a `locksql-clients` group: the console runs as that account in its own
   login session, the agent's account only reaches its socket, and the kernel
-  checks every peer. Without it (same-user mode) the console warns that the
-  agent's account could read or type into its terminal.
+  checks every peer. The console refuses to start without this setup, since
+  an agent in the console's own account could read or type into its terminal.
 - **Human approval.** Every statement is shown and approved in the console
   terminal; no socket method can approve. On a production profile you type the
   profile name, not `y`. Pending keystrokes are flushed before each prompt, so
@@ -379,10 +385,10 @@ iteration, and it is deliberately narrow:
 
 ## Limitations
 
-- **Same-user mode is weaker.** Without `locksql install`, the agent runs as
-  the console's account and could read its terminal, type into it or read
-  its keychain session. Run `locksql doctor` to see what your machine allows.
-  Malware running as the console account is out of scope in both modes.
+- **The console runs only in a separate account.** `sudo locksql install`
+  sets it up; `locksql console` refuses to start without it and names
+  `locksql doctor`. Run `locksql doctor` to see what your machine allows.
+  Malware running as the console account, or as root, is out of scope.
 - **k-anonymity is a query-set-size control.** It refuses a single query
   whose PII filter covers fewer than `k` rows; it does not stop differencing
   attacks that combine several approved queries.
