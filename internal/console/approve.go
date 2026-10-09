@@ -148,9 +148,6 @@ func (s *Server) readDetails(pl *plan, add func(string)) {
 				add(fmt.Sprintf("k-anonymity check (k=%d) runs first: %s", k, safeText(c.SQL, false)))
 			}
 		}
-		if n := len(an.Replacements); n > 0 {
-			add(fmt.Sprintf("%d token(s) stand for values from earlier results: the console substitutes them in the statement that runs", n))
-		}
 		if an.PIIFilter {
 			add("row estimates are hidden from the agent: the statement filters on a PII column")
 		}

@@ -170,7 +170,6 @@ func (s *Server) astEnv(ctx context.Context, sess engine.Session, db string, unm
 			return s.rules.Mode(src.DB, src.Table, src.Column)
 		},
 		Masking: !unmask,
-		Token:   s.tokens.Lookup,
 	}
 }
 
@@ -347,5 +346,5 @@ func (s *Server) maskRead(res *engine.Result, pl *plan, sess engine.Session) err
 		pii.MaskResult(res, pii.Rules{}, s.detectors, false)
 		return nil
 	}
-	return pii.MaskOutputs(res, pl.an.Outputs, s.rules, s.detectors, s.tokens, sess.OriginColumns())
+	return pii.MaskOutputs(res, pl.an.Outputs, s.rules, s.detectors, sess.OriginColumns())
 }

@@ -75,10 +75,6 @@ type Env struct {
 	// Masking is false for an unmask plan: provenance and functions are
 	// still checked, but not the PII usage rules.
 	Masking bool
-	// Token resolves a string literal (without quotes) that looks like a
-	// token issued by the console. isToken reports the token format; ok
-	// whether the console knows it.
-	Token func(lit string) (value string, isToken, ok bool)
 }
 
 // Output is one result column.
@@ -210,9 +206,6 @@ type analyzer struct {
 func Analyze(st *Statement, env Env) (*Analysis, error) {
 	if env.Rule == nil {
 		env.Rule = func(Source) (string, bool) { return "", false }
-	}
-	if env.Token == nil {
-		env.Token = func(string) (string, bool, bool) { return "", false, false }
 	}
 	an := &analyzer{env: env, st: st, d: st.Dialect, a: &Analysis{}, relations: map[string]bool{}, uses: map[Use]bool{}}
 	cols, err := an.query(st.Query, nil)
@@ -1447,9 +1440,6 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 		if !isConstant(otherExpr) {
 			return refusef("a PII column (%s) may only be compared with a literal", piiNames(col))
 		}
-		if err := an.tokenLiterals(col, []Expr{otherExpr}); err != nil {
-			return err
-		}
 		return an.constFilter(sc, clause, col, op+" "+an.frag(otherExpr.Span()))
 	case KindIdentity:
 		if !other.Sensitive {
@@ -1565,59 +1555,10 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 			return refusef("a PII column (%s) may only be tested against a list of literals", piiNames(x))
 		}
 	}
-	if err := an.tokenLiterals(x, e.List); err != nil {
-		return err
-	}
 	for _, it := range e.List {
 		items = append(items, an.frag(it.Span()))
 	}
 	return an.constFilter(sc, clause, x, "IN ("+strings.Join(items, ", ")+")")
-}
-
-// tokenLiterals plans the substitution of token literals compared with a
-// PII column masked as tokens.
-func (an *analyzer) tokenLiterals(col Prov, lits []Expr) error {
-	hashOnly := len(col.Modes) > 0
-	for _, m := range col.Modes {
-		if m != "hash" {
-			hashOnly = false
-		}
-	}
-	for _, e := range lits {
-		for {
-			p, ok := e.(*Paren)
-			if !ok {
-				break
-			}
-			e = p.X
-		}
-		l, ok := e.(*Literal)
-		if !ok || l.Kind != LitString {
-			continue
-		}
-		body, ok := unquote(an.d, l.Text)
-		if !ok {
-			continue
-		}
-		value, isToken, known := an.env.Token(body)
-		if !isToken {
-			continue
-		}
-		if !hashOnly {
-			return refusef("a token can only be compared with a column masked as tokens (mode \"hash\"); %s is not", piiNames(col))
-		}
-		if !known {
-			return refuse("unknown token: tokens are only valid in the console session that issued them")
-		}
-		q, err := quoteLiteral(an.d, value)
-		if err != nil {
-			return err
-		}
-		if an.dry == 0 {
-			an.a.Replacements = append(an.a.Replacements, Replacement{Span: l.Sp, Text: q})
-		}
-	}
-	return nil
 }
 
 // unquote returns the value of a plain single-quoted string literal.

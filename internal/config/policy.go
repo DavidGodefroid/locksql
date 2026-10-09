@@ -23,7 +23,7 @@ type Policy struct {
 	PIIMask  []string `json:"pii_mask"`  // sorted column patterns
 	PIIAllow []string `json:"pii_allow"` // sorted column patterns
 	// PIIModes maps a mask pattern to its mode when it is not the default
-	// (redact): partial, email or hash.
+	// (redact): partial or email.
 	PIIModes map[string]string `json:"pii_modes,omitempty"`
 }
 

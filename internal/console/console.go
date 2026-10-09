@@ -122,7 +122,7 @@ type plan struct {
 	created time.Time
 	explain *engine.Plan // the EXPLAIN result, assessed again when the plan runs
 	// an is the analysis of a read statement (nil for other classes);
-	// runSQL is the statement that runs (token values substituted) and
+	// runSQL is the statement that runs and
 	// isExplain marks an EXPLAIN SELECT, answered with the plan.
 	an        *sqlast.Analysis
 	runSQL    string
@@ -145,9 +145,6 @@ type Server struct {
 	started  time.Time
 	lastSeen time.Time
 
-	// tokens is the session's token table (mask mode hash); its key dies
-	// with the console.
-	tokens *pii.Tokens
 	// catalogCache holds the column catalog per database for the analyser.
 	catalogCache map[string][]engine.ColumnInfo
 	// quantum levels response times (ResponseQuantum; 0 in tests).
@@ -177,7 +174,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, tokens: pii.NewTokens(), quantum: cfg.Quantum}
+	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, quantum: cfg.Quantum}
 	if err := s.apply(cfg.Policy); err != nil {
 		return nil, err
 	}

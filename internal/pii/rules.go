@@ -40,16 +40,11 @@ const (
 	// ModeEmail keeps the first character and the domain of an address:
 	// "j***@example.com" (other values are masked as partial).
 	ModeEmail = "email"
-	// ModeHash replaces the value with a token, the same for the same value
-	// within one console session: "tok_...". Joins, grouping, counting and
-	// equality filters on tokens keep working; the value never leaves the
-	// console. The token key changes with every session.
-	ModeHash = "hash"
 )
 
 // ValidMode reports whether m is a mask mode.
 func ValidMode(m string) bool {
-	return m == ModeRedact || m == ModePartial || m == ModeEmail || m == ModeHash
+	return m == ModeRedact || m == ModePartial || m == ModeEmail
 }
 
 type ruleEntry struct {
@@ -175,7 +170,7 @@ func (r *Rules) AddMode(pattern, mode string) error {
 		mode = ModeRedact
 	}
 	if !ValidMode(mode) {
-		return fmt.Errorf("pii rule %q: unknown mode %q (want partial, redact, email or hash)", pattern, mode)
+		return fmt.Errorf("pii rule %q: unknown mode %q (want redact, partial or email)", pattern, mode)
 	}
 	if err := r.Add(pattern); err != nil {
 		return err

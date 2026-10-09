@@ -16,10 +16,6 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 )
 
-func hashEmail(c *ServerConfig) {
-	c.Policy = c.Policy.WithModes(map[string]string{"app.users.email": "hash"})
-}
-
 func countResult(n any) *engine.Result {
 	return &engine.Result{Columns: []engine.ResultColumn{{Label: "count"}}, Rows: [][]any{{n}}}
 }
@@ -69,44 +65,6 @@ func TestKAnonymityRefusesSmallSets(t *testing.T) {
 	pr = h.plan(t, "SELECT email, count(*) FROM users GROUP BY email LIMIT 5", false)
 	h.io.answers = []string{"y"}
 	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
-}
-
-func TestTokenRoundTrip(t *testing.T) {
-	h := newHarness(t, uatProfile(), hashEmail)
-	pr := h.plan(t, "SELECT id, email, note FROM users WHERE id = 1 LIMIT 1", false)
-	h.io.answers = []string{"y"}
-	var rr ipc.RunResult
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
-	tok, _ := rr.Rows[0][1].(string)
-	if !strings.HasPrefix(tok, "tok_") || strings.Contains(rr.Text, "alice@") {
-		t.Fatalf("email not tokenised: %v", rr.Rows[0])
-	}
-
-	// Filtering on the token runs with the value, which never comes back.
-	h.sess.count = countResult(int64(9))
-	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{int64(1)}}}
-	q := "SELECT id FROM users WHERE email = '" + tok + "' LIMIT 1"
-	pr = h.plan(t, q, false)
-	if pr.SQL != q {
-		t.Errorf("the plan shows %q, want the statement as written", pr.SQL)
-	}
-	h.io.answers = []string{"y"}
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
-	last := h.sess.runs[len(h.sess.runs)-1]
-	if !strings.Contains(last, "'alice@example.com'") || strings.Contains(last, tok) {
-		t.Errorf("token not substituted: %q", last)
-	}
-	if strings.Contains(h.auditLog(t), "alice@example.com") {
-		t.Error("the substituted value reached the audit log")
-	}
-
-	// Another console session has another key: the token is unknown there.
-	h2 := newHarness(t, uatProfile(), hashEmail)
-	resp := h2.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
-	wantCode(t, resp, ipc.CodeRefused)
-	if !strings.Contains(resp.Error.Message, "unknown token") {
-		t.Errorf("refusal: %q", resp.Error.Message)
-	}
 }
 
 func TestResponseIsLevelled(t *testing.T) {

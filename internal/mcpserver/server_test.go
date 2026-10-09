@@ -518,7 +518,7 @@ func TestExactCellKeepsLargeIntegersExact(t *testing.T) {
 }
 
 func TestInstructionsCarryAgentRules(t *testing.T) {
-	for _, want := range []string{"never start one yourself", "Never edit the locksql config", "psql", "k-anonymity", "tok_"} {
+	for _, want := range []string{"never start one yourself", "Never edit the locksql config", "psql", "k-anonymity"} {
 		if !strings.Contains(instructions, want) {
 			t.Errorf("instructions lack %q", want)
 		}

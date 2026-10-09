@@ -250,9 +250,9 @@ func TestDiffModesAndNewLimits(t *testing.T) {
 	if c := field(Diff(a, b), "pii.mode"); c == nil || !c.Loosens {
 		t.Errorf("redact → partial: %+v", c)
 	}
-	c := b.WithModes(map[string]string{"app.users.email": "hash"})
+	c := b.WithModes(map[string]string{"app.users.email": "email"})
 	if ch := field(Diff(b, c), "pii.mode"); ch == nil || !ch.Loosens {
-		t.Errorf("partial → hash: %+v", ch)
+		t.Errorf("partial → email: %+v", ch)
 	}
 	if Fingerprint(a) != Fingerprint(a.WithModes(map[string]string{"app.users.email": "redact"})) {
 		t.Error("the default mode changes the fingerprint")

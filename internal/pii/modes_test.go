@@ -11,7 +11,6 @@ import (
 )
 
 func TestMaskValueModes(t *testing.T) {
-	tok := NewTokens()
 	cases := []struct {
 		mode string
 		in   any
@@ -24,29 +23,18 @@ func TestMaskValueModes(t *testing.T) {
 		{ModeEmail, "not an address", "n***(14)"},
 	}
 	for _, c := range cases {
-		if got := MaskValue(c.in, c.mode, tok); got != c.want {
+		if got := MaskValue(c.in, c.mode); got != c.want {
 			t.Errorf("%s(%v) = %v, want %v", c.mode, c.in, got, c.want)
 		}
 	}
-	a, b := MaskValue("alice@example.com", ModeHash, tok), MaskValue("alice@example.com", ModeHash, tok)
-	if a != b || !strings.HasPrefix(a.(string), "tok_") || strings.Contains(a.(string), "alice") {
-		t.Errorf("hash tokens %v %v", a, b)
-	}
-	if MaskValue("bob@example.com", ModeHash, tok) == a {
-		t.Error("two values share a token")
-	}
-	if NewTokens().Token("alice@example.com") == a {
-		t.Error("tokens are stable across sessions")
-	}
-	v, isTok, ok := tok.Lookup(a.(string))
-	if !isTok || !ok || v != "alice@example.com" {
-		t.Errorf("Lookup = %q %v %v", v, isTok, ok)
-	}
-	if _, isTok, ok := tok.Lookup("tok_aaaaaaaaaaaaaaaaaaaa"); !isTok || ok {
-		t.Error("unknown token resolved")
-	}
-	if _, isTok, _ := tok.Lookup("hello"); isTok {
-		t.Error("plain text taken for a token")
+}
+
+func TestHashModeIsUnknown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pii.toml")
+	os.WriteFile(path, []byte("[[mask]]\ncolumn = \"app.users.email\"\nmode = \"hash\"\n"), 0o644)
+	_, err := LoadRulesFile(path)
+	if err == nil || !strings.Contains(err.Error(), `unknown mode "hash" (want redact, partial or email)`) {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -57,7 +45,7 @@ func TestRulesModes(t *testing.T) {
 	}
 	file := `[[mask]]
 column = "app.users.email"
-mode = "hash"
+mode = "email"
 
 [[mask]]
 column = "*.*.email"
@@ -91,7 +79,7 @@ mode = "redact"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if back.Modes["app.users.email"] != ModeHash || back.Modes["*.*.email"] != ModePartial || len(back.Modes) != 2 {
+	if back.Modes["app.users.email"] != ModeEmail || back.Modes["*.*.email"] != ModePartial || len(back.Modes) != 2 {
 		t.Errorf("modes after save: %v", back.Modes)
 	}
 	if err := os.WriteFile(filepath.Join(dir, RulesFile), []byte("[[mask]]\ncolumn = \"a.b.c\"\nmode = \"rot13\"\n"), 0o644); err != nil {
@@ -110,7 +98,7 @@ func TestMaskOutputs(t *testing.T) {
 	outs := []sqlast.Output{{Label: "X", Mask: ModeRedact}, {Label: "NOTE"}, {}}
 	r := Rules{Mask: []string{"app.users.email"}}
 	ds, _ := Detectors([]string{"email"})
-	if err := MaskOutputs(&res, outs, r, ds, NewTokens(), true); err != nil {
+	if err := MaskOutputs(&res, outs, r, ds, true); err != nil {
 		t.Fatal(err)
 	}
 	row := res.Rows[0]
@@ -119,10 +107,10 @@ func TestMaskOutputs(t *testing.T) {
 	}
 	// A label the analysis did not expect: refused.
 	res = engine.Result{Columns: []engine.ResultColumn{{Label: "y"}}, Rows: [][]any{{"v"}}}
-	if err := MaskOutputs(&res, []sqlast.Output{{Label: "X"}}, r, ds, nil, true); err == nil {
+	if err := MaskOutputs(&res, []sqlast.Output{{Label: "X"}}, r, ds, true); err == nil {
 		t.Error("unexpected label accepted")
 	}
-	if err := MaskOutputs(&res, nil, r, ds, nil, true); err == nil {
+	if err := MaskOutputs(&res, nil, r, ds, true); err == nil {
 		t.Error("column count mismatch accepted")
 	}
 }

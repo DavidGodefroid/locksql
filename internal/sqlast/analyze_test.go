@@ -33,7 +33,7 @@ var testCatalog = fakeCatalog{
 var testRules = map[string]string{
 	"app.users.email":    "partial",
 	"app.users.salary":   "redact",
-	"app.contacts.email": "hash",
+	"app.contacts.email": "email",
 }
 
 func testEnv(masking bool) Env {
@@ -44,15 +44,6 @@ func testEnv(masking bool) Env {
 			return m, ok
 		},
 		Masking: masking,
-		Token: func(lit string) (string, bool, bool) {
-			if !strings.HasPrefix(lit, "tok_") {
-				return "", false, false
-			}
-			if lit == "tok_known" {
-				return "a@b.example", true, true
-			}
-			return "", true, false
-		},
 	}
 }
 
@@ -81,7 +72,7 @@ func TestProvenanceMasksResolvedSource(t *testing.T) {
 		{"SELECT o.email, u.email FROM orders o JOIN users u ON u.id = o.user_id LIMIT 1", []string{"", "partial"}},
 		{"SELECT sum(salary) AS s FROM users LIMIT 1", []string{"redact"}},
 		{"SELECT count(email) FROM users LIMIT 1", []string{""}},
-		{"SELECT email FROM contacts LIMIT 1", []string{"hash"}},
+		{"SELECT email FROM contacts LIMIT 1", []string{"email"}},
 		{"SELECT email FROM users UNION SELECT email FROM contacts LIMIT 1", []string{"redact"}},
 		{"SELECT id FROM users JOIN contacts USING (id) LIMIT 1", []string{""}},
 		{"SELECT * FROM users JOIN contacts USING (email) LIMIT 1", []string{"redact", "", "", "redact", "", ""}},
@@ -126,8 +117,6 @@ func TestPIIUsageRefused(t *testing.T) {
 		"SELECT id FROM users u JOIN orders o ON o.user_id = u.id AND u.email = 'x' LIMIT 1",
 		"SELECT id FROM users WHERE sum(salary) > 1 LIMIT 1",
 		"SELECT id FROM users GROUP BY id HAVING max(salary) > 1000 LIMIT 1",
-		"SELECT email FROM contacts WHERE email = 'tok_unknown' LIMIT 1",
-		"SELECT id FROM users WHERE email = 'tok_known' LIMIT 1",
 		"SELECT (SELECT count(*) FROM users u WHERE u.email = 'x' AND u.id = o.user_id) FROM orders o LIMIT 1",
 		"WITH g(x) AS (SELECT 'a@b.c') SELECT u.id FROM users u JOIN g ON u.email = g.x LIMIT 1",
 		"EXPLAIN SELECT id FROM users WHERE email = 'x'",
@@ -198,10 +187,6 @@ func TestKAnonymityChecks(t *testing.T) {
 			{SQL: `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" IN ('a', 'b')`},
 			{SQL: "WITH c AS (SELECT * FROM users) SELECT COUNT(*) FROM c WHERE email IN ('a', 'b')"},
 		}},
-		{"SELECT id FROM contacts WHERE email = 'tok_known' LIMIT 1", []KCheck{
-			{SQL: `SELECT COUNT(*) FROM "app"."contacts" WHERE "app"."contacts"."email" = 'a@b.example'`},
-			{SQL: "SELECT COUNT(*) FROM contacts WHERE email = 'a@b.example'"},
-		}},
 		// The subjects are counted in the column's own table, whatever the
 		// join multiplies.
 		{"SELECT o.id FROM users u JOIN orders o ON o.user_id = u.id WHERE u.email IS NULL AND u.salary IN (1, 2) LIMIT 1", []KCheck{
@@ -240,17 +225,13 @@ func TestKCheckQuoting(t *testing.T) {
 	}
 }
 
-func TestTokenSubstitution(t *testing.T) {
-	sql := "SELECT id FROM contacts WHERE email = 'tok_known' LIMIT 1"
-	a, err := analyze(t, sqlclass.Postgres, sql)
-	if err != nil {
-		t.Fatal(err)
+func TestQuoteLiteral(t *testing.T) {
+	got, err := quoteLiteral(sqlclass.Postgres, "o'k")
+	if err != nil || got != "'o''k'" {
+		t.Errorf("quoteLiteral = %q, %v", got, err)
 	}
-	if got, want := a.RunSQL(sql), "SELECT id FROM contacts WHERE email = 'a@b.example' LIMIT 1"; got != want {
-		t.Errorf("RunSQL = %q, want %q", got, want)
-	}
-	if !a.PIIFilter {
-		t.Error("PIIFilter not set")
+	if _, err := quoteLiteral(sqlclass.Postgres, `a\b`); err == nil {
+		t.Error("a backslash was accepted")
 	}
 }
 
