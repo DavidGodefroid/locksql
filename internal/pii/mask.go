@@ -1301,6 +1301,13 @@ func (a *aliasCheck) writtenValues() error {
 				k = m
 				continue
 			}
+			// A SET target list with subfields or subscripts:
+			// SET (email.f, id) = (...).
+			if m > k && outer.clause == "SET" && a.isPunct(m+1, "=") && (a.isWord(k-1, "SET") || a.isPunct(k-1, ",")) {
+				if err := a.plantedTuple(k); err != nil {
+					return err
+				}
+			}
 			levels[t.Depth] = &level{filter: outer.filter || writeFilters[outer.clause]}
 			continue
 		}
@@ -1373,27 +1380,44 @@ func (a *aliasCheck) plantedEnd(j int) bool {
 }
 
 // plantedSet checks the SET item whose target is token k: a target under a
-// rule may only be set to NULL or DEFAULT.
+// rule may only be set to NULL or DEFAULT. Every name of a dotted target
+// counts: in MySQL "u.email" qualifies the column, in PostgreSQL
+// "email.f" assigns a subfield of the column email.
 func (a *aliasCheck) plantedSet(k int) error {
-	if !a.r.MatchesName(a.name(k)) {
+	col := ""
+	for j := k; ; j -= 2 {
+		if a.r.MatchesName(a.name(j)) {
+			col = a.name(j)
+		}
+		if !a.isPunct(j-1, ".") || a.name(j-2) == "" {
+			break
+		}
+	}
+	if col == "" {
 		return nil
 	}
 	if a.nullOrDefault(k+2, k+3) && a.plantedEnd(k+3) {
 		return nil
 	}
-	return plantedValue(a.name(k))
+	return plantedValue(col)
 }
 
 // plantedTuple checks SET (a, b) = (x, y) at the target list opened at k:
 // each target under a rule may only receive NULL or DEFAULT, from a list of
-// values (a subquery is refused).
+// values (a subquery is refused). A target with a subfield or a subscript
+// ("email.f", "email[1]") counts as its column.
 func (a *aliasCheck) plantedTuple(k int) error {
 	m := a.match[k]
 	var pos []int
 	col := ""
-	for p := k + 1; p < m; p += 2 {
-		if a.r.MatchesName(a.name(p)) {
-			pos = append(pos, (p-k-1)/2)
+	idx := 0
+	for p := k + 1; p < m; p++ {
+		if a.isPunct(p, ",") && a.encl[p] == k {
+			idx++
+			continue
+		}
+		if a.r.MatchesName(a.name(p)) && !slices.Contains(pos, idx) {
+			pos = append(pos, idx)
 			col = a.name(p)
 		}
 	}

@@ -98,3 +98,24 @@ func TestWriteCopiesRuleColumnIntoRuleColumn(t *testing.T) {
 		}
 	}
 }
+
+// A PostgreSQL subfield or element assignment writes the rule column too.
+func TestWritePlantsSubfieldRefused(t *testing.T) {
+	r := Rules{Mask: []string{"*.users.email"}}
+	for _, c := range []dsql{
+		{sqlclass.Postgres, "UPDATE users SET email.f = 'v' WHERE id = 1"},
+		{sqlclass.Postgres, "UPDATE users SET email[1] = 'v' WHERE id = 1"},
+		{sqlclass.Postgres, "UPDATE users SET note = 'x', email.f = 'v' WHERE id = 1"},
+		{sqlclass.Postgres, "UPDATE users SET (email.f, id) = ('v', 1) WHERE id = 1"},
+		{sqlclass.Postgres, "UPDATE users SET (email[1], id) = ('v', 1) WHERE id = 1"},
+		{sqlclass.Postgres, "INSERT INTO users (id, email.f) VALUES (1, 'v')"},
+		{sqlclass.Postgres, "INSERT INTO users (id, email[1]) VALUES (1, 'v')"},
+	} {
+		if err := PlanCheck(classify(t, c), r, c.d, true); err == nil {
+			t.Errorf("accepted: %s", c.sql)
+		}
+	}
+	if err := PlanCheck(classify(t, dsql{sqlclass.Postgres, "UPDATE users SET email.f = NULL WHERE id = 1"}), r, sqlclass.Postgres, true); err != nil {
+		t.Errorf("NULL subfield refused: %v", err)
+	}
+}
