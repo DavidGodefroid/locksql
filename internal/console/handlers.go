@@ -175,9 +175,10 @@ func (s *Server) masking() bool {
 // errText is the text of a statement error for the client, the console and
 // the audit log. With masking on, a value the server quotes in its message
 // (a failed cast in a WHERE clause) is redacted: it reaches no result row,
-// so neither the rules nor the detectors would mask it otherwise.
-func (s *Server) errText(err error, sql string, unmask bool) string {
-	msg := secrets.Sanitize(err)
+// so neither the rules nor the detectors would mask it otherwise. The
+// values substituted for the placeholders of pl never appear.
+func (s *Server) errText(err error, sql string, unmask bool, pl *plan) string {
+	msg := s.hideValues(secrets.Sanitize(err), pl)
 	if unmask || !s.masking() {
 		return msg
 	}
@@ -328,6 +329,7 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	return okResp(req.ID, ipc.PlanResult{
 		PlanID: pl.id, Profile: s.profile.Name, Host: s.host(), DB: db, SQL: pl.st.SQL,
 		Class: class, Verdict: pl.level, Summary: summary, Reasons: reasons, Unmask: pl.unmask,
+		Values: s.typedNames(),
 	})
 }
 
@@ -425,22 +427,52 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	}
 
 	s.screen(ctx, pl)
+	// The values are asked before the approval, and asked even when the
+	// approval is skipped: nothing runs while a placeholder has none.
+	missing, _ := s.placeholders(pl)
+	if r := s.askValues(ctx, req.ID, pl, rec, missing); r != nil {
+		return *r
+	}
 	if s.autoApprove() && !pl.unmask {
 		rec.Event, rec.Decision = audit.EventAuto, "auto"
 		s.println(s.frameEnd(paint.Yellow("auto-approved") + " (--skip-permissions)"))
 	} else {
-		if r := s.approve(ctx, req.ID, pl, rec); r != nil {
-			return *r
-		}
-		// The prompt may have waited: check the TTL again, so that an
-		// approval landing after it runs nothing.
-		if s.now().Sub(pl.created) > PlanTTL {
-			rec.Event, rec.Decision = audit.EventTimeout, "expired"
-			s.audit(rec)
-			s.println(paint.Fail("plan expired while waiting for approval: not run"))
-			return errResp(req.ID, ipc.CodeNoSuchPlan, "the plan expired while waiting for approval; plan the query again")
+		for {
+			r, retype := s.approve(ctx, req.ID, pl, rec)
+			if r != nil {
+				return *r
+			}
+			if !retype {
+				break
+			}
+			_, reused := s.placeholders(pl)
+			if r := s.askValues(ctx, req.ID, pl, rec, reused); r != nil {
+				return *r
+			}
 		}
 		rec.Event, rec.Decision = audit.EventApproved, "approved"
+	}
+	// The prompts may have waited: check the TTL again, so that an
+	// approval or a value landing after it runs nothing.
+	if s.now().Sub(pl.created) > PlanTTL {
+		rec.Event, rec.Decision = audit.EventTimeout, "expired"
+		s.audit(rec)
+		s.println(paint.Fail("plan expired while waiting for approval: not run"))
+		return errResp(req.ID, ipc.CodeNoSuchPlan, "the plan expired while waiting for approval; plan the query again")
+	}
+	if pl.an != nil && len(pl.an.Values) > 0 {
+		// The values are known now: analyse again, so that the statement
+		// and its k-anonymity checks carry them. pl.st.SQL is the statement
+		// as the agent wrote it, placeholders included: the audit keeps it.
+		if reason, refused, err := s.analyzeRead(ctx, sess, pl, pl.st.SQL); err != nil || refused {
+			if err != nil {
+				return s.failed(req.ID, "plan", err)
+			}
+			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, reason)
+		}
+		if missing, _ := s.placeholders(pl); len(missing) > 0 {
+			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, "a placeholder has no value")
+		}
 	}
 
 	rctx := ctx
@@ -454,7 +486,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	defer s.level(ctx, start)
 	if reason, err := s.kCheck(rctx, sess, pl); err != nil || reason != "" {
 		if err != nil {
-			rec.Error = s.errText(err, pl.st.SQL, false)
+			rec.Error = s.errText(err, pl.st.SQL, false, pl)
 			s.audit(rec)
 			return s.failed(req.ID, "k-anonymity check", err)
 		}
@@ -475,7 +507,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	rec.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
 		// The audit log never holds row data, even for an unmask run.
-		rec.Error = s.errText(err, pl.st.SQL, false)
+		rec.Error = s.errText(err, pl.st.SQL, false, pl)
 		s.audit(rec)
 		s.println(paint.Fail("failed: " + rec.Error))
 		if errors.Is(err, engine.ErrConnLost) {
@@ -522,14 +554,22 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 }
 
 // approve shows the prompt and waits for the human. It returns nil when
-// approved, the error response otherwise (audited).
-func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Record) *ipc.Response {
+// approved, the error response otherwise (audited). retype reports that the
+// human asked to type again the values the plan reuses.
+func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Record) (resp *ipc.Response, retype bool) {
 	expected, prompt := "y", "Approve? [y/N] "
 	if s.profile.Production {
 		expected = s.profile.Name
 		prompt = fmt.Sprintf("Type the profile name %q to approve: ", s.profile.Name)
 	}
+	_, reused := s.placeholders(pl)
+	if len(reused) > 0 {
+		prompt = "(r to retype ${" + strings.Join(reused, "}, ${") + "}) " + prompt
+	}
 	ans, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold(prompt)), ApprovalTimeout)
+	if ok && len(reused) > 0 && strings.TrimSpace(ans) == "r" {
+		return nil, true
+	}
 	var r ipc.Response
 	switch {
 	case !ok && ctx.Err() != nil:
@@ -545,10 +585,10 @@ func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Reco
 		s.println(paint.Fail("denied"))
 		r = errResp(id, ipc.CodeDenied, "denied by the human; do not retry unless asked")
 	default:
-		return nil
+		return nil, false
 	}
 	s.audit(rec)
-	return &r
+	return &r, false
 }
 
 // result renders the masked result as capped JSON rows and TSV text.

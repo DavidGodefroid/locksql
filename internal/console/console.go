@@ -143,6 +143,8 @@ type Server struct {
 
 	// refs keeps the values behind the references of redacted cells.
 	refs refStore
+	// typed keeps the values the human typed for placeholder names.
+	typed map[string]typedValue
 
 	plans    map[string]*plan
 	started  time.Time
@@ -177,7 +179,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, quantum: cfg.Quantum}
+	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, quantum: cfg.Quantum}
 	if err := s.apply(cfg.Policy); err != nil {
 		return nil, err
 	}

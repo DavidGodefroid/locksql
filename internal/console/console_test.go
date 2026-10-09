@@ -121,6 +121,8 @@ type fakeIO struct {
 	blocked chan struct{}
 	// onAsk, when set, runs before each scripted answer (e.g. to let time pass).
 	onAsk func()
+	// secrets answer AskSecret, in order; none left fails the prompt.
+	secrets []string
 }
 
 func (f *fakeIO) Println(s string) {
@@ -156,8 +158,16 @@ func (f *fakeIO) Ask(ctx context.Context, prompt string, _ time.Duration) (strin
 	return a, true
 }
 
-func (f *fakeIO) AskSecret(context.Context, string) ([]byte, error) {
-	return []byte("not-used"), nil
+func (f *fakeIO) AskSecret(_ context.Context, prompt string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prompts = append(f.prompts, prompt)
+	if len(f.secrets) == 0 {
+		return nil, errors.New("no answer")
+	}
+	s := f.secrets[0]
+	f.secrets = f.secrets[1:]
+	return []byte(s), nil
 }
 
 func (f *fakeIO) promptCount() int {
