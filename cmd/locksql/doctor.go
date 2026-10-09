@@ -145,13 +145,8 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 		out = append(out, check{state, title, detail, fix})
 	}
 
-	// 1. Operating system.
-	switch d.goos {
-	case "linux", "darwin":
-		add(checkOK, "operating system", d.goos, "")
-	default:
-		add(checkFail, "operating system", d.goos+" is not supported", "use Linux or macOS")
-	}
+	// 1. Operating system (the build is Linux or macOS only).
+	add(checkOK, "operating system", d.goos, "")
 
 	// 2. Graphical session.
 	disp := d.display()
@@ -181,7 +176,7 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 		add(checkFail, "system setup", err.Error(), "fix "+sysconf.Path+" (root-owned, mode 0644) or run sudo locksql install again")
 		return out
 	case sys == nil:
-		add(checkWarn, "separation", "same-user mode: the agent runs as the console's account and could read its terminal or type into it",
+		add(checkFail, "separation", "same-user mode: the console refuses to run in the agent's account",
 			"run sudo locksql install, then use the console from a separate locksql session")
 		if on, known := d.tiocsti(); known && on {
 			add(checkWarn, "terminal injection", "dev.tty.legacy_tiocsti = 1: a process can type into a terminal of its own account",

@@ -156,8 +156,11 @@ func TestDoctorSameUserMode(t *testing.T) {
 	d.tiocsti = func() (bool, bool) { return true, true }
 	d.status = func(string, string) (*ipc.StatusResult, error) { return nil, &client.NoConsoleError{Profile: "uat"} }
 	checks := doctor(d, doctorProject(t, "ask"), "")
-	if stateOf(checks, "separation") != checkWarn || stateOf(checks, "terminal injection") != checkWarn {
-		t.Errorf("same-user checks: %+v", checks)
+	if stateOf(checks, "separation") != checkFail {
+		t.Errorf("same-user mode is not a failure: %+v", checks)
+	}
+	if stateOf(checks, "terminal injection") != checkWarn {
+		t.Errorf("terminal injection check: %+v", checks)
 	}
 }
 

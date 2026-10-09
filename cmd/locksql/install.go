@@ -61,15 +61,9 @@ func runInstall(e env, args []string) int {
 		fmt.Fprintln(e.stderr, "locksql install:", err)
 		return exitFail
 	}
-	var script string
-	switch runtime.GOOS {
-	case "linux":
-		script = linuxInstallScript(bin, *client, *svc, *group)
-	case "darwin":
+	script := linuxInstallScript(bin, *client, *svc, *group)
+	if runtime.GOOS == "darwin" {
 		script = darwinInstallScript(bin, *client, *svc, *group)
-	default:
-		fmt.Fprintf(e.stderr, "locksql install: separated mode is supported on Linux and macOS, not %s\n", runtime.GOOS)
-		return exitFail
 	}
 	fmt.Fprintf(e.stdout, `locksql install separates the console from the agent:
   - the console runs as %[1]q, in its own login session (use Wayland), and alone
