@@ -19,8 +19,8 @@ import (
 
 // isolation is how the console is kept apart from the agent: in a
 // separated setup (sysconf) the console runs as the service account in its
-// own login session and serves the client group over a shared socket; in
-// same-user mode it serves its own user over a private socket.
+// own login session and serves the client group over a shared socket; without
+// one it refuses to start.
 type isolation struct {
 	sys     *sysconf.Config
 	display sysconf.Display
@@ -40,7 +40,6 @@ type isolationEnv struct {
 	terminalOwner func() (int, bool)
 	clientAllowed func(sys *sysconf.Config, uid int) bool
 	clientGID     func(sys *sysconf.Config) (int, error)
-	tiocsti       func() (bool, bool)
 }
 
 func realIsolationEnv(tty *os.File) isolationEnv {
@@ -64,7 +63,6 @@ func realIsolationEnv(tty *os.File) isolationEnv {
 		},
 		clientAllowed: func(sys *sysconf.Config, uid int) bool { return sys.ClientAllowed(uid) },
 		clientGID:     func(sys *sysconf.Config) (int, error) { return sys.ClientGID() },
-		tiocsti:       sysconf.LegacyTIOCSTI,
 	}
 }
 
@@ -86,11 +84,7 @@ func checkIsolation(io IO, env isolationEnv, p config.Profile) (*isolation, erro
 	}
 
 	if sys == nil {
-		io.Println(paint.Warn(red + "same-user mode: the agent runs as your account, so it could read this console's terminal or type into it; run `locksql doctor`, then `sudo locksql install` to separate them" + reset))
-		if on, known := env.tiocsti(); known && on {
-			io.Println(red + "warning: the kernel allows TIOCSTI (dev.tty.legacy_tiocsti = 1): a process of your account can type into this terminal" + reset)
-		}
-		return iso, nil
+		return nil, errors.New("console: refused: the console must run in a separate account, apart from the agent's, or the agent could read its terminal and type into it; run `locksql doctor`, then `sudo locksql install`")
 	}
 
 	name, err := env.userName()

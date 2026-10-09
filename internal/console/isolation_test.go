@@ -18,7 +18,6 @@ func fakeIsolation(sys *sysconf.Config, display string) isolationEnv {
 		terminalOwner: func() (int, bool) { return 900, true },
 		clientAllowed: func(_ *sysconf.Config, uid int) bool { return uid == 1000 },
 		clientGID:     func(*sysconf.Config) (int, error) { return 950, nil },
-		tiocsti:       func() (bool, bool) { return true, true },
 	}
 }
 
@@ -26,24 +25,22 @@ func separated() *sysconf.Config {
 	return &sysconf.Config{ServiceUser: "locksql", ClientGroup: "locksql-clients", SocketDir: "/run/locksql", X11: sysconf.X11Warn}
 }
 
-func TestIsolationSameUser(t *testing.T) {
+func TestIsolationSameUserRefused(t *testing.T) {
 	io := &fakeIO{}
-	iso, err := checkIsolation(io, fakeIsolation(nil, sysconf.DisplayWayland), uatProfile())
-	if err != nil {
-		t.Fatal(err)
+	_, err := checkIsolation(io, fakeIsolation(nil, sysconf.DisplayWayland), uatProfile())
+	if err == nil {
+		t.Fatal("same-user mode accepted")
 	}
-	out := io.output()
-	if !strings.Contains(out, "same-user mode") || !strings.Contains(out, "TIOCSTI") {
-		t.Errorf("same-user warnings missing:\n%s", out)
-	}
-	if iso.peerCheck() != nil {
-		t.Error("same-user mode must keep the default peer check")
+	for _, want := range []string{"separate account", "sudo locksql install", "locksql doctor"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q: %v", want, err)
+		}
 	}
 }
 
 func TestIsolationX11(t *testing.T) {
 	io := &fakeIO{}
-	if _, err := checkIsolation(io, fakeIsolation(nil, sysconf.DisplayX11), uatProfile()); err != nil {
+	if _, err := checkIsolation(io, fakeIsolation(separated(), sysconf.DisplayX11), uatProfile()); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(io.output(), "X11") {
@@ -51,7 +48,7 @@ func TestIsolationX11(t *testing.T) {
 	}
 	prod := uatProfile()
 	prod.Production = true
-	if _, err := checkIsolation(&fakeIO{}, fakeIsolation(nil, sysconf.DisplayX11), prod); err == nil {
+	if _, err := checkIsolation(&fakeIO{}, fakeIsolation(separated(), sysconf.DisplayX11), prod); err == nil {
 		t.Error("X11 accepted on a production profile")
 	}
 	sys := separated()
