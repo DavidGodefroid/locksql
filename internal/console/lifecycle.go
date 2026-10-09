@@ -83,11 +83,23 @@ func legacyRulesNotice(cwd, projectRoot, rulesPath string) string {
 	return fmt.Sprintf("note: %s is no longer read outside a project; PII rules now live in %s (copy it there to keep its rules)", old, rulesPath)
 }
 
+// newIsolationEnv builds what Run's isolation checks read; tests replace it.
+var newIsolationEnv = realIsolationEnv
+
 // Run is `locksql console`: the start-up sequence of spec §6, then the
 // request loop until Ctrl-C, logout, :quit or a timeout.
 func Run(ctx context.Context, o Options) error {
 	if o.IO == nil {
 		return errors.New("console: no terminal")
+	}
+	// Same-user mode is refused before any prompt or file write.
+	isoEnv := newIsolationEnv(o.TTY)
+	sys, err := isoEnv.loadSys()
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrConfig, err)
+	}
+	if err := SameUserRefused(sys); err != nil {
+		return err
 	}
 	if err := harden(); err != nil {
 		o.IO.Println("warning: could not disable core dumps: " + err.Error())
@@ -171,7 +183,7 @@ func Run(ctx context.Context, o Options) error {
 	st.profile = p
 
 	// Separation from the agent, before any secret is asked for.
-	iso, err := checkIsolation(o.IO, realIsolationEnv(o.TTY), p)
+	iso, err := checkIsolation(o.IO, isoEnv, p)
 	if err != nil {
 		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
 		return err

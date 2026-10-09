@@ -1,6 +1,8 @@
 package console
 
 import (
+	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -35,6 +37,47 @@ func TestIsolationSameUserRefused(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error lacks %q: %v", want, err)
 		}
+	}
+}
+
+func TestIsolationSameUserRefusedBeforeX11(t *testing.T) {
+	io := &fakeIO{}
+	_, err := checkIsolation(io, fakeIsolation(nil, sysconf.DisplayX11), uatProfile())
+	if err == nil || !strings.Contains(err.Error(), "separate account") {
+		t.Fatalf("want the same-user refusal, got %v", err)
+	}
+	if strings.Contains(io.output(), "X11") {
+		t.Errorf("X11 warning before the same-user refusal:\n%s", io.output())
+	}
+}
+
+// TestRunSameUserRefusedFirst pins spec §8 "Console refuses to start without
+// a separated setup": no prompt, no approved policy, no audit file.
+func TestRunSameUserRefusedFirst(t *testing.T) {
+	if allowSameUserForTests {
+		t.Skip("built with the locksql_testhook tag")
+	}
+	root := t.TempDir()
+	writeProjectConfig(t, root, 200)
+	state := t.TempDir()
+	old := newIsolationEnv
+	newIsolationEnv = func(*os.File) isolationEnv { return fakeIsolation(nil, sysconf.DisplayWayland) }
+	t.Cleanup(func() { newIsolationEnv = old })
+
+	io := &fakeIO{answers: []string{"y", "y", "y"}}
+	err := Run(context.Background(), Options{Profile: "uat", Cwd: root, IO: io, StateDir: state})
+	if err == nil || err.Error() != sameUserRefusal {
+		t.Fatalf("want the same-user refusal, got %v", err)
+	}
+	if len(io.prompts) > 0 {
+		t.Errorf("prompted before refusing: %q", io.prompts)
+	}
+	entries, err := os.ReadDir(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) > 0 {
+		t.Errorf("state written before refusing: %v", entries)
 	}
 }
 

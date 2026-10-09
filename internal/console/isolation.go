@@ -20,7 +20,7 @@ import (
 // isolation is how the console is kept apart from the agent: in a
 // separated setup (sysconf) the console runs as the service account in its
 // own login session and serves the client group over a shared socket; without
-// one it refuses to start.
+// one it refuses to start (except in a test build: allowSameUserForTests).
 type isolation struct {
 	sys     *sysconf.Config
 	display sysconf.Display
@@ -66,12 +66,33 @@ func realIsolationEnv(tty *os.File) isolationEnv {
 	}
 }
 
+// allowSameUserForTests lets the console run without a separated setup, in
+// the agent's account. Only isolation_testhook.go sets it, in a build with
+// the locksql_testhook tag: no config file, flag, environment variable or
+// client can.
+var allowSameUserForTests bool
+
+// sameUserRefusal is the one text of the same-user refusal.
+const sameUserRefusal = "console: refused: the console must run in a separate account, apart from the agent's, or the agent could read its terminal and type into it; run `locksql doctor`, then `sudo locksql install`"
+
+// SameUserRefused is the refusal of a console without a separated setup
+// (sys nil, as sysconf.Load returns it), or nil.
+func SameUserRefused(sys *sysconf.Config) error {
+	if sys == nil && !allowSameUserForTests {
+		return errors.New(sameUserRefusal)
+	}
+	return nil
+}
+
 // checkIsolation applies the separation rules before the console holds any
 // secret. Warnings go to the terminal; a violation is an error.
 func checkIsolation(io IO, env isolationEnv, p config.Profile) (*isolation, error) {
 	sys, err := env.loadSys()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrConfig, err)
+	}
+	if err := SameUserRefused(sys); err != nil {
+		return nil, err
 	}
 	iso := &isolation{sys: sys, display: env.display(), self: env.uid(), gid: -1}
 
@@ -83,8 +104,9 @@ func checkIsolation(io IO, env isolationEnv, p config.Profile) (*isolation, erro
 		io.Println(red + "warning: " + msg + "; prefer a Wayland session" + reset)
 	}
 
-	if sys == nil {
-		return nil, errors.New("console: refused: the console must run in a separate account, apart from the agent's, or the agent could read its terminal and type into it; run `locksql doctor`, then `sudo locksql install`")
+	if sys == nil { // only a test build gets here (allowSameUserForTests)
+		io.Println(red + "same-user mode: test build only" + reset)
+		return iso, nil
 	}
 
 	name, err := env.userName()
