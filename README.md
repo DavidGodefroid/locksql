@@ -412,7 +412,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `ssh.host`, `ssh.port`, `ssh.user` | required host and user; port 22 | the bastion; not with sqlite or a Unix socket `host` |
 | `ssh.auth` | required | `key`, `agent` (`SSH_AUTH_SOCK` of the console) or `password` |
 | `ssh.key` | required with `auth = "key"` | private key of the console account, mode 0600 |
-| `ssh.credentials` | the profile's `credentials` | `ask` or `keychain` for the passphrase or SSH password |
+| `ssh.credentials` | the profile's `credentials` | `ask` or `keychain` for the passphrase or SSH password; `locksql forget --profile P` removes it too |
 
 </details>
 

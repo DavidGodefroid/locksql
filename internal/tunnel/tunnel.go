@@ -298,11 +298,13 @@ func (c *bridgedConn) RemoteAddr() net.Addr { return c.remote }
 // withDeadlines bridges ch to a net.Pipe and returns the pipe's other end.
 // The drivers bound their handshakes and reads with deadlines, which an SSH
 // channel does not support; a pipe does, and a deadline that expires there
-// loses no data. Closing either side closes the other.
+// loses no data. When either copy ends, both ends are closed, so the other
+// copy and any driver call blocked on the pipe end too.
 func withDeadlines(ch net.Conn) net.Conn {
 	driver, bridge := net.Pipe()
-	go func() { io.Copy(ch, bridge); ch.Close() }()
-	go func() { io.Copy(bridge, ch); bridge.Close() }()
+	closeBoth := func() { ch.Close(); bridge.Close() }
+	go func() { io.Copy(ch, bridge); closeBoth() }()
+	go func() { io.Copy(bridge, ch); closeBoth() }()
 	return &bridgedConn{Conn: driver, local: ch.LocalAddr(), remote: ch.RemoteAddr()}
 }
 

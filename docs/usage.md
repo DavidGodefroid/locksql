@@ -227,7 +227,7 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   (or it does not decrypt the key), the console asks once and offers
   `Replace the SSH secret stored in the OS keychain? [y/N]`; other failures
   (bastion unreachable, host key refused) are reported without asking.
-  `locksql forget` removes the database secret only.
+  `locksql forget --profile P` removes both secrets.
 - `key` and `known_hosts` belong to the **console account** (section 2):
   `~` is its home, and the bastion's host key is checked against its
   `~/.ssh/known_hosts`. Nothing needs to be prepared there: the first

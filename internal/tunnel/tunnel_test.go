@@ -399,3 +399,84 @@ func TestDialedConnHonoursDeadlines(t *testing.T) {
 		t.Error("read on a closed tunnel succeeded")
 	}
 }
+
+// targetServer accepts one TCP connection and hands it to serve.
+func targetServer(t *testing.T, serve func(net.Conn)) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		serve(c)
+	}()
+	return ln.Addr().String()
+}
+
+func openKeyTunnel(t *testing.T) *Tunnel {
+	t.Helper()
+	path, pub := writeKey(t, t.TempDir(), "", 0o600)
+	s := newTestServer(t, acceptKey(pub))
+	tun, err := Open(context.Background(), Options{Profile: sshProfile(s, config.SSHAuthKey, path), HostKey: trust(s)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tun.Close() })
+	return tun
+}
+
+// Closing the driver's end closes the connection on the far side.
+func TestDriverCloseReachesTheServer(t *testing.T) {
+	tun := openKeyTunnel(t)
+	closed := make(chan struct{})
+	addr := targetServer(t, func(c net.Conn) {
+		io.Copy(io.Discard, c)
+		c.Close()
+		close(closed)
+	})
+	c, err := tun.Dial(context.Background(), "tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Write([]byte("hello"))
+	c.Close()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server never saw the close")
+	}
+}
+
+// A server that answers and then closes without reading must not leave a
+// large driver Write blocked: the bridge closes both ends when either copy
+// ends.
+func TestRemoteCloseUnblocksDriverWrite(t *testing.T) {
+	tun := openKeyTunnel(t)
+	addr := targetServer(t, func(c net.Conn) {
+		c.Write([]byte("bye"))
+		c.Close()
+	})
+	c, err := tun.Dial(context.Background(), "tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Write(make([]byte, 8<<20)) // never read: blocks until the bridge closes
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("a write to a closed connection succeeded")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the driver's Write is still blocked after the server closed")
+	}
+}

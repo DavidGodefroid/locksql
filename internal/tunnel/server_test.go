@@ -100,7 +100,7 @@ func (s *testServer) serve(nc net.Conn, cfg *ssh.ServerConfig) {
 		}
 		go ssh.DiscardRequests(chReqs)
 		go func() { io.Copy(ch, dst); ch.CloseWrite() }()
-		go func() { io.Copy(dst, ch); dst.Close() }()
+		go func() { io.Copy(dst, ch); dst.Close(); ch.Close() }() // as sshd, once the target stops taking data
 	}
 }
 
