@@ -82,6 +82,12 @@ func TestPlaceholderUnknownTypedIsRecorded(t *testing.T) {
 	if len(a.Values) != 2 || !a.Values[0].InList || len(a.Replacements) != 0 {
 		t.Errorf("Values %+v Replacements %+v", a.Values, a.Replacements)
 	}
+	if len(a.KChecks) != 0 {
+		t.Errorf("k-checks for typed values: %+v", a.KChecks)
+	}
+	if !a.PIIFilter {
+		t.Error("PIIFilter not set")
+	}
 }
 
 func TestPlaceholderUnknownRefRefused(t *testing.T) {
@@ -103,34 +109,47 @@ func TestMixedLiteralsKeepKCheck(t *testing.T) {
 }
 
 func TestPlaceholderElsewhereRefused(t *testing.T) {
-	for _, sql := range []string{
-		"SELECT '${email}' AS x FROM users LIMIT 1",
-		"SELECT id FROM users WHERE lower(email) = lower('${email}') LIMIT 1",
-		"SELECT id FROM users WHERE id = '${email}' LIMIT 1",
-		"SELECT id FROM users WHERE name = '${email}' LIMIT 1",
-		"SELECT id FROM users WHERE email = '${Email}' LIMIT 1",
-		"SELECT id FROM users u JOIN orders o ON o.user_id = u.id AND u.email = '${email}' LIMIT 1",
+	const (
+		stray     = "a placeholder may only be compared with a PII column"
+		malformed = "malformed placeholder"
+	)
+	for _, c := range []struct{ sql, reason string }{
+		{"SELECT '${email}' AS x FROM users LIMIT 1", stray},
+		{"SELECT id FROM users WHERE lower(email) = lower('${email}') LIMIT 1", "is used inside function lower"},
+		{"SELECT id FROM users WHERE id = '${email}' LIMIT 1", stray},
+		{"SELECT id FROM users WHERE name = '${email}' LIMIT 1", stray},
+		{"SELECT id FROM users WHERE email = '${Email}' LIMIT 1", malformed},
+		{"SELECT id FROM users u JOIN orders o ON o.user_id = u.id AND u.email = '${email}' LIMIT 1", "not in a JOIN condition"},
 		// Spec 8: function argument, CONCAT, CASE, UNION constant, ref vs
 		// ref.
-		"SELECT length('${email}') AS n FROM users LIMIT 1",
-		"SELECT id FROM users WHERE length('${email}') > 3 LIMIT 1",
-		"SELECT concat('${email}', id) AS x FROM users LIMIT 1",
-		"SELECT CASE WHEN id = 1 THEN '${email}' END AS x FROM users LIMIT 1",
-		"SELECT id FROM users WHERE email = '${email}' UNION SELECT '${email}' LIMIT 1",
-		"SELECT id FROM users WHERE '${r1.1.1}' = '${r1.1.2}' LIMIT 1",
-		"SELECT id FROM users WHERE '${email}' = '${email}' LIMIT 1",
-		"SELECT id FROM users WHERE name IN ('${email}') LIMIT 1",
+		{"SELECT length('${email}') AS n FROM users LIMIT 1", stray},
+		{"SELECT id FROM users WHERE length('${email}') > 3 LIMIT 1", stray},
+		{"SELECT concat('${email}', id) AS x FROM users LIMIT 1", stray},
+		{"SELECT CASE WHEN id = 1 THEN '${email}' END AS x FROM users LIMIT 1", stray},
+		{"SELECT id FROM users WHERE email = '${email}' UNION SELECT '${email}' LIMIT 1", stray},
+		{"SELECT id FROM users WHERE '${r1.1.1}' = '${r1.1.2}' LIMIT 1", stray},
+		{"SELECT id FROM users WHERE '${email}' = '${email}' LIMIT 1", stray},
+		{"SELECT id FROM users WHERE name IN ('${email}') LIMIT 1", stray},
+		// Only plain single-quoted strings are substituted.
+		{"SELECT id FROM users WHERE email = E'${email}' LIMIT 1", malformed},
+		{"SELECT E'${email}' AS x FROM users LIMIT 1", malformed},
+		{"SELECT $$${email}$$ AS x FROM users LIMIT 1", malformed},
+		{"SELECT $t$${email}$t$ AS x FROM users LIMIT 1", malformed},
 	} {
 		env := valueEnv(map[string]string{"email": "a@b.example", "r1.1.1": "a@b.example", "r1.1.2": "c@d.example"})
-		if _, err := analyzeWith(t, sql, env); err == nil {
-			t.Errorf("%q accepted", sql)
+		_, err := analyzeWith(t, c.sql, env)
+		if err == nil || !strings.Contains(err.Error(), c.reason) {
+			t.Errorf("%q: err = %v, want %q", c.sql, err, c.reason)
 		}
 	}
-	st, _ := Parse(sqlclass.Postgres, "SELECT email FROM users WHERE email = '${email}' LIMIT 1")
+	st, err := Parse(sqlclass.Postgres, "SELECT email FROM users WHERE email = '${email}' LIMIT 1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	env := valueEnv(map[string]string{"email": "a@b.example"})
 	env.Masking = false
-	if _, err := Analyze(st, env); err == nil {
-		t.Error("placeholder accepted in an unmask plan")
+	if _, err := Analyze(st, env); err == nil || !strings.Contains(err.Error(), stray) {
+		t.Errorf("placeholder in an unmask plan: err = %v", err)
 	}
 }
 

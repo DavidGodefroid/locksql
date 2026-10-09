@@ -1500,7 +1500,7 @@ func (an *analyzer) keyFilter(op string, l, r Prov, le, re Expr, clause string, 
 func (an *analyzer) strayPlaceholders() error {
 	toks, err := sqlclass.Lex(an.d, an.st.SQL)
 	if err != nil {
-		return nil // the statement parsed: the lexer agrees
+		return refuse("the statement could not be checked for placeholders")
 	}
 	for _, t := range toks {
 		if t.Kind != sqlclass.TokString {
@@ -1508,6 +1508,11 @@ func (an *analyzer) strayPlaceholders() error {
 		}
 		body, ok := unquote(an.d, t.Text)
 		if !ok {
+			// E'...', $$...$$ and the like are never substituted: a
+			// placeholder written that way is malformed.
+			if strings.Contains(t.Text, "${") {
+				return refusef("malformed placeholder %s: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}' as a plain single-quoted string", t.Text)
+			}
 			continue
 		}
 		if _, _, isPH, _ := ParsePlaceholder(body); !isPH {
