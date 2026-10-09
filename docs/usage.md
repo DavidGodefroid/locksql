@@ -597,7 +597,10 @@ locksql doctor   [--profile P]
 - `plan` validates the statement and runs `EXPLAIN` only. The plan id it
   returns is valid once, for 10 minutes. A REFUSE verdict gives no plan id.
   When the statement filters on a PII column, the row estimates are hidden
-  from the agent.
+  from the agent and the weight verdict is decided at run time, on the
+  console: `plan` answers `OK` with a plan id, and `run` refuses a heavy
+  plan before the approval prompt, with the reasons on the console and a
+  generic `refused by the weight check` to the agent.
 - `pii add` adds a mask rule at once, since it only tightens.
 - `request` queues a proposal that the human sees in `:review`. It never
   changes the policy; the human edits the config, and the console then asks

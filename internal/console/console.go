@@ -133,6 +133,9 @@ type plan struct {
 	created  time.Time
 	warnings []string
 	explain  *engine.Plan // the EXPLAIN result, assessed again when the plan runs
+	// kExplains are the EXPLAIN results of the k-anonymity counts, assessed
+	// again when the plan runs.
+	kExplains []engine.Plan
 	// an is the analysis of a read statement (nil for other classes);
 	// runSQL is the statement that runs; isExplain marks an EXPLAIN
 	// SELECT, answered with the plan.

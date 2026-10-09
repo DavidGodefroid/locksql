@@ -215,11 +215,23 @@ func (s *Server) readPlan(ctx context.Context, sess engine.Session, pl *plan, sq
 			s.println("EXPLAIN of the k-anonymity check failed: " + s.errText(err, k.SQL, false, pl))
 			return "the k-anonymity check of this statement cannot be planned: " + genericFailure, true, nil
 		}
-		if v := weight.Assess(kp, s.profile.Limits, s.profile.Production); v.Level == weight.Refuse {
-			return "weight check of the k-anonymity count: " + strings.Join(v.Reasons, "; "), true, nil
-		}
+		pl.kExplains = append(pl.kExplains, kp)
+	}
+	if reason, refused := s.assessK(pl); refused && !estimatesHidden(pl) {
+		return reason, true, nil
 	}
 	return "", false, nil
+}
+
+// assessK weighs the k-anonymity counts of a plan under the limits in
+// force. It reports the refusal reason of the first one refused.
+func (s *Server) assessK(pl *plan) (string, bool) {
+	for _, kp := range pl.kExplains {
+		if v := weight.Assess(kp, s.profile.Limits, s.profile.Production); v.Level == weight.Refuse {
+			return "weight check of the k-anonymity count: " + strings.Join(v.Reasons, "; "), true
+		}
+	}
+	return "", false
 }
 
 // analyzeRead parses and analyses a read statement and sets the plan's
@@ -259,11 +271,23 @@ func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan,
 // planner's statistics would answer the question the k-anonymity check
 // guards.
 func clientSummary(pl *plan) (string, []string) {
-	if pl.an != nil && pl.an.PIIFilter && !pl.unmask {
+	if estimatesHidden(pl) {
 		return "estimates hidden: the statement filters on a PII column", nil
 	}
 	return pl.summary, pl.reasons
 }
+
+// estimatesHidden reports whether the plan's weight check stays on the
+// console: its estimates, its reasons and its verdict. The verdict is then
+// decided when the plan runs, so that query.plan answers the same whatever
+// the planner's statistics say about the filtered value.
+func estimatesHidden(pl *plan) bool {
+	return pl.an != nil && pl.an.PIIFilter && !pl.unmask
+}
+
+// hiddenWeightRefusal is the client answer of a weight refusal whose
+// details stay on the console.
+const hiddenWeightRefusal = "refused by the weight check (the details are shown on the console)"
 
 // kCheck runs the k-anonymity row counts of an approved plan. It returns
 // the refusal reason, if any.

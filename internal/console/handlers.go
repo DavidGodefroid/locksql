@@ -282,6 +282,14 @@ func (s *Server) refuseWarned(id int64, pl *plan, class, reason string) ipc.Resp
 	return s.refuseRec(id, audit.Record{Event: audit.EventRefused, DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Error: reason, Warnings: pl.warnings})
 }
 
+// refuseHidden is refuse for a weight refusal under a PII filter: the
+// console and the audit log get the reason, the client a generic answer.
+func (s *Server) refuseHidden(id int64, pl *plan, class, reason string) ipc.Response {
+	s.audit(audit.Record{Event: audit.EventRefused, DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Error: reason})
+	s.println(paint.Fail("refused: " + reason))
+	return errResp(id, ipc.CodeRefused, hiddenWeightRefusal)
+}
+
 func (s *Server) refuseRec(id int64, rec audit.Record) ipc.Response {
 	reason := rec.Error
 	s.audit(rec)
@@ -366,7 +374,9 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 			return s.refuse(req.ID, db, auditSQL, class, "", reason)
 		}
 		pl.st.SQL = strings.TrimSuffix(full, ";")
-		if reason, refused := s.assess(pl); refused {
+		// Under a PII filter the verdict is a statistic of the filtered
+		// value: it is decided by query.run, on the console.
+		if reason, refused := s.assess(pl); refused && !estimatesHidden(pl) {
 			return s.refuse(req.ID, db, pl.st.SQL, class, pl.level, reason)
 		}
 	} else {
@@ -378,9 +388,13 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	pl.id = newID()
 	s.plans[pl.id] = pl
 	summary, reasons := clientSummary(pl)
+	verdict := pl.level
+	if estimatesHidden(pl) {
+		verdict = weight.OK.String()
+	}
 	return okResp(req.ID, ipc.PlanResult{
 		PlanID: pl.id, Profile: s.profile.Name, Host: s.host(), DB: db, SQL: pl.st.SQL,
-		Class: class, Verdict: pl.level, Summary: summary, Reasons: reasons, Unmask: pl.unmask,
+		Class: class, Verdict: verdict, Summary: summary, Reasons: reasons, Unmask: pl.unmask,
 		Values: s.typedNames(),
 	})
 }
@@ -468,7 +482,16 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	// at once): the verdict shown and enforced is the one under the policy
 	// in force now.
 	if pl.explain != nil {
-		if reason, refused := s.assess(pl); refused {
+		reason, refused := s.assess(pl)
+		if !refused {
+			reason, refused = s.assessK(pl)
+		}
+		if refused {
+			if estimatesHidden(pl) {
+				// Decided here, before any prompt: the reasons stay on
+				// the console and in the audit log.
+				return s.refuseHidden(req.ID, pl, class, reason)
+			}
 			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, reason)
 		}
 	}
