@@ -248,7 +248,8 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   why it changed. Certificate host keys (`@cert-authority`) are not
   supported.
 - While a host key or SSH password prompt waits, the connection has no
-  deadline; Ctrl-C aborts it.
+  deadline while you answer; the prompt itself times out as the console's
+  other prompts do. Ctrl-C aborts it.
 - No local port is opened: the tunnel is a channel inside the console
   process, which other local accounts cannot use. A keepalive is sent every
   30 s; after 3 missed answers the tunnel closes and the next query
@@ -537,7 +538,9 @@ The console watches the config and PII files while it runs.
 - A change that loosens it (higher tier, `production = true → false`, larger
   limits, a smaller `k_anonymity`, a larger `reference_probe`, a higher or
   removed `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
-  host, port, engine, user or database, a weaker `tls` or any change of `tls_ca`, `ask → keychain`, a removed mask rule or detector, a mask mode
+  host, port, engine, user or database, a weaker `tls` or any change of `tls_ca`,
+  any change of the `ssh` table (except `ssh.credentials` set to `ask`),
+  `ask → keychain`, a removed mask rule or detector, a mask mode
   changed to anything but `redact`, a new allow rule) waits for you. Plans are
   refused with `policy_pending` until you run `:review` and answer
   `Apply these changes? [y/N]`.
