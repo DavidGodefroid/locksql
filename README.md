@@ -34,8 +34,13 @@ terminal you keep in view, holds the credentials, parses and weighs every
 statement, masks personal data and waits for **your** approval. The agent
 never sees a credential and never opens a connection.
 
+<p align="center">
+  <img alt="Demo: Claude Code (left) asks for the top Belgian customers; the locksql console (right) shows each query for approval. Claude gets names and emails as redacted references, filters on them in a follow-up query, then searches on an email the human types in the console." src="docs/assets/demo.gif" width="900">
+</p>
+<p align="center"><sub>Claude Code (left, account <code>alice</code>) and the locksql console (right, account <code>locksql</code>, started with <code>--show-results</code>). Claude gets <code>&lt;redacted:rN.R.C&gt;</code> references, filters on them without seeing a value, then searches on an email the human types in the console.</sub></p>
+
 > [!NOTE]
-> **Pre-release** (`v0.1.x`). See [Install](#install).
+> **Pre-release** (`v0.3.x`). See [Install](#install).
 
 ## Why locksql?
 
@@ -53,6 +58,7 @@ locksql moves the decision **out of the agent**.
 | `EXPLAIN` cost check before running | ❌ | ✅ |
 | PII masked on its source column, not its label | ❌ | ✅ |
 | k-anonymity on PII filters and aggregates | ❌ | ✅ |
+| Search on a PII value the agent never sees | ❌ | ✅ |
 | Policy loosening needs a human confirmation | ❌ | ✅ |
 | Append-only audit log | ❌ | ✅ |
 
@@ -106,6 +112,22 @@ are refused before they run.
 **🛡️ OS separation**<br>
 `locksql install` runs the console under its own account; the kernel checks
 every peer on the socket.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**🔎 Blind search**<br>
+The agent filters on `'${email}'` and you type the value in the console, or
+on a redacted cell's reference (`'${r1.2.3}'`). The value never reaches it.
+
+</td>
+<td valign="top">
+
+**👁️ Clear for you only**<br>
+`--show-results` prints the clear rows in the console while the agent gets
+them masked; `--allow-unmask` is the only way an agent can ask for raw PII.
 
 </td>
 </tr>
@@ -443,6 +465,10 @@ iteration, and it is deliberately narrow:
   under `limits.reference_probe`, across results or sessions, is not stopped.
   The unmasked columns of a targeted row still identify it, and free text
   without a detector is not masked.
+- **Clear results stay on the console's screen.** With `--show-results` (and
+  for an unmasked run) the clear rows stay in the scrollback of the console's
+  terminal, visible to anyone who sees that screen (screen sharing, recording,
+  a terminal that logs its output). locksql does not clear it.
 - **TLS is not configurable yet.** PostgreSQL, MariaDB and MySQL connect like
   PostgreSQL's `sslmode=prefer`: encrypted when the server offers TLS, plain
   otherwise, and the certificate is not verified, so an active attacker on the
@@ -484,7 +510,7 @@ PATH), then installs `/usr/local/bin/locksql`, with `sudo` if needed:
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh
 less install.sh                     # read it first
-sh install.sh                       # LOCKSQL_VERSION=v0.1.1 to pin a version
+sh install.sh                       # LOCKSQL_VERSION=v0.3.0 to pin a version
 ```
 
 `LOCKSQL_INSTALL_DIR=~/.local/bin` installs without `sudo`, but the binary is
