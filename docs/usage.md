@@ -542,7 +542,9 @@ The rules:
 - Placeholders work only as the literal side of such a comparison in `WHERE`
   or `HAVING` (not in a `JOIN` condition), on a masked statement (not `--unmask`); anywhere else the
   statement is refused (`a placeholder may only be compared with a PII column`),
-  and so is any malformed `${...}` literal.
+  and so is any malformed `${...}` literal. A write (`INSERT`, `UPDATE`,
+  `DELETE`, ...) holding a placeholder is refused at plan time
+  (`placeholders are only allowed in read statements`).
 - A filter made only of placeholders skips the k-anonymity check; an `IN` list
   that mixes placeholders and literals keeps it.
 - Values never reach the audit log, client answers, plan answers or client

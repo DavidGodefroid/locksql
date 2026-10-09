@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/sqlast"
@@ -261,4 +262,30 @@ func TestPlaceholderColumns(t *testing.T) {
 			t.Errorf("%s: %q, want %q", name, got, want)
 		}
 	}
+}
+
+// A placeholder in a write is refused at plan time: it would run as the
+// literal text '${...}', and no value is ever prompted for.
+func TestPlaceholderInWriteRefused(t *testing.T) {
+	p := uatProfile()
+	p.Tier = config.TierWrite
+	h := newHarness(t, p, skip)
+	for _, q := range []string{
+		"UPDATE users SET email = '${email}' WHERE id = 7",
+		"UPDATE users SET note = 'x' WHERE email = '${r1.1.2}'",
+		"DELETE FROM users WHERE email = '${email}'",
+		"INSERT INTO users (id, email) VALUES (9, '${email}')",
+		"INSERT INTO users (id, email) VALUES (9, \"${email}\")",
+	} {
+		resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
+		wantCode(t, resp, ipc.CodeRefused)
+		if resp.Error != nil && !strings.Contains(resp.Error.Message, "only allowed in read statements") {
+			t.Errorf("%s: refusal %q", q, resp.Error.Message)
+		}
+	}
+	if h.sess.runCount() != 0 {
+		t.Fatal("a statement ran")
+	}
+	// A plain string that merely holds "${" further in is not a placeholder.
+	h.plan(t, "UPDATE users SET note = 'cost: ${x}' WHERE id = 1", false)
 }

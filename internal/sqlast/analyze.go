@@ -1498,31 +1498,64 @@ func (an *analyzer) keyFilter(op string, l, r Prov, le, re Expr, clause string, 
 // strayPlaceholders refuses a placeholder that did not end up compared
 // with a PII column: anywhere else its value could come back unmasked.
 func (an *analyzer) strayPlaceholders() error {
-	toks, err := sqlclass.Lex(an.d, an.st.SQL)
+	lits, err := placeholderLits(an.d, an.st.SQL)
 	if err != nil {
 		return refuse("the statement could not be checked for placeholders")
 	}
-	for _, t := range toks {
-		if t.Kind != sqlclass.TokString {
-			continue
-		}
-		body, ok := unquote(an.d, t.Text)
-		if !ok {
+	for _, l := range lits {
+		if !l.plain {
 			// E'...', $$...$$ and the like are never substituted: a
 			// placeholder written that way is malformed.
-			if strings.Contains(t.Text, "${") {
-				return refusef("malformed placeholder %s: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}' as a plain single-quoted string", t.Text)
-			}
-			continue
+			return refusef("malformed placeholder %s: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}' as a plain single-quoted string", l.text)
 		}
-		if _, _, isPH, _ := ParsePlaceholder(body); !isPH {
-			continue
-		}
-		if !slices.ContainsFunc(an.a.Values, func(v ValueUse) bool { return v.Span.Pos == t.Pos }) {
+		if !slices.ContainsFunc(an.a.Values, func(v ValueUse) bool { return v.Span.Pos == l.pos }) {
 			return refuse("a placeholder may only be compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")
 		}
 	}
 	return nil
+}
+
+// HasPlaceholder reports whether sql holds a placeholder: a plain string
+// literal '${...}', or "${" in any other string form. A statement that
+// cannot be lexed is reported as holding one.
+func HasPlaceholder(d sqlclass.Dialect, sql string) bool {
+	lits, err := placeholderLits(d, sql)
+	return err != nil || len(lits) > 0
+}
+
+// phLit is a string literal of a statement that is or may be a placeholder.
+type phLit struct {
+	pos  int
+	text string
+	// plain is set for a plain single-quoted string whose body has the
+	// '${...}' shape; otherwise the literal is another string form that
+	// holds "${".
+	plain bool
+}
+
+// placeholderLits lists the string literals of sql that are placeholders.
+func placeholderLits(d sqlclass.Dialect, sql string) ([]phLit, error) {
+	toks, err := sqlclass.Lex(d, sql)
+	if err != nil {
+		return nil, err
+	}
+	var out []phLit
+	for _, t := range toks {
+		if t.Kind != sqlclass.TokString {
+			continue
+		}
+		body, ok := unquote(d, t.Text)
+		if !ok {
+			if strings.Contains(t.Text, "${") {
+				out = append(out, phLit{pos: t.Pos, text: t.Text})
+			}
+			continue
+		}
+		if _, _, isPH, _ := ParsePlaceholder(body); isPH {
+			out = append(out, phLit{pos: t.Pos, text: t.Text, plain: true})
+		}
+	}
+	return out, nil
 }
 
 // quoteIdent quotes a catalog name as an identifier of the dialect.

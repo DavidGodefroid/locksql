@@ -163,3 +163,26 @@ func TestKeyFilters(t *testing.T) {
 		t.Errorf("KeyFilters = %+v", a.KeyFilters)
 	}
 }
+
+func TestHasPlaceholder(t *testing.T) {
+	for _, c := range []struct {
+		d    sqlclass.Dialect
+		sql  string
+		want bool
+	}{
+		{sqlclass.MySQL, "UPDATE users SET email = '${email}' WHERE id = 7", true},
+		{sqlclass.MySQL, "DELETE FROM users WHERE email = '${r1.1.2}'", true},
+		{sqlclass.MySQL, "UPDATE users SET email = '${bad name}'", true},
+		{sqlclass.MySQL, `INSERT INTO users (email) VALUES ("${email}")`, true},
+		{sqlclass.Postgres, "INSERT INTO users (email) VALUES (E'${email}')", true},
+		{sqlclass.Postgres, "INSERT INTO users (email) VALUES ($$${email}$$)", true},
+		{sqlclass.MySQL, "UPDATE users SET note = 'cost: ${x}' WHERE id = 1", false},
+		{sqlclass.MySQL, "UPDATE `${email}` SET note = 'x'", false},
+		// Comments do not lex: reported as holding one (fail closed).
+		{sqlclass.MySQL, "UPDATE users SET note = 'x' -- c", true},
+	} {
+		if got := HasPlaceholder(c.d, c.sql); got != c.want {
+			t.Errorf("%s: got %v", c.sql, got)
+		}
+	}
+}

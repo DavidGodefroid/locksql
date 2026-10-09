@@ -20,6 +20,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/render"
 	"github.com/DavidGodefroid/locksql/internal/secrets"
+	"github.com/DavidGodefroid/locksql/internal/sqlast"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 	"github.com/DavidGodefroid/locksql/internal/weight"
 )
@@ -323,6 +324,11 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	if int(st.Class) > int(s.profile.Tier) {
 		return s.refuse(req.ID, db, st.SQL, class, "", fmt.Sprintf(
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
+	}
+	if st.Class != sqlclass.Read && sqlast.HasPlaceholder(s.dialect, st.SQL) {
+		// A write is never analysed for placeholders: it would run with
+		// the literal text '${...}'.
+		return s.refuse(req.ID, db, st.SQL, class, "", "placeholders are only allowed in read statements, compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")
 	}
 	sess, r := s.session(ctx, req.ID)
 	if r != nil {
