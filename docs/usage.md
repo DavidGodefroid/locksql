@@ -494,6 +494,13 @@ PII columns (columns under a mask rule) may be used as follows:
   `PII: UNMASKED` in red, and it is never auto-approved.
 - At tiers above `read`, a write's `RETURNING` list (or a data-modifying CTE)
   must not alias or transform a masked column.
+- While mask rules exist, a write may store into a column under a mask rule
+  (matched by name) only `NULL` or `DEFAULT`: a literal, an expression or
+  another column is refused (`a masked column cannot receive values the agent
+  chose`), since the next read would mask it and hand back a reference to a
+  value the agent chose. An `INSERT` without a column list must name its
+  columns (or store only `NULL`/`DEFAULT`); an `INSERT` into a masked column
+  from a query is refused. Writing other columns is unaffected.
 
 ### Placeholders and cell references
 
@@ -542,8 +549,15 @@ The rules:
   source is under a mask rule gets references: a column that may hold a
   literal of the statement (`SELECT email ... UNION ALL SELECT 'x'`), a `UNION`
   arm of an unmasked column (`UNION ALL SELECT note`), an expression or an
-  aggregate gets plain `<redacted>` on every row, since the agent may know the
-  value behind it.
+  aggregate other than `MIN`/`MAX` gets plain `<redacted>` on every row, since
+  the agent may know the value behind it. `MIN` and `MAX` return a real cell
+  value and keep their references.
+- A statement that compares a PII column with a literal the agent wrote
+  (`email = 'x'`, `email IN ('x', ...)`, in `WHERE` or `HAVING`, in any `UNION`
+  or `INTERSECT` arm, join or subquery) gives plain `<redacted>` on every
+  column: the agent chose the value behind the cells it selects, and a
+  reference to it would be a lookup without the k-anonymity check. A filter
+  whose values are all placeholders keeps the references.
 - Placeholders work only as the literal side of such a comparison in `WHERE`
   or `HAVING` (not in a `JOIN` condition), on a masked statement (not `--unmask`); anywhere else the
   statement is refused (`a placeholder may only be compared with a PII column`),
@@ -609,7 +623,9 @@ finds the project's consoles.
   character and the domain (`a***@example.com`). `partial`, `email` and
   detector-masked cells carry no reference, nor does any column but a plain
   one whose every source is under a mask rule (a `UNION` with a constant or
-  an unmasked column, an expression or an aggregate gives `<redacted>`). Several rules with different modes on one
+  an unmasked column, an expression or an aggregate other than `MIN`/`MAX`
+  gives `<redacted>`), nor any column of a statement that filters a PII
+  column on a literal the agent wrote. Several rules with different modes on one
   column give `redact`. Masked binary cells in `partial` mode
   become `<masked bytes:N>`.
 - A result whose column count or labels differ from the analysis is dropped,
