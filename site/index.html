@@ -50,16 +50,10 @@
     <div class="wrap">
 
 <section class="hero" aria-labelledby="hero-title">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
-    <img src="assets/banner-light.svg" alt="locksql logo" width="720" height="180">
-  </picture>
-  <h1 id="hero-title">Your AI writes the query. <span class="key">You hold the key.</span></h1>
-  <div class="prose">
-    <p class="lead">Let Claude Code, Codex, Cursor or Gemini CLI query your databases without ever handing them a password.</p>
-    <p>locksql puts a <strong>human-held console</strong> between your AI agent and MariaDB, MySQL, PostgreSQL or SQLite. The agent proposes SQL; the console, running in a terminal you keep in view, holds the credentials, parses and weighs every statement, masks personal data and waits for <strong>your</strong> approval. The agent never sees a credential and never opens a connection.</p>
-    <p class="notice"><strong>Pre-release</strong> (<code>v0.1.x</code>). <a href="install/">Install</a></p>
-  </div>
+  <p class="eyebrow"><a href="install/"><span class="badge">v0.3</span> Pre-release · open source, Apache 2.0</a></p>
+  <h1 id="hero-title">Your AI writes the query. <br><span class="key">You hold the key.</span></h1>
+  <p class="lead">Let Claude Code, Codex, Cursor or Gemini CLI query your databases without ever handing them a password.</p>
+  <p class="intro">locksql puts a <strong>human-held console</strong> between your AI agent and MariaDB, MySQL, PostgreSQL or SQLite. The agent proposes SQL; the console, running in a terminal you keep in view, holds the credentials, parses and weighs every statement, masks personal data and waits for <strong>your</strong> approval. The agent never sees a credential and never opens a connection.</p>
   <div class="actions">
     <a class="button primary" href="install/">Install</a>
     <a class="button" href="how-it-works/">How it works</a>
@@ -71,6 +65,19 @@
     <li>MariaDB, MySQL, PostgreSQL, SQLite</li>
     <li>Apache 2.0</li>
   </ul>
+</section>
+
+<section class="demo-section" aria-labelledby="demo">
+  <h2 id="demo" class="visually-hidden">See it run</h2>
+  <figure class="demo">
+    <video controls autoplay muted loop playsinline preload="metadata" poster="assets/demo-poster.jpg" width="1700" height="940" aria-describedby="demo-caption">
+      <source src="assets/demo.webm" type="video/webm">
+      <source src="assets/demo.mp4" type="video/mp4">
+      <img src="assets/demo-poster.jpg" alt="The locksql console asking for approval of a query written by Claude Code" width="1700" height="940">
+    </video>
+    <script>if (matchMedia("(prefers-reduced-motion: reduce)").matches) { const v = document.currentScript.previousElementSibling; v.removeAttribute("autoplay"); v.pause(); }</script>
+    <figcaption id="demo-caption">Claude Code (left, account <code>alice</code>) asks for the top Belgian customers; the locksql console (right, account <code>locksql</code>, started with <code>--show-results</code>) stops each query for approval. Claude gets names and emails as <code>&lt;redacted:rN.R.C&gt;</code> references and filters on them in a follow-up query without seeing an address. Then it searches on an email the human types in the console.</figcaption>
+  </figure>
 </section>
 
 <section aria-labelledby="why">
@@ -90,6 +97,7 @@
 <tr><th scope="row"><code>EXPLAIN</code> cost check before running</th><td class="no">No</td><td class="yes">Yes</td></tr>
 <tr><th scope="row">PII masked on its source column, not its label</th><td class="no">No</td><td class="yes">Yes</td></tr>
 <tr><th scope="row">k-anonymity on PII filters and aggregates</th><td class="no">No</td><td class="yes">Yes</td></tr>
+<tr><th scope="row">Search on a PII value the agent never sees</th><td class="no">No</td><td class="yes">Yes</td></tr>
 <tr><th scope="row">Policy loosening needs a human confirmation</th><td class="no">No</td><td class="yes">Yes</td></tr>
 <tr><th scope="row">Append-only audit log</th><td class="no">No</td><td class="yes">Yes</td></tr>
 </tbody>
@@ -102,18 +110,18 @@
   <h2 id="approve">See what you approve</h2>
   <p class="prose">When the agent calls <code>locksql run PLAN_ID</code>, the console shows you this screen and waits. The statement runs only after you approve it.</p>
   <figure>
-    <code>╭─ <pre tabindex="0"> · DEV · 127.0.0.1 / app · user alice · tier read ─────
-    │ ested by uid 1000 (alice) · pid 48211 (claude)
-    │
-    │   CT id, email FROM customers WHERE country = 'BE' LIMIT 20
-    │
-    │ s READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
-    │ s: app.customers
-    │ rns at most 20 rows
-    │ columns touched: customers.email (select)
-    │ ed outputs: email → redact
-    │  masked (4 column rules; detectors: email, phone, iban, card)
-    ╰─ ove? [y/N]</code></pre>
+    <pre tabindex="0" class="term"><code>╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
+│ requested by uid 1000 (alice) · pid 48211 (claude)
+│
+│   SELECT id, email FROM customers WHERE country = 'BE' LIMIT 20
+│
+│ class READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
+│ reads: app.customers
+│ returns at most 20 rows
+│ PII columns touched: customers.email (select)
+│ masked outputs: email → redact
+│ PII: masked (4 column rules; detectors: email, phone, iban, card)
+╰─ Approve? [y/N]</code></pre>
     <figcaption>On approval the console runs its k-anonymity counts when the statement filters, groups or aggregates PII, then the statement itself, masks PII, caps the output and hands the rows back to the agent, framed as untrusted data.</figcaption>
   </figure>
   <p class="prose">On a production profile you type the profile name, not <code>y</code>. No answer within 5 minutes means denied.</p>
@@ -122,18 +130,20 @@
 <section aria-labelledby="highlights">
   <h2 id="highlights">Highlights</h2>
   <ul class="cards">
-    <li><h3>One key holder</h3><p>Credentials are typed at console start or read from the OS keychain. Never in argv, env, files, logs, the socket or error messages.</p></li>
-    <li><h3>Human in the loop</h3><p>Every statement is shown with its plan, cost and PII footprint. On production you type the profile name, not <code>y</code>.</p></li>
-    <li><h3>Fail closed</h3><p>A dialect-aware classifier refuses anything it cannot classify with certainty. Reads are parsed in full; unknown syntax is refused.</p></li>
-    <li><h3>PII masking</h3><p>Every output column is traced to its source through aliases, CTEs, unions and joins, then masked (<code>redact</code> by default, <code>partial</code> or <code>email</code>).</p></li>
-    <li><h3>Weight check</h3><p><code>LIMIT</code> is mandatory, <code>EXPLAIN</code> runs first, and plans that would scan too many rows are refused before they run.</p></li>
-    <li><h3>OS separation</h3><p><code>locksql install</code> runs the console under its own account; the kernel checks every peer on the socket.</p></li>
+    <li><span class="icon" aria-hidden="true">🔑</span><h3>One key holder</h3><p>Credentials are typed at console start or read from the OS keychain. Never in argv, env, files, logs, the socket or error messages.</p></li>
+    <li><span class="icon" aria-hidden="true">👤</span><h3>Human in the loop</h3><p>Every statement is shown with its plan, cost and PII footprint. On production you type the profile name, not <code>y</code>.</p></li>
+    <li><span class="icon" aria-hidden="true">🧱</span><h3>Fail closed</h3><p>A dialect-aware classifier refuses anything it cannot classify with certainty. Reads are parsed in full; unknown syntax is refused.</p></li>
+    <li><span class="icon" aria-hidden="true">🕶️</span><h3>PII masking</h3><p>Every output column is traced to its source through aliases, CTEs, unions and joins, then masked (<code>redact</code> by default, <code>partial</code> or <code>email</code>).</p></li>
+    <li><span class="icon" aria-hidden="true">⚖️</span><h3>Weight check</h3><p><code>LIMIT</code> is mandatory, <code>EXPLAIN</code> runs first, and plans that would scan too many rows are refused before they run.</p></li>
+    <li><span class="icon" aria-hidden="true">🛡️</span><h3>OS separation</h3><p><code>locksql install</code> runs the console under its own account; the kernel checks every peer on the socket.</p></li>
+    <li><span class="icon" aria-hidden="true">🔎</span><h3>Blind search</h3><p>The agent filters on <code>'${email}'</code> and you type the value in the console, or on a redacted cell’s reference (<code>'${r1.2.3}'</code>). The value never reaches it.</p></li>
+    <li><span class="icon" aria-hidden="true">👁️</span><h3>Clear for you only</h3><p><code>--show-results</code> prints the clear rows in the console while the agent gets them masked; <code>--allow-unmask</code> is the only way an agent can ask for raw PII.</p></li>
   </ul>
 </section>
 
 <section aria-labelledby="quick-start">
   <h2 id="quick-start">Quick start</h2>
-  <pre tabindex="0"><code># 1. Install (see the Install page for packages, checksums and signatures)
+  <pre tabindex="0" class="term"><code># 1. Install (see the Install page for packages, checksums and signatures)
 curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh
 
 # 2. Wire your agents and set up the console account
@@ -168,7 +178,7 @@ locksql console --project DIR
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
       </ul>
-      <p>Pre-release (<code>v0.1.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (<code>v0.3.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
     </div>
   </footer>
 </body>

@@ -88,6 +88,14 @@
   <h2 id="pii">How is personal data protected?</h2>
   <p>Every output column is traced to its source columns and masked on that source, not on its label; value detectors mask the other cells. Modes are <code>redact</code> (the default), <code>partial</code> and <code>email</code>. Quasi-identifiers (birth date, postal code, gender) are never masked unless you accept them one by one. Masking is best effort: use a database account that cannot read what the agent must never see. <a href="../how-it-works/#masking">More on masking</a>.</p>
 </section>
+<section aria-labelledby="blind-search">
+  <h2 id="blind-search">Can the agent look up a customer by email without seeing it?</h2>
+  <p>Yes. It writes <code>WHERE email = '${email}'</code> and you type the address in the console, without echo; or it filters on the reference of a redacted cell from an earlier result (<code>'${r1.2.3}'</code>), whose clear value only the console holds. The value never reaches the agent, the audit log or a client error. <a href="../how-it-works/#blind-search">More on placeholders and references</a>.</p>
+</section>
+<section aria-labelledby="see-values">
+  <h2 id="see-values">Can I see the real values myself?</h2>
+  <p>Yes: start the console with <code>--show-results</code> and it prints each result in clear, in the console only; the agent still gets the masked cells. If the agent itself must see raw values, start the console with <code>--allow-unmask</code>: only then may it ask for an unmasked query, which you still approve one by one. <a href="../how-it-works/#show-results">More on these flags</a>.</p>
+</section>
 <section aria-labelledby="k-anonymity">
   <h2 id="k-anonymity">Does k-anonymity stop all inference?</h2>
   <p>No. It is a query-set-size control: it refuses a single query whose PII filter covers fewer than <code>k</code> rows; it does not stop differencing attacks that combine several approved queries. <a href="../security/#k-anonymity">See the example</a>.</p>
@@ -122,7 +130,7 @@
 </section>
 <section aria-labelledby="stable">
   <h2 id="stable">Is locksql stable?</h2>
-  <p>It is a pre-release (<code>v0.1.x</code>).</p>
+  <p>It is a pre-release (<code>v0.3.x</code>).</p>
 </section>
 <section aria-labelledby="report">
   <h2 id="report">How do I report a vulnerability?</h2>
@@ -145,7 +153,7 @@
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
       </ul>
-      <p>Pre-release (<code>v0.1.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (<code>v0.3.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
     </div>
   </footer>
 </body>

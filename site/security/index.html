@@ -113,6 +113,11 @@ Expressions over them, <code>LIKE</code>, ranges and <code>ORDER BY</code> are
 refused. A filter, grouping or aggregate on PII must cover at least
 <code>k_anonymity</code> rows (default 5, production 10).</p>
 
+    <h3 id="placeholders">Placeholders and references</h3>
+    <p>The agent can filter a PII column on a value it never sees: a placeholder (<code>'${email}'</code>) that you type in the console without echo, or the reference of a redacted cell (<code>'${r1.2.3}'</code>) whose clear value only the console holds, in memory. Both work only compared with a PII column, and the values never reach the agent, the audit log or a client error. The approval screen warns, in red and in the audit log, on a clear value from the agent, a reference with a unique-key filter, and probing beyond <code>limits.reference_probe</code>. <a href="../how-it-works/#blind-search">How it works</a>.</p>
+
+    <h3 id="unmask-gate">Raw values only on your say-so</h3>
+    <p>An agent can ask for unmasked output only when the console was started with <code>--allow-unmask</code>; without it the request is refused and audited. <code>--show-results</code> shows you the clear rows in the console while the agent still gets them masked. Both are console flags only: no client or config file can turn them on.</p>
 
     <h3 id="quiet">Quiet failures</h3>
     <p>Clients get a generic message, never the server’s error text, and no timings; <code>query.run</code> answers on a 250 ms quantum.</p>
@@ -178,6 +183,12 @@ servers.</p>
     <h3 id="equality">Equality still leaks equality</h3>
     <p>A filter <code>WHERE email = 'x@example.com'</code> tells the agent whether that value exists among at least <code>k</code> rows. That is the purpose of this feature.</p>
 
+    <h3 id="patient-agent">Placeholders leave room for a patient agent</h3>
+    <p>Equality probing through cell references only raises a warning: an agent that spreads its probes under <code>limits.reference_probe</code>, across results or sessions, is not stopped. The unmasked columns of a targeted row still identify it, and free text without a detector is not masked.</p>
+
+    <h3 id="scrollback">Clear results stay on the console’s screen</h3>
+    <p>With <code>--show-results</code> (and for an unmasked run) the clear rows stay in the scrollback of the console’s terminal, visible to anyone who sees that screen (screen sharing, recording, a terminal that logs its output). That terminal is already the trusted party; locksql does not clear it.</p>
+
     <h3 id="views">Views and inherited tables</h3>
     <p>A view, a materialized view or a foreign table is masked by column name only: a view that renames a rule column (<code>firstname AS contact</code>) needs its own rule for the new name. The same holds for a classic-inheritance table (<code>INHERITS</code>) read through a parent or a child the rule does not name. A PostgreSQL partition is resolved to the root of its partition tree, so a rule on the partitioned table covers its partitions.</p>
 
@@ -218,7 +229,7 @@ servers.</p>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
       </ul>
-      <p>Pre-release (<code>v0.1.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (<code>v0.3.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
     </div>
   </footer>
 </body>

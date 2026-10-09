@@ -96,33 +96,33 @@
 <section aria-labelledby="screen">
   <h2 id="screen">The approval screen</h2>
   <h3 id="plain-read">A plain read</h3>
-  <code>╭─ <pre tabindex="0"> · DEV · 127.0.0.1 / app · user alice · tier read ─────
-  │ quested by uid 1000 (alice) · pid 48211 (claude)
-  │
-  │   LECT id, email FROM customers WHERE country = 'BE' LIMIT 20
-  │
-  │ ass READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
-  │ ads: app.customers
-  │ turns at most 20 rows
-  │ I columns touched: customers.email (select)
-  │ sked outputs: email → redact
-  │ I: masked (4 column rules; detectors: email, phone, iban, card)
-  ╰─ prove? [y/N]</code></pre>
+  <pre tabindex="0" class="term"><code>╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
+│ requested by uid 1000 (alice) · pid 48211 (claude)
+│
+│   SELECT id, email FROM customers WHERE country = 'BE' LIMIT 20
+│
+│ class READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
+│ reads: app.customers
+│ returns at most 20 rows
+│ PII columns touched: customers.email (select)
+│ masked outputs: email → redact
+│ PII: masked (4 column rules; detectors: email, phone, iban, card)
+╰─ Approve? [y/N]</code></pre>
   <h3 id="pii-read">A read that filters on personal data</h3>
-  <code>╭─ <pre tabindex="0"> · DEV · 127.0.0.1 / app · user alice · tier read ─────
-  │ quested by uid 1000 (alice) · pid 48211 (claude)
-  │
-  │   LECT country, COUNT(*) FROM customers WHERE email = 'a@example.com' GROUP BY country LIMIT 20
-  │
-  │ ass READ · EXPLAIN: customers ref ~1 · est. 1 rows examined · verdict OK
-  │ ads: app.customers
-  │ turns at most 20 rows
-  │ I columns touched: customers.email (where)
-  │ anonymity check (k=5) runs first: SELECT COUNT(*) FROM `app`.`customers` WHERE `app`.`customers`.`email` = 'a@example.com'
-  │ anonymity check (k=5) runs first: SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM customers WHERE email = 'a@example.com' GROUP BY country) AS locksql_k
-  │ w estimates are hidden from the agent: the statement filters on a PII column
-  │ I: masked (4 column rules; detectors: email, phone, iban, card)
-  ╰─ prove? [y/N]</code></pre>
+  <pre tabindex="0" class="term"><code>╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
+│ requested by uid 1000 (alice) · pid 48211 (claude)
+│
+│   SELECT country, COUNT(*) FROM customers WHERE email = 'a@example.com' GROUP BY country LIMIT 20
+│
+│ class READ · EXPLAIN: customers ref ~1 · est. 1 rows examined · verdict OK
+│ reads: app.customers
+│ returns at most 20 rows
+│ PII columns touched: customers.email (where)
+│ k-anonymity check (k=5) runs first: SELECT COUNT(*) FROM `app`.`customers` WHERE `app`.`customers`.`email` = 'a@example.com'
+│ k-anonymity check (k=5) runs first: SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM customers WHERE email = 'a@example.com' GROUP BY country) AS locksql_k
+│ row estimates are hidden from the agent: the statement filters on a PII column
+│ PII: masked (4 column rules; detectors: email, phone, iban, card)
+╰─ Approve? [y/N]</code></pre>
   <h3 id="approval-rules">Approval rules</h3>
   <ul class="prose">
     <li>The screen names the requesting uid, pid and process (as the kernel reports them), the relations read, the PII columns touched and in which clause (highlighted in red in the SQL), each masked output and its mode, the k-anonymity counts that run first and the row cap.</li>
@@ -207,7 +207,7 @@ filters, <code>LIKE</code> and <code>ORDER BY</code> on the column.</p>
 <caption>Mask modes</caption>
 <thead><tr><th scope="col">Mode</th><th scope="col">Output</th><th scope="col">Notes</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code>redact</code> (default)</th><td><code>&lt;redacted&gt;</code></td><td>a rule without <code>mode</code> is <code>redact</code></td></tr>
+<tr><th scope="row"><code>redact</code> (default)</th><td><code>&lt;redacted:rN.R.C&gt;</code></td><td>a rule without <code>mode</code> is <code>redact</code>; <code>rN.R.C</code> (result, row, column) is a reference the agent can filter on; plain <code>&lt;redacted&gt;</code> when the console cannot hold the cell</td></tr>
 <tr><th scope="row"><code>partial</code></th><td><code>j***(12)</code></td><td>first character and length</td></tr>
 <tr><th scope="row"><code>email</code></th><td><code>j***@example.com</code></td><td>first character and domain; other values as <code>partial</code></td></tr>
 </tbody>
@@ -227,6 +227,29 @@ being right, and value detectors catch common formats only. Use a database
 account that cannot read what the agent must never see.</p>
 
     <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md#pii-rules">PII rules</a> · <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#writing-statements-that-pass">Writing statements that pass</a></p>
+  </div>
+</section>
+
+<section aria-labelledby="blind-search">
+  <h2 id="blind-search">Search without seeing: placeholders and references</h2>
+  <div class="prose">
+    <p>To filter a PII column on a value the agent does not know, it writes a <strong>placeholder</strong>: <code>col = '${email}'</code> or <code>col IN ('${a}', '${b}')</code>. The console asks you for the value (no echo), once per name per session; <code>r</code> at the approval prompt retypes it. <code>--skip-permissions</code> skips the approval, never the value prompt.</p>
+    <p>Redacted cells come back as <code>&lt;redacted:r1.2.3&gt;</code> (result, row, column). The agent filters on one with <code>col = '${r1.2.3}'</code>; the console substitutes the clear value, which it keeps in memory only (the last 50 results, 16 MiB at most; an older reference is unknown).</p>
+  </div>
+  <pre tabindex="0"><code><span class="cmt">-- query 1: the agent gets references</span>
+SELECT c.id, c.name, c.email FROM customers c WHERE c.country = 'BE' LIMIT 3
+<span class="cmt">-- → 548 | &lt;redacted:r1.1.2&gt; | &lt;redacted:r1.1.3&gt;</span>
+
+<span class="cmt">-- query 2: it filters on them, without ever seeing an address</span>
+SELECT u.customer_id, u.reason FROM newsletter_unsubscribes u
+ WHERE u.email IN ('${r1.1.3}', '${r1.2.3}', '${r1.3.3}') LIMIT 3
+
+<span class="cmt">-- query 3: you type the value in the console</span>
+SELECT COUNT(*) FROM orders o JOIN customers c ON o.customer_id = c.id
+ WHERE c.email = '${email}' LIMIT 1</code></pre>
+  <div class="prose">
+    <p>Both work only compared with a PII column with <code>=</code> or <code>IN</code> in <code>WHERE</code> or <code>HAVING</code>, and skip the k-anonymity check, since the agent did not choose the value. Typed and referenced values never reach the agent, the audit log or a client error. The approval screen warns, in red and in the audit log, when the agent put a clear value in its statement, when a reference is combined with a unique-key filter or an output with no plain column, and when one result’s cells are filtered on one by one beyond <code>limits.reference_probe</code> (default 5). Warnings never refuse and never carry a value.</p>
+    <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#placeholders-and-cell-references">Placeholders and references, in the usage guide</a></p>
   </div>
 </section>
 
@@ -296,7 +319,7 @@ account that cannot read what the agent must never see.</p>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
       </ul>
-      <p>Pre-release (<code>v0.1.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (<code>v0.3.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
     </div>
   </footer>
 </body>
