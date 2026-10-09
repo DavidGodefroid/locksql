@@ -66,7 +66,7 @@ func TestProvenanceMasksResolvedSource(t *testing.T) {
 		{"SELECT u.email AS id, id AS email FROM users u LIMIT 1", []string{"partial", ""}},
 		{"SELECT x FROM (SELECT email AS x FROM users) s LIMIT 1", []string{"partial"}},
 		{"WITH c(z) AS (SELECT email FROM users) SELECT z FROM c LIMIT 1", []string{"partial"}},
-		{"SELECT name FROM users UNION SELECT email FROM users LIMIT 1", []string{"partial"}},
+		{"SELECT name FROM users UNION ALL SELECT email FROM users LIMIT 1", []string{"partial"}},
 		{"SELECT (SELECT max(email) FROM users) AS m LIMIT 1", []string{"partial"}},
 		{"SELECT * FROM users LIMIT 1", []string{"", "partial", "", "redact", ""}},
 		{"SELECT o.email, u.email FROM orders o JOIN users u ON u.id = o.user_id LIMIT 1", []string{"", "partial"}},

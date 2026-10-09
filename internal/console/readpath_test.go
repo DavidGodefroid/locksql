@@ -284,20 +284,24 @@ func TestReferenceRoundTrip(t *testing.T) {
 
 // A column that may hold a literal the agent wrote gets no reference on any
 // row: a reference to it would be a lookup of a chosen value without the
-// k-anonymity check.
+// k-anonymity check. INTERSECT with a literal is an equality test on the
+// PII column, refused outright.
 func TestNoReferenceForLiteralColumn(t *testing.T) {
-	for _, op := range []string{"UNION ALL", "INTERSECT"} {
-		h := newHarness(t, uatProfile())
-		h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"alice@example.com"}, {"john@x.com"}}}
-		pr := h.plan(t, "SELECT email FROM users "+op+" SELECT 'john@x.com' LIMIT 50", false)
-		h.io.answers = []string{"y"}
-		var rr ipc.RunResult
-		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
-		for _, row := range rr.Rows {
-			if row[0] != "<redacted>" {
-				t.Errorf("%s: row %v", op, row)
-			}
+	h := newHarness(t, uatProfile())
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"alice@example.com"}, {"john@x.com"}}}
+	pr := h.plan(t, "SELECT email FROM users UNION ALL SELECT 'john@x.com' LIMIT 50", false)
+	h.io.answers = []string{"y"}
+	var rr ipc.RunResult
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	for _, row := range rr.Rows {
+		if row[0] != "<redacted>" {
+			t.Errorf("row %v", row)
 		}
+	}
+	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT email FROM users INTERSECT SELECT 'john@x.com' LIMIT 50"})
+	wantCode(t, resp, ipc.CodeRefused)
+	if !strings.Contains(resp.Error.Message, "set operation compares a PII column") {
+		t.Errorf("INTERSECT refusal %q", resp.Error.Message)
 	}
 }
 

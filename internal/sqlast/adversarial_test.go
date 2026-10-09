@@ -183,3 +183,61 @@ func TestAdvViewConstFilter(t *testing.T) {
 		}
 	}
 }
+
+// A set operation compares its arms column by column: INTERSECT, EXCEPT
+// and the duplicate removal of UNION are equality tests between a PII
+// column and a value the agent chose, wherever the set operation sits.
+func TestAdvSetOpOracle(t *testing.T) {
+	dialects := []sqlclass.Dialect{sqlclass.MySQL, sqlclass.Postgres, sqlclass.SQLite}
+	for _, d := range dialects {
+		for _, sql := range []string{
+			"SELECT name FROM users u WHERE EXISTS (SELECT u.email INTERSECT SELECT 'x@example.com') LIMIT 10",
+			"SELECT name FROM users u WHERE NOT EXISTS (SELECT u.email INTERSECT SELECT 'x@example.com') LIMIT 10",
+			"SELECT name, (SELECT COUNT(*) FROM (SELECT u.email INTERSECT SELECT 'x') d) AS hit FROM users u LIMIT 100",
+			"SELECT name FROM users u WHERE (SELECT COUNT(*) FROM (SELECT u.email UNION SELECT 'b@example.com') d) = 1 LIMIT 10",
+			"SELECT 1 AS hit FROM (SELECT email FROM users INTERSECT SELECT 'x') t LIMIT 1",
+			"SELECT 'x' EXCEPT SELECT email FROM users LIMIT 1",
+			"SELECT n FROM (SELECT 1 AS n, 'a@example.com' AS e UNION ALL SELECT 2, 'zz@example.com') c WHERE EXISTS (SELECT c.e INTERSECT SELECT email FROM users) LIMIT 10",
+			// Nested set operations are checked at every level.
+			"SELECT email FROM users UNION ALL SELECT 'x' INTERSECT SELECT email FROM contacts LIMIT 5",
+			"SELECT email FROM contacts INTERSECT (SELECT email FROM users UNION ALL SELECT name FROM users) LIMIT 5",
+			"SELECT 1 AS hit FROM users u WHERE EXISTS (SELECT u.email EXCEPT ALL SELECT 'x') LIMIT 1",
+			"WITH c AS (SELECT email FROM users UNION SELECT name FROM users) SELECT 1 FROM c LIMIT 1",
+			"SELECT salary FROM users INTERSECT SELECT total + 1 FROM orders LIMIT 5",
+			"SELECT name FROM users UNION SELECT email FROM users LIMIT 1",
+		} {
+			_, err := analyze(t, d, sql)
+			if err == nil || !strings.Contains(err.Error(), "set operation compares a PII column") {
+				t.Errorf("%s %q: got %v, want a set operation refusal", d, sql, err)
+			}
+		}
+		// UNION ALL compares nothing: the column is masked in its mode and,
+		// as it may hold a literal, gets no reference (plain <redacted>).
+		for sql, mask := range map[string]string{
+			"SELECT email FROM users UNION ALL SELECT 'x' LIMIT 5": "partial",
+			"SELECT salary FROM users UNION ALL SELECT 1 LIMIT 5":  "redact",
+		} {
+			a, err := analyze(t, d, sql)
+			if err != nil {
+				t.Errorf("%s %q: %v", d, sql, err)
+			} else if a.Outputs[0].Mask != mask || !a.Outputs[0].Prov.Lit {
+				t.Errorf("%s %q: outputs %+v, want mask %s and Lit", d, sql, a.Outputs, mask)
+			}
+		}
+		// Two PII arms, or two non-PII arms, compare nothing the agent chose.
+		for _, sql := range []string{
+			"SELECT email FROM users INTERSECT SELECT email FROM contacts LIMIT 5",
+			"SELECT name FROM users UNION SELECT name FROM users LIMIT 5",
+		} {
+			if _, err := analyze(t, d, sql); err != nil {
+				t.Errorf("%s %q: %v", d, sql, err)
+			}
+		}
+		a, err := analyze(t, d, "SELECT email FROM users WHERE email = 'x' LIMIT 5")
+		if err != nil {
+			t.Errorf("%s: constant filter: %v", d, err)
+		} else if len(a.KChecks) != 2 {
+			t.Errorf("%s: constant filter: checks %+v, want 2", d, a.KChecks)
+		}
+	}
+}

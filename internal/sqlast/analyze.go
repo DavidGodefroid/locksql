@@ -339,11 +339,45 @@ func (an *analyzer) body(b Body, parent *scope) ([]column, *scope, error) {
 		}
 		out := make([]column, len(l))
 		for i := range l {
+			if err := an.setOpCompare(b, i, l[i].prov, r[i].prov); err != nil {
+				return nil, nil, err
+			}
 			out[i] = column{name: l[i].name, prov: union(l[i].prov, r[i].prov), labeled: l[i].labeled}
 		}
 		return out, nil, nil
 	}
 	return nil, nil, refuse("unsupported query body")
+}
+
+// setOpCompare checks column i of a set operation. UNION (distinct),
+// INTERSECT and EXCEPT compare their arms column by column: like a join, a
+// PII column may only meet values that are themselves all PII, never a
+// literal, an expression, an unmasked column or a mix the agent chose, or
+// the result would tell whether that value is in the column, without any
+// k-anonymity check. UNION ALL compares nothing. The arms of a nested set
+// operation arrive merged, so every level is checked.
+func (an *analyzer) setOpCompare(b *SetOp, i int, l, r Prov) error {
+	if !an.env.Masking || b.All && strings.EqualFold(b.Op, "UNION") {
+		return nil
+	}
+	if !l.Sensitive && !r.Sensitive || an.allPII(l) && an.allPII(r) {
+		return nil
+	}
+	return refusef("a set operation compares a PII column with a value the agent chose (column %d)", i+1)
+}
+
+// allPII reports a plain value whose every source is under a mask rule and
+// which cannot be a literal of the statement.
+func (an *analyzer) allPII(p Prov) bool {
+	if !p.Sensitive || p.Lit || p.Kind != KindIdentity || len(p.Sources) == 0 {
+		return false
+	}
+	for _, s := range p.Sources {
+		if _, ok := an.env.Rule(s); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // union merges the provenance of two values that may each be the result.
