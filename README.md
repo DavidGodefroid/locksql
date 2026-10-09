@@ -511,9 +511,13 @@ iteration, and it is deliberately narrow:
   remote host. Below `verify-ca` an active attacker on the path can intercept
   or downgrade the connection, and obtain the password: the clear-text guard
   protects plain TCP connections only, and go-mysql answers
-  `mysql_clear_password` and `sha256_password` in clear over any TLS, so an
+  `mysql_clear_password`, `sha256_password` and a `caching_sha2_password`
+  full authentication (the MySQL 8 default) in clear over any TLS, so an
   attacker terminating TLS gets the MySQL/MariaDB password; PostgreSQL sends
-  it in clear to a server that asks for cleartext authentication. `verify-ca`
+  it in clear to a server that asks for cleartext authentication. On plain
+  TCP (`disable`, or `prefer` after a fallback) the guard refuses a full
+  authentication, so a MySQL 8 account logs in only while the server's
+  authentication cache holds it. `verify-ca`
   and `verify-full` prevent the impersonation. Through an `ssh` bastion the
   SSH leg is encrypted and verified, but the bastion-to-database leg is
   protected only by `tls`, unless the database runs on the bastion. See

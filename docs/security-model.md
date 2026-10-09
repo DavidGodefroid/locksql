@@ -151,9 +151,13 @@ Records contain the SQL and metadata, never secrets and never row data.
   Below `verify-ca` an active attacker on the path can intercept or downgrade
   the connection, and obtain the password. The MariaDB/MySQL clear-text guard
   protects plain TCP connections only: over TLS, go-mysql answers
-  `mysql_clear_password` and `sha256_password` in clear, so an attacker
-  terminating TLS gets the password. PostgreSQL likewise sends the password
-  to a server that asks for cleartext authentication. `verify-ca` and
+  `mysql_clear_password`, `sha256_password` and a `caching_sha2_password`
+  full authentication (the MySQL 8 default) in clear, so an attacker
+  terminating TLS gets the password. On plain TCP (`disable`, or `prefer`
+  after a fallback) the guard refuses a full authentication, so a MySQL 8
+  account logs in only while the server's authentication cache holds it.
+  PostgreSQL likewise sends the password to a server that asks for
+  cleartext authentication. `verify-ca` and
   `verify-full` prevent the impersonation. A plain connection is reported on
   the console and in the audit log (`"decision":"notice"`) as `the connection
   is NOT encrypted (tls = ...)`; unverified TLS on a non-loopback host as
