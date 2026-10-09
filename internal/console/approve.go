@@ -43,6 +43,9 @@ func (s *Server) screen(ctx context.Context, pl *plan) {
 		add(fmt.Sprintf("PII: masked (%d column rules; detectors: %s)",
 			len(s.rules.Mask), strings.Join(s.profile.Detectors, ", ")))
 	}
+	for _, w := range pl.warnings {
+		add(red + "warning: " + safeText(w, false) + reset)
+	}
 	frame := s.frameColour()
 	sep := paint.Dim(" · ")
 	s.println("")
@@ -96,9 +99,6 @@ func (s *Server) screenBody(ctx context.Context, pl *plan, add func(string)) {
 	for _, r := range pl.reasons {
 		add("  - " + safeText(r, false))
 	}
-	for _, w := range pl.warnings {
-		s.println(red + "warning: " + safeText(w, false) + reset)
-	}
 }
 
 // readDetails explains a read plan to the human: what it reads, which PII
@@ -148,10 +148,10 @@ func (s *Server) readDetails(pl *plan, add func(string)) {
 		}
 		_, reused := s.placeholders(pl)
 		for _, n := range reused {
-			s.println(fmt.Sprintf("${%s} = value typed at %s", n, s.typed[n].at.Format("15:04")))
+			add(fmt.Sprintf("${%s} = value typed at %s", n, s.typed[n].at.Format("15:04")))
 		}
 		if missing, _ := s.placeholders(pl); len(missing) > 0 {
-			s.println("values to type: ${" + strings.Join(missing, "}, ${") + "}")
+			add("values to type: ${" + strings.Join(missing, "}, ${") + "}")
 		}
 		if k := s.profile.Limits.KAnonymity; k > 1 {
 			for _, c := range an.KChecks {

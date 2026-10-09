@@ -76,32 +76,32 @@ func placeholderColumns(pl *plan, name string) string {
 // answer denies the request and keeps the name unknown.
 func (s *Server) askValues(ctx context.Context, id int64, pl *plan, rec audit.Record, names []string) *ipc.Response {
 	for _, n := range names {
-		b, err := s.cfg.IO.AskSecret(ctx, fmt.Sprintf("value for ${%s} (%s): ", n, safeText(placeholderColumns(pl, n), false)))
+		b, err := s.cfg.IO.AskSecret(ctx, paint.Paint(s.frameColour(), "│ ")+fmt.Sprintf("value for ${%s} (%s): ", n, safeText(placeholderColumns(pl, n), false)))
 		v := string(b)
 		clear(b)
 		switch {
 		case err != nil && ctx.Err() != nil:
 			rec.Event, rec.Decision = audit.EventAbandoned, "abandoned"
 			s.audit(rec)
-			s.println("client gone: request cancelled")
+			s.println(paint.Fail("client gone: request cancelled"))
 			r := errResp(id, ipc.CodeDenied, "the request was cancelled")
 			return &r
 		case errors.Is(err, errSecretTimeout):
 			rec.Event, rec.Decision = audit.EventTimeout, "timeout"
 			s.audit(rec)
-			s.println("no value typed in time: denied")
+			s.println(paint.Fail("no value typed in time: denied"))
 			r := errResp(id, ipc.CodeDenied, "the human typed no value for ${"+n+"}; do not retry unless asked")
 			return &r
 		case err != nil || v == "":
 			rec.Event, rec.Decision = audit.EventDenied, "no value"
 			s.audit(rec)
-			s.println("no value typed: denied")
+			s.println(paint.Fail("no value typed: denied"))
 			r := errResp(id, ipc.CodeDenied, "the human typed no value for ${"+n+"}; do not retry unless asked")
 			return &r
 		case strings.ContainsAny(v, "\\\x00"):
 			rec.Event, rec.Decision = audit.EventDenied, "unsafe value"
 			s.audit(rec)
-			s.println("a backslash or a NUL cannot be substituted safely: denied")
+			s.println(paint.Fail("a backslash or a NUL cannot be substituted safely: denied"))
 			r := errResp(id, ipc.CodeDenied, "the value typed for ${"+n+"} cannot be substituted safely; do not retry unless asked")
 			return &r
 		}
