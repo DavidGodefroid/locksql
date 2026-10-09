@@ -285,6 +285,14 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 	} else {
 		uid, gid, ok := d.ownerOf(fi)
 		perm := fi.Mode().Perm()
+		shown := perm // with setgid, as chmod takes it
+		if fi.Mode()&os.ModeSetgid != 0 {
+			shown |= 0o2000
+		}
+		wantMode := "0710"
+		if d.goos == "linux" {
+			wantMode = "2710"
+		}
 		want := ""
 		if g, err := user.LookupGroup(sys.ClientGroup); err == nil {
 			want = g.Gid
@@ -298,9 +306,13 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 			add(checkFail, "socket directory", sys.SocketDir+" does not belong to group "+sys.ClientGroup,
 				fmt.Sprintf("sudo chown %s:%s %s", sys.ServiceUser, sys.ClientGroup, sys.SocketDir))
 		case perm&0o027 != 0 || perm&0o010 == 0:
-			add(checkFail, "socket directory", fmt.Sprintf("%s has mode %04o", sys.SocketDir, perm), "sudo chmod 0710 "+sys.SocketDir)
+			add(checkFail, "socket directory", fmt.Sprintf("%s has mode %04o", sys.SocketDir, shown), "sudo chmod "+wantMode+" "+sys.SocketDir)
+		case d.goos == "linux" && fi.Mode()&os.ModeSetgid == 0:
+			// The console cannot give its socket to the client group.
+			add(checkFail, "socket directory", fmt.Sprintf("%s has mode %04o, without setgid", sys.SocketDir, shown),
+				"sudo locksql install (it also fixes /etc/tmpfiles.d/locksql.conf)")
 		default:
-			add(checkOK, "socket directory", fmt.Sprintf("%s %04o %s:%s", sys.SocketDir, perm, sys.ServiceUser, sys.ClientGroup), "")
+			add(checkOK, "socket directory", fmt.Sprintf("%s %04o %s:%s", sys.SocketDir, shown, sys.ServiceUser, sys.ClientGroup), "")
 		}
 	}
 	return out

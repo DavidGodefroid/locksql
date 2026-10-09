@@ -207,7 +207,7 @@ confirm (`--print` only prints; on macOS it always only prints). The script:
 | group `locksql-clients` | the agent's account (`--client`, default you or `$SUDO_USER`) is added to it |
 | `/usr/local/bin/locksql` | owned by root, so the agent cannot replace the binary the console runs |
 | `/etc/locksql/system.toml` | owned by root, mode 0644; a file owned or writable by anyone else is refused |
-| `/run/locksql` | socket directory, `locksql:locksql-clients`, mode 0710 (via `/etc/tmpfiles.d`; `/usr/local/var/run/locksql` on macOS) |
+| `/run/locksql` | socket directory, `locksql:locksql-clients`, mode 2710 (setgid, so the socket inherits the group; via `/etc/tmpfiles.d`). On macOS, `/usr/local/var/run/locksql`, mode 0710: a new file always takes its directory's group there |
 
 `system.toml` keys:
 
@@ -215,7 +215,7 @@ confirm (`--print` only prints; on macOS it always only prints). The script:
 |---|---|---|
 | `service_user` | `locksql` | the account the console must run as |
 | `client_group` | `locksql-clients` | members may connect to the console sockets |
-| `socket_dir` | `/run/locksql` | absolute; owned by `service_user` and `client_group`, mode 0710 or 0750 |
+| `socket_dir` | `/run/locksql` | absolute; owned by `service_user` and `client_group`, mode 0710 or 0750, plus setgid on Linux (2710 or 2750) |
 | `allowed_uids` | none | uids allowed besides the group's members |
 | `x11` | `warn` (`install` writes `refuse`) | what the console does in an X11 session |
 
@@ -226,6 +226,31 @@ the agent's project directory. The profiles come from that project's
 `.locksql/config.toml`, readable by both accounts (`locksql init <agent>`
 writes a commented example). A user config is seen by one account only, so it
 cannot hold the profiles.
+
+The console also writes `.locksql/pii.toml`: at its first start (the PII
+proposal), when you accept a rule and when a client adds one. It writes a
+temporary `.locksql/.pii-*.toml` and renames it over the file, so the console
+account needs write access to the `<project>/.locksql/` directory itself, not
+only to `pii.toml`. Give it the directory and keep both files readable by
+both accounts:
+
+```sh
+sudo chown locksql <project>/.locksql
+sudo chmod 0755 <project>/.locksql
+chmod 0644 <project>/.locksql/config.toml   # pii.toml is written 0644
+```
+
+The agent's account can still edit a file it owns in place, but it can no
+longer create or replace files in `.locksql/` (a `git checkout` that changes
+them needs the console account). An edit of these files from the agent's side
+is a policy change and waits for your approval when it loosens the policy
+(section 3). Without that access the console stops and names the directory.
+
+On Linux the console gives its socket to `client_group`, of which it is not a
+member: only the setgid bit of `socket_dir` makes that possible. An install
+made before it creates `/run/locksql` 0710 at every boot (from
+`/etc/tmpfiles.d/locksql.conf`), and the console stops with an error naming
+the directory: run `sudo locksql install` again.
 
 In separated mode the console refuses to start when:
 
@@ -263,7 +288,7 @@ each; the exit code is 1 when any check fails.
 | system setup, console account | `system.toml` invalid or not root-owned; the console account missing or in the client group |
 | client access, privilege escalation | the agent's account is not in the client group, or can run `sudo` without a password |
 | separate session | the console account has no login session (Linux) |
-| socket directory | missing, wrong owner or group, or a mode other than 0710/0750 |
+| socket directory | missing, wrong owner or group, a mode other than 0710/0750, or no setgid on Linux; shows the mode with setgid (`/run/locksql 2710 locksql:locksql-clients`) |
 | binary | the running binary can be changed by a non-root account (fails in separated mode) |
 | secret store | separated mode with a secret for the profile left in the agent's keychain; keychain unavailable |
 | console (per profile) | not running; then, from its `health`: not separated, an X11 display, database privileges beyond the tier, EXPLAIN failing |

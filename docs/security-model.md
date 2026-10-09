@@ -72,7 +72,7 @@ root.
 | Approval spoofing through the socket | Approval comes only from the console terminal; no socket method approves, and no socket method loosens policy. The approval screen names the requesting uid, pid and process as the kernel reports them. |
 | A client stuck or killed during an approval | The approval is abandoned or times out after 5 minutes; the socket keeps serving. |
 | A fake console | In separated mode clients check through peer credentials that the socket is served by `service_user`, and the socket directory is owned by it. |
-| Another local user | The socket directory is `service_user:client_group` mode 0710, the socket 0660, and each peer is checked with `SO_PEERCRED` (Linux) or `LOCAL_PEERCRED` (macOS): the console's own uid, a member of `client_group` or an `allowed_uids` entry. |
+| Another local user | The socket directory is `service_user:client_group` mode 2710 on Linux (0710 on macOS), the socket 0660, and each peer is checked with `SO_PEERCRED` (Linux) or `LOCAL_PEERCRED` (macOS): the console's own uid, a member of `client_group` or an `allowed_uids` entry. |
 
 ## Approval
 

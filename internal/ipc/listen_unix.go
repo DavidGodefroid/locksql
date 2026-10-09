@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -67,7 +68,7 @@ func ListenShared(path string, gid int) (net.Listener, error) {
 	case int(st.Gid) != gid:
 		return nil, fmt.Errorf("ipc: shared socket dir %s does not belong to the client group (gid %d)", dir, gid)
 	case fi.Mode().Perm()&0o027 != 0 || fi.Mode().Perm()&0o010 == 0:
-		return nil, fmt.Errorf("ipc: shared socket dir %s has mode %04o; want 0710 or 0750", dir, fi.Mode().Perm())
+		return nil, fmt.Errorf("ipc: shared socket dir %s has mode %04o; want 0710 or 0750, setgid on Linux", dir, fi.Mode().Perm())
 	}
 	if err := clearStale(path); err != nil {
 		return nil, err
@@ -84,11 +85,22 @@ func ListenShared(path string, gid int) (net.Listener, error) {
 	}
 	if err := os.Chown(path, -1, gid); err != nil {
 		ln.Close()
-		return nil, fmt.Errorf("ipc: %w", err)
+		return nil, sharedChownError(dir, gid, err)
 	}
 	if err := os.Chmod(path, 0o660); err != nil {
 		ln.Close()
 		return nil, fmt.Errorf("ipc: %w", err)
 	}
 	return ln, nil
+}
+
+// sharedChownError explains a failed hand-over of the socket to the client
+// group. On Linux the console's account, not a member of that group, may
+// only keep the group the socket was born with: without setgid on dir that
+// is its own primary group.
+func sharedChownError(dir string, gid int, err error) error {
+	if errors.Is(err, syscall.EPERM) {
+		return fmt.Errorf("ipc: cannot give the socket to the client group (gid %d): %s lacks the setgid bit (want mode 2710); run sudo locksql install again, which also fixes /etc/tmpfiles.d/locksql.conf: %w", gid, dir, err)
+	}
+	return fmt.Errorf("ipc: %w", err)
 }
