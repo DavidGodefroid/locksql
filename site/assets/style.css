@@ -379,12 +379,23 @@ blockquote p { margin: 0; }
 
 /* Demo video */
 .demo-section { margin-top: 2.5rem; }
-figure.demo { margin: 0 auto 1.5rem; }
+/* The video breaks out of the text column: as wide as the window allows
+   (94vw, at most its 1700px recording), and never taller than the window
+   minus the header, so it is always seen whole. */
+figure.demo {
+  position: relative;
+  left: 50%;
+  width: min(94vw, 1700px, calc((100vh - 6rem) * 1700 / 940));
+  width: min(94vw, 1700px, calc((100svh - 6rem) * 1700 / 940));
+  margin: 0 0 1.5rem;
+  transform: translateX(-50%);
+}
 figure.demo video,
 figure.demo img {
   display: block;
   width: 100%;
   height: auto;
+  aspect-ratio: 1700 / 940;
   border-radius: var(--radius);
   background: #5b4bc4;
   box-shadow: var(--shadow-lg);
