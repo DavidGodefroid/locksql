@@ -19,8 +19,8 @@ import (
 
 // isolation is how the console is kept apart from the agent: in a
 // separated setup (sysconf) the console runs as the service account in its
-// own login session and serves the client group over a shared socket; in
-// same-user mode it serves its own user over a private socket.
+// own login session and serves the client group over a shared socket; without
+// one it refuses to start (except in a test build: allowSameUserForTests).
 type isolation struct {
 	sys     *sysconf.Config
 	display sysconf.Display
@@ -40,7 +40,6 @@ type isolationEnv struct {
 	terminalOwner func() (int, bool)
 	clientAllowed func(sys *sysconf.Config, uid int) bool
 	clientGID     func(sys *sysconf.Config) (int, error)
-	tiocsti       func() (bool, bool)
 }
 
 func realIsolationEnv(tty *os.File) isolationEnv {
@@ -64,8 +63,25 @@ func realIsolationEnv(tty *os.File) isolationEnv {
 		},
 		clientAllowed: func(sys *sysconf.Config, uid int) bool { return sys.ClientAllowed(uid) },
 		clientGID:     func(sys *sysconf.Config) (int, error) { return sys.ClientGID() },
-		tiocsti:       sysconf.LegacyTIOCSTI,
 	}
+}
+
+// allowSameUserForTests lets the console run without a separated setup, in
+// the agent's account. Only isolation_testhook.go sets it, in a build with
+// the locksql_testhook tag: no config file, flag, environment variable or
+// client can.
+var allowSameUserForTests bool
+
+// sameUserRefusal is the one text of the same-user refusal.
+const sameUserRefusal = "console: refused: the console must run in a separate account, apart from the agent's, or the agent could read its terminal and type into it; run `locksql doctor`, then `sudo locksql install`"
+
+// SameUserRefused is the refusal of a console without a separated setup
+// (sys nil, as sysconf.Load returns it), or nil.
+func SameUserRefused(sys *sysconf.Config) error {
+	if sys == nil && !allowSameUserForTests {
+		return errors.New(sameUserRefusal)
+	}
+	return nil
 }
 
 // checkIsolation applies the separation rules before the console holds any
@@ -74,6 +90,9 @@ func checkIsolation(io IO, env isolationEnv, p config.Profile) (*isolation, erro
 	sys, err := env.loadSys()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrConfig, err)
+	}
+	if err := SameUserRefused(sys); err != nil {
+		return nil, err
 	}
 	iso := &isolation{sys: sys, display: env.display(), self: env.uid(), gid: -1}
 
@@ -85,11 +104,8 @@ func checkIsolation(io IO, env isolationEnv, p config.Profile) (*isolation, erro
 		io.Println(red + "warning: " + msg + "; prefer a Wayland session" + reset)
 	}
 
-	if sys == nil {
-		io.Println(paint.Warn(red + "same-user mode: the agent runs as your account, so it could read this console's terminal or type into it; run `locksql doctor`, then `sudo locksql install` to separate them" + reset))
-		if on, known := env.tiocsti(); known && on {
-			io.Println(red + "warning: the kernel allows TIOCSTI (dev.tty.legacy_tiocsti = 1): a process of your account can type into this terminal" + reset)
-		}
+	if sys == nil { // only a test build gets here (allowSameUserForTests)
+		io.Println(red + "same-user mode: test build only" + reset)
 		return iso, nil
 	}
 

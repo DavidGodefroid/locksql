@@ -7,7 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
 
+	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/console"
 )
 
@@ -40,6 +45,11 @@ func runConsole(e env, args []string) int {
 		if code, failed := sysFail(e, " console"); failed {
 			return code
 		}
+		sys, _ := sysConfig(e)
+		if err := console.SameUserRefused(sys); err != nil {
+			fmt.Fprintln(e.stderr, "locksql console:", err)
+			return exitFail
+		}
 		wireAgents(e)
 		pe := e
 		if *project != "" {
@@ -58,7 +68,7 @@ func runConsole(e env, args []string) int {
 			if separated, _ := isServiceAccount(e); separated {
 				fmt.Fprintf(e.stderr, "locksql console: no profile visible here; in separated mode, put the profile in the project's .locksql/config.toml and run: locksql console --project %s\n", projectDirHint(pe))
 			} else {
-				fmt.Fprintln(e.stderr, "locksql console: no profile: run locksql (or locksql add) to add one")
+				fmt.Fprintln(e.stderr, "locksql console: no profile: put the profile in the project's .locksql/config.toml (locksql init <agent> writes an example)")
 			}
 			return exitUsage
 		}
@@ -93,4 +103,51 @@ func openConsole(e env, profile string, skip bool, project string, term *console
 		return exitFail
 	}
 	return exitOK
+}
+
+// errAborted is a profile choice cut short (Ctrl-D, timeout).
+var errAborted = errors.New("aborted")
+
+// chooseProfile returns the only profile, asks among several, or returns
+// "" when none is configured.
+func chooseProfile(e env, io console.IO) (string, error) {
+	cfg, err := config.Load(e.cwd)
+	if err != nil {
+		return "", usageError{err.Error()}
+	}
+	names := profileNames(cfg)
+	switch len(names) {
+	case 0:
+		return "", nil
+	case 1:
+		return names[0], nil
+	}
+	for i, n := range names {
+		io.Println(fmt.Sprintf("  %d) %s", i+1, n))
+	}
+	for {
+		l, ok := io.Ask(context.Background(), "Profile: ", 30*time.Minute)
+		if !ok {
+			return "", errAborted
+		}
+		l = strings.TrimSpace(l)
+		if n, err := strconv.Atoi(l); err == nil && n >= 1 && n <= len(names) {
+			return names[n-1], nil
+		}
+		if slices.Contains(names, l) {
+			return l, nil
+		}
+		io.Println(fmt.Sprintf("  answer a number from 1 to %d or a profile name", len(names)))
+	}
+}
+
+// onboardFail reports a profile choice error: exit 3 for a configuration
+// error, 1 otherwise.
+func onboardFail(e env, err error) int {
+	fmt.Fprintln(e.stderr, "locksql:", err)
+	var ue usageError
+	if errors.As(err, &ue) {
+		return exitUsage
+	}
+	return exitFail
 }

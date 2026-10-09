@@ -83,11 +83,23 @@ func legacyRulesNotice(cwd, projectRoot, rulesPath string) string {
 	return fmt.Sprintf("note: %s is no longer read outside a project; PII rules now live in %s (copy it there to keep its rules)", old, rulesPath)
 }
 
+// newIsolationEnv builds what Run's isolation checks read; tests replace it.
+var newIsolationEnv = realIsolationEnv
+
 // Run is `locksql console`: the start-up sequence of spec §6, then the
 // request loop until Ctrl-C, logout, :quit or a timeout.
 func Run(ctx context.Context, o Options) error {
 	if o.IO == nil {
 		return errors.New("console: no terminal")
+	}
+	// Same-user mode is refused before any prompt or file write.
+	isoEnv := newIsolationEnv(o.TTY)
+	sys, err := isoEnv.loadSys()
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrConfig, err)
+	}
+	if err := SameUserRefused(sys); err != nil {
+		return err
 	}
 	if err := harden(); err != nil {
 		o.IO.Println("warning: could not disable core dumps: " + err.Error())
@@ -171,7 +183,7 @@ func Run(ctx context.Context, o Options) error {
 	st.profile = p
 
 	// Separation from the agent, before any secret is asked for.
-	iso, err := checkIsolation(o.IO, realIsolationEnv(o.TTY), p)
+	iso, err := checkIsolation(o.IO, isoEnv, p)
 	if err != nil {
 		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
 		return err
@@ -552,12 +564,21 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 		}
 		proposals = append(proposals, pat)
 	}
-	if !firstRun && len(proposals) == 0 {
+	var quasi []string
+	for _, pat := range pii.ProposeQuasi(cols) {
+		seg := strings.SplitN(pat, ".", 3)
+		if len(seg) == 3 && rules.Covered(seg[0], seg[1], seg[2]) {
+			continue
+		}
+		quasi = append(quasi, pat)
+	}
+	if !firstRun && len(proposals) == 0 && len(quasi) == 0 {
 		return ap, nil
 	}
-	if len(proposals) == 0 {
+	if len(proposals) == 0 && len(quasi) == 0 {
 		st.io.Println(paint.OK("PII: no personal-data columns found in the schema"))
-	} else {
+	}
+	if len(proposals) > 0 {
 		if firstRun {
 			st.io.Println(bold + "PII: these columns look like personal data and would be masked:" + reset)
 		} else {
@@ -599,6 +620,32 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 			st.io.Println("PII: no rules added; add them later with locksql pii add")
 		}
 	}
+	allowed := false
+	if len(quasi) > 0 {
+		st.io.Println(bold + "PII scan: these columns can identify a person together (quasi-identifiers); they are not masked unless you say so:" + reset)
+		for _, pat := range quasi {
+			a, ok := st.io.Ask(ctx, "Mask "+safeText(pat, false)+"? ("+pii.QuasiLimit+") [y/N] ", ApprovalTimeout)
+			if ctx.Err() != nil {
+				return ap, ctx.Err()
+			}
+			if !ok {
+				continue // asked again at the next start
+			}
+			switch strings.TrimSpace(strings.ToLower(a)) {
+			case "y", "yes":
+				if err := rules.Add(pat); err != nil {
+					return ap, err
+				}
+			case "n", "no", "":
+				if err := rules.AddAllow(pat); err != nil {
+					return ap, err
+				}
+				allowed = true
+			default:
+				// Not an answer: nothing is written, asked again at the next start.
+			}
+		}
+	}
 	next := config.NewPolicy(ap.Profile, rules.Mask, rules.Allow).WithModes(rules.Modes)
 	switch {
 	case firstRun:
@@ -621,6 +668,13 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 				}
 			}
 		}
+		for _, pat := range rules.Allow {
+			if !slices.Contains(ap.PIIAllow, pat) {
+				if err := onDisk.AddAllow(pat); err != nil {
+					return ap, err
+				}
+			}
+		}
 		if err := pii.SaveRulesFile(rulesPath, onDisk); err != nil {
 			return ap, err
 		}
@@ -630,7 +684,11 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 		if err := config.SaveApproved(stateDir, key, next); err != nil {
 			return ap, err
 		}
-		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "tightened"})
+		decision := "tightened"
+		if allowed {
+			decision = "approved" // the human declined to mask a quasi-identifier, in the console
+		}
+		st.audit(audit.Record{Event: audit.EventPolicy, Decision: decision})
 		st.io.Println(paint.OK(fmt.Sprintf("PII: %d mask rules in %s", len(next.PIIMask), rulesPath)))
 	}
 	return next, nil

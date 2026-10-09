@@ -55,14 +55,16 @@ func (e *NoConsoleError) Error() string {
 // Command is the exact command that starts the missing console.
 func (e *NoConsoleError) Command() string { return StartCommand(e.Profile, e.Project) }
 
-// Hint tells the agent what to ask of the user. Outside a project a bare
-// `locksql` serves the user config; inside one, only a console started on
-// that project serves the agent, so the hint names it.
+// Hint tells the agent what to ask of the user. Inside a project, only a
+// console started on that project serves the agent, so the hint names it;
+// outside one, the hint asks for the project's directory, since the
+// console runs in the locksql account and reads the profiles from the
+// project's config.
 func (e *NoConsoleError) Hint() string {
 	if e.Project != "" {
-		return fmt.Sprintf("ask the user to run this command in a separate terminal (the console must serve the project %s):\n  %s", e.Project, e.Command())
+		return fmt.Sprintf("ask the user to run this command in the locksql account's own session (the console must serve the project %s):\n  %s", e.Project, e.Command())
 	}
-	return "ask the user to run `locksql` (or the exact command below) in a separate terminal:\n  " + e.Command()
+	return "ask the user to start the console in the locksql account's own session, on the project that holds .locksql/config.toml (`locksql doctor` checks the setup):\n  " + StartCommand(e.Profile, "DIR")
 }
 
 // Is makes errors.Is(err, ErrNoConsole) true.

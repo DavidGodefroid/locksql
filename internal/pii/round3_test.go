@@ -59,6 +59,11 @@ func TestPlanCheckRound3(t *testing.T) {
 		{sqlclass.MySQL, "SELECT min_value, max_value FROM mysql.column_stats LIMIT 5"},
 		{sqlclass.MySQL, "SELECT HISTOGRAM FROM information_schema.COLUMN_STATISTICS LIMIT 5"},
 		{sqlclass.SQLite, "SELECT sample FROM sqlite_stat4 LIMIT 5"},
+		// Statement-text views hold the values substituted into past statements.
+		{sqlclass.Postgres, "SELECT query FROM pg_stat_statements LIMIT 5"},
+		{sqlclass.Postgres, "SELECT query FROM pg_stat_activity LIMIT 5"},
+		{sqlclass.MySQL, "SELECT INFO FROM information_schema.PROCESSLIST LIMIT 5"},
+		{sqlclass.MySQL, "SELECT SQL_TEXT FROM performance_schema.events_statements_history LIMIT 5"},
 	}
 	for _, c := range refused {
 		st := classify(t, c)

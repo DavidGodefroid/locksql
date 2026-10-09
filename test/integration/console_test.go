@@ -23,14 +23,16 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 )
 
-// buildLocksql builds the binary once per test binary.
+// buildLocksql builds the binary once per test binary, with the
+// locksql_testhook tag: the console then runs in this account, without a
+// separated setup (internal/console/isolation_testhook.go).
 var buildLocksql = sync.OnceValues(func() (string, error) {
 	dir, err := os.MkdirTemp("", "ls-bin-")
 	if err != nil {
 		return "", err
 	}
 	bin := filepath.Join(dir, "locksql")
-	cmd := exec.Command("go", "build", "-o", bin, "github.com/DavidGodefroid/locksql/cmd/locksql")
+	cmd := exec.Command("go", "build", "-tags", "locksql_testhook", "-o", bin, "github.com/DavidGodefroid/locksql/cmd/locksql")
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("go build: %v: %s", err, out)
@@ -271,10 +273,13 @@ production = true
 			t.Fatalf("type-ahead run: want denied, got %+v", resp)
 		}
 
-		// A typed answer approves; the email column comes back masked.
+		// A typed answer approves; the email column comes back redacted,
+		// the default mode of a proposed rule.
 		id = plan()
 		cl.send(ipc.MethodQueryRun, ipc.RunParams{PlanID: id})
-		c.expect("Approve? [y/N] ")
+		if seen := c.expect("Approve? [y/N] "); !strings.Contains(seen, "masked outputs: email → redact") {
+			t.Errorf("approval screen lacks the mask mode: %q", seen)
+		}
 		c.send("y\n")
 		resp, err = cl.recv(30 * time.Second)
 		if err != nil || resp.Error != nil {
@@ -284,7 +289,7 @@ production = true
 		if err := json.Unmarshal(resp.Result, &rr); err != nil {
 			t.Fatal(err)
 		}
-		if len(rr.Rows) != 1 || rr.Rows[0][1] != "u***(17)" {
+		if len(rr.Rows) != 1 || !strings.HasPrefix(fmt.Sprint(rr.Rows[0][1]), "<redacted") {
 			t.Fatalf("rows: %+v", rr.Rows)
 		}
 

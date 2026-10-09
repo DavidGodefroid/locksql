@@ -75,10 +75,10 @@ type Env struct {
 	// Masking is false for an unmask plan: provenance and functions are
 	// still checked, but not the PII usage rules.
 	Masking bool
-	// Token resolves a string literal (without quotes) that looks like a
-	// token issued by the console. isToken reports the token format; ok
-	// whether the console knows it.
-	Token func(lit string) (value string, isToken, ok bool)
+	// Value resolves a placeholder: the value the human typed for a name, or
+	// the value of a referenced cell. ok is false when the console does not
+	// know it (yet, for a typed name).
+	Value func(kind ValueKind, name string) (value string, ok bool)
 }
 
 // Output is one result column.
@@ -126,9 +126,14 @@ type Analysis struct {
 	// estimates must not reach the agent.
 	PIIFilter    bool
 	Replacements []Replacement
+	// Values are the placeholders compared with PII columns.
+	Values []ValueUse
+	// KeyFilters are the non-PII columns compared with = and a literal in
+	// WHERE (the console checks whether one is a unique key).
+	KeyFilters []Source
 }
 
-// RunSQL is the statement with its token replacements applied.
+// RunSQL is the statement with its replacements applied.
 func (a *Analysis) RunSQL(sql string) string {
 	return applyReplacements(sql, Span{0, len(sql)}, a.Replacements)
 }
@@ -211,8 +216,8 @@ func Analyze(st *Statement, env Env) (*Analysis, error) {
 	if env.Rule == nil {
 		env.Rule = func(Source) (string, bool) { return "", false }
 	}
-	if env.Token == nil {
-		env.Token = func(string) (string, bool, bool) { return "", false, false }
+	if env.Value == nil {
+		env.Value = func(ValueKind, string) (string, bool) { return "", false }
 	}
 	an := &analyzer{env: env, st: st, d: st.Dialect, a: &Analysis{}, relations: map[string]bool{}, uses: map[Use]bool{}}
 	cols, err := an.query(st.Query, nil)
@@ -245,6 +250,9 @@ func Analyze(st *Statement, env Env) (*Analysis, error) {
 		}
 		return an.a.Uses[i].Clause < an.a.Uses[j].Clause
 	})
+	if err := an.strayPlaceholders(); err != nil {
+		return nil, err
+	}
 	return an.a, nil
 }
 
@@ -1396,6 +1404,127 @@ func (an *analyzer) constFilter(sc *scope, clause string, col Prov, pred string)
 	return nil
 }
 
+// valueLiterals records the placeholders among lits, compared with the PII
+// column col, and plans the substitution of those whose value is known.
+// human reports that every literal is a placeholder: the agent chose none
+// of the values, so the filter needs no k-anonymity check.
+func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human bool, err error) {
+	human = len(lits) > 0
+	var target Source
+	for _, s := range col.Sources {
+		if _, ok := an.env.Rule(s); ok {
+			target = s
+			break
+		}
+	}
+	for _, e := range lits {
+		for {
+			p, ok := e.(*Paren)
+			if !ok {
+				break
+			}
+			e = p.X
+		}
+		l, ok := e.(*Literal)
+		if !ok || l.Kind != LitString {
+			human = false
+			continue
+		}
+		body, ok := unquote(an.d, l.Text)
+		if !ok {
+			human = false
+			continue
+		}
+		kind, name, isPH, valid := ParsePlaceholder(body)
+		if !isPH {
+			human = false
+			continue
+		}
+		if !valid {
+			return false, refusef("malformed placeholder %q: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}'", body)
+		}
+		if an.dry == 0 {
+			an.a.Values = append(an.a.Values, ValueUse{Kind: kind, Name: name, Column: target, InList: inList, Span: l.Sp})
+		}
+		value, known := an.env.Value(kind, name)
+		if !known {
+			if kind == ValueRef {
+				return false, refusef("unknown reference %s: it is not from this console session, or its result is too old", name)
+			}
+			continue // the console asks the human before the run
+		}
+		q, err := quoteLiteral(an.d, value)
+		if err != nil {
+			return false, err
+		}
+		if an.dry == 0 {
+			an.a.Replacements = append(an.a.Replacements, Replacement{Span: l.Sp, Text: q})
+		}
+	}
+	return human, nil
+}
+
+// humanFilter is a PII filter whose values all come from placeholders: no
+// k-anonymity check, but row estimates stay hidden from the agent.
+func (an *analyzer) humanFilter(clause string) error {
+	if clause == "join" {
+		return refuse("compare PII columns with placeholders in WHERE, not in a JOIN condition")
+	}
+	an.a.PIIFilter = an.a.PIIFilter || an.dry == 0
+	return nil
+}
+
+// keyFilter records a non-PII column compared with = and a literal in
+// WHERE.
+func (an *analyzer) keyFilter(op string, l, r Prov, le, re Expr, clause string, pos bool) {
+	if an.dry > 0 || clause != "where" || !pos || op != "=" {
+		return
+	}
+	col := l
+	if l.Kind != KindIdentity {
+		col = r
+		re = le
+	}
+	if col.Kind != KindIdentity || !isConstant(re) {
+		return
+	}
+	for _, s := range col.Sources {
+		if !slices.Contains(an.a.KeyFilters, s) {
+			an.a.KeyFilters = append(an.a.KeyFilters, s)
+		}
+	}
+}
+
+// strayPlaceholders refuses a placeholder that did not end up compared
+// with a PII column: anywhere else its value could come back unmasked.
+func (an *analyzer) strayPlaceholders() error {
+	toks, err := sqlclass.Lex(an.d, an.st.SQL)
+	if err != nil {
+		return refuse("the statement could not be checked for placeholders")
+	}
+	for _, t := range toks {
+		if t.Kind != sqlclass.TokString {
+			continue
+		}
+		body, ok := unquote(an.d, t.Text)
+		if !ok {
+			// E'...', $$...$$ and the like are never substituted: a
+			// placeholder written that way is malformed.
+			if strings.Contains(t.Text, "${") {
+				return refusef("malformed placeholder %s: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}' as a plain single-quoted string", t.Text)
+			}
+			continue
+		}
+		if _, _, isPH, _ := ParsePlaceholder(body); !isPH {
+			continue
+		}
+		if !slices.ContainsFunc(an.a.Values, func(v ValueUse) bool { return v.Span.Pos == t.Pos }) {
+			return refuse("a placeholder may only be compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")
+		}
+	}
+	return nil
+}
+
 // quoteIdent quotes a catalog name as an identifier of the dialect.
 func (an *analyzer) quoteIdent(name string) string {
 	q := `"`
@@ -1424,6 +1553,7 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 		return err
 	}
 	if !an.env.Masking || !l.Sensitive && !r.Sensitive {
+		an.keyFilter(op, l, r, le, re, clause, pos)
 		return nil
 	}
 	if l.Sensitive && l.Kind != KindIdentity || r.Sensitive && r.Kind != KindIdentity {
@@ -1447,8 +1577,12 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 		if !isConstant(otherExpr) {
 			return refusef("a PII column (%s) may only be compared with a literal", piiNames(col))
 		}
-		if err := an.tokenLiterals(col, []Expr{otherExpr}); err != nil {
+		human, err := an.valueLiterals(col, []Expr{otherExpr}, false)
+		if err != nil {
 			return err
+		}
+		if human {
+			return an.humanFilter(clause)
 		}
 		return an.constFilter(sc, clause, col, op+" "+an.frag(otherExpr.Span()))
 	case KindIdentity:
@@ -1565,59 +1699,17 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 			return refusef("a PII column (%s) may only be tested against a list of literals", piiNames(x))
 		}
 	}
-	if err := an.tokenLiterals(x, e.List); err != nil {
+	human, err := an.valueLiterals(x, e.List, true)
+	if err != nil {
 		return err
+	}
+	if human {
+		return an.humanFilter(clause)
 	}
 	for _, it := range e.List {
 		items = append(items, an.frag(it.Span()))
 	}
 	return an.constFilter(sc, clause, x, "IN ("+strings.Join(items, ", ")+")")
-}
-
-// tokenLiterals plans the substitution of token literals compared with a
-// PII column masked as tokens.
-func (an *analyzer) tokenLiterals(col Prov, lits []Expr) error {
-	hashOnly := len(col.Modes) > 0
-	for _, m := range col.Modes {
-		if m != "hash" {
-			hashOnly = false
-		}
-	}
-	for _, e := range lits {
-		for {
-			p, ok := e.(*Paren)
-			if !ok {
-				break
-			}
-			e = p.X
-		}
-		l, ok := e.(*Literal)
-		if !ok || l.Kind != LitString {
-			continue
-		}
-		body, ok := unquote(an.d, l.Text)
-		if !ok {
-			continue
-		}
-		value, isToken, known := an.env.Token(body)
-		if !isToken {
-			continue
-		}
-		if !hashOnly {
-			return refusef("a token can only be compared with a column masked as tokens (mode \"hash\"); %s is not", piiNames(col))
-		}
-		if !known {
-			return refuse("unknown token: tokens are only valid in the console session that issued them")
-		}
-		q, err := quoteLiteral(an.d, value)
-		if err != nil {
-			return err
-		}
-		if an.dry == 0 {
-			an.a.Replacements = append(an.a.Replacements, Replacement{Span: l.Sp, Text: q})
-		}
-	}
-	return nil
 }
 
 // unquote returns the value of a plain single-quoted string literal.

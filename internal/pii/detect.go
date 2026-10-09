@@ -23,11 +23,8 @@ var sensitiveTokens = set(
 	// address
 	"address", "addresses", "addr", "adresse", "adres", "anschrift", "direccion", "domicilio",
 	"street", "streetname", "rue", "straat", "strasse", "calle", "city", "ville", "stad", "woonplaats",
-	"stadt", "ciudad", "zip", "zipcode", "postcode", "postalcode", "postleitzahl", "plz",
+	"stadt", "ciudad",
 	"housenumber", "huisnummer", "hausnummer",
-	// birth
-	"birth", "birthdate", "birthday", "dob", "naissance", "geboorte", "geboortedatum", "geburt",
-	"geburtsdatum", "geburtstag", "nacimiento",
 	// bank and card
 	"iban", "bic", "cardnumber", "creditcard", "cvv", "cvc",
 	// national ids and documents
@@ -47,8 +44,7 @@ var pairTokens = map[[2]string]bool{
 	{"phone", "number"}: true, {"card", "number"}: true, {"account", "number"}: true, {"bank", "account"}: true,
 	{"national", "id"}: true, {"national", "number"}: true, {"national", "register"}: true,
 	{"id", "card"}: true, {"identity", "card"}: true, {"tax", "id"}: true, {"social", "security"}: true,
-	{"house", "number"}: true, {"postal", "code"}: true, {"code", "postal"}: true, {"api", "key"}: true,
-	{"date", "naissance"}: true, {"fecha", "nacimiento"}: true, {"codigo", "postal"}: true,
+	{"house", "number"}: true, {"api", "key"}: true,
 }
 
 func init() {
@@ -102,6 +98,57 @@ func Propose(cols []engine.ColumnInfo) []string {
 		}
 	}
 	return canonical(out)
+}
+
+// quasiTokens are column-name tokens of quasi-identifiers: not personal
+// data alone, but a birth date, a postal code and a gender together
+// identify most people.
+var quasiTokens = set(
+	// birth
+	"birth", "birthdate", "birthday", "dob", "naissance", "geboorte", "geboortedatum", "geburt",
+	"geburtsdatum", "geburtstag", "nacimiento",
+	// postal code
+	"zip", "zipcode", "postcode", "postalcode", "postleitzahl", "plz",
+	// gender
+	"gender", "sex", "sexe", "geslacht", "geschlecht", "genero", "sexo",
+)
+
+var quasiPairs = map[[2]string]bool{
+	{"postal", "code"}: true, {"code", "postal"}: true, {"codigo", "postal"}: true,
+	{"date", "naissance"}: true, {"fecha", "nacimiento"}: true,
+}
+
+// QuasiLimit is what masking a quasi-identifier costs, shown when the scan
+// proposes one.
+const QuasiLimit = "masking blocks range filters, LIKE and ORDER BY on this column"
+
+// ProposeQuasi returns the "db.table.column" patterns for the columns that
+// look like quasi-identifiers and not like personal data, sorted and
+// de-duplicated.
+func ProposeQuasi(cols []engine.ColumnInfo) []string {
+	var out []string
+	for _, c := range cols {
+		if !sensitiveColumn(c.Column, c.Type) && quasiColumn(c.Column) {
+			out = append(out, patternSeg(c.DB)+"."+patternSeg(c.Table)+"."+patternSeg(c.Column))
+		}
+	}
+	return canonical(out)
+}
+
+func quasiColumn(name string) bool {
+	toks := tokens(name)
+	if len(toks) == 0 {
+		return false
+	}
+	for i := 1; i < len(toks); i++ {
+		if quasiPairs[[2]string{toks[i-1], toks[i]}] {
+			return true
+		}
+	}
+	if neutralLast[toks[len(toks)-1]] && len(toks) > 1 {
+		return false
+	}
+	return slices.ContainsFunc(toks, func(t string) bool { return quasiTokens[t] })
 }
 
 func patternSeg(s string) string {

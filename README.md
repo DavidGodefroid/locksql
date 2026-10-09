@@ -89,7 +89,7 @@ Reads are parsed in full; unknown syntax is refused.
 
 **🕶️ PII masking**<br>
 Every output column is traced to its source through aliases, CTEs, unions and
-joins, then masked (`partial`, `redact`, `email`, `hash` tokens).
+joins, then masked (`redact` by default, `partial` or `email`).
 
 </td>
 </tr>
@@ -117,24 +117,30 @@ every peer on the socket.
 # 1. Install (see Install below for packages, checksums and signatures)
 curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh
 
-# 2. Wire your agents, add a database, start the console (keep this terminal open)
+# 2. Wire your agents and set up the console account
 locksql
 
-# 3. In your agent, anywhere: "how many orders were placed yesterday on dev?"
+# 3. In the locksql session (a separate login), start the console
+#    (keep this terminal open)
+locksql console --project DIR
+
+# 4. In your agent, anywhere: "how many orders were placed yesterday on dev?"
 #    Approve or deny each query in the console.
 ```
 
-Bare `locksql` in a terminal does three things. It wires every installed
-agent (Claude Code, Codex, Gemini CLI, Cursor) for your user account, so
-that they work from any directory. When no database is configured it asks
-for one (a URL first) and saves a profile to your user config. Then it starts
-the console. Later runs only wire agents installed since, then start the
-console.
+Bare `locksql` in a terminal wires every installed agent (Claude Code, Codex,
+Gemini CLI, Cursor) for your user account, so that they work from any
+directory. The console must run in a separate account, so when that is not
+set up yet it explains why and offers to run `sudo locksql install`. It then
+prints the next steps: put your database profile in the project's
+`.locksql/config.toml` (`locksql init <agent>` writes a commented example)
+and run `locksql console --project DIR` in the `locksql` session. Later runs
+only wire agents installed since. Run in the service account, bare `locksql`
+starts the console.
 
-Separated mode (`sudo locksql install`, then `locksql doctor`) and project
-mode (`.locksql/config.toml` committed with the repository, `locksql init
-<agent>`) are described in [docs/usage.md](docs/usage.md). Separated mode
-always uses a project config, read by both accounts.
+The setup is described in [docs/usage.md](docs/usage.md) (`sudo locksql
+install`, then `locksql doctor`; project mode with `.locksql/config.toml`
+committed with the repository). Both accounts read the project config.
 
 ## How it works
 
@@ -168,16 +174,18 @@ sequenceDiagram
    screen and waits:
 
    ```
-   ━━ DEV ━━ 127.0.0.1 / app ━━ user alice ━━ tier read
-   requested by uid 1000 (alice) · pid 48211 (claude)
-   SELECT id, email FROM customers WHERE country = 'BE' LIMIT 20
-   class READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
-   reads: app.customers
-   returns at most 20 rows
-   PII columns touched: customers.email (select)
-   masked outputs: email → partial
-   PII: masked (4 column rules; detectors: email, phone, iban, card)
-   Approve? [y/N]
+   ╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
+   │ requested by uid 1000 (alice) · pid 48211 (claude)
+   │
+   │   SELECT id, email FROM customers WHERE country = 'BE' LIMIT 20
+   │
+   │ class READ · EXPLAIN: customers range ~410 · est. 410 rows examined · verdict OK
+   │ reads: app.customers
+   │ returns at most 20 rows
+   │ PII columns touched: customers.email (select)
+   │ masked outputs: email → redact
+   │ PII: masked (4 column rules; detectors: email, phone, iban, card)
+   ╰─ Approve? [y/N]
    ```
 
 3. On approval the console runs its k-anonymity counts when the statement
@@ -229,8 +237,8 @@ only guide the agent; the console's checks are the guarantee.
 - **OS separation.** `locksql install` creates a `locksql` console account
   and a `locksql-clients` group: the console runs as that account in its own
   login session, the agent's account only reaches its socket, and the kernel
-  checks every peer. Without it (same-user mode) the console warns that the
-  agent's account could read or type into its terminal.
+  checks every peer. The console refuses to start without this setup, since
+  an agent in the console's own account could read or type into its terminal.
 - **Human approval.** Every statement is shown and approved in the console
   terminal; no socket method can approve. On a production profile you type the
   profile name, not `y`. Pending keystrokes are flushed before each prompt, so
@@ -254,8 +262,15 @@ only guide the agent; the console's checks are the guarantee.
   and `*`, and masked on that source, not on its label; the engine's origin
   metadata is a second check, and a result whose columns do not match the
   analysis is dropped. Value detectors (email, phone, IBAN, card, opt-in
-  national ids) mask the other cells. Mask modes: `partial`, `redact`,
-  `email`, `hash` (per-session tokens that keep joins and equality filters).
+  national ids) mask the other cells. Mask modes: `redact` (the default),
+  `partial`, `email`. Quasi-identifiers (birth date, postal code, gender) are
+  never masked unless you accept them one by one, since masking blocks range
+  filters, `LIKE` and `ORDER BY` on the column.
+- **Statement text.** While mask rules exist, the views that hold the text of
+  past statements are refused, in reads and in writes: `pg_stat_statements`
+  and `pg_stat_activity`; on MySQL and MariaDB,
+  `information_schema.PROCESSLIST`, every `performance_schema` and `sys`
+  relation, `mysql.general_log` and `mysql.slow_log`.
 - **PII usage.** PII columns may be selected, counted, joined with `=` and
   filtered with `=`, `IN (literals)` or `IS NULL`. Expressions over them,
   `LIKE`, ranges and `ORDER BY` are refused. A filter, grouping or aggregate on
@@ -342,24 +357,24 @@ column = "app.users.email"            # db.table.column, * per segment
 mode   = "email"                      # j***@example.com
 [[mask]]
 column = "app.users.customer_ref"
-mode   = "hash"                       # tok_... per console session
+mode   = "partial"                    # j***(12)
 [[mask]]
-column = "*.*.recipient_reference"    # mode "partial" by default: j***(12)
+column = "*.*.recipient_reference"    # <redacted> (default)
 [[allow]]                             # explicit exception: never mask
 column = "app.templates.name"
 ```
 
 | Mode | Output | Notes |
 |---|---|---|
-| `partial` (default) | `j***(12)` | first character and length |
-| `redact` | `<redacted>` | |
+| `redact` (default) | `<redacted>` | a rule without `mode` is `redact` |
+| `partial` | `j***(12)` | first character and length |
 | `email` | `j***@example.com` | first character and domain; other values as `partial` |
-| `hash` | `tok_` + 20 characters | keyed HMAC with a random key per console session: equal values give equal tokens, so the agent can join, group and count, and filter with `WHERE col = 'tok_...'` (the console substitutes the value in the statement that runs) |
 
-Only columns explicitly configured with `mode = "hash"` get tokens, and a
-token is accepted only against such a column. A column covered by several
-rules with different modes is redacted. Changing a mode is a loosening unless
-the new mode is `redact`.
+A column covered by several rules with different modes is redacted. Changing
+a mode is a loosening unless the new mode is `redact`.
+
+`mode = "hash"` is no longer a mode: a rules file that uses it is rejected
+(`unknown mode "hash" (want redact, partial or email)`).
 
 On PostgreSQL the first segment is the schema (`public.users.email`).
 
@@ -379,10 +394,10 @@ iteration, and it is deliberately narrow:
 
 ## Limitations
 
-- **Same-user mode is weaker.** Without `locksql install`, the agent runs as
-  the console's account and could read its terminal, type into it or read
-  its keychain session. Run `locksql doctor` to see what your machine allows.
-  Malware running as the console account is out of scope in both modes.
+- **The console runs only in a separate account.** `sudo locksql install`
+  sets it up; `locksql console` refuses to start without it and names
+  `locksql doctor`. Run `locksql doctor` to see what your machine allows.
+  Malware running as the console account, or as root, is out of scope.
 - **k-anonymity is a query-set-size control.** It refuses a single query
   whose PII filter covers fewer than `k` rows; it does not stop differencing
   attacks that combine several approved queries.

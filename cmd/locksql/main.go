@@ -39,8 +39,7 @@ type helpRow struct{ name, args, desc string }
 
 var helpSections = []helpSection{
 	{title: "Human commands", rows: []helpRow{
-		{"locksql", "", "wire agents, add a database if none, start the console"},
-		{"add", "", "add a database profile to the user config"},
+		{"locksql", "", "wire agents and lead to the separated setup (or start the console)"},
 		{"console", "[--profile P] [--project DIR] [--skip-permissions]", "run the approval console"},
 		{"forget", "--profile P", "remove the keychain secret"},
 		{"install", "[--client USER] [--print]", "separate the console from the agent (sudo)"},
@@ -149,8 +148,6 @@ func runEnv(e env, args []string) int {
 		return exitOK
 	case "console":
 		return runConsole(e, args[1:])
-	case "add":
-		return runAdd(e, args[1:])
 	case "status":
 		return runStatus(e, args[1:])
 	case "forget":

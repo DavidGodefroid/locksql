@@ -30,6 +30,8 @@ type env struct {
 	agentEnv func() (agentinit.Env, error)
 	// sys loads the separated-mode setup; nil means same-user mode.
 	sys func() (*sysconf.Config, error)
+	// install runs `locksql install` with args; nil means runInstall.
+	install func(args []string) int
 	// euid is the effective user id; nil means os.Geteuid.
 	euid func() int
 	// paint colours human-facing output on stdout; the zero value is plain.
@@ -202,7 +204,7 @@ func resolveProfile(e env, name string) (string, error) {
 	}
 	switch len(names) {
 	case 0:
-		return "", usagef("no profile is configured; run `locksql` (or `locksql add`) to add one, or, in a project, add one to .locksql/config.toml")
+		return "", usagef("no profile is configured; add a profile to .locksql/config.toml")
 	case 1:
 		return names[0], nil
 	}
