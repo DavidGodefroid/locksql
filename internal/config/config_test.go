@@ -286,3 +286,56 @@ func TestUserConfigPath(t *testing.T) {
 		t.Fatalf("UserConfigPath = %q, %v", p, err)
 	}
 }
+
+func TestIsLoopback(t *testing.T) {
+	for host, want := range map[string]bool{
+		"localhost": true, "127.0.0.1": true, "127.8.9.1": true, "::1": true,
+		"LOCALHOST": true, "localhost.example.com": false, "db.internal": false,
+		"10.0.0.1": false, "/var/run/mysqld/mysqld.sock": false, "": false,
+	} {
+		if got := IsLoopback(host); got != want {
+			t.Errorf("IsLoopback(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
+func TestTLSDefaultsAndValidation(t *testing.T) {
+	parse := func(name, body string) (Profile, error) {
+		ps, err := ParseProfiles([]byte("[profiles."+name+"]\n"+body), "t.toml", t.TempDir())
+		return ps[name], err
+	}
+	cases := []struct {
+		name, body, wantTLS, wantErr string
+	}{
+		{"remote default", `engine="postgres"` + "\nhost=\"db.example\"", TLSVerifyFull, ""},
+		{"loopback default", `engine="postgres"` + "\nhost=\"127.0.0.1\"", TLSPrefer, ""},
+		{"socket default", `engine="mysql"` + "\nhost=\"/run/mysqld.sock\"", TLSPrefer, ""},
+		{"explicit require", `engine="mysql"` + "\nhost=\"db\"\ntls=\"require\"", TLSRequire, ""},
+		{"unknown mode", `engine="mysql"` + "\nhost=\"db\"\ntls=\"strict\"", "", "unknown tls mode"},
+		{"ca with prefer", `engine="mysql"` + "\nhost=\"db\"\ntls=\"prefer\"\ntls_ca=\"/ca.pem\"", "", "tls_ca needs tls = \"require\""},
+		{"socket verify", `engine="mysql"` + "\nhost=\"/run/m.sock\"\ntls=\"verify-full\"", "", "Unix socket"},
+		{"sqlite tls", `engine="sqlite"` + "\npath=\"x.db\"\ntls=\"require\"", "", "not used by sqlite"},
+		{"production prefer remote", `engine="postgres"` + "\nhost=\"db\"\nproduction=true\ntls=\"prefer\"", "", "production profile"},
+		{"production prefer loopback", `engine="postgres"` + "\nhost=\"localhost\"\nproduction=true\ntls=\"prefer\"", TLSPrefer, ""},
+	}
+	for _, c := range cases {
+		name := "p"
+		if strings.HasPrefix(c.name, "production") {
+			name = "prod" // a production profile name needs 2 characters or more
+		}
+		p, err := parse(name, c.body)
+		if c.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("%s: err = %v, want %q", c.name, err, c.wantErr)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if p.TLS != c.wantTLS {
+			t.Errorf("%s: TLS = %q, want %q", c.name, p.TLS, c.wantTLS)
+		}
+	}
+}

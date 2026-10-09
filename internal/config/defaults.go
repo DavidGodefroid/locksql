@@ -1,6 +1,9 @@
 package config
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Supported engines.
 const (
@@ -67,6 +70,12 @@ func DefaultLimits(production bool) Limits {
 func applyDefaults(p *Profile, detectorsSet bool) {
 	if p.Credentials == "" {
 		p.Credentials = CredentialsAsk
+	}
+	if p.TLS == "" && p.Engine != EngineSQLite {
+		p.TLS = TLSVerifyFull
+		if strings.HasPrefix(p.Host, "/") || IsLoopback(p.Host) {
+			p.TLS = TLSPrefer
+		}
 	}
 	if p.Port == 0 {
 		p.Port = defaultPorts[p.Engine]
