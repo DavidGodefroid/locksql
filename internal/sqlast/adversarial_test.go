@@ -324,21 +324,16 @@ func TestAdvSelfComparison(t *testing.T) {
 
 // Size functions allocate their result per cell: an unbounded length
 // passes the EXPLAIN gate with a constant-cost plan and exhausts memory.
+// Nesting them, or feeding them to a replacement, multiplies the sizes.
 func TestAdvSizeFunctionCap(t *testing.T) {
-	const msg = ": the length argument must be an integer literal at most 65536"
 	shapes := func(call string) []string {
-		return []string{
-			strings.ReplaceAll(call, "N", "1073741823"),
-			strings.ReplaceAll(call, "N", "65537"),
-			strings.ReplaceAll(call, "N", "-1"),
-			strings.ReplaceAll(call, "N", "id"),
-			strings.ReplaceAll(call, "N", "10 * 10"),
-			strings.ReplaceAll(call, "N", "1.5"),
-			strings.ReplaceAll(call, "N", "'10'"),
-			strings.ReplaceAll(call, "N", "(SELECT 10)"),
+		var out []string
+		for _, n := range []string{"1073741823", "65537", "-1", "id", "10 * 10", "1.5", "'10'", "(SELECT 10)", "length(name)"} {
+			out = append(out, strings.ReplaceAll(call, "N", n))
 		}
+		return out
 	}
-	funcs := map[string]string{"repeat": "repeat(name, N)", "lpad": "lpad(name, N, '0')", "rpad": "rpad(name, N, '0')"}
+	funcs := map[string]string{"repeat": "repeat('x', N)", "lpad": "lpad(name, N, '0')", "rpad": "rpad(name, N, '0')"}
 	for _, d := range []sqlclass.Dialect{sqlclass.MySQL, sqlclass.Postgres, sqlclass.SQLite} {
 		all := maps.Clone(funcs)
 		switch d {
@@ -351,8 +346,8 @@ func TestAdvSizeFunctionCap(t *testing.T) {
 			for _, expr := range shapes(call) {
 				sql := "SELECT " + expr + " FROM users LIMIT 1"
 				_, err := analyze(t, d, sql)
-				if err == nil || !strings.Contains(err.Error(), name+msg) {
-					t.Errorf("%s %q: got %v, want a length refusal", d, sql, err)
+				if err == nil || !strings.Contains(err.Error(), name+": ") {
+					t.Errorf("%s %q: got %v, want a %s refusal", d, sql, err, name)
 				}
 			}
 			sql := "SELECT " + strings.ReplaceAll(call, "N", "65536") + " FROM users LIMIT 1"
@@ -360,15 +355,56 @@ func TestAdvSizeFunctionCap(t *testing.T) {
 				t.Errorf("%s %q: %v", d, sql, err)
 			}
 		}
-		wantRefused(t, d, "SELECT repeat('x', 1073741823), repeat('y', 1073741823) LIMIT 1")
+		refused := map[string]string{
+			"SELECT repeat('x', 1073741823), repeat('y', 1073741823) LIMIT 1":                   "repeat: the length argument must be an integer literal at most 65536",
+			"SELECT repeat(repeat('x', 65536), 16000) FROM users LIMIT 1":                       "repeat: arguments must be literals or columns",
+			"SELECT lpad(repeat('x', 10), 10, '0') FROM users LIMIT 1":                          "lpad: arguments must be literals or columns",
+			"SELECT lpad(name, 10, lower(name)) FROM users LIMIT 1":                             "lpad: arguments must be literals or columns",
+			"SELECT repeat(name, 10) FROM users LIMIT 1":                                        "repeat: the string argument must be a string literal",
+			"SELECT repeat('ab', 32769) FROM users LIMIT 1":                                     "repeat: the result would exceed 65536 bytes",
+			"SELECT replace(repeat('x', 65536), 'x', repeat('y', 65536)) FROM users LIMIT 1":    "replace: the replacement must be a string literal of at most 1024 bytes",
+			"SELECT replace(name, 'a', repeat('b', 10)) FROM users LIMIT 1":                     "replace: the replacement must be a string literal of at most 1024 bytes",
+			"SELECT replace(name, 'a', name) FROM users LIMIT 1":                                "replace: the replacement must be a string literal of at most 1024 bytes",
+			"SELECT replace(name, 'a', '" + strings.Repeat("b", 1025) + "') FROM users LIMIT 1": "replace: the replacement must be a string literal of at most 1024 bytes",
+			"SELECT replace(repeat('x', 65536), 'x', 'yy') FROM users LIMIT 1":                  "replace: an argument calls REPEAT",
+			"SELECT replace(lower(lpad(name, 100, 'x')), 'x', 'y') FROM users LIMIT 1":          "replace: an argument calls REPEAT",
+			"SELECT replace(replace(name, 'a', 'bbbb'), 'b', 'cccc') FROM users LIMIT 1":        "replace: an argument calls REPEAT",
+			"SELECT replace(name, (SELECT repeat('x', 10)), 'y') FROM users LIMIT 1":            "replace: an argument calls REPEAT",
+		}
+		for sql, msg := range refused {
+			_, err := analyze(t, d, sql)
+			if err == nil || !strings.Contains(err.Error(), msg) {
+				t.Errorf("%s %q: got %v, want %q", d, sql, err, msg)
+			}
+		}
 		for _, sql := range []string{
 			"SELECT lpad(name, 10, '0') FROM users LIMIT 1",
 			"SELECT rpad(name, 0, '0') FROM users LIMIT 1",
 			"SELECT repeat('-', 3) FROM users LIMIT 1",
+			"SELECT repeat('ab', 32768) FROM users LIMIT 1",
+			"SELECT replace(name, 'a', 'b') FROM users LIMIT 1",
+			"SELECT replace(replace(name, '-', ''), ' ', '') FROM users LIMIT 1",
+			"SELECT replace(replace(name, 'a', 'bbbb'), 'b', '') FROM users LIMIT 1",
+			"SELECT concat(repeat('-', 10), name) FROM users LIMIT 1",
 		} {
 			if _, err := analyze(t, d, sql); err != nil {
 				t.Errorf("%s %q: %v", d, sql, err)
 			}
+		}
+	}
+	for _, sql := range []string{
+		"SELECT regexp_replace(name, '', repeat('x', 10)) FROM users LIMIT 1",
+		"SELECT replace(regexp_replace(name, '', 'xx', 'g'), 'x', 'yy') FROM users LIMIT 1",
+		"SELECT translate(name, 'a', name) FROM users LIMIT 1",
+	} {
+		wantRefused(t, sqlclass.Postgres, sql)
+	}
+	for _, sql := range []string{
+		"SELECT regexp_replace(name, 'a', 'b', 'g') FROM users LIMIT 1",
+		"SELECT replace(translate(name, 'ab', 'cd'), 'c', 'e') FROM users LIMIT 1",
+	} {
+		if _, err := analyze(t, sqlclass.Postgres, sql); err != nil {
+			t.Errorf("%q: %v", sql, err)
 		}
 	}
 }

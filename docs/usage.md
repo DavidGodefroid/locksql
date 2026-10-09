@@ -613,13 +613,17 @@ locksql doctor   [--profile P]
 - The parser is fail-closed: syntax it does not know is refused. Functions
   must be in the allowlist (`internal/sqlast/funcs.go`: common string,
   numeric, date and JSON functions, aggregates and window functions;
-  schema-qualified functions are refused). `REPEAT`, `LPAD`, `RPAD`,
-  `SPACE` and `ZEROBLOB` take a literal length of at most 65 536. System
-  schemas and relations (`information_schema`, `pg_catalog`, `mysql`, `performance_schema`, `sys`,
-  SQLite internals) are refused, and so are `pg_stat_statements` and
-  `pg_stat_activity` while mask rules exist (they hold the text of past
-  statements). Every table and column must resolve
-  against the catalog.
+  schema-qualified functions are refused). `REPEAT`, `LPAD`, `RPAD`, `SPACE`
+  and `ZEROBLOB` take a literal length of at most 65 536, and only literals
+  and columns as arguments; `REPEAT` repeats a string literal into at most
+  65 536 bytes. The replacement of `REPLACE`, `REGEXP_REPLACE` and `TRANSLATE`
+  is a string literal of at most 1 024 bytes; their arguments call none of
+  these size functions, and a replacement that grows its input takes no other
+  call that grows it. System schemas and relations (`information_schema`,
+  `pg_catalog`, `mysql`, `performance_schema`, `sys`, SQLite internals) are
+  refused, and so are `pg_stat_statements` and `pg_stat_activity` while mask
+  rules exist (they hold the text of past statements). Every table and column
+  must resolve against the catalog.
 - Every output column is traced to its source columns, so an alias, a CTE or
   a subquery does not hide a PII column: `SELECT e FROM (SELECT email AS e
   FROM users) t LIMIT 5` is masked like `email`.

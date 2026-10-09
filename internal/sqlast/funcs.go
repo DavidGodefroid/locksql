@@ -78,26 +78,113 @@ var dialectFuncs = map[sqlclass.Dialect]set{
 }
 
 // maxSizeArg caps the length argument of the functions that build a value
-// of a given size: the result is allocated per cell, and an EXPLAIN plan
-// does not show its cost.
+// of a given size, and the result of REPEAT, in bytes: the result is
+// allocated per cell, and an EXPLAIN plan does not show its cost.
 const maxSizeArg = 65536
+
+// maxReplacement caps the replacement string of REPLACE, REGEXP_REPLACE and
+// TRANSLATE, in bytes.
+const maxReplacement = 1024
 
 // sizeArg is, per size function, the index of its length argument.
 var sizeArg = map[string]int{"REPEAT": 1, "LPAD": 1, "RPAD": 1, "SPACE": 0, "ZEROBLOB": 0}
 
-// checkSizeArg refuses a size function whose length argument is not an
-// integer literal of at most maxSizeArg.
-func checkSizeArg(f *FuncCall) error {
+// replaceArg is, per replacing function, the index of its replacement.
+var replaceArg = map[string]int{"REPLACE": 2, "REGEXP_REPLACE": 2, "TRANSLATE": 2}
+
+// checkSizeArgs bounds a size function: its arguments are literals or
+// plain columns (no nested call can grow the input), the length is an
+// integer literal of at most maxSizeArg, and REPEAT repeats a string
+// literal into at most maxSizeArg bytes.
+func (an *analyzer) checkSizeArgs(f *FuncCall) error {
 	i, ok := sizeArg[f.Name]
+	if !ok {
+		return nil
+	}
+	name := strings.ToLower(f.Name)
+	for _, a := range f.Args {
+		switch a.(type) {
+		case *Literal, *ColumnRef:
+		default:
+			return refusef("%s: arguments must be literals or columns", name)
+		}
+	}
+	if i >= len(f.Args) {
+		return nil // the engine refuses the call
+	}
+	n, ok := lengthLiteral(f.Args[i])
+	if !ok {
+		return refusef("%s: the length argument must be an integer literal at most %d", name, maxSizeArg)
+	}
+	if f.Name == "REPEAT" {
+		str, ok := an.stringLiteral(f.Args[0])
+		if !ok {
+			return refuse("repeat: the string argument must be a string literal")
+		}
+		if len(str)*n > maxSizeArg {
+			return refusef("repeat: the result would exceed %d bytes", maxSizeArg)
+		}
+	}
+	return nil
+}
+
+// lengthLiteral is the value of an unsigned integer literal of at most
+// maxSizeArg.
+func lengthLiteral(e Expr) (int, bool) {
+	l, ok := e.(*Literal)
+	if !ok || l.Kind != LitNumber || l.Text == "" || strings.Trim(l.Text, "0123456789") != "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(l.Text)
+	return n, err == nil && n <= maxSizeArg
+}
+
+// stringLiteral is the text of a string literal (escapes are not decoded:
+// the text is at least as long as the value).
+func (an *analyzer) stringLiteral(e Expr) (string, bool) {
+	l, ok := e.(*Literal)
+	if !ok || l.Kind != LitString {
+		return "", false
+	}
+	return StringValue(an.d, l.Text)
+}
+
+// checkReplaceArgs bounds a replacing function: its replacement is a string
+// literal of at most maxReplacement bytes.
+func (an *analyzer) checkReplaceArgs(f *FuncCall) error {
+	i, ok := replaceArg[f.Name]
 	if !ok || i >= len(f.Args) {
 		return nil
 	}
-	if l, ok := f.Args[i].(*Literal); ok && l.Kind == LitNumber && l.Text != "" && strings.Trim(l.Text, "0123456789") == "" {
-		if n, err := strconv.Atoi(l.Text); err == nil && n <= maxSizeArg {
-			return nil
-		}
+	if s, ok := an.stringLiteral(f.Args[i]); !ok || len(s) > maxReplacement {
+		return refusef("%s: the replacement must be a string literal of at most %d bytes", strings.ToLower(f.Name), maxReplacement)
 	}
-	return refusef("%s: the length argument must be an integer literal at most %d", strings.ToLower(f.Name), maxSizeArg)
+	return nil
+}
+
+// grows reports a call whose result may be much larger than its input: a
+// size function, a REGEXP_REPLACE (an empty match inserts the replacement
+// at every position), a REPLACE whose replacement is longer than a plain
+// literal pattern. TRANSLATE maps characters one to one.
+func (an *analyzer) grows(f *FuncCall) bool {
+	switch f.Name {
+	case "REPEAT", "LPAD", "RPAD", "SPACE", "ZEROBLOB", "REGEXP_REPLACE":
+		return true
+	case "REPLACE":
+		if len(f.Args) != 3 {
+			return true
+		}
+		from, ok1 := f.Args[1].(*Literal)
+		to, ok2 := f.Args[2].(*Literal)
+		if !ok1 || !ok2 {
+			return true
+		}
+		fv, ok1 := unquote(an.d, from.Text)
+		tv, ok2 := unquote(an.d, to.Text)
+		// An empty pattern leaves the string unchanged in every dialect.
+		return !ok1 || !ok2 || strings.Contains(fv, "\\") || fv != "" && len(tv) > len(fv)
+	}
+	return false
 }
 
 // funcAllowed reports whether the function name may be called.

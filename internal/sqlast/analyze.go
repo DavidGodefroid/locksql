@@ -213,6 +213,9 @@ type analyzer struct {
 	inRecCTE  int
 	relations map[string]bool
 	uses      map[Use]bool
+	// sizeCalls counts the size function calls, growth the calls whose
+	// result may outgrow their input.
+	sizeCalls, growth int
 }
 
 // Analyze resolves the provenance of every output column of st, checks the
@@ -1186,13 +1189,35 @@ func piiNames(p Prov) string {
 }
 
 // call is the provenance of a function call.
-func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
+func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (p Prov, err error) {
 	if !funcAllowed(an.d, f.Name) {
 		return Prov{}, refusef("function %s is not in the allowlist", strings.ToLower(f.Name))
 	}
-	if err := checkSizeArg(f); err != nil {
+	if err := an.checkSizeArgs(f); err != nil {
 		return Prov{}, err
 	}
+	if err := an.checkReplaceArgs(f); err != nil {
+		return Prov{}, err
+	}
+	// A replacement multiplies the length of its input: none takes a size
+	// function in its arguments, and one that grows takes no call that
+	// grows (see grows), at any depth.
+	sized, grown := an.sizeCalls, an.growth
+	defer func() {
+		if err != nil {
+			return
+		}
+		if _, ok := replaceArg[f.Name]; ok && (an.sizeCalls > sized || an.grows(f) && an.growth > grown) {
+			p, err = Prov{}, refusef("%s: an argument calls REPEAT, LPAD, RPAD, SPACE, ZEROBLOB, or a replacement that grows its input", strings.ToLower(f.Name))
+			return
+		}
+		if _, ok := sizeArg[f.Name]; ok {
+			an.sizeCalls++
+		}
+		if an.grows(f) {
+			an.growth++
+		}
+	}()
 	if f.Over != nil {
 		for _, e := range f.Over.PartitionBy {
 			if err := an.noPIIValue(e, sc, "window PARTITION BY"); err != nil {
