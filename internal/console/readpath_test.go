@@ -300,3 +300,22 @@ func TestNoReferenceForLiteralColumn(t *testing.T) {
 		}
 	}
 }
+
+// The plan of EXPLAIN quotes the statement's literals: with a placeholder
+// it would hand the agent the value behind it.
+func TestExplainWithPlaceholderRefused(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	pr := h.plan(t, "SELECT id, email, note FROM users WHERE id = 1 LIMIT 1", false)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	for _, q := range []string{
+		"EXPLAIN SELECT id FROM users WHERE email = '${r1.1.2}' LIMIT 1",
+		"EXPLAIN SELECT id FROM users WHERE email = '${email}' LIMIT 1",
+	} {
+		resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
+		wantCode(t, resp, ipc.CodeRefused)
+		if !strings.Contains(resp.Error.Message, "EXPLAIN") {
+			t.Errorf("%s: refusal %q", q, resp.Error.Message)
+		}
+	}
+}
