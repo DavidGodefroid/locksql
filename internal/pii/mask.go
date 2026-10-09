@@ -260,26 +260,38 @@ var statsRelations = map[string]bool{
 	"SQLITE_STAT3": true, "SQLITE_STAT4": true,
 }
 
-// statementTextRelations hold the text of past statements, and so the
-// values the console substituted for placeholders and cell references.
-// MySQL and MariaDB keep theirs in system schemas the console's catalog
-// does not list (performance_schema, sys, information_schema).
-var statementTextRelations = map[string]bool{
-	"PG_STAT_STATEMENTS": true, "PG_STAT_ACTIVITY": true,
-}
-
-// StatementTextRelation reports a relation that holds the text of past
-// statements.
-func StatementTextRelation(name string) bool {
-	return statementTextRelations[strings.ToUpper(name)]
+// StatementTextRelation reports whether rel, a relation name as written
+// ("name", "schema.name"), holds the text of past statements, and so the
+// values the console substituted into them. On PostgreSQL these are
+// pg_stat_statements and pg_stat_activity. On MySQL and MariaDB they are
+// information_schema.PROCESSLIST, every performance_schema and sys
+// relation (threads, events_statements_*, session, statement_analysis,
+// x$...), and mysql.general_log and slow_log.
+func StatementTextRelation(d sqlclass.Dialect, rel string) bool {
+	parts := strings.Split(strings.ToUpper(rel), ".")
+	name := parts[len(parts)-1]
+	if name == "PG_STAT_STATEMENTS" || name == "PG_STAT_ACTIVITY" {
+		return true
+	}
+	if d != sqlclass.MySQL {
+		return false
+	}
+	if len(parts) > 1 {
+		switch parts[len(parts)-2] {
+		case "PERFORMANCE_SCHEMA", "SYS":
+			return true
+		}
+	}
+	return name == "PROCESSLIST" || name == "GENERAL_LOG" || name == "SLOW_LOG" ||
+		strings.HasPrefix(name, "EVENTS_STATEMENTS_")
 }
 
 // StatsViolation refuses, while mask rules exist, a statement that names a
 // planner statistics relation (pg_stats, pg_statistic, mysql.column_stats,
 // information_schema.COLUMN_STATISTICS, sqlite_stat4, ...): they hold real
 // values of the columns, rule columns included, which no rule can match.
-// It refuses a statement-text relation (pg_stat_statements, pg_stat_activity)
-// the same way.
+// It refuses a statement-text relation (see StatementTextRelation) the
+// same way.
 func StatsViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
 	if len(r.Mask) == 0 {
 		return nil
@@ -293,8 +305,16 @@ func StatsViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
 		if n := a.name(i); statsRelations[n] {
 			return &sqlclass.Refusal{Reason: fmt.Sprintf("%s holds sample values of table columns, PII columns included, that could not be masked; it cannot be read while PII mask rules exist", strings.ToLower(n))}
 		}
-		if n := a.name(i); statementTextRelations[n] {
-			return &sqlclass.Refusal{Reason: fmt.Sprintf("%s holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist", strings.ToLower(n))}
+		if a.name(i) == "" || a.isPunct(i-1, ".") {
+			continue
+		}
+		// The name as written, with its qualifiers: "schema.name".
+		rel := a.name(i)
+		for j := i; a.isPunct(j+1, ".") && a.name(j+2) != ""; j += 2 {
+			rel += "." + a.name(j+2)
+		}
+		if StatementTextRelation(d, rel) {
+			return &sqlclass.Refusal{Reason: fmt.Sprintf("%s holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist", strings.ToLower(rel))}
 		}
 	}
 	return nil

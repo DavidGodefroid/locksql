@@ -264,10 +264,11 @@ only guide the agent; the console's checks are the guarantee.
   `partial`, `email`. Quasi-identifiers (birth date, postal code, gender) are
   never masked unless you accept them one by one, since masking blocks range
   filters, `LIKE` and `ORDER BY` on the column.
-- **Statement text.** While mask rules exist, `pg_stat_statements` and
-  `pg_stat_activity` are refused, since they hold the text of past statements.
-  The MySQL and MariaDB system schemas (`performance_schema`, `sys`,
-  `information_schema`) are outside the console's catalog and refused.
+- **Statement text.** While mask rules exist, the views that hold the text of
+  past statements are refused, in reads and in writes: `pg_stat_statements`
+  and `pg_stat_activity`; on MySQL and MariaDB,
+  `information_schema.PROCESSLIST`, every `performance_schema` and `sys`
+  relation, `mysql.general_log` and `mysql.slow_log`.
 - **PII usage.** PII columns may be selected, counted, joined with `=` and
   filtered with `=`, `IN (literals)` or `IS NULL`. Expressions over them,
   `LIKE`, ranges and `ORDER BY` are refused. A filter, grouping or aggregate on

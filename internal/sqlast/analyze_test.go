@@ -284,3 +284,29 @@ func TestDialectStarOrder(t *testing.T) {
 		}
 	}
 }
+
+// On PostgreSQL pg_stat_statements is a view in a user schema and
+// pg_stat_activity is reachable unqualified: both are refused on the read
+// path even when the catalog lists them.
+func TestStatementTextViewsRefusedPostgres(t *testing.T) {
+	env := testEnv(true)
+	env.Catalog = fakeCatalog{
+		"public.pg_stat_statements": {"query"},
+		"public.pg_stat_activity":   {"query"},
+	}
+	for _, sql := range []string{
+		"SELECT query FROM pg_stat_statements LIMIT 1",
+		"SELECT query FROM public.pg_stat_statements LIMIT 1",
+		"SELECT query FROM pg_stat_activity LIMIT 1",
+	} {
+		st, err := Parse(sqlclass.Postgres, sql)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", sql, err)
+		}
+		_, err = Analyze(st, env)
+		var r *sqlclass.Refusal
+		if !errors.As(err, &r) {
+			t.Errorf("%q: got %v, want a refusal", sql, err)
+		}
+	}
+}

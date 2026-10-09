@@ -201,8 +201,8 @@ func (s *Server) readPlan(ctx context.Context, sess engine.Session, pl *plan, sq
 	pl.an = an
 	if len(s.rules.Mask) > 0 {
 		for _, rel := range an.Relations {
-			if name := rel[strings.LastIndexByte(rel, '.')+1:]; pii.StatementTextRelation(name) {
-				return name + " holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist", true, nil
+			if pii.StatementTextRelation(s.dialect, rel) {
+				return rel[strings.LastIndexByte(rel, '.')+1:] + " holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist", true, nil
 			}
 		}
 	}
