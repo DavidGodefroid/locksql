@@ -140,3 +140,35 @@ func TestMaskOutputsReferences(t *testing.T) {
 		t.Errorf("cell calls %v", got)
 	}
 }
+
+// A column that may hold a literal of the statement, or that is masked only
+// by the engine-reported origin, gets no reference: the agent could choose
+// the value behind it.
+func TestMaskOutputsNoReferenceForLiteralOrOrigin(t *testing.T) {
+	res := engine.Result{
+		Columns: []engine.ResultColumn{
+			{Label: "email"},
+			{Label: "x", OriginDB: "app", OriginTable: "users", OriginColumn: "email"},
+			{Label: "e"},
+		},
+		Rows: [][]any{{"alice@example.com", "bob@example.com", "carol@example.com"}, {"john@x.com", "john@x.com", "dave@example.com"}},
+	}
+	outs := []sqlast.Output{
+		{Label: "EMAIL", Mask: ModeRedact, Prov: sqlast.Prov{Kind: sqlast.KindIdentity, Lit: true}},
+		{Label: "X"},
+		{Label: "E", Mask: ModeRedact, Prov: sqlast.Prov{Kind: sqlast.KindIdentity}},
+	}
+	r := Rules{Mask: []string{"app.users.email"}}
+	cell := func(row, col int, v any) string { return fmt.Sprintf("r1.%d.%d", row+1, col+1) }
+	if err := MaskOutputs(&res, outs, r, nil, cell, true); err != nil {
+		t.Fatal(err)
+	}
+	for ri, row := range res.Rows {
+		if row[0] != Redacted || row[1] != Redacted {
+			t.Errorf("row %d: literal or origin-masked column got a reference: %v", ri, row)
+		}
+		if row[2] != RedactedRef(fmt.Sprintf("r1.%d.3", ri+1)) {
+			t.Errorf("row %d: plain column lost its reference: %v", ri, row)
+		}
+	}
+}

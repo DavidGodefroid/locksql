@@ -536,7 +536,9 @@ The rules:
 - The console keeps the clear values of the last results in memory only, at
   most 50 results and 16 MiB; the oldest are forgotten, and a reference to one
   is refused as `unknown reference rN.R.C`. Cells masked in `partial` or `email`
-  mode, or by a detector, carry no reference.
+  mode, or by a detector, carry no reference; neither does a column that may
+  hold a literal of the statement (`SELECT email ... UNION ALL SELECT 'x'`), on
+  any row, since the agent chose that value.
 - Placeholders work only as the literal side of such a comparison in `WHERE`
   or `HAVING` (not in a `JOIN` condition), on a masked statement (not `--unmask`); anywhere else the
   statement is refused (`a placeholder may only be compared with a PII column`),
@@ -595,7 +597,8 @@ finds the project's consoles.
   `<redacted>` when the console cannot hold the cell), `partial` keeps the
   first character and the length (`a***(17)`), `email` keeps the first
   character and the domain (`a***@example.com`). `partial`, `email` and
-  detector-masked cells carry no reference. Several rules with different modes on one
+  detector-masked cells carry no reference, nor does a column that may hold a
+  literal of the statement (a `UNION` with a constant, say). Several rules with different modes on one
   column give `redact`. Masked binary cells in `partial` mode
   become `<masked bytes:N>`.
 - A result whose column count or labels differ from the analysis is dropped,

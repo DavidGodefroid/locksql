@@ -281,3 +281,22 @@ func TestReferenceRoundTrip(t *testing.T) {
 		t.Error("the value reached the audit log")
 	}
 }
+
+// A column that may hold a literal the agent wrote gets no reference on any
+// row: a reference to it would be a lookup of a chosen value without the
+// k-anonymity check.
+func TestNoReferenceForLiteralColumn(t *testing.T) {
+	for _, op := range []string{"UNION ALL", "INTERSECT"} {
+		h := newHarness(t, uatProfile())
+		h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"alice@example.com"}, {"john@x.com"}}}
+		pr := h.plan(t, "SELECT email FROM users "+op+" SELECT 'john@x.com' LIMIT 50", false)
+		h.io.answers = []string{"y"}
+		var rr ipc.RunResult
+		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+		for _, row := range rr.Rows {
+			if row[0] != "<redacted>" {
+				t.Errorf("%s: row %v", op, row)
+			}
+		}
+	}
+}

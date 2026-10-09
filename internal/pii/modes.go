@@ -53,7 +53,11 @@ func RedactedRef(name string) string { return "<redacted:" + name + ">" }
 // cells go through the detectors.
 //
 // cell, when not nil, stores the value of a cell masked in mode redact and
-// returns its reference name, or "" for none.
+// returns its reference name, or "" for none. It is called only for a column
+// the analysis masks and whose values cannot be literals of the statement: a
+// reference to a value the agent chose (a UNION with a constant, say) would
+// let it look up one row without the k-anonymity check. A column masked by
+// its engine-reported origin alone gets plain <redacted> too.
 //
 // The result must have exactly the analysed columns, and the columns the
 // analysis expects by name (plain references, aliases, star expansions)
@@ -64,12 +68,14 @@ func MaskOutputs(res *engine.Result, outs []sqlast.Output, r Rules, ds []Detecto
 		return fmt.Errorf("the result has %d columns where the statement was analysed with %d", len(res.Columns), len(outs))
 	}
 	modes := make([]string, len(outs))
+	refs := make([]bool, len(outs))
 	for i, c := range res.Columns {
 		o := outs[i]
 		if o.Label != "" && fold(o.Label) != fold(c.Label) {
 			return fmt.Errorf("result column %d is labelled %q where %q was expected", i+1, c.Label, strings.ToLower(o.Label))
 		}
 		modes[i] = o.Mask
+		refs[i] = o.Mask == ModeRedact && !o.Prov.Lit
 		if modes[i] == "" && origin && c.HasOrigin() {
 			if m, ok := r.Mode(c.OriginDB, c.OriginTable, c.OriginColumn); ok {
 				modes[i] = m
@@ -82,7 +88,7 @@ func MaskOutputs(res *engine.Result, outs []sqlast.Output, r Rules, ds []Detecto
 				continue
 			}
 			if modes[i] != "" {
-				if modes[i] == ModeRedact && cell != nil {
+				if refs[i] && cell != nil {
 					if name := cell(ri, i, v); name != "" {
 						row[i] = RedactedRef(name)
 						continue
