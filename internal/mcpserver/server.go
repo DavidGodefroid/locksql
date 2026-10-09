@@ -138,7 +138,7 @@ type (
 		Profile string `json:"profile,omitempty" jsonschema:"Profile name from the locksql config. Optional when the server was started with --profile or exactly one profile is configured."`
 		DB      string `json:"db,omitempty" jsonschema:"Database. Defaults to the profile's database."`
 		SQL     string `json:"sql" jsonschema:"Exactly one SELECT, WITH ... SELECT or EXPLAIN SELECT (or a write if the tier allows). A SELECT needs a LIMIT. PII columns only plainly, counted/aggregated, joined with = or filtered with =, IN or IS NULL against literals. PII columns may be compared with placeholders '${name}' (typed by the human) or '${rN.R.C}' (a redacted cell). No bind parameters, no statement chaining."`
-		Unmask  bool   `json:"unmask,omitempty" jsonschema:"Ask the human to approve unmasked PII output. Only when the user explicitly needs the raw values."`
+		Unmask  bool   `json:"unmask,omitempty" jsonschema:"Ask the human to approve unmasked PII output. Only when the user explicitly needs the raw values. Refused unless the human started the console with --allow-unmask (see locksql_status)."`
 	}
 	RunIn struct {
 		Profile string `json:"profile,omitempty" jsonschema:"Profile name from the locksql config. Optional when the server was started with --profile or exactly one profile is configured."`

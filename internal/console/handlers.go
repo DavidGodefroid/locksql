@@ -110,6 +110,7 @@ func (s *Server) status() ipc.StatusResult {
 		HostConfirmed:   true, // the host is part of the approved policy
 		Production:      s.profile.Production,
 		SkipPermissions: s.autoApprove(),
+		AllowUnmask:     s.cfg.AllowUnmask,
 		Tier:            s.profile.Tier.String(),
 		Databases:       nonNil(s.cfg.Databases),
 		Limits:          s.profile.Limits,
@@ -307,6 +308,9 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		return *r
 	}
 	auditSQL := capSQL(p.SQL)
+	if p.Unmask && !s.cfg.AllowUnmask {
+		return s.refuse(req.ID, db, auditSQL, "", "", "unmasked output is off in this console: run the query masked, or ask the human to restart the console with --allow-unmask")
+	}
 	inner, explain := splitExplain(s.dialect, p.SQL)
 	st, err := sqlclass.Classify(s.dialect, inner, s.profile.Limits.MaxRows)
 	if err != nil {

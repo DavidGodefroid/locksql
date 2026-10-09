@@ -449,6 +449,8 @@ func TestProductionNeedsProfileName(t *testing.T) {
 
 func skip(c *ServerConfig) { c.SkipPermissions = true }
 
+func allowUnmask(c *ServerConfig) { c.AllowUnmask = true }
+
 func TestSkipPermissions(t *testing.T) {
 	t.Run("auto on uat", func(t *testing.T) {
 		h := newHarness(t, uatProfile(), skip)
@@ -478,7 +480,7 @@ func TestSkipPermissions(t *testing.T) {
 		}
 	})
 	t.Run("prompts on unmask", func(t *testing.T) {
-		h := newHarness(t, uatProfile(), skip)
+		h := newHarness(t, uatProfile(), skip, allowUnmask)
 		pr := h.plan(t, selectUsers, true)
 		if !pr.Unmask {
 			t.Fatal("unmask flag lost")
@@ -845,7 +847,7 @@ func TestClientGoneDuringApproval(t *testing.T) {
 // masking on, it must reach neither the client nor the audit log.
 func TestRunErrorTextIsRedacted(t *testing.T) {
 	// EXTRACTVALUE is outside the function allowlist.
-	h := newHarness(t, uatProfile())
+	h := newHarness(t, uatProfile(), allowUnmask)
 	wantCode(t, h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app",
 		SQL: "SELECT 1 FROM users WHERE EXTRACTVALUE(1, CONCAT(0x7e, email)) LIMIT 1"}), ipc.CodeRefused)
 
@@ -930,5 +932,38 @@ func TestPIIAddKeepsMaskModes(t *testing.T) {
 	h.ok(t, ipc.MethodPIIAdd, ipc.PIIAddParams{Pattern: "app.users.phone"}, nil)
 	if got := h.s.approved.PIIModes["app.users.email"]; got != "partial" {
 		t.Fatalf("mode lost after pii add: %v", h.s.approved.PIIModes)
+	}
+}
+
+// Unmasked output is off unless the human started the console with
+// --allow-unmask: the agent cannot turn it on by itself.
+func TestUnmaskOffByDefault(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Unmask: true})
+	wantCode(t, resp, ipc.CodeRefused)
+	if !strings.Contains(resp.Error.Message, "--allow-unmask") {
+		t.Errorf("refusal does not name the option: %q", resp.Error.Message)
+	}
+	if h.io.promptCount() != 0 || h.sess.runCount() != 0 {
+		t.Fatal("refused unmask request prompted or ran")
+	}
+	if !strings.Contains(h.auditLog(t), "--allow-unmask") {
+		t.Error("refused unmask request not audited")
+	}
+	var st ipc.StatusResult
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if st.AllowUnmask {
+		t.Error("status reports unmask allowed")
+	}
+	// A masked plan still works.
+	h.plan(t, selectUsers, false)
+
+	h = newHarness(t, uatProfile(), allowUnmask)
+	if pr := h.plan(t, selectUsers, true); !pr.Unmask {
+		t.Fatal("unmask flag lost with --allow-unmask")
+	}
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if !st.AllowUnmask {
+		t.Error("status does not report unmask allowed")
 	}
 }

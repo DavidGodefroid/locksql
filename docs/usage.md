@@ -298,7 +298,7 @@ each; the exit code is 1 when any check fails.
 In a terminal you keep in view, in the `locksql` session:
 
 ```sh
-locksql console [--profile dev] [--project DIR] [--skip-permissions]
+locksql console [--profile dev] [--project DIR] [--skip-permissions] [--allow-unmask]
 ```
 
 Without `--profile` the console uses the only profile, or asks which one when
@@ -514,9 +514,12 @@ PII columns (columns under a mask rule) may be used as follows:
   `FROM`, `WHERE`, `GROUP BY` and `HAVING` text. Fewer than `k_anonymity`
   rows in any count, or in the smallest group, refuses the statement.
 - `EXPLAIN` of a statement that filters, groups or aggregates PII is refused.
-- Ask for unmasked values with `--unmask`: the PII usage rules and the
-  k-anonymity checks no longer apply, the approval screen shows
-  `PII: UNMASKED` in red, and it is never auto-approved.
+- Ask for unmasked values with `--unmask`. It is off by default: the console
+  refuses the request unless the human started it with
+  `locksql console --allow-unmask` (`locksql status` shows `unmask allowed`
+  or `off`). When allowed, the PII usage rules and the k-anonymity checks no
+  longer apply, the approval screen shows `PII: UNMASKED` in red, and it is
+  never auto-approved.
 - At tiers above `read`, a write's `RETURNING` list (or a data-modifying CTE)
   must not alias or transform a masked column.
 - While mask rules exist, a write may store into a column under a mask rule
