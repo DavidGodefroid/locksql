@@ -243,6 +243,31 @@ func TestSeparatedServiceBareIsConsoleWithoutPrompts(t *testing.T) {
 	}
 }
 
+func TestConsoleWithoutProfileSameUserRefused(t *testing.T) {
+	e, out, home := onboardEnv(t, "codex")
+	if err := os.MkdirAll(filepath.Join(e.cwd, ".locksql"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	conf := "[profiles.a]\nengine = \"sqlite\"\npath = \"a.db\"\n\n[profiles.b]\nengine = \"sqlite\"\npath = \"b.db\"\n"
+	if err := os.WriteFile(filepath.Join(e.cwd, ".locksql", "config.toml"), []byte(conf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runEnv(e, []string{"console"}); code != exitFail {
+		t.Fatalf("code %d\n%s", code, out)
+	}
+	for _, want := range []string{"separate account", "sudo locksql install", "locksql doctor"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out.String(), "Profile") {
+		t.Fatalf("asked for a profile before refusing:\n%s", out)
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 0 {
+		t.Fatalf("wrote %v before refusing", entries)
+	}
+}
+
 func TestSysconfErrorStopsEarly(t *testing.T) {
 	for _, args := range [][]string{nil, {"console"}} {
 		e, out, home := onboardEnv(t, "codex")

@@ -45,6 +45,11 @@ func runConsole(e env, args []string) int {
 		if code, failed := sysFail(e, " console"); failed {
 			return code
 		}
+		sys, _ := sysConfig(e)
+		if err := console.SameUserRefused(sys); err != nil {
+			fmt.Fprintln(e.stderr, "locksql console:", err)
+			return exitFail
+		}
 		wireAgents(e)
 		pe := e
 		if *project != "" {
