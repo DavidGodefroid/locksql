@@ -425,9 +425,6 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	if socket && TLSRank(p.TLS) > TLSRank(TLSPrefer) {
 		return Profile{}, errf("tls %q needs a TCP host; a Unix socket is not encrypted", p.TLS)
 	}
-	if p.TLSCA != "" && TLSRank(p.TLS) < TLSRank(TLSRequire) {
-		return Profile{}, errf("tls_ca needs tls = \"require\", \"verify-ca\" or \"verify-full\"")
-	}
 
 	if r.Tier != "" {
 		t, err := ParseTier(r.Tier)
@@ -491,6 +488,10 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	}
 
 	applyDefaults(&p, detectorsSet)
+	// After the defaults: a remote host without tls is verify-full.
+	if p.TLSCA != "" && TLSRank(p.TLS) < TLSRank(TLSRequire) {
+		return Profile{}, errf("tls_ca needs tls = \"require\", \"verify-ca\" or \"verify-full\"")
+	}
 	if p.Production && TLSRank(p.TLS) < TLSRank(TLSRequire) && !strings.HasPrefix(p.Host, "/") && !IsLoopback(p.Host) {
 		return Profile{}, errf("a production profile on a remote host needs tls = \"require\" or stronger, or an ssh tunnel to the database's own host")
 	}
