@@ -200,7 +200,8 @@ func New(o Options) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "locksql_plan",
 		Description: "Validate one SQL statement and weigh it with EXPLAIN, without running it. Returns a one-shot plan_id (valid 10 minutes), the statement class, " +
-			"the verdict (OK, WARN or REFUSE) and a summary. Show the plan to the user before running it. A REFUSE verdict is final." + guidance,
+			"the verdict (OK, WARN or REFUSE) and a summary. Show the plan to the user before running it. A REFUSE verdict is final. " +
+			"When the statement filters on a PII column the verdict is decided on the console at run time and may still be refused there." + guidance,
 		Annotations: readOnly,
 	}, t.plan)
 	no := false

@@ -26,10 +26,12 @@ import (
 
 // fakeSession is a scripted engine.Session.
 type fakeSession struct {
-	mu       sync.Mutex
-	origin   bool
-	dbs      []string
-	plan     engine.Plan
+	mu     sync.Mutex
+	origin bool
+	dbs    []string
+	plan   engine.Plan
+	// kplan, when set, answers the EXPLAIN of the k-anonymity counts.
+	kplan    *engine.Plan
 	result   engine.Result
 	runErr   error
 	explains []string
@@ -81,6 +83,9 @@ func (f *fakeSession) Explain(_ context.Context, _ string, sql string) (engine.P
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.explains = append(f.explains, sql)
+	if f.kplan != nil && strings.Contains(sql, "COUNT(*)") {
+		return *f.kplan, nil
+	}
 	return f.plan, nil
 }
 func (f *fakeSession) Run(_ context.Context, _ string, st sqlclass.Statement, _ int) (engine.Result, error) {

@@ -495,49 +495,76 @@ func TestRecursiveCTENotConvergedRefused(t *testing.T) {
 
 // Under a PII filter the weight verdict is a 1-bit oracle on the planner's
 // statistics: query.plan answers OK with the estimates hidden, and query.run
-// enforces the REFUSE on the console, before any prompt, with a generic
-// answer to the client.
+// shows the REFUSE to the human, who presses Enter before the client gets a
+// generic refusal. Neither the main EXPLAIN nor a k-anonymity count's, nor
+// --skip-permissions, makes the answer come without the human.
 func TestWeightVerdictUnderPIIFilterDecidedAtRun(t *testing.T) {
-	h := newHarness(t, uatProfile())
-	h.sess.plan = heavyPlan()
 	const q = "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1"
-	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
-	if resp.Error != nil {
-		t.Fatalf("plan refused under a PII filter: %q", resp.Error.Message)
-	}
-	var pr ipc.PlanResult
-	if err := json.Unmarshal(resp.Result, &pr); err != nil {
-		t.Fatal(err)
-	}
-	if pr.PlanID == "" || pr.Verdict != "OK" || pr.Summary != "estimates hidden: the statement filters on a PII column" || pr.Reasons != nil {
-		t.Fatalf("plan result: %+v", pr)
-	}
-	if strings.Contains(h.auditLog(t), `"event":"refused"`) {
-		t.Error("plan refusal audited under a PII filter")
-	}
-	h.io.answers = []string{"y"}
-	run := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
-	wantCode(t, run, ipc.CodeRefused)
-	if run.Error.Message != "refused by the weight check (the details are shown on the console)" {
-		t.Errorf("run refusal: %q", run.Error.Message)
-	}
-	if h.io.promptCount() != 0 || h.sess.runCount() != 0 {
-		t.Fatal("REFUSE verdict prompted or ran")
-	}
-	for _, s := range []string{string(resp.Result), run.Error.Message} {
-		if strings.Contains(s, "000") || strings.Contains(s, "est.") {
-			t.Errorf("an estimate reaches the client: %s", s)
-		}
-	}
-	if out := h.io.output(); !strings.Contains(out, "50 000 000") {
-		t.Errorf("the console does not show the reasons: %s", out)
-	}
-	if !strings.Contains(h.auditLog(t), `"event":"refused"`) {
-		t.Error("run refusal not audited")
+	heavy := heavyPlan()
+	for _, tc := range []struct {
+		name string
+		opts []hopt
+		set  func(*fakeSession)
+	}{
+		{"main EXPLAIN", nil, func(f *fakeSession) { f.plan = heavyPlan() }},
+		{"k-anonymity count", nil, func(f *fakeSession) { f.kplan = &heavy }},
+		{"skip-permissions", []hopt{skip}, func(f *fakeSession) { f.plan = heavyPlan() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, uatProfile(), tc.opts...)
+			tc.set(h.sess)
+			resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
+			if resp.Error != nil {
+				t.Fatalf("plan refused under a PII filter: %q", resp.Error.Message)
+			}
+			var pr ipc.PlanResult
+			if err := json.Unmarshal(resp.Result, &pr); err != nil {
+				t.Fatal(err)
+			}
+			if pr.PlanID == "" || pr.Verdict != "OK" || pr.Summary != "estimates hidden: the statement filters on a PII column" || pr.Reasons != nil {
+				t.Fatalf("plan result: %+v", pr)
+			}
+			if strings.Contains(h.auditLog(t), `"event":"refused"`) {
+				t.Error("plan refusal audited under a PII filter")
+			}
+			h.io.answers = []string{"y"} // ignored: Enter refuses whatever is typed
+			run := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+			wantCode(t, run, ipc.CodeRefused)
+			if run.Error.Message != "refused by the weight check (the details are shown on the console)" {
+				t.Errorf("run refusal: %q", run.Error.Message)
+			}
+			if h.io.promptCount() != 1 || !strings.Contains(h.io.prompts[0], "Press Enter to refuse") {
+				t.Errorf("prompts %q, want one Press Enter to refuse", h.io.prompts)
+			}
+			if h.sess.runCount() != 0 {
+				t.Fatal("a REFUSE verdict ran")
+			}
+			for _, s := range []string{string(resp.Result), run.Error.Message} {
+				if strings.Contains(s, "000") || strings.Contains(s, "est.") {
+					t.Errorf("an estimate reaches the client: %s", s)
+				}
+			}
+			out := ansi.ReplaceAllString(h.io.output(), "")
+			for _, want := range []string{"verdict REFUSE", "50 000 000", "verdict REFUSE: this statement cannot be approved"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("the console does not show %q: %s", want, out)
+				}
+			}
+			if !strings.Contains(h.auditLog(t), `"event":"refused"`) {
+				t.Error("run refusal not audited")
+			}
+		})
 	}
 
+	// No answer: the approval timeout applies, as for any prompt.
+	h := newHarness(t, uatProfile())
+	h.sess.plan = heavyPlan()
+	pr := h.plan(t, q, false)
+	h.io.timeout = true
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeTimeout)
+
 	// Without a PII filter the verdict is answered at plan time, as before.
-	resp = h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT id FROM users WHERE id = 1 LIMIT 1"})
+	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT id FROM users WHERE id = 1 LIMIT 1"})
 	wantCode(t, resp, ipc.CodeRefused)
 	if !strings.HasPrefix(resp.Error.Message, "weight check") {
 		t.Errorf("plan refusal: %q", resp.Error.Message)

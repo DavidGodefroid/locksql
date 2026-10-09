@@ -33,7 +33,9 @@ directory. Both talk to the same console.
    - `unmask` only if the user asked to see personal data in clear; the console refuses it unless the
      human started it with `--allow-unmask` (`locksql status` shows it). Never retry to get around that.
 5. **Show the user** in chat, before running: target (profile, host, database), the SQL, the EXPLAIN
-   summary and the verdict. Then say: *"Waiting for your approval in the console."*
+   summary and the verdict. Then say: *"Waiting for your approval in the console."* When the
+   statement filters on a PII column the verdict is decided on the console at run time and may still
+   be refused there.
 6. **Run.** `locksql_run` with the plan id, or `locksql run --profile P PLAN_ID` with the Bash tool
    **`timeout: 600000`** (approval can take up to 5 minutes; a short default timeout kills the
    wait). Plans are one-shot and expire after 10 minutes.

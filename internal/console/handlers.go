@@ -282,14 +282,6 @@ func (s *Server) refuseWarned(id int64, pl *plan, class, reason string) ipc.Resp
 	return s.refuseRec(id, audit.Record{Event: audit.EventRefused, DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Error: reason, Warnings: pl.warnings})
 }
 
-// refuseHidden is refuse for a weight refusal under a PII filter: the
-// console and the audit log get the reason, the client a generic answer.
-func (s *Server) refuseHidden(id int64, pl *plan, class, reason string) ipc.Response {
-	s.audit(audit.Record{Event: audit.EventRefused, DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Error: reason})
-	s.println(paint.Fail("refused: " + reason))
-	return errResp(id, ipc.CodeRefused, hiddenWeightRefusal)
-}
-
 func (s *Server) refuseRec(id int64, rec audit.Record) ipc.Response {
 	reason := rec.Error
 	s.audit(rec)
@@ -481,18 +473,22 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	// The limits may have changed since query.plan (a tightening is applied
 	// at once): the verdict shown and enforced is the one under the policy
 	// in force now.
+	hiddenRefusal := ""
 	if pl.explain != nil {
 		reason, refused := s.assess(pl)
 		if !refused {
-			reason, refused = s.assessK(pl)
+			if reason, refused = s.assessK(pl); refused {
+				pl.level = weight.Refuse.String()
+				pl.reasons = append(pl.reasons, reason)
+			}
 		}
 		if refused {
-			if estimatesHidden(pl) {
-				// Decided here, before any prompt: the reasons stay on
-				// the console and in the audit log.
-				return s.refuseHidden(req.ID, pl, class, reason)
+			if !estimatesHidden(pl) {
+				return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, reason)
 			}
-			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, reason)
+			// Under a PII filter an immediate answer would tell the
+			// agent the verdict: the refusal waits for the human.
+			hiddenRefusal = reason
 		}
 	}
 	sess, r := s.session(ctx, req.ID)
@@ -503,6 +499,9 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	rec := audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask, Warnings: pl.warnings}
 
 	s.screen(ctx, pl)
+	if hiddenRefusal != "" {
+		return s.refuseOnScreen(ctx, req.ID, rec, hiddenRefusal)
+	}
 	// The values are asked before the approval, and asked even when the
 	// approval is skipped: nothing runs while a placeholder has none.
 	missing, _ := s.placeholders(pl)
@@ -730,25 +729,49 @@ func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Reco
 	if ok && canRetype && strings.TrimSpace(ans) == "r" {
 		return nil, true
 	}
+	if !ok {
+		return s.unanswered(ctx, id, rec), false
+	}
+	if strings.TrimSpace(ans) != expected {
+		rec.Event, rec.Decision = audit.EventDenied, "denied"
+		s.audit(rec)
+		s.println(paint.Fail("denied"))
+		r := errResp(id, ipc.CodeDenied, "denied by the human; do not retry unless asked")
+		return &r, false
+	}
+	return nil, false
+}
+
+// unanswered audits and answers a prompt left without an answer: the
+// client went away, or the approval timeout passed.
+func (s *Server) unanswered(ctx context.Context, id int64, rec audit.Record) *ipc.Response {
 	var r ipc.Response
-	switch {
-	case !ok && ctx.Err() != nil:
+	if ctx.Err() != nil {
 		rec.Event, rec.Decision = audit.EventAbandoned, "abandoned"
 		s.println(paint.Fail("client gone: request cancelled"))
 		r = errResp(id, ipc.CodeDenied, "the request was cancelled")
-	case !ok:
+	} else {
 		rec.Event, rec.Decision = audit.EventTimeout, "timeout"
 		s.println(paint.Fail("no answer: denied"))
 		r = errResp(id, ipc.CodeTimeout, "no answer from the human within the approval timeout; do not retry unless asked")
-	case strings.TrimSpace(ans) != expected:
-		rec.Event, rec.Decision = audit.EventDenied, "denied"
-		s.println(paint.Fail("denied"))
-		r = errResp(id, ipc.CodeDenied, "denied by the human; do not retry unless asked")
-	default:
-		return nil, false
 	}
 	s.audit(rec)
-	return &r, false
+	return &r
+}
+
+// refuseOnScreen ends the approval screen of a plan refused by the weight
+// check under a PII filter. The agent learns of the refusal only once the
+// human has seen it and pressed Enter, so that answering it tells no more
+// than a denial would; --skip-permissions does not skip this prompt.
+func (s *Server) refuseOnScreen(ctx context.Context, id int64, rec audit.Record, reason string) ipc.Response {
+	s.println(paint.Paint(s.frameColour(), "│ ") + red + "verdict REFUSE: this statement cannot be approved" + reset)
+	if _, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold("Press Enter to refuse ")), ApprovalTimeout); !ok {
+		return *s.unanswered(ctx, id, rec)
+	}
+	rec.Event, rec.Error = audit.EventRefused, reason
+	s.audit(rec)
+	s.println(paint.Fail("refused: " + reason))
+	return errResp(id, ipc.CodeRefused, hiddenWeightRefusal)
 }
 
 // result renders the masked result as capped JSON rows and TSV text.
