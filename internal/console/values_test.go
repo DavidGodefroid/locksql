@@ -289,3 +289,32 @@ func TestPlaceholderInWriteRefused(t *testing.T) {
 	// A plain string that merely holds "${" further in is not a placeholder.
 	h.plan(t, "UPDATE users SET note = 'cost: ${x}' WHERE id = 1", false)
 }
+
+// An approved statement whose run-time analysis fails is still audited,
+// with its warnings, and without the typed value.
+func TestRunTimeAnalysisFailureAudited(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	pr := h.plan(t, "SELECT id, email, note FROM users WHERE email = '${email}' AND note = 'bob@example.com' LIMIT 5", false)
+	h.sess.colsErr = errors.New("catalog read failed for alice@example.com")
+	h.s.catalogCache = nil
+	h.io.secrets, h.io.answers = []string{"alice@example.com"}, []string{"y"}
+	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	if resp.Error == nil {
+		t.Fatal("the run succeeded")
+	}
+	if strings.Contains(resp.Error.Message, "alice@") {
+		t.Errorf("the value reached the client: %q", resp.Error.Message)
+	}
+	if h.sess.runCount() != 0 {
+		t.Fatal("a statement ran")
+	}
+	log := h.auditLog(t)
+	lines := strings.Split(strings.TrimSpace(log), "\n")
+	last := lines[len(lines)-1]
+	if !strings.Contains(last, `"approved"`) || !strings.Contains(last, `"error"`) || !strings.Contains(last, `"warnings"`) {
+		t.Errorf("no audit record of the failed run: %s", last)
+	}
+	if strings.Contains(log, "alice@") {
+		t.Error("the value reached the audit log")
+	}
+}

@@ -40,6 +40,7 @@ type fakeSession struct {
 	count   *engine.Result
 	indexes []engine.IndexDesc
 	cols    []engine.ColumnInfo // appended to the catalog Columns answers
+	colsErr error               // answers the catalog Columns calls
 }
 
 func (f *fakeSession) ServerVersion() string { return "11.4.0-MariaDB" }
@@ -62,6 +63,9 @@ func (f *fakeSession) Describe(_ context.Context, db, table string) (engine.Tabl
 	return engine.TableInfo{DB: db, Table: table, Columns: []engine.ColumnDesc{{Name: "id", Type: "int"}}, Indexes: f.indexes, EstRows: 3}, nil
 }
 func (f *fakeSession) Columns(_ context.Context, db string) ([]engine.ColumnInfo, error) {
+	if f.colsErr != nil {
+		return nil, f.colsErr
+	}
 	var out []engine.ColumnInfo
 	for _, c := range []struct{ t, c string }{
 		{"users", "id"}, {"users", "email"}, {"users", "note"}, {"users", "status"},

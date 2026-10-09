@@ -509,6 +509,9 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		// as the agent wrote it, placeholders included: the audit keeps it.
 		if reason, refused, err := s.analyzeRead(ctx, sess, pl, pl.st.SQL); err != nil || refused {
 			if err != nil {
+				// Approved already: the failure is audited like a run's.
+				rec.Error = s.auditErrText(err, pl)
+				s.audit(rec)
 				return s.failedPlan(req.ID, "plan", err, pl)
 			}
 			return s.refuseWarned(req.ID, pl, class, reason)
