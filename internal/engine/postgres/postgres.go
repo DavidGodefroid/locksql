@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -118,10 +119,7 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte, dial
 		return nil, err
 	}
 	if dial != nil {
-		cfg.DialFunc = pgconn.DialFunc(dial)
-		// The host name is the dialer's to resolve (it may only exist on the
-		// far side of a tunnel): hand it through untouched.
-		cfg.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }
+		useDialer(cfg, dial)
 	}
 	s := &session{cfg: cfg, conns: map[string]*dbConn{}, tier: p.Tier, timeout: p.Limits.StatementTimeout, tlsMode: p.TLS, host: p.Host}
 	dc, err := s.open(ctx, p.Database)
@@ -623,3 +621,36 @@ func value(v []byte, oid uint32) any {
 	}
 	return string(v)
 }
+
+// useDialer routes every connection of cfg through dial. The dialer must
+// honour ctx: pgconn's own connect-timeout dial wrapper no longer applies. The
+// host name is the dialer's to resolve (it may only exist on the far side of a
+// tunnel), so the lookup hands it through untouched.
+func useDialer(cfg *pgx.ConnConfig, dial engine.DialFunc) {
+	cfg.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		nc, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		if network == "unix" {
+			return nc, nil
+		}
+		return &addrConn{Conn: nc, remote: dialledAddr{network, addr}}, nil
+	}
+	cfg.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }
+}
+
+// addrConn reports the address that was dialled as its remote address. pgconn
+// sends a cancel request to the RemoteAddr of the connection, and a tunnelled
+// connection reports a zero one.
+type addrConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c *addrConn) RemoteAddr() net.Addr { return c.remote }
+
+type dialledAddr struct{ network, addr string }
+
+func (a dialledAddr) Network() string { return a.network }
+func (a dialledAddr) String() string  { return a.addr }
