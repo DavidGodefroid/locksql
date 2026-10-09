@@ -155,7 +155,7 @@ func TestConcurrentWritesStayWholeLines(t *testing.T) {
 func TestRecordFieldSet(t *testing.T) {
 	want := []string{
 		"affected", "class", "db", "db_user", "decision", "duration_ms", "engine", "error",
-		"event", "host", "profile", "rows", "sql", "truncated", "ts", "unmasked", "verdict", "warnings",
+		"event", "host", "profile", "rows", "sql", "ssh_host", "ssh_host_key", "truncated", "ts", "unmasked", "verdict", "warnings",
 	}
 	l, err := Open(t.TempDir())
 	if err != nil {
@@ -165,6 +165,7 @@ func TestRecordFieldSet(t *testing.T) {
 		Event: EventApproved, Profile: "p", Engine: "mysql", Host: "h", DB: "d", DBUser: "u",
 		Class: "read", SQL: "s", Verdict: "OK", Decision: "y", Error: "e",
 		Rows: 1, Affected: 2, DurationMS: 3, Truncated: true, Unmasked: true, Warnings: []string{"w"},
+		SSHHost: "b", SSHHostKey: "SHA256:k",
 	}
 	if err := l.Write(full); err != nil {
 		t.Fatal(err)
