@@ -337,3 +337,29 @@ func agentSock(t *testing.T) string {
 	}()
 	return sock
 }
+
+func TestAuthFailuresAreErrAuth(t *testing.T) {
+	s := newTestServer(t, &ssh.ServerConfig{PasswordCallback: func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) {
+		return nil, errors.New("no")
+	}})
+	_, err := Open(t.Context(), Options{Profile: sshProfile(s, config.SSHAuthPassword, ""), HostKey: trust(s),
+		Secret: func(string) ([]byte, error) { return []byte("wrong"), nil }})
+	if !errors.Is(err, ErrAuth) || !strings.Contains(err.Error(), "authentication to deploy@") {
+		t.Errorf("refused password: err = %v", err)
+	}
+
+	path, pub := writeKey(t, t.TempDir(), "open sesame", 0o600)
+	ks := newTestServer(t, acceptKey(pub))
+	_, err = Open(t.Context(), Options{Profile: sshProfile(ks, config.SSHAuthKey, path), HostKey: trust(ks),
+		Secret: func(string) ([]byte, error) { return []byte("wrong"), nil }})
+	if !errors.Is(err, ErrAuth) || !strings.Contains(err.Error(), "passphrase is incorrect") {
+		t.Errorf("wrong passphrase: err = %v", err)
+	}
+
+	cb, _ := KnownHosts(filepath.Join(t.TempDir(), "known_hosts"), func(string, string, string) bool { return false })
+	_, err = Open(t.Context(), Options{Profile: sshProfile(ks, config.SSHAuthKey, path), HostKey: cb,
+		Secret: func(string) ([]byte, error) { return []byte("open sesame"), nil }})
+	if err == nil || errors.Is(err, ErrAuth) {
+		t.Errorf("refused host key: err = %v", err)
+	}
+}

@@ -25,8 +25,17 @@ func hostKeyAnswerOK(production bool, fingerprint, answer string) bool {
 	return answer == "yes"
 }
 
+// retryKeychainSSHSecret reports whether a failed Open should be retried
+// with an asked secret: only when Open was handed the keychain secret
+// (used) and the bastion refused it or it did not decrypt the key.
+func retryKeychainSSHSecret(err error, used bool) bool {
+	return used && errors.Is(err, tunnel.ErrAuth)
+}
+
 // openTunnel opens the SSH tunnel of p, asking for its secret by p.SSH's
-// credentials mode and for any unknown host key.
+// credentials mode and for any unknown host key. Open runs under ctx
+// itself, with no deadline of the console's: it bounds its own network
+// phases and lifts them while the human answers a prompt.
 func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tunnel, error) {
 	s := *p.SSH
 	home, err := os.UserHomeDir()
@@ -34,6 +43,9 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 		return nil, fmt.Errorf("console: ssh: %w", err)
 	}
 	khPath := tunnel.KnownHostsPath(home)
+	// added is the fingerprint the human trusted; it is audited once Open
+	// succeeded, as the known_hosts write follows confirm.
+	var added string
 	confirm := func(host, keyType, fp string) bool {
 		st.io.Println(paint.Warn(fmt.Sprintf("The authenticity of %s can't be established.", safeText(host, false))))
 		st.io.Println(fmt.Sprintf("%s key fingerprint is %s", safeText(keyType, false), fp))
@@ -45,7 +57,7 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 		if !ok || !hostKeyAnswerOK(p.Production, fp, ans) {
 			return false
 		}
-		st.audit(audit.Record{Event: audit.EventLogin, Decision: "hostkey-added", SSHHost: s.Host, SSHHostKey: fp})
+		added = fp
 		return true
 	}
 	hk, err := tunnel.KnownHosts(khPath, confirm)
@@ -87,22 +99,20 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 	}
 	o := tunnel.Options{Profile: s, Home: home, HostKey: hk, HostKeyAlgorithms: algs, Secret: secret,
 		AgentSock: os.Getenv("SSH_AUTH_SOCK")}
-	open := func() (*tunnel.Tunnel, error) {
-		cctx, cancel := context.WithTimeout(ctx, connectTimeout)
-		defer cancel()
-		return tunnel.Open(cctx, o)
-	}
-	t, err := open()
+	t, err := tunnel.Open(ctx, o)
 	savePrompt := "Save the SSH secret in the OS keychain? [y/N] "
-	if err != nil && usedKeychain && ctx.Err() == nil && !errors.Is(err, tunnel.ErrHostKeyChanged) {
+	if err != nil && retryKeychainSSHSecret(err, usedKeychain) {
 		st.io.Println("connecting with the keychain SSH secret failed: " + secrets.Sanitize(err, fromKeychain))
 		secrets.Wipe(fromKeychain)
 		fromKeychain = nil
 		savePrompt = "Replace the SSH secret stored in the OS keychain? [y/N] "
-		t, err = open()
+		t, err = tunnel.Open(ctx, o)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("console: %s", secrets.Sanitize(err, fromKeychain, asked))
+	}
+	if added != "" {
+		st.audit(audit.Record{Event: audit.EventLogin, Decision: "hostkey-added", SSHHost: s.Host, SSHHostKey: added})
 	}
 	if keychain && asked != nil {
 		st.offerSaveAs(ctx, keychainHost, asked, savePrompt)

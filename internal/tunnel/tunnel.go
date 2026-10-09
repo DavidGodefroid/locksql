@@ -24,6 +24,17 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/secrets"
 )
 
+// ErrAuth marks an authentication failure: the bastion refused the
+// credentials, or the key passphrase is wrong.
+var ErrAuth = errors.New("ssh: authentication failed")
+
+// authError is an authentication failure with its own message; it matches
+// ErrAuth.
+type authError struct{ msg string }
+
+func (e *authError) Error() string        { return e.msg }
+func (e *authError) Is(target error) bool { return target == ErrAuth }
+
 // connectTimeout bounds each non-interactive phase of the connection; a
 // variable so that tests can shorten it.
 var connectTimeout = 15 * time.Second
@@ -127,7 +138,7 @@ func Open(ctx context.Context, o Options) (*Tunnel, error) {
 		}
 		// The client reports a refused authentication only as text.
 		if strings.Contains(err.Error(), "unable to authenticate") {
-			return nil, fmt.Errorf("ssh: authentication to %s@%s failed (%s)", p.User, p.Host, p.Auth)
+			return nil, &authError{fmt.Sprintf("ssh: authentication to %s@%s failed (%s)", p.User, p.Host, p.Auth)}
 		}
 		return nil, fmt.Errorf("ssh: %s: %w", addr, err)
 	}
@@ -233,7 +244,7 @@ func loadKey(o Options) (ssh.Signer, error) {
 	defer secrets.Wipe(pass)
 	signer, err = ssh.ParsePrivateKeyWithPassphrase(pem, pass)
 	if err != nil {
-		return nil, fmt.Errorf("ssh.key: %s: the passphrase is incorrect or the key is unreadable", path)
+		return nil, &authError{fmt.Sprintf("ssh.key: %s: the passphrase is incorrect or the key is unreadable", path)}
 	}
 	return signer, nil
 }
