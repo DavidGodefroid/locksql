@@ -333,7 +333,8 @@ holds a secret: keys named like `password`, `passwd`, `pwd`, `secret` or
 > **Breaking change.** A remote profile with no `tls` setting now verifies
 > the server certificate (`tls = "verify-full"`). A server with a private CA
 > needs `tls_ca`; to keep encryption without verification, set
-> `tls = "require"`.
+> `tls = "require"`. Until then its connection fails with an error that
+> names both settings.
 
 ```toml
 [profiles.uat]

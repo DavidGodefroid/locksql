@@ -197,7 +197,7 @@ func (s *session) open(ctx context.Context, db string) (*dbConn, error) {
 	defer cancel()
 	conn, err := pgx.ConnectConfig(cctx, cfg)
 	if err != nil {
-		return nil, connectError(err, s.cfg.Password)
+		return nil, connectError(err, s.cfg.Password, s.transport.Mode)
 	}
 	var stmts []string
 	if s.tier == config.TierRead {
@@ -219,14 +219,14 @@ func (s *session) open(ctx context.Context, db string) (*dbConn, error) {
 }
 
 // connectError keeps the server's reason and drops anything that could
-// echo the secret.
-func connectError(err error, pw string) error {
+// echo the secret. A certificate that did not verify gets the way out.
+func connectError(err error, pw, mode string) error {
 	msg := err.Error()
 	var pe *pgconn.PgError
 	if errors.As(err, &pe) {
 		msg = fmt.Sprintf("%s %s: %s", pe.Severity, pe.Code, pe.Message)
 	}
-	return fmt.Errorf("postgres: connect: %s", redact(msg, pw))
+	return fmt.Errorf("postgres: connect: %s%s", redact(msg, pw), engine.TLSVerifyHint(err, mode))
 }
 
 // pgMessage is the server's error without its DETAIL (which can quote row

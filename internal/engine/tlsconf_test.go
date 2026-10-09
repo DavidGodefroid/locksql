@@ -8,6 +8,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"os"
@@ -130,5 +132,29 @@ func TestTLSConfigBadCA(t *testing.T) {
 	}
 	if _, err := TLSConfig(config.Profile{Host: "db", TLS: config.TLSVerifyFull, TLSCA: "/nonexistent.pem"}); err == nil {
 		t.Error("missing tls_ca accepted")
+	}
+}
+
+func TestTLSVerifyHint(t *testing.T) {
+	_, otherCA := testCA(t, "db.example")
+	cfg, err := TLSConfig(config.Profile{Engine: config.EnginePostgres, Host: "db.example", TLS: config.TLSVerifyFull})
+	if err != nil {
+		t.Fatal(err)
+	}
+	herr := handshake(t, cfg, otherCA)
+	if herr == nil {
+		t.Fatal("handshake with an unknown CA succeeded")
+	}
+	want := ` (tls = "verify-full": set tls_ca to the server's CA, or tls = "require" to encrypt without verifying)`
+	if got := TLSVerifyHint(fmt.Errorf("connect: %w", herr), config.TLSVerifyFull); got != want {
+		t.Errorf("hint = %q, want %q", got, want)
+	}
+	for _, err := range []error{x509.HostnameError{}, x509.CertificateInvalidError{}, x509.UnknownAuthorityError{}} {
+		if TLSVerifyHint(err, config.TLSVerifyCA) == "" {
+			t.Errorf("%T: no hint", err)
+		}
+	}
+	if got := TLSVerifyHint(errors.New("password authentication failed"), config.TLSVerifyFull); got != "" {
+		t.Errorf("hint of another error = %q", got)
 	}
 }

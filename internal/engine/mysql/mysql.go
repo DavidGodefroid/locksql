@@ -106,12 +106,12 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte, dial
 		conn, err = dial(ctx, addr, p.User, pw, p.Database, 0, nil, dialFn)
 	}
 	if err != nil {
-		return nil, connectError(err, pw)
+		return nil, connectError(err, pw, p.TLS)
 	}
 	ctl, err := dial(ctx, addr, p.User, pw, "", killTimeout, tlsCfg, dialFn)
 	if err != nil {
 		conn.Close()
-		return nil, connectError(err, pw)
+		return nil, connectError(err, pw, p.TLS)
 	}
 	s := &session{
 		conn: conn, connID: conn.GetConnectionID(), ctl: ctl, engine: p.Engine,
@@ -331,8 +331,8 @@ func noServerTLS(err error) bool {
 }
 
 // connectError keeps the server's reason and drops anything that could
-// echo the secret.
-func connectError(err error, pw string) error {
+// echo the secret. A certificate that did not verify gets the way out.
+func connectError(err error, pw, mode string) error {
 	msg := err.Error()
 	var me *gomysql.MyError
 	if errors.As(err, &me) {
@@ -341,7 +341,7 @@ func connectError(err error, pw string) error {
 	if pw != "" {
 		msg = strings.ReplaceAll(msg, pw, "***")
 	}
-	return fmt.Errorf("mysql: connect: %s", msg)
+	return fmt.Errorf("mysql: connect: %s%s", msg, engine.TLSVerifyHint(err, mode))
 }
 
 func (s *session) setup() error {
