@@ -363,3 +363,39 @@ func TestAuthFailuresAreErrAuth(t *testing.T) {
 		t.Errorf("refused host key: err = %v", err)
 	}
 }
+
+// The drivers bound their handshakes and reads with deadlines, which an
+// SSH channel does not support on its own.
+func TestDialedConnHonoursDeadlines(t *testing.T) {
+	path, pub := writeKey(t, t.TempDir(), "", 0o600)
+	s := newTestServer(t, acceptKey(pub))
+	tun, err := Open(context.Background(), Options{Profile: sshProfile(s, config.SSHAuthKey, path), HostKey: trust(s)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tun.Close()
+	c, err := tun.Dial(context.Background(), "tcp", echoServer(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.SetDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatalf("SetDeadline: %v", err)
+	}
+	var ne net.Error
+	if _, err := c.Read(make([]byte, 1)); !errors.As(err, &ne) || !ne.Timeout() {
+		t.Fatalf("read past the deadline = %v, want a timeout", err)
+	}
+	if err := c.SetDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	c.Write([]byte("ping"))
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(c, buf); err != nil || string(buf) != "ping" {
+		t.Fatalf("echo after a timeout = %q, %v", buf, err)
+	}
+	tun.Close()
+	if _, err := c.Read(buf); err == nil {
+		t.Error("read on a closed tunnel succeeded")
+	}
+}

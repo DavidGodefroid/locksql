@@ -157,6 +157,32 @@ Records contain the SQL and metadata, never secrets and never row data.
   the console and in the audit log (`"decision":"notice"`) as `the connection
   is NOT encrypted (tls = ...)`; unverified TLS on a non-loopback host as
   `the server certificate is not verified (tls = ...)`.
+
+  A profile with an `ssh` table reaches its database through a bastion. The
+  console opens the SSH connection in its own process
+  (`golang.org/x/crypto/ssh`): no `ssh` binary, no secret in argv, and no
+  local listening port, so another local account (the agent's included)
+  cannot use the tunnel; the driver dials the database through an SSH
+  channel and the bastion resolves the database's host name. The bastion's
+  host key is checked against the console account's `~/.ssh/known_hosts`,
+  negotiating only the key types recorded there (Ed25519 first when none is):
+  an unknown key is shown with its SHA256 fingerprint and trusted only when
+  the human types `yes` (on a production profile, the fingerprint's last 8
+  characters), and a changed key is refused with no override. The key
+  passphrase or SSH password follows the same rules as the database password
+  (`ask` or the keychain item `ssh:<host>`, never in argv, environment, files
+  or logs). The SSH leg is encrypted and the bastion authenticated; the leg
+  from the bastion to the database is protected only by `tls`, unless the
+  database runs on the bastion (`host` loopback). The `tls` default is
+  decided on `host` as seen from the bastion, and when that leg is not
+  verified the notice reads `encrypted by SSH to <bastion>; NOT encrypted
+  (or not verified) from the bastion to <db host>: ...`. Each tunnel is
+  audited (`"decision":"tunnel"` with `ssh_host` and `ssh_host_key`), as is
+  a key trusted on first use (`"decision":"hostkey-added"`). Adding,
+  removing or changing the `ssh` table loosens the approved policy (except
+  `ssh.credentials` set to `ask`). Out of scope: `ProxyJump`
+  chains, `~/.ssh/config` (never read), certificate host keys
+  (`@cert-authority`) and forwarding to a Unix socket on the bastion.
 - **Write tiers.** Above tier `read`, the human's approval is the gate. The
   classifier assigns the class shown on the screen, but the server does not
   restrict what an approved write statement does within the account's

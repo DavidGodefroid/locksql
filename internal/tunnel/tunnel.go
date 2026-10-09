@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -273,7 +274,7 @@ func (t *Tunnel) Dial(ctx context.Context, network, addr string) (net.Conn, erro
 		if r.err != nil {
 			return nil, fmt.Errorf("ssh: forward to %s: %w", addr, r.err)
 		}
-		return r.c, nil
+		return withDeadlines(r.c), nil
 	case <-ctx.Done():
 		go func() {
 			if r := <-ch; r.c != nil {
@@ -282,6 +283,27 @@ func (t *Tunnel) Dial(ctx context.Context, network, addr string) (net.Conn, erro
 		}()
 		return nil, ctx.Err()
 	}
+}
+
+// bridgedConn is the driver's end of a net.Pipe bridged to an SSH channel,
+// reporting the channel's addresses.
+type bridgedConn struct {
+	net.Conn
+	local, remote net.Addr
+}
+
+func (c *bridgedConn) LocalAddr() net.Addr  { return c.local }
+func (c *bridgedConn) RemoteAddr() net.Addr { return c.remote }
+
+// withDeadlines bridges ch to a net.Pipe and returns the pipe's other end.
+// The drivers bound their handshakes and reads with deadlines, which an SSH
+// channel does not support; a pipe does, and a deadline that expires there
+// loses no data. Closing either side closes the other.
+func withDeadlines(ch net.Conn) net.Conn {
+	driver, bridge := net.Pipe()
+	go func() { io.Copy(ch, bridge); ch.Close() }()
+	go func() { io.Copy(bridge, ch); bridge.Close() }()
+	return &bridgedConn{Conn: driver, local: ch.LocalAddr(), remote: ch.RemoteAddr()}
 }
 
 // HostKey is the SHA256 fingerprint of the bastion's host key.

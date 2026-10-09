@@ -115,6 +115,50 @@ func TestDoctorTLSMode(t *testing.T) {
 	}
 }
 
+func TestDoctorSSHKeyFile(t *testing.T) {
+	d := fakeDoctor(nil)
+	d.stat = os.Stat // fakeDoctor's stat knows only the install paths
+	dir := t.TempDir()
+	key := filepath.Join(dir, "id")
+	if err := os.WriteFile(key, []byte("k"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := config.Profile{Name: "p", Engine: config.EnginePostgres, Host: "127.0.0.1", TLS: config.TLSPrefer, Credentials: config.CredentialsAsk,
+		SSH: &config.SSHProfile{Host: "b", Port: 22, User: "u", Auth: config.SSHAuthKey, Key: key, Credentials: config.CredentialsAsk}}
+	checks := profileChecks(d, p, nil, dir)
+	if !hasCheck(checks, checkFail, "ssh key") {
+		t.Error("group/world-readable key not reported")
+	}
+	if !hasCheck(checks, checkOK, "ssh") {
+		t.Error("the bastion is not reported")
+	}
+	if c := findCheck(checks, ": tls"); c == nil || c.state != checkOK || !strings.Contains(c.detail, "bastion") {
+		t.Errorf("tls check of a database on the bastion = %+v, want ok naming the bastion", c)
+	}
+	if err := os.Chmod(key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !hasCheck(profileChecks(d, p, nil, dir), checkOK, "ssh key") {
+		t.Error("0600 key not reported ok")
+	}
+	p.SSH.Key = filepath.Join(dir, "missing")
+	if !hasCheck(profileChecks(d, p, nil, dir), checkFail, "ssh key") {
+		t.Error("missing key not reported")
+	}
+	if hasCheck(profileChecks(d, p, separatedSys(), dir), checkFail, "ssh key") {
+		t.Error("an unreadable key in the console account's home reported as failing in a separated setup")
+	}
+}
+
+func findCheck(checks []check, titlePart string) *check {
+	for i := range checks {
+		if strings.Contains(checks[i].title, titlePart) {
+			return &checks[i]
+		}
+	}
+	return nil
+}
+
 func separatedSys() *sysconf.Config {
 	return &sysconf.Config{ServiceUser: "locksql", ClientGroup: "locksql-clients", SocketDir: "/run/locksql", X11: "refuse"}
 }

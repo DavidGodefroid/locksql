@@ -361,6 +361,30 @@ k_anonymity         = 5
 explain_cost_refuse = 0             # engine cost units; 0 = off
 ```
 
+A database reachable only from a bastion gets an `ssh` table: the console
+opens the SSH connection itself, with no local listening port, and verifies
+the bastion against the console account's `~/.ssh/known_hosts` (asking on
+first use, refusing a changed key). `host` is then the database as seen from
+the bastion; keep `tls = "verify-full"` unless the database runs on the
+bastion itself. See
+[Reaching a remote server through SSH](docs/usage.md#reaching-a-remote-server-through-ssh).
+
+```toml
+[profiles.prod]
+engine      = "postgres"
+host        = "db.internal"         # as seen from the bastion
+tls         = "verify-full"
+production  = true
+
+[profiles.prod.ssh]
+host        = "bastion.example.com"
+port        = 22                    # default 22
+user        = "deploy"
+auth        = "key"                 # key | agent | password
+key         = "~/.ssh/id_ed25519"   # auth = "key" only; the console account's home
+credentials = "ask"                 # passphrase or SSH password; default: the profile's
+```
+
 <details>
 <summary>All profile keys</summary>
 
@@ -385,6 +409,10 @@ explain_cost_refuse = 0             # engine cost units; 0 = off
 | `limits.k_anonymity` | 5 (production 10) | smallest row count a PII filter, a group or an aggregate of a PII column may cover; lowering it is a loosening |
 | `limits.reference_probe` | 5 | distinct cells of one result the agent may filter on one by one before the console warns (an `IN` list counts once); raising it is a loosening |
 | `limits.explain_cost_refuse` | 0 (off) | refuse plans above this total cost, in the engine's own units; SQLite reports no cost and is not checked |
+| `ssh.host`, `ssh.port`, `ssh.user` | required host and user; port 22 | the bastion; not with sqlite or a Unix socket `host` |
+| `ssh.auth` | required | `key`, `agent` (`SSH_AUTH_SOCK` of the console) or `password` |
+| `ssh.key` | required with `auth = "key"` | private key of the console account, mode 0600 |
+| `ssh.credentials` | the profile's `credentials` | `ask` or `keychain` for the passphrase or SSH password |
 
 </details>
 
@@ -485,7 +513,9 @@ iteration, and it is deliberately narrow:
   `mysql_clear_password` and `sha256_password` in clear over any TLS, so an
   attacker terminating TLS gets the MySQL/MariaDB password; PostgreSQL sends
   it in clear to a server that asks for cleartext authentication. `verify-ca`
-  and `verify-full` prevent the impersonation. See
+  and `verify-full` prevent the impersonation. Through an `ssh` bastion the
+  SSH leg is encrypted and verified, but the bastion-to-database leg is
+  protected only by `tls`, unless the database runs on the bastion. See
   [Transport security](docs/security-model.md#out-of-scope-and-limitations).
 - One console per profile and project, one request at a time. No remote or
   shared consoles, no data export.
