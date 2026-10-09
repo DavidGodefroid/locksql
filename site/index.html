@@ -50,7 +50,7 @@
     <div class="wrap">
 
 <section class="hero" aria-labelledby="hero-title">
-  <p class="eyebrow"><a href="install/"><span class="badge">v0.3</span> Pre-release · open source, Apache 2.0</a></p>
+  <p class="eyebrow"><a href="install/"><span class="badge">v0.4</span> Pre-release · open source, Apache 2.0</a></p>
   <h1 id="hero-title">Your AI writes the query. <br><span class="key">You hold the key.</span></h1>
   <p class="lead">Let Claude Code, Codex, Cursor or Gemini CLI query your databases without ever handing them a password.</p>
   <p class="intro">locksql puts a <strong>human-held console</strong> between your AI agent and MariaDB, MySQL, PostgreSQL or SQLite. The agent proposes SQL; the console, running in a terminal you keep in view, holds the credentials, parses and weighs every statement, masks personal data and waits for <strong>your</strong> approval. The agent never sees a credential and never opens a connection.</p>
@@ -138,6 +138,7 @@
     <li><span class="icon" aria-hidden="true">🛡️</span><h3>OS separation</h3><p><code>locksql install</code> runs the console under its own account; the kernel checks every peer on the socket.</p></li>
     <li><span class="icon" aria-hidden="true">🔎</span><h3>Blind search</h3><p>The agent filters on <code>'${email}'</code> and you type the value in the console, or on a redacted cell’s reference (<code>'${r1.2.3}'</code>). The value never reaches it.</p></li>
     <li><span class="icon" aria-hidden="true">👁️</span><h3>Clear for you only</h3><p><code>--show-results</code> prints the clear rows in the console while the agent gets them masked; <code>--allow-unmask</code> is the only way an agent can ask for raw PII.</p></li>
+    <li><span class="icon" aria-hidden="true">🔐</span><h3>Remote, verified</h3><p>TLS verifies the server certificate by default, and an <code>ssh</code> table reaches a database behind a bastion: the console opens the tunnel itself, checks the host key and listens on no local port.</p></li>
   </ul>
 </section>
 
@@ -178,7 +179,7 @@ locksql console --project DIR
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
       </ul>
-      <p>Pre-release (<code>v0.3.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (<code>v0.4.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
     </div>
   </footer>
 </body>

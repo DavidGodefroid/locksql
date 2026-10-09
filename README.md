@@ -40,7 +40,7 @@ never sees a credential and never opens a connection.
 <p align="center"><sub>Claude Code (left, account <code>alice</code>) and the locksql console (right, account <code>locksql</code>, started with <code>--show-results</code>). Claude gets <code>&lt;redacted:rN.R.C&gt;</code> references, filters on them without seeing a value, then searches on an email the human types in the console.</sub></p>
 
 > [!NOTE]
-> **Pre-release** (`v0.3.x`). See [Install](#install).
+> **Pre-release** (`v0.4.x`). See [Install](#install).
 
 ## Why locksql?
 
@@ -128,6 +128,16 @@ on a redacted cell's reference (`'${r1.2.3}'`). The value never reaches it.
 **👁️ Clear for you only**<br>
 `--show-results` prints the clear rows in the console while the agent gets
 them masked; `--allow-unmask` is the only way an agent can ask for raw PII.
+
+</td>
+</tr>
+<tr>
+<td colspan="2" valign="top">
+
+**🔐 Remote, verified**<br>
+TLS verifies the server certificate by default (`tls = "verify-full"`), and an
+`ssh` table reaches a database behind a bastion: the console opens the tunnel
+itself, checks the bastion's host key and listens on no local port.
 
 </td>
 </tr>
@@ -547,7 +557,7 @@ PATH), then installs `/usr/local/bin/locksql`, with `sudo` if needed:
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh
 less install.sh                     # read it first
-sh install.sh                       # LOCKSQL_VERSION=v0.3.0 to pin a version
+sh install.sh                       # LOCKSQL_VERSION=v0.4.0 to pin a version
 ```
 
 `LOCKSQL_INSTALL_DIR=~/.local/bin` installs without `sudo`, but the binary is
