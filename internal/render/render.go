@@ -68,40 +68,77 @@ func renderTSV(w io.Writer, res engine.Result, rows [][]any, truncated bool, l c
 		_, err := w.Write(b.Bytes())
 		return err
 	}
+	t := tsvTable(res, rows, truncated, l)
+	b.WriteString(strings.Join(t.Header, "\t"))
+	b.WriteByte('\n')
+	for _, r := range t.Rows {
+		b.WriteString(strings.Join(r, "\t"))
+		b.WriteByte('\n')
+	}
+	for _, f := range t.Footer {
+		b.WriteString(f)
+		b.WriteByte('\n')
+	}
+	_, err := w.Write(b.Bytes())
+	return err
+}
+
+// Table is the TSV rendering of a result split into cells, with the same
+// caps as Render: the header labels, the rows shown and the lines after
+// them (cut marker, row count).
+type Table struct {
+	Header []string
+	Rows   [][]string
+	Footer []string
+}
+
+// TSVTable is what Render writes in format tsv for a result with columns,
+// before the cells are joined.
+func TSVTable(res engine.Result, l config.Limits) Table {
+	l = effective(l)
+	rows, truncated := res.Rows, res.Truncated
+	if len(rows) > l.MaxRows {
+		rows, truncated = rows[:l.MaxRows], true
+	}
+	return tsvTable(res, rows, truncated, l)
+}
+
+func tsvTable(res engine.Result, rows [][]any, truncated bool, l config.Limits) Table {
+	var t Table
 	cells := make([]string, len(res.Columns))
 	for i, c := range res.Columns {
 		cells[i] = capText(c.Label, l.MaxCellChars, false)
 	}
-	b.WriteString(cutBytes(strings.Join(cells, "\t"), l.MaxOutputBytes-1))
-	b.WriteByte('\n')
-	shown, cut := 0, false
-	var line strings.Builder
+	header := cutBytes(strings.Join(cells, "\t"), l.MaxOutputBytes-1)
+	t.Header = strings.Split(header, "\t")
+	size := len(header) + 1
+	cut := false
 	for _, row := range rows {
-		line.Reset()
+		line := make([]string, len(row))
+		n := 0
 		for i, v := range row {
-			if i > 0 {
-				line.WriteByte('\t')
-			}
-			line.WriteString(tsvCell(v, l.MaxCellChars))
+			line[i] = tsvCell(v, l.MaxCellChars)
+			n += len(line[i])
 		}
-		if b.Len()+line.Len()+1 > l.MaxOutputBytes {
+		if len(row) > 1 {
+			n += len(row) - 1
+		}
+		if size+n+1 > l.MaxOutputBytes {
 			cut = true
 			break
 		}
-		b.WriteString(line.String())
-		b.WriteByte('\n')
-		shown++
+		t.Rows = append(t.Rows, line)
+		size += n + 1
 	}
 	if cut {
-		fmt.Fprintf(&b, "[output cut at %d bytes: %d of %d rows shown]\n", l.MaxOutputBytes, shown, len(rows))
+		t.Footer = append(t.Footer, fmt.Sprintf("[output cut at %d bytes: %d of %d rows shown]", l.MaxOutputBytes, len(t.Rows), len(rows)))
 	}
-	fmt.Fprintf(&b, "(%d rows)", shown)
+	count := fmt.Sprintf("(%d rows)", len(t.Rows))
 	if truncated {
-		b.WriteString(" — more rows exist beyond the row cap")
+		count += " — more rows exist beyond the row cap"
 	}
-	b.WriteByte('\n')
-	_, err := w.Write(b.Bytes())
-	return err
+	t.Footer = append(t.Footer, count)
+	return t
 }
 
 // cutBytes cuts s to at most n bytes, ending it with "…" when it was cut,
