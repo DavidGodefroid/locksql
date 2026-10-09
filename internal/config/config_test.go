@@ -366,6 +366,10 @@ func TestSSHTable(t *testing.T) {
 		"secret key":     {head + "host=\"b\"\nuser=\"u\"\nauth=\"password\"\npassword=\"x\"\n", "looks like a secret"},
 		"socket host":    {"[profiles.p]\nengine=\"mysql\"\nhost=\"/run/m.sock\"\n[profiles.p.ssh]\nhost=\"b\"\nuser=\"u\"\nauth=\"agent\"\n", "Unix socket"},
 		"sqlite":         {"[profiles.p]\nengine=\"sqlite\"\npath=\"x.db\"\n[profiles.p.ssh]\nhost=\"b\"\nuser=\"u\"\nauth=\"agent\"\n", "sqlite"},
+		"host secret":    {head + "host=\"u:pw@b\"\nuser=\"u\"\nauth=\"agent\"\n", "embedded password"},
+		"user secret":    {head + "host=\"b\"\nuser=\"u:pw@x\"\nauth=\"agent\"\n", "embedded password"},
+		"key secret":     {head + "host=\"b\"\nuser=\"u\"\nauth=\"key\"\nkey=\"u:pw@x\"\n", "embedded password"},
+		"user control":   {head + "host=\"b\"\nuser=\"u\\u001b[2J\"\nauth=\"agent\"\n", "control"},
 		"control char":   {head + "host=\"b\\u001b[2J\"\nuser=\"u\"\nauth=\"agent\"\n", "control"},
 	} {
 		if _, err := parse(c.body); err == nil || !strings.Contains(err.Error(), c.err) {

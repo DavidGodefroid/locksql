@@ -575,6 +575,9 @@ func buildSSH(r rawSSH, p Profile, errf func(string, ...any) error) (*SSHProfile
 		return nil, errf("ssh needs a TCP host; forwarding to a Unix socket is not supported")
 	}
 	for _, f := range []struct{ key, val string }{{"ssh.host", r.Host}, {"ssh.user", r.User}, {"ssh.key", r.Key}} {
+		if embedsPassword(f.val) {
+			return nil, errf("%s looks like a DSN with an embedded password; locksql never reads secrets from config files", f.key)
+		}
 		if strings.IndexFunc(f.val, unsafeRune) >= 0 {
 			return nil, errf("%s holds a control or formatting character", f.key)
 		}
