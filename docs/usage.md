@@ -798,8 +798,9 @@ finds the project's consoles.
 - Control and bidirectional characters are escaped. NULL prints as `NULL`.
 - Masked cells follow the rule's mode: `redact` (the default for a rule
   without `mode`) gives `<redacted:rN.R.C>` (result, row, column; plain
-  `<redacted>` when the console cannot hold the cell), `partial` keeps the
-  first character and the length (`a***(17)`), `email` keeps the first
+  `<redacted>` when the console cannot hold the cell), including the
+  `RETURNING` list of a write, which gets plain `<redacted>`; `partial` keeps
+  the first character and the length (`a***(17)`), `email` keeps the first
   character and the domain (`a***@example.com`). `partial`, `email` and
   detector-masked cells carry no reference, nor does any column but a plain
   one whose every source is under a mask rule (a `UNION` with a constant or
