@@ -2,6 +2,7 @@ package pii
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1258,7 +1259,9 @@ var writeFilters = map[string]bool{"WHERE": true, "ON": true, "HAVING": true, "C
 // origin and no mask. This holds even when the target is itself a rule
 // column: rules match targets by name only, and the column written may be
 // one no rule's origin covers. Target column lists and SET targets are not
-// values.
+// values. A column under a rule may besides only receive NULL or DEFAULT
+// (plantedSet, plantedTuple, plantedInserts): any other value is one the
+// agent chose, which a later read would hand back as a cell reference.
 func (a *aliasCheck) writtenValues() error {
 	writes := false
 	for i := range a.toks {
@@ -1290,6 +1293,11 @@ func (a *aliasCheck) writtenValues() error {
 			// (a, b), SET (a, b) = (...).
 			if m > k && a.namesOnly(k+1, m) && (outer.clause == "INTO" || outer.clause == "INSERT" ||
 				outer.clause == "SET" && a.isPunct(m+1, "=")) {
+				if outer.clause == "SET" {
+					if err := a.plantedTuple(k); err != nil {
+						return err
+					}
+				}
 				k = m
 				continue
 			}
@@ -1311,6 +1319,11 @@ func (a *aliasCheck) writtenValues() error {
 			return err
 		}
 		if a.setTarget(k) {
+			if l.clause == "SET" {
+				if err := a.plantedSet(k); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		if a.matched(k) && !a.insideCount(k) {
@@ -1329,6 +1342,164 @@ func (a *aliasCheck) writtenValues() error {
 		if n := a.name(k); n != "" && a.rows[n] && !a.insideCount(k) &&
 			!a.isPunct(k-1, ".") && !a.isPunct(k+1, ".") && !a.isPunct(k+1, "(") {
 			return refusal("the whole row of %s is used in %s", strings.ToLower(n), where)
+		}
+	}
+	return a.plantedInserts()
+}
+
+// plantedValue refuses a write that stores into column col, under a mask
+// rule, a value the agent chose. Rules match the column by name only, as
+// for the copies writtenValues refuses: the table written may be a view
+// over a rule table.
+func plantedValue(col string) error {
+	what := "a column under a PII mask rule"
+	if col != "" {
+		what = "PII column " + strings.ToLower(col)
+	}
+	return &sqlclass.Refusal{Reason: fmt.Sprintf("this write stores into %s a value the agent chose (a literal, an expression or another column);"+
+		" while PII mask rules exist, a masked column cannot receive values the agent chose, since a later read would mask the value and hand it back as a cell reference to a value the agent already knows."+
+		" Set it to NULL or DEFAULT only, or run the write as an unmasked query", what)}
+}
+
+// nullOrDefault reports whether [s, e) is the single word NULL or DEFAULT.
+func (a *aliasCheck) nullOrDefault(s, e int) bool {
+	return e == s+1 && a.isWord(s, "NULL", "DEFAULT")
+}
+
+// plantedEnd reports whether token j ends a SET value.
+func (a *aliasCheck) plantedEnd(j int) bool {
+	return j >= len(a.toks) || a.isPunct(j, ",") || a.isPunct(j, ";") || a.isPunct(j, ")") ||
+		a.isWord(j, "WHERE", "FROM", "RETURNING", "WHEN", "ORDER", "LIMIT", "ON")
+}
+
+// plantedSet checks the SET item whose target is token k: a target under a
+// rule may only be set to NULL or DEFAULT.
+func (a *aliasCheck) plantedSet(k int) error {
+	if !a.r.MatchesName(a.name(k)) {
+		return nil
+	}
+	if a.nullOrDefault(k+2, k+3) && a.plantedEnd(k+3) {
+		return nil
+	}
+	return plantedValue(a.name(k))
+}
+
+// plantedTuple checks SET (a, b) = (x, y) at the target list opened at k:
+// each target under a rule may only receive NULL or DEFAULT, from a list of
+// values (a subquery is refused).
+func (a *aliasCheck) plantedTuple(k int) error {
+	m := a.match[k]
+	var pos []int
+	col := ""
+	for p := k + 1; p < m; p += 2 {
+		if a.r.MatchesName(a.name(p)) {
+			pos = append(pos, (p-k-1)/2)
+			col = a.name(p)
+		}
+	}
+	if len(pos) == 0 {
+		return nil
+	}
+	v := m + 2
+	if a.isWord(v, "ROW") {
+		v++
+	}
+	if !a.isPunct(v, "(") || a.isWord(v+1, "SELECT", "WITH", "VALUES", "TABLE") || !a.plantedRow(v, pos) {
+		return plantedValue(col)
+	}
+	return nil
+}
+
+// plantedRow reports whether the parenthesised list of values opened at o
+// holds only NULL or DEFAULT at the positions pos (every position when pos
+// is nil).
+func (a *aliasCheck) plantedRow(o int, pos []int) bool {
+	m := a.match[o]
+	if m < 0 {
+		return false
+	}
+	idx, s := 0, o+1
+	for j := o + 1; j <= m; j++ {
+		if j < m && !(a.isPunct(j, ",") && a.encl[j] == o) {
+			continue
+		}
+		if (pos == nil || slices.Contains(pos, idx)) && !a.nullOrDefault(s, j) {
+			return false
+		}
+		idx, s = idx+1, j+1
+	}
+	return true
+}
+
+// plantedInserts checks every INSERT (or REPLACE) of a write: a target
+// column under a rule may only receive NULL or DEFAULT, written in VALUES;
+// an INSERT without a column list may store into any column, so all its
+// values must be NULL or DEFAULT (DEFAULT VALUES passes). A MySQL
+// INSERT ... SET list is checked as a SET list.
+func (a *aliasCheck) plantedInserts() error {
+	if len(a.r.Mask) == 0 {
+		return nil
+	}
+	for i := range a.toks {
+		insert := a.isWord(i, "INSERT") && (!a.isPunct(i+1, "(") || a.isWord(i-1, "THEN"))
+		replace := a.isWord(i, "REPLACE") && !a.isPunct(i+1, "(") && !a.isWord(i-1, "OR")
+		if !insert && !replace {
+			continue // INSERT(...) and REPLACE(...) are MySQL string functions
+		}
+		if err := a.plantedInsert(i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// plantedInsert checks the INSERT at token i.
+func (a *aliasCheck) plantedInsert(i int) error {
+	lvl := a.encl[i]
+	var pos []int
+	list := false
+	col := ""
+	for j := i + 1; j < len(a.toks) && a.encl[j] == lvl; j++ {
+		switch {
+		case a.isPunct(j, "("):
+			m := a.match[j]
+			if a.isWord(j-1, "PARTITION") && m > j {
+				j = m
+				continue
+			}
+			if !list && m > j && a.namesOnly(j+1, m) {
+				list = true
+				for p := j + 1; p < m; p += 2 {
+					if a.r.MatchesName(a.name(p)) {
+						pos = append(pos, (p-j-1)/2)
+						col = a.name(p)
+					}
+				}
+				if len(pos) == 0 {
+					return nil
+				}
+				j = m
+				continue
+			}
+			return plantedValue(col) // a parenthesised query as the source
+		case a.isPunct(j, ";"), a.isWord(j, "SET", "DEFAULT"):
+			return nil
+		case a.isWord(j, "VALUES") || a.isWord(j, "VALUE") && !a.isWord(j-1, "SYSTEM", "USER"):
+			for r := j + 1; ; {
+				if a.isWord(r, "ROW") {
+					r++
+				}
+				if !a.isPunct(r, "(") || !a.plantedRow(r, pos) {
+					return plantedValue(col)
+				}
+				r = a.match[r] + 1
+				if !a.isPunct(r, ",") {
+					return nil
+				}
+				r++
+			}
+		case a.isWord(j, "SELECT", "WITH", "TABLE"):
+			return plantedValue(col)
 		}
 	}
 	return nil
