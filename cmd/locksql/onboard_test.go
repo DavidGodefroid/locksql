@@ -360,7 +360,7 @@ func TestOnboardSameUserInstallDeclined(t *testing.T) {
 		if len(*calls) != 0 {
 			t.Fatalf("answer %q ran install", answer)
 		}
-		if !strings.Contains(out.String(), "sudo locksql install") || !strings.Contains(out.String(), "locksql console --project") {
+		if !strings.Contains(out.String(), "Later: run sudo locksql install") || !strings.Contains(out.String(), "locksql console --project") {
 			t.Fatalf("answer %q: no steps:\n%s", answer, out)
 		}
 	}
@@ -368,14 +368,31 @@ func TestOnboardSameUserInstallDeclined(t *testing.T) {
 
 func TestOnboardSameUserExistingProfileNotUsed(t *testing.T) {
 	e, out, _ := onboardEnv(t)
+	before := []byte("[profiles.dev]\nengine = \"sqlite\"\npath = \"/tmp/x.db\"\n")
 	os.MkdirAll(filepath.Dir(userConfig(t)), 0o700)
-	os.WriteFile(userConfig(t), []byte("[profiles.dev]\nengine = \"sqlite\"\npath = \"/tmp/x.db\"\n"), 0o600)
+	os.WriteFile(userConfig(t), before, 0o600)
 	installSpy(&e, "n\n")
 	if code := runOnboard(e); code != exitOK {
 		t.Fatalf("code %d\n%s", code, out)
 	}
 	if !strings.Contains(out.String(), ".locksql/config.toml") {
 		t.Fatalf("no pointer to the project config:\n%s", out)
+	}
+	after, err := os.ReadFile(userConfig(t))
+	if err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("user config changed (%v):\n%s", err, after)
+	}
+}
+
+func TestOnboardSameUserInstallFailurePropagates(t *testing.T) {
+	e, out, _ := onboardEnv(t)
+	installSpy(&e, "y\n")
+	e.install = func([]string) int { return exitFail }
+	if code := runOnboard(e); code != exitFail {
+		t.Fatalf("code %d, want %d\n%s", code, exitFail, out)
+	}
+	if !strings.Contains(out.String(), "locksql console --project") {
+		t.Fatalf("steps not printed after a failed install:\n%s", out)
 	}
 }
 

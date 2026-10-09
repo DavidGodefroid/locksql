@@ -139,9 +139,10 @@ const sameUserSteps = `The console must run in a separate account, apart from yo
 holds the database password, and the agent's account cannot read its terminal.
 `
 
-// offerInstall asks whether to run locksql install now. It never fails:
-// any answer but y continues with the steps.
-func offerInstall(e env) {
+// offerInstall asks whether to run locksql install now and returns
+// install's exit code; any answer but y returns exitOK. Either way the
+// steps follow.
+func offerInstall(e env) int {
 	fmt.Fprint(e.stdout, "Set it up now with sudo locksql install? [y/N] ")
 	// One reader for both prompts: install must not lose buffered input.
 	br := bufio.NewReader(e.stdin)
@@ -149,13 +150,13 @@ func offerInstall(e env) {
 	ans, _ := br.ReadString('\n')
 	if strings.TrimSpace(strings.ToLower(ans)) != "y" {
 		fmt.Fprintln(e.stdout, "\nLater: run sudo locksql install, then locksql doctor.")
-		return
+		return exitOK
 	}
 	run := e.install
 	if run == nil {
 		run = func(args []string) int { return runInstall(e, args) }
 	}
-	run(nil)
+	return run(nil)
 }
 
 // runOnboard is bare `locksql` in a terminal: wire the agents, then lead
@@ -171,12 +172,13 @@ func runOnboard(e env) int {
 	fmt.Fprint(e.stdout, e.paint.Banner(version))
 	fmt.Fprintln(e.stdout)
 	wireAgents(e)
+	code := exitOK
 	if !separated {
 		fmt.Fprint(e.stdout, "\n"+sameUserSteps)
-		offerInstall(e)
+		code = offerInstall(e)
 	}
 	fmt.Fprint(e.stdout, "\n"+separatedSteps(e))
-	return exitOK
+	return code
 }
 
 // tildePath shows p with the home directory as ~.
