@@ -619,7 +619,9 @@ locksql doctor   [--profile P]
   65 536 bytes. The replacement of `REPLACE`, `REGEXP_REPLACE` and `TRANSLATE`
   is a string literal of at most 1 024 bytes; their arguments call none of
   these size functions, and a replacement that grows its input takes no other
-  call that grows it. System schemas and relations (`information_schema`,
+  call that grows it. The format string of `format` (PostgreSQL, SQLite) and
+  `printf` (SQLite) is a literal whose widths and precisions are at most
+  65 536, never `*`. System schemas and relations (`information_schema`,
   `pg_catalog`, `mysql`, `performance_schema`, `sys`, SQLite internals) are
   refused, and so are `pg_stat_statements` and `pg_stat_activity` while mask
   rules exist (they hold the text of past statements). Every table and column

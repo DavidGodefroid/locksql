@@ -408,3 +408,56 @@ func TestAdvSizeFunctionCap(t *testing.T) {
 		}
 	}
 }
+
+// printf-style formats pad to the width they are given: a literal width
+// or precision is capped like a length argument, and one taken from an
+// argument (*) or a format string that is not a literal is refused.
+func TestAdvFormatWidthCap(t *testing.T) {
+	funcs := map[sqlclass.Dialect][]string{
+		sqlclass.Postgres: {"format"},
+		sqlclass.SQLite:   {"format", "printf"},
+	}
+	for d, names := range funcs {
+		for _, name := range names {
+			refused := map[string]string{
+				"('%1000000000s', 'x')":        "a width or precision exceeds 65536",
+				"('%65537s', 'x')":             "a width or precision exceeds 65536",
+				"('%-0000000001000000s', 'x')": "a width or precision exceeds 65536",
+				"('%*s', 1000000000, 'x')":     "a width or precision taken from an argument (*)",
+				"(name, 'x')":                  "the format string must be a literal",
+				"('%' || '9999999s', 'x')":     "the format string must be a literal",
+			}
+			if d == sqlclass.SQLite {
+				refused["('%.1000000000c', 'x')"] = "a width or precision exceeds 65536"
+				refused["('%.*c', 1000000000, 'x')"] = "a width or precision taken from an argument (*)"
+			} else {
+				refused["('%1$1000000000s', 'x')"] = "a width or precision exceeds 65536"
+				refused["(E'%\\061000000000s', 'x')"] = "the format string must be a literal"
+			}
+			for args, msg := range refused {
+				sql := "SELECT " + name + args + " FROM users LIMIT 1"
+				_, err := analyze(t, d, sql)
+				if err == nil || !strings.Contains(err.Error(), name+": "+msg) {
+					t.Errorf("%s %q: got %v, want %q", d, sql, err, msg)
+				}
+			}
+			accepted := []string{"('%-10s|%5s', name, 'x')", "('%65536s', 'x')", "('100%% %s', name)", "('%s', name)"}
+			if d == sqlclass.Postgres {
+				accepted = append(accepted, "('%1$s %1$I', name)")
+			} else {
+				accepted = append(accepted, "('%.2f %lld', 1.5, 3)")
+			}
+			for _, args := range accepted {
+				sql := "SELECT " + name + args + " FROM users LIMIT 1"
+				if _, err := analyze(t, d, sql); err != nil {
+					t.Errorf("%s %q: %v", d, sql, err)
+				}
+			}
+		}
+	}
+	// MySQL FORMAT(x, d) formats a number (at most 30 decimals): no format
+	// string to check.
+	if _, err := analyze(t, sqlclass.MySQL, "SELECT format(id, 2) FROM users LIMIT 1"); err != nil {
+		t.Errorf("mysql format: %v", err)
+	}
+}

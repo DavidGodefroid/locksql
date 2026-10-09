@@ -187,6 +187,68 @@ func (an *analyzer) grows(f *FuncCall) bool {
 	return false
 }
 
+// formatArg reports the functions whose first argument is a printf-style
+// format string: PostgreSQL format(), SQLite printf() and format(). MySQL
+// FORMAT(x, d) formats a number with at most 30 decimals.
+func (an *analyzer) formatArg(name string) bool {
+	switch an.d {
+	case sqlclass.Postgres:
+		return name == "FORMAT"
+	case sqlclass.SQLite:
+		return name == "FORMAT" || name == "PRINTF"
+	}
+	return false
+}
+
+// checkFormat bounds a format function: its format string is a literal
+// and every width or precision it writes is at most maxSizeArg; a width
+// taken from an argument (*) is refused.
+func (an *analyzer) checkFormat(f *FuncCall) error {
+	if !an.formatArg(f.Name) || len(f.Args) == 0 {
+		return nil
+	}
+	name := strings.ToLower(f.Name)
+	fs, ok := an.stringLiteral(f.Args[0])
+	if !ok || strings.Contains(fs, "\\") {
+		// A backslash may be an escape (E'...') hiding a digit.
+		return refusef("%s: the format string must be a literal", name)
+	}
+	for i := 0; i < len(fs); i++ {
+		if fs[i] != '%' {
+			continue
+		}
+		i++
+		if i < len(fs) && fs[i] == '%' {
+			continue
+		}
+		// Flags, position, width and precision, up to the first letter.
+		for ; i < len(fs) && !isLetter(fs[i]); i++ {
+			if fs[i] == '*' {
+				return refusef("%s: a width or precision taken from an argument (*) is not allowed", name)
+			}
+			if fs[i] < '0' || fs[i] > '9' {
+				continue
+			}
+			j := i
+			for j < len(fs) && fs[j] >= '0' && fs[j] <= '9' {
+				j++
+			}
+			if j < len(fs) && fs[j] == '$' {
+				i = j // a position (PostgreSQL %2$s), not a size
+				continue
+			}
+			digits := strings.TrimLeft(fs[i:j], "0")
+			if n, err := strconv.Atoi(digits); len(digits) > 6 || err == nil && n > maxSizeArg {
+				return refusef("%s: a width or precision exceeds %d", name, maxSizeArg)
+			}
+			i = j - 1
+		}
+	}
+	return nil
+}
+
+func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
+
 // funcAllowed reports whether the function name may be called.
 func funcAllowed(d sqlclass.Dialect, name string) bool {
 	if strings.Contains(name, ".") {

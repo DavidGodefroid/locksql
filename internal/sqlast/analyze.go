@@ -1199,6 +1199,9 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (p Prov, err err
 	if err := an.checkReplaceArgs(f); err != nil {
 		return Prov{}, err
 	}
+	if err := an.checkFormat(f); err != nil {
+		return Prov{}, err
+	}
 	// A replacement multiplies the length of its input: none takes a size
 	// function in its arguments, and one that grows takes no call that
 	// grows (see grows), at any depth.
