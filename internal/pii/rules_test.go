@@ -128,3 +128,25 @@ func TestDefaultModeIsRedact(t *testing.T) {
 		t.Errorf("partial lost on reload: %q", m)
 	}
 }
+
+// The console replaces pii.toml through a temporary file next to it: a
+// directory it cannot write is named with the fix.
+func TestSaveRulesFileUnwritableDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes anywhere")
+	}
+	dir := filepath.Join(t.TempDir(), ".locksql")
+	if err := os.Mkdir(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	err := SaveRulesFile(filepath.Join(dir, "pii.toml"), Rules{Mask: []string{"app.users.email"}})
+	if err == nil {
+		t.Fatal("write in a read-only directory succeeded")
+	}
+	for _, want := range []string{dir, "write access to the directory", "sudo chown"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -301,5 +302,67 @@ func TestListenShared(t *testing.T) {
 	if ln, err := ListenShared(path, gid+1); err == nil {
 		ln.Close()
 		t.Error("a dir of another group accepted")
+	}
+}
+
+// A setgid directory gives the socket its group at birth, so the console
+// never needs to change it (Linux refuses a group the owner is not in).
+func TestListenSharedSetgidDir(t *testing.T) {
+	gid := -1
+	groups, _ := os.Getgroups()
+	for _, g := range groups {
+		if g != os.Getgid() {
+			gid = g
+			break
+		}
+	}
+	if gid < 0 {
+		t.Skip("needs a supplementary group")
+	}
+	base, err := os.MkdirTemp("", "lsg") // short: socket paths are limited
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(base)
+	dir := filepath.Join(base, "run")
+	if err := os.Mkdir(dir, 0o710); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(dir, -1, gid); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o710|os.ModeSetgid); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(dir); err != nil || fi.Mode()&os.ModeSetgid == 0 {
+		t.Skipf("cannot set setgid here: %v", err)
+	}
+	path := filepath.Join(dir, "x.sock")
+	ln, err := ListenShared(path, gid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := fi.Sys().(*syscall.Stat_t); int(st.Gid) != gid || fi.Mode().Perm() != 0o660 {
+		t.Errorf("socket gid %d mode %04o, want %d 0660", st.Gid, fi.Mode().Perm(), gid)
+	}
+}
+
+func TestSharedChownErrorNamesTheFix(t *testing.T) {
+	err := sharedChownError("/run/locksql", 990, &os.PathError{Op: "chown", Path: "/run/locksql/x.sock", Err: syscall.EPERM})
+	for _, want := range []string{"/run/locksql", "setgid", "2710", "sudo locksql install"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+	if !errors.Is(err, syscall.EPERM) {
+		t.Error("EPERM not wrapped")
+	}
+	if err := sharedChownError("/run/locksql", 990, syscall.EIO); strings.Contains(err.Error(), "setgid") {
+		t.Errorf("non-EPERM error blames setgid: %v", err)
 	}
 }

@@ -126,11 +126,11 @@ func SaveRulesFile(path string, r Rules) error {
 
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("pii: %w", err)
+		return dirError(dir, err)
 	}
 	tmp, err := os.CreateTemp(dir, ".pii-*.toml")
 	if err != nil {
-		return fmt.Errorf("pii: %w", err)
+		return dirError(dir, err)
 	}
 	defer os.Remove(tmp.Name()) // no-op after a successful rename
 	if _, err := tmp.Write(b.Bytes()); err != nil {
@@ -145,9 +145,20 @@ func SaveRulesFile(path string, r Rules) error {
 		return fmt.Errorf("pii: %w", err)
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
-		return fmt.Errorf("pii: %w", err)
+		return dirError(dir, err)
 	}
 	return nil
+}
+
+// dirError explains a refused write in the rules directory: the file is
+// replaced through a temporary file in that directory, so the account needs
+// write access to the directory itself, which a separated setup must grant
+// to the console's account.
+func dirError(dir string, err error) error {
+	if errors.Is(err, fs.ErrPermission) {
+		return fmt.Errorf("pii: this account cannot write the PII rules in %s: %w; it needs write access to the directory itself (separated setup: sudo chown <service_user> %s, config.toml readable by both accounts)", dir, err, dir)
+	}
+	return fmt.Errorf("pii: %w", err)
 }
 
 // Add adds a mask pattern after validating it. Adding an existing pattern

@@ -49,7 +49,7 @@ func fakeDoctor(sys *sysconf.Config) doctorEnv {
 			case "/usr/local/bin/locksql":
 				return fakeInfo{"locksql", 0o755}, nil
 			case "/run/locksql":
-				return fakeInfo{"locksql", fs.ModeDir | 0o710}, nil
+				return fakeInfo{"locksql", fs.ModeDir | fs.ModeSetgid | 0o710}, nil
 			case "/run/user/900":
 				return fakeInfo{"900", fs.ModeDir | 0o700}, nil
 			}
@@ -126,6 +126,15 @@ func TestDoctorFindsProblems(t *testing.T) {
 		"binary writable": {func(d *doctorEnv) {
 			d.ownerOf = func(os.FileInfo) (int, int, bool) { return 1000, 1000, true }
 		}, "ask", "binary", checkFail},
+		"socket dir without setgid": {func(d *doctorEnv) {
+			stat := d.stat
+			d.stat = func(p string) (os.FileInfo, error) {
+				if p == "/run/locksql" {
+					return fakeInfo{"locksql", fs.ModeDir | 0o710}, nil
+				}
+				return stat(p)
+			}
+		}, "ask", "socket directory", checkFail},
 		"secret in agent keychain": {func(d *doctorEnv) { d.keychain = func(string, string) error { return nil } }, "keychain", "secret store", checkFail},
 		"no console": {func(d *doctorEnv) {
 			d.status = func(string, string) (*ipc.StatusResult, error) { return nil, &client.NoConsoleError{Profile: "uat"} }
@@ -173,9 +182,14 @@ func TestInstallPrint(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		adduser = "sysadminctl"
 	}
-	for _, want := range []string{adduser, "locksql-clients", "/etc/locksql/system.toml", "x11          = \"refuse\"", "0710"} {
+	for _, want := range []string{adduser, "locksql-clients", "/etc/locksql/system.toml", "x11          = \"refuse\""} {
 		if !strings.Contains(o.stdout, want) {
 			t.Errorf("install script lacks %q", want)
+		}
+	}
+	if runtime.GOOS == "darwin" {
+		if !strings.Contains(o.stdout, "install -d -m 0710 -o locksql -g locksql-clients") {
+			t.Error("install script lacks the 0710 socket directory")
 		}
 	}
 	if o := cli(t, t.TempDir(), "", "install", "--client", "locksql", "--print"); o.code != exitUsage {
@@ -183,5 +197,37 @@ func TestInstallPrint(t *testing.T) {
 	}
 	if o := cli(t, t.TempDir(), "", "install", "--client", "a;id", "--print"); o.code != exitUsage {
 		t.Error("shell metacharacters accepted in an account name")
+	}
+}
+
+// Without setgid the socket is born with the console's own group, which it
+// may not change to the client group it is not a member of.
+func TestLinuxInstallScriptSetgidSocketDir(t *testing.T) {
+	s := linuxInstallScript("/tmp/locksql", "agent", "locksql", "locksql-clients")
+	for _, want := range []string{
+		`printf 'd /run/locksql 2710 locksql locksql-clients -\n' > /etc/tmpfiles.d/locksql.conf`,
+		"|| install -d -m 2710 -o locksql -g locksql-clients /run/locksql",
+		// A system without systemd has no /etc/tmpfiles.d: the fallback
+		// must still be reached.
+		"install -d -m 0755 -o root -g root /etc/tmpfiles.d\nprintf",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("install script lacks %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, " 0710 ") {
+		t.Errorf("install script still creates a 0710 directory:\n%s", s)
+	}
+}
+
+func TestDoctorShowsSetgidMode(t *testing.T) {
+	checks := doctor(fakeDoctor(separatedSys()), doctorProject(t, "ask"), "")
+	if stateOf(checks, "socket directory") != checkOK {
+		t.Fatalf("socket directory check: %+v", checks)
+	}
+	for _, c := range checks {
+		if c.title == "socket directory" && !strings.Contains(c.detail, "/run/locksql 2710") {
+			t.Errorf("socket directory shown as %q, want mode 2710", c.detail)
+		}
 	}
 }
