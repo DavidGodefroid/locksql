@@ -1531,6 +1531,11 @@ func (p *parser) primary() (Expr, error) {
 		p.i += 2
 		return &Literal{Kind: LitTyped, Text: p.src[t.Pos:next.End], Sp: p.span(start)}, nil
 	case (w == "X" || w == "B" || w == "N") && adjacentString:
+		if p.mysqlDoubleQuoted(1) {
+			// MySQL forms these literals with single quotes only: X"a" is
+			// the column x aliased a.
+			return nil, refuse("double-quoted text is ambiguous in MySQL; use single quotes")
+		}
 		p.i += 2
 		return &Literal{Kind: LitTyped, Text: p.src[t.Pos:next.End], Sp: p.span(start)}, nil
 	case adjacentString:
