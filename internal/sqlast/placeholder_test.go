@@ -207,3 +207,18 @@ func TestHasPlaceholder(t *testing.T) {
 		}
 	}
 }
+
+// A referenced value that cannot be substituted is refused without a word
+// about the value: the agent never saw it. A typed value keeps the reason.
+func TestUnsubstitutableValueRefusal(t *testing.T) {
+	for _, v := range []string{`a\b@example.com`, "a\x00b"} {
+		_, err := analyzeWith(t, "SELECT id FROM users WHERE email = '${r1.1.2}' LIMIT 1", valueEnv(map[string]string{"r1.1.2": v}))
+		if err == nil || err.Error() != "reference r1.1.2 cannot be substituted" {
+			t.Errorf("%q: err = %v", v, err)
+		}
+	}
+	_, err := analyzeWith(t, "SELECT id FROM users WHERE email = '${email}' LIMIT 1", valueEnv(map[string]string{"email": `a\b`}))
+	if err == nil || !strings.Contains(err.Error(), "backslash") {
+		t.Errorf("typed: err = %v", err)
+	}
+}

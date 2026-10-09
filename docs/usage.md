@@ -532,7 +532,9 @@ The rules:
   the names already typed (`values`), so the agent can reuse one or pick another.
 - `--skip-permissions` skips the approval, never the value prompt. If you
   cancel the prompt or let it time out, the query is denied and nothing runs.
-  A value with a backslash or a NUL is refused.
+  A value with a backslash or a NUL is refused; a reference to a cell holding
+  one is refused as `reference rN.R.C cannot be substituted`, which says
+  nothing more about the value.
 - The console keeps the clear values of the last results in memory only, at
   most 50 results and 16 MiB; the oldest are forgotten, and a reference to one
   is refused as `unknown reference rN.R.C`. Cells masked in `partial` or `email`

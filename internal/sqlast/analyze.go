@@ -1471,6 +1471,11 @@ func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human boo
 		}
 		q, err := quoteLiteral(an.d, value)
 		if err != nil {
+			if kind == ValueRef {
+				// The agent never saw this value: the refusal must not
+				// tell it what the value holds.
+				return false, refusef("reference %s cannot be substituted", name)
+			}
 			return false, err
 		}
 		if an.dry == 0 {
