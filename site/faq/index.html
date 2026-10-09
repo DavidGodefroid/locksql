@@ -102,7 +102,7 @@
 </section>
 <section aria-labelledby="tls">
   <h2 id="tls">Is the connection to the database encrypted?</h2>
-  <p>TLS is not configurable yet. PostgreSQL, MariaDB and MySQL connect like <code>sslmode=prefer</code>: encrypted when the server offers TLS, plain otherwise, and the certificate is not verified, so an active attacker on the path can intercept or downgrade the connection, password included. Use an SSH tunnel (<code>ssh -L</code>) or a Unix socket for remote servers. <a href="../security/#transport">Full details</a>.</p>
+  <p>Yes, and verified by default: the profile’s <code>tls</code> setting follows libpq’s <code>sslmode</code> (<code>disable</code>, <code>prefer</code>, <code>require</code>, <code>verify-ca</code>, <code>verify-full</code>). A remote host defaults to <code>verify-full</code>; set <code>tls_ca</code> for a private CA. Below <code>verify-ca</code> an attacker on the path can obtain the password. For a server behind a bastion, add an <code>ssh</code> table to the profile: the console opens the tunnel itself, checks the bastion’s host key and listens on no local port. <a href="../security/#transport">Full details</a>.</p>
 </section>
 <section aria-labelledby="injection">
   <h2 id="injection">Can text stored in the database manipulate my agent?</h2>

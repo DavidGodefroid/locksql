@@ -153,22 +153,55 @@ takes effect after you confirm it in the console.</p>
 
     <h3 id="transport">Transport security</h3>
     
-<p>TLS is not configurable yet. PostgreSQL, MariaDB and MySQL connect like
-PostgreSQL’s <code>sslmode=prefer</code>: encrypted when the server offers TLS,
-plain otherwise, and the certificate is not verified, so an active attacker on
-the path can intercept or downgrade the connection. A plain TCP connection is
-reported as a warning. This mode gives no protection against such an attacker,
-the password included: over the unverified TLS connection the attacker can ask
-for it in clear (MySQL and MariaDB <code>mysql_clear_password</code> or a
-<code>caching_sha2_password</code> full authentication), and PostgreSQL sends it
-in clear to a server that asks for cleartext authentication, with or without
-TLS. On a plain MySQL/MariaDB TCP connection locksql refuses the
-authentications that would hand the password over (clear text, or RSA
-encryption with a key the server sends: <code>sha256_password</code> and a
-<code>caching_sha2_password</code> full authentication), so a MySQL 8 account
-on a server without TLS can log in only while the server’s authentication cache
-holds it. Use an SSH tunnel (<code>ssh -L</code>) or a Unix socket for remote
-servers.</p>
+<p>The profile’s <code>tls</code> setting picks the mode, with libpq’s
+<code>sslmode</code> semantics:</p>
+<table>
+<caption>TLS modes</caption>
+<thead><tr><th scope="col">Mode</th><th scope="col">Encrypts</th><th scope="col">Verifies chain</th><th scope="col">Verifies host name</th></tr></thead>
+<tbody>
+<tr><td><code>disable</code></td><td>no</td><td>no</td><td>no</td></tr>
+<tr><td><code>prefer</code></td><td>if offered</td><td>no</td><td>no</td></tr>
+<tr><td><code>require</code></td><td>yes, else refuse</td><td>only with <code>tls_ca</code></td><td>no</td></tr>
+<tr><td><code>verify-ca</code></td><td>yes, else refuse</td><td>yes</td><td>no</td></tr>
+<tr><td><code>verify-full</code></td><td>yes, else refuse</td><td>yes</td><td>yes (<code>host</code>)</td></tr>
+</tbody>
+</table>
+<p>The default is <code>verify-full</code>, except <code>prefer</code> when
+<code>host</code> is a Unix socket path or a loopback host (<code>localhost</code>
+or a loopback IP literal). <code>production = true</code> refuses
+<code>disable</code> and <code>prefer</code> unless the host is loopback or a
+socket path. <code>tls_ca</code> is a PEM bundle that replaces the system roots;
+it is refused with <code>disable</code> and <code>prefer</code>, and with
+<code>require</code> it verifies the chain, as libpq does. A weaker
+<code>tls</code> or any change of <code>tls_ca</code> loosens the approved policy
+and needs the human’s confirmation.</p>
+<p>Below <code>verify-ca</code> an active attacker on the path can intercept or
+downgrade the connection, and obtain the password. The MariaDB/MySQL clear-text
+guard protects plain TCP connections only: over TLS the driver answers
+<code>mysql_clear_password</code>, <code>sha256_password</code> and a
+<code>caching_sha2_password</code> full authentication (the MySQL 8 default) in
+clear, so an attacker terminating TLS gets the password. On plain TCP
+(<code>disable</code>, or <code>prefer</code> after a fallback) the guard refuses
+a full authentication, so a MySQL 8 account logs in only while the server’s
+authentication cache holds it. PostgreSQL likewise sends the password to a
+server that asks for cleartext authentication. <code>verify-ca</code> and
+<code>verify-full</code> prevent the impersonation. A plain or unverified
+connection is reported on the console and in the audit log.</p>
+<p>A profile with an <code>ssh</code> table reaches its database through a
+bastion. The console opens the SSH connection in its own process: no
+<code>ssh</code> binary, no secret in argv, and no local listening port, so
+another local account (the agent’s included) cannot use the tunnel; the bastion
+resolves the database’s host name. The bastion’s host key is checked against the
+console account’s <code>~/.ssh/known_hosts</code>: an unknown key is shown with
+its SHA256 fingerprint and trusted only when the human types <code>yes</code> (on
+a production profile, the fingerprint’s last 8 characters), and a changed key is
+refused with no override. The key passphrase or SSH password follows the same
+rules as the database password. The SSH leg is encrypted and the bastion
+authenticated; the leg from the bastion to the database is protected only by
+<code>tls</code>, unless the database runs on the bastion. Adding, removing or
+changing the <code>ssh</code> table loosens the approved policy. Out of scope:
+<code>ProxyJump</code> chains, <code>~/.ssh/config</code> (never read),
+certificate host keys and forwarding to a Unix socket on the bastion.</p>
 
 
     <h3 id="write-tiers">Write tiers</h3>
