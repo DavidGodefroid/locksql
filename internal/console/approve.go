@@ -413,6 +413,16 @@ func describePolicy(p config.Policy) []string {
 		"  detectors: " + safeText(strings.Join(pr.Detectors, ", "), false),
 		fmt.Sprintf("  PII rules: %d mask, %d allow", len(p.PIIMask), len(p.PIIAllow)),
 	}
+	if pr.Engine != config.EngineSQLite {
+		mode := pr.TLS
+		if mode == "" {
+			mode = config.TLSPrefer
+		}
+		lines = append(lines, "  tls: "+safeText(mode, false))
+	}
+	if pr.SSH != nil {
+		lines = append(lines, "  ssh: "+safeText(config.SSHString(pr.SSH), false))
+	}
 	for _, a := range p.PIIAllow {
 		lines = append(lines, red+"  allow "+safeText(a, false)+reset)
 	}

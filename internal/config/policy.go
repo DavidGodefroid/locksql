@@ -106,11 +106,19 @@ func Fingerprint(p Policy) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// SSHString shows a bastion in a policy change.
+func SSHString(s *SSHProfile) string {
+	if s == nil {
+		return "none"
+	}
+	return s.User + "@" + s.Host + ":" + strconv.Itoa(s.Port) + " (" + s.Auth + ")"
+}
+
 // Diff lists the changes from approved to current and marks each loosening
 // (spec section 4): a higher tier, production true→false, a larger limit
 // (0 means unlimited), a removed PII rule or detector, an added allow rule,
 // any change of engine, host, port, path, database or user, and a
-// credentials mode other than ask, a weaker tls mode and any change of tls_ca.
+// credentials mode other than ask, a weaker tls mode, any change of tls_ca and any change of the ssh table.
 func Diff(approved, current Policy) []Change {
 	a, c := canonical(approved), canonical(current)
 	ap, cp := a.Profile, c.Profile
@@ -142,6 +150,22 @@ func Diff(approved, current Policy) []Change {
 	}
 	// A new CA can vouch for any certificate: every change loosens.
 	same("tls_ca", ap.TLSCA, cp.TLSCA)
+
+	switch as, cs := ap.SSH, cp.SSH; {
+	case as == nil && cs == nil:
+	case as == nil || cs == nil:
+		// Added or removed: the database is reached another way.
+		out = append(out, Change{Field: "ssh", Old: SSHString(as), New: SSHString(cs), Loosens: true})
+	default:
+		same("ssh.host", as.Host, cs.Host)
+		same("ssh.port", strconv.Itoa(as.Port), strconv.Itoa(cs.Port))
+		same("ssh.user", as.User, cs.User)
+		same("ssh.auth", as.Auth, cs.Auth)
+		same("ssh.key", as.Key, cs.Key)
+		if as.Credentials != cs.Credentials {
+			out = append(out, Change{Field: "ssh.credentials", Old: as.Credentials, New: cs.Credentials, Loosens: cs.Credentials != CredentialsAsk})
+		}
+	}
 
 	limit := func(field string, o, n int64, format func(int64) string) {
 		if o != n {
