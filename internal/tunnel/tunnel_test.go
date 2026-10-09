@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -229,4 +230,110 @@ func TestKeepaliveClosesDeadTunnel(t *testing.T) {
 	if _, err := tun.Dial(context.Background(), "tcp", echoServer(t)); err == nil {
 		t.Error("dial on a closed tunnel succeeded")
 	}
+}
+
+// shortHandshake lowers the handshake timeout for one test.
+func shortHandshake(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := connectTimeout
+	connectTimeout = d
+	t.Cleanup(func() { connectTimeout = old })
+}
+
+func TestSlowPasswordAnswerConnects(t *testing.T) {
+	shortHandshake(t, 200*time.Millisecond)
+	s := newTestServer(t, &ssh.ServerConfig{PasswordCallback: func(_ ssh.ConnMetadata, pw []byte) (*ssh.Permissions, error) {
+		if string(pw) == "hunter2" {
+			return nil, nil
+		}
+		return nil, errors.New("no")
+	}})
+	tun, err := Open(context.Background(), Options{Profile: sshProfile(s, config.SSHAuthPassword, ""), HostKey: trust(s),
+		Secret: func(string) ([]byte, error) { time.Sleep(600 * time.Millisecond); return []byte("hunter2"), nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tun.Close()
+	roundTrip(t, tun, echoServer(t))
+}
+
+func TestSlowHostKeyAnswerConnects(t *testing.T) {
+	shortHandshake(t, 200*time.Millisecond)
+	path, pub := writeKey(t, t.TempDir(), "", 0o600)
+	s := newTestServer(t, acceptKey(pub))
+	check := trust(s)
+	slow := func(host string, remote net.Addr, key ssh.PublicKey) error {
+		time.Sleep(600 * time.Millisecond)
+		return check(host, remote, key)
+	}
+	tun, err := Open(context.Background(), Options{Profile: sshProfile(s, config.SSHAuthKey, path), HostKey: slow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tun.Close()
+	roundTrip(t, tun, echoServer(t))
+}
+
+func TestCancelStopsHandshake(t *testing.T) {
+	// A server that accepts and never speaks.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var conns []net.Conn
+	t.Cleanup(func() {
+		ln.Close()
+		mu.Lock()
+		for _, c := range conns {
+			c.Close()
+		}
+		mu.Unlock()
+	})
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+		}
+	}()
+	host, port, _ := net.SplitHostPort(ln.Addr().String())
+	p, _ := strconv.Atoi(port)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	start := time.Now()
+	_, err = Open(ctx, Options{Profile: config.SSHProfile{Host: host, Port: p, User: "deploy", Auth: config.SSHAuthAgent},
+		AgentSock: agentSock(t), HostKey: ssh.InsecureIgnoreHostKey()})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("Open returned after %v", d)
+	}
+}
+
+// agentSock serves an empty agent keyring and returns its socket path.
+func agentSock(t *testing.T) string {
+	t.Helper()
+	sock := filepath.Join(t.TempDir(), "agent.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	kr := agent.NewKeyring()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go agent.ServeAgent(kr, c)
+		}
+	}()
+	return sock
 }

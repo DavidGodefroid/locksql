@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -23,8 +24,11 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/secrets"
 )
 
+// connectTimeout bounds each non-interactive phase of the connection; a
+// variable so that tests can shorten it.
+var connectTimeout = 15 * time.Second
+
 const (
-	connectTimeout   = 15 * time.Second
 	defaultKeepalive = 30 * time.Second
 	keepaliveMisses  = 3
 )
@@ -57,41 +61,75 @@ type Tunnel struct {
 func Open(ctx context.Context, o Options) (*Tunnel, error) {
 	p := o.Profile
 	addr := net.JoinHostPort(p.Host, strconv.Itoa(p.Port))
+	// The handshake runs under connectTimeout (or the earlier ctx deadline),
+	// except while a human answers a prompt: the host key confirmation or
+	// the SSH password. A cancelled ctx closes the connection at any point.
+	var nc net.Conn
+	// handshaking guards the deadline: the host key callback also runs on
+	// every later key re-exchange, when nc must keep no deadline.
+	var handshaking atomic.Bool
+	handshaking.Store(true)
+	arm := func() {
+		if !handshaking.Load() {
+			return
+		}
+		dl := time.Now().Add(connectTimeout)
+		if d, ok := ctx.Deadline(); ok && d.Before(dl) {
+			dl = d
+		}
+		nc.SetDeadline(dl)
+	}
+	suspend := func() (resume func()) {
+		if handshaking.Load() {
+			nc.SetDeadline(time.Time{})
+		}
+		return arm
+	}
 	var fingerprint string
 	verify := func(host string, remote net.Addr, key ssh.PublicKey) error {
-		fingerprint = ssh.FingerprintSHA256(key)
+		if handshaking.Load() {
+			fingerprint = ssh.FingerprintSHA256(key)
+		}
 		if o.HostKey == nil {
 			return errors.New("ssh: no host key verification configured")
 		}
+		defer suspend()()
 		return o.HostKey(host, remote, key)
 	}
-	auth, cleanup, err := authMethod(o)
+	auth, cleanup, err := authMethod(o, suspend)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 	cfg := &ssh.ClientConfig{
 		User: p.User, Auth: []ssh.AuthMethod{auth}, HostKeyCallback: verify,
-		Timeout: connectTimeout, ClientVersion: "SSH-2.0-locksql",
+		ClientVersion: "SSH-2.0-locksql",
 	}
 	d := net.Dialer{Timeout: connectTimeout}
-	nc, err := d.DialContext(ctx, "tcp", addr)
+	nc, err = d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("ssh: connect to %s: %w", addr, err)
 	}
-	if dl, ok := ctx.Deadline(); ok {
-		nc.SetDeadline(dl)
-	} else {
-		nc.SetDeadline(time.Now().Add(connectTimeout))
-	}
+	arm()
+	stop := context.AfterFunc(ctx, func() { nc.Close() })
 	cc, chans, reqs, err := ssh.NewClientConn(nc, addr, cfg)
 	if err != nil {
+		stop()
 		nc.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		// The client reports a refused authentication only as text.
 		if strings.Contains(err.Error(), "unable to authenticate") {
 			return nil, fmt.Errorf("ssh: authentication to %s@%s failed (%s)", p.User, p.Host, p.Auth)
 		}
 		return nil, fmt.Errorf("ssh: %s: %w", addr, err)
+	}
+	handshaking.Store(false)
+	if !stop() {
+		// ctx was cancelled as the handshake ended: nc is closed.
+		cc.Close()
+		return nil, ctx.Err()
 	}
 	nc.SetDeadline(time.Time{})
 	t := &Tunnel{client: ssh.NewClient(cc, chans, reqs), hostKey: fingerprint, done: make(chan struct{})}
@@ -100,9 +138,11 @@ func Open(ctx context.Context, o Options) (*Tunnel, error) {
 	return t, nil
 }
 
-// authMethod builds the single method of p.Auth. cleanup releases what it
-// holds open (the agent connection).
-func authMethod(o Options) (ssh.AuthMethod, func(), error) {
+// authMethod builds the single method of p.Auth. suspend lifts the
+// handshake deadline while the human types the SSH password; the function
+// it returns restores it. cleanup releases what authMethod holds open (the
+// agent connection).
+func authMethod(o Options, suspend func() (resume func())) (ssh.AuthMethod, func(), error) {
 	p := o.Profile
 	nop := func() {}
 	switch p.Auth {
@@ -126,7 +166,9 @@ func authMethod(o Options) (ssh.AuthMethod, func(), error) {
 			return nil, nop, errors.New("ssh: no way to ask for the SSH password")
 		}
 		return ssh.PasswordCallback(func() (string, error) {
+			resume := suspend()
 			pw, err := o.Secret(fmt.Sprintf("SSH password for %s@%s: ", p.User, p.Host))
+			resume()
 			if err != nil {
 				return "", err
 			}
