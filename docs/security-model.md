@@ -199,6 +199,10 @@ like the SQL. `reason` is the reason the human typed with a denial.
   restrict what an approved write statement does within the account's
   privileges. The column analysis covers reads; a write's `RETURNING` list
   or a data-modifying CTE may not alias or transform a masked column.
+- **Size bound.** The size bound counts bytes built from literals and string
+  functions; numeric arithmetic (`1e131071`, `^`) and formatting of stored
+  data (`jsonb_pretty`) can still produce a value of hundreds of megabytes on
+  the server, bounded by `statement_timeout`.
 - **Clear results on the human's screen.** With `--show-results` (and for an
   unmasked run) the clear rows stay in the scrollback of the console's
   terminal, and are visible to anyone who sees that screen (screen sharing,
