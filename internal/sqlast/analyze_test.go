@@ -388,7 +388,7 @@ func TestLitFilter(t *testing.T) {
 		"SELECT email FROM users WHERE email = 'v@x.com' LIMIT 5":                                             true,
 		"SELECT email FROM users WHERE email IN ('v@x.com', 'b@x.com') LIMIT 5":                               true,
 		"SELECT email FROM users GROUP BY email HAVING email = 'v@x.com' LIMIT 5":                             true,
-		"SELECT email FROM users INTERSECT SELECT email FROM users WHERE email = 'v@x.com' LIMIT 5":           true,
+		"SELECT email FROM users INTERSECT SELECT email FROM contacts WHERE email = 'v@x.com' LIMIT 5":        true,
 		"SELECT b.email FROM users a JOIN contacts b ON a.email = b.email WHERE a.email = 'v@x.com' LIMIT 5":  true,
 		"SELECT email FROM users WHERE id IN (SELECT id FROM users WHERE email = 'v@x.com') LIMIT 5":          true,
 		"SELECT email FROM users WHERE email IN ('${email}', 'v@x.com') LIMIT 5":                              true,

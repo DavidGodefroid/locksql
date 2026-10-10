@@ -356,13 +356,21 @@ func (an *analyzer) body(b Body, parent *scope) ([]column, *scope, error) {
 // PII column may only meet values that are themselves all PII, never a
 // literal, an expression, an unmasked column or a mix the agent chose, or
 // the result would tell whether that value is in the column, without any
-// k-anonymity check. UNION ALL compares nothing. The arms of a nested set
-// operation arrive merged, so every level is checked.
+// k-anonymity check. Two reads of one PII source column are refused as in a
+// self-join: the result tells whether one subject's value equals
+// another's. UNION ALL compares nothing. The arms of a nested set operation
+// arrive merged, so every level is checked.
 func (an *analyzer) setOpCompare(b *SetOp, i int, l, r Prov) error {
 	if !an.env.Masking || b.All && strings.EqualFold(b.Op, "UNION") {
 		return nil
 	}
-	if !l.Sensitive && !r.Sensitive || an.allPII(l) && an.allPII(r) {
+	if !l.Sensitive && !r.Sensitive {
+		return nil
+	}
+	if an.allPII(l) && an.allPII(r) {
+		if sameColumn(l, r) {
+			return selfComparison()
+		}
 		return nil
 	}
 	return refusef("a set operation compares a PII column with a value the agent chose (column %d)", i+1)

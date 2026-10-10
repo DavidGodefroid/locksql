@@ -299,6 +299,11 @@ func TestAdvSelfComparison(t *testing.T) {
 			"SELECT a.name FROM users a NATURAL JOIN users b LIMIT 10",
 			"SELECT a.name FROM users a JOIN users b USING (email) LIMIT 10",
 			"WITH c AS (SELECT email FROM users) SELECT x.email FROM c x JOIN c y ON x.email = y.email LIMIT 10",
+			// A set operation compares its arms like a join.
+			"SELECT id FROM users u WHERE EXISTS (SELECT u.email INTERSECT SELECT u2.email FROM users u2 WHERE u2.id = 7) LIMIT 10",
+			"SELECT email FROM users WHERE id=5 INTERSECT SELECT email FROM users WHERE id=6 LIMIT 1",
+			"SELECT email FROM users WHERE id=5 EXCEPT SELECT email FROM users WHERE id=6 LIMIT 1",
+			"SELECT email FROM users WHERE id=5 UNION SELECT email FROM users WHERE id=6 LIMIT 1",
 		}
 		if d == sqlclass.MySQL {
 			refused = append(refused, "SELECT name FROM users WHERE email <=> email LIMIT 10")
@@ -314,6 +319,8 @@ func TestAdvSelfComparison(t *testing.T) {
 			"SELECT u.name FROM users u JOIN contacts c ON u.email = c.email LIMIT 10",
 			"SELECT u.name FROM users u JOIN contacts c USING (email) LIMIT 10",
 			"SELECT name FROM users u WHERE u.email IN (SELECT c.email FROM contacts c) LIMIT 10",
+			"SELECT email FROM users INTERSECT SELECT email FROM contacts LIMIT 5",
+			"SELECT email FROM users WHERE id=5 UNION ALL SELECT email FROM users WHERE id=6 LIMIT 1",
 		} {
 			if _, err := analyze(t, d, sql); err != nil {
 				t.Errorf("%s %q: %v", d, sql, err)
