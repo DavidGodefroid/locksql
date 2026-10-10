@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -37,6 +38,8 @@ var expected = map[string]Level{
 	"cartesian":       Refuse,
 	"correlated":      Refuse,
 	"join_no_index":   Refuse,
+	// The planner guesses how often a recursive CTE iterates.
+	"recursive_cte": Warn,
 }
 
 // engineLevel overrides expected for one engine.
@@ -280,6 +283,29 @@ func TestLevelText(t *testing.T) {
 	}
 	if OK.String() != "OK" || Warn.String() != "WARN" || Refuse.String() != "REFUSE" {
 		t.Error("String")
+	}
+}
+
+func TestRecursiveCTEIsWarn(t *testing.T) {
+	const reason = "recursive CTE: the planner's row estimate is a guess"
+	for _, file := range []string{"postgres/17/recursive_cte.json", "sqlite/recursive_cte.json"} {
+		p, _ := loadPlan(t, filepath.Join("..", "..", "testdata", "explain", filepath.FromSlash(file)))
+		for _, production := range []bool{false, true} {
+			v := Assess(p, limits, production)
+			if v.Level != Warn || !slices.Contains(v.Reasons, reason) {
+				t.Errorf("%s production=%v: verdict = %+v", file, production, v)
+			}
+		}
+	}
+	// The signal alone never refuses, and does not hide a refusal.
+	rec := group(table("r", engine.AccessFull, 2))
+	rec.Recursive = true
+	if v := Assess(engine.Plan{Root: group(rec)}, limits, true); v.Level != Warn || len(v.Reasons) != 1 || v.Reasons[0] != reason {
+		t.Errorf("small recursive CTE: %+v", v)
+	}
+	rec.Children[0].EstRows = 500_000
+	if v := Assess(engine.Plan{Root: group(rec)}, limits, false); v.Level != Refuse || !slices.Contains(v.Reasons, reason) {
+		t.Errorf("large recursive CTE: %+v", v)
 	}
 }
 

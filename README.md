@@ -285,8 +285,9 @@ only guide the agent; the console's checks are the guarantee.
   is also enforced server side (read-only session and transaction).
 - **Weight check.** A READ statement must carry `LIMIT n` with `n <= max_rows`.
   The console runs `EXPLAIN` and refuses statements that would examine too
-  many rows (or cost more than `explain_cost_refuse`); REFUSE cannot be
-  overridden from the console.
+  many rows (or cost more than `explain_cost_refuse`); a recursive CTE is at
+  least WARN on PostgreSQL and SQLite, whose planners only guess how often it
+  iterates; REFUSE cannot be overridden from the console.
 - **PII masking.** At every start the console scans the schema and proposes
   rules for columns that look like personal data (multilingual names and
   types) and that no rule names yet. Every output column is resolved to its
