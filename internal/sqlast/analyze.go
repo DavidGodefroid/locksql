@@ -50,9 +50,8 @@ type Prov struct {
 	// Lit is set when some values may be literals of the statement (a
 	// UNION of a column and a constant, for instance).
 	Lit bool
-	// grown marks a column whose values a growing call built (see
-	// analyzer.grows): reading it counts as such a call.
-	grown bool
+	// w bounds the size of the value (see width).
+	w width
 }
 
 // Table is one relation of the catalog.
@@ -216,9 +215,6 @@ type analyzer struct {
 	inRecCTE  int
 	relations map[string]bool
 	uses      map[Use]bool
-	// sizeCalls counts the size function calls, growth the calls whose
-	// result may outgrow their input.
-	sizeCalls, growth int
 }
 
 // Analyze resolves the provenance of every output column of st, checks the
@@ -407,7 +403,7 @@ func union(a, b Prov) Prov {
 		Sensitive: a.Sensitive || b.Sensitive,
 		Modes:     mergeSources(a.Modes, b.Modes),
 		Lit:       a.Lit || b.Lit || a.Kind == KindConst || b.Kind == KindConst,
-		grown:     a.grown || b.grown,
+		w:         a.w.max(b.w),
 	}
 }
 
@@ -478,7 +474,7 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 	}
 	an.inRecCTE++
 	defer func() { an.inRecCTE-- }()
-	converged := false
+	converged, growing := false, false
 	for i := 0; i < 8; i++ {
 		def.selfCols = cur
 		an.dry++
@@ -494,11 +490,16 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 		for k := range next {
 			next[k].prov = union(next[k].prov, cur[k].prov)
 		}
-		if sameCols(cur, next) {
+		if sameCols(cur, next, true) {
 			converged = true
 			break
 		}
+		// Only the widths changed: a column grows on every pass.
+		growing = sameCols(cur, next, false)
 		cur = next
+	}
+	if !converged && growing {
+		return refusef("a recursive CTE builds growing values (CTE %s): each pass makes a column wider", strings.ToLower(c.Name))
 	}
 	if !converged {
 		// The last iteration may still miss a literal or a source a few
@@ -515,14 +516,15 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 
 // sameCols reports whether a recursive CTE's provenance has converged:
 // every field that decides masking and references (kind, sensitivity,
-// literals, sources, modes, growth) is unchanged.
-func sameCols(a, b []column) bool {
+// literals, sources, modes) is unchanged, and so are the widths when
+// widths is set.
+func sameCols(a, b []column, widths bool) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
 		p, q := a[i].prov, b[i].prov
-		if p.Kind != q.Kind || p.Sensitive != q.Sensitive || p.Lit != q.Lit || p.grown != q.grown || !sameSet(p.Sources, q.Sources) || !sameSet(p.Modes, q.Modes) {
+		if p.Kind != q.Kind || p.Sensitive != q.Sensitive || p.Lit != q.Lit || widths && p.w != q.w || !sameSet(p.Sources, q.Sources) || !sameSet(p.Modes, q.Modes) {
 			return false
 		}
 	}
@@ -607,14 +609,10 @@ func (an *analyzer) selectCore(s *Select, parent *scope) ([]column, *scope, erro
 			cols = append(cols, exp...)
 			continue
 		}
-		grown := an.growth
 		p, err := an.value(it.Expr, sc, "select")
 		if err != nil {
 			return nil, nil, err
 		}
-		// A column built by a growing call carries it to the queries that
-		// read it (derived tables, CTEs, set operations).
-		p.grown = p.grown || an.growth > grown
 		name, labeled := it.Alias, it.Alias != ""
 		if name == "" {
 			name = defaultName(it.Expr)
@@ -934,7 +932,7 @@ func (an *analyzer) tableName(t *TableName) (*relation, error) {
 }
 
 func (an *analyzer) sourceProv(s Source) Prov {
-	p := Prov{Sources: []Source{s}, Kind: KindIdentity}
+	p := Prov{Sources: []Source{s}, Kind: KindIdentity, w: width{cols: 1}}
 	if mode, ok := an.env.Rule(s); ok {
 		p.Sensitive = true
 		p.Modes = []string{mode}
@@ -1045,8 +1043,21 @@ func (an *analyzer) touch(p Prov, clause string) {
 // value computes the provenance of an expression used as a value. An
 // expression that transforms a PII column (anything but a plain reference,
 // COUNT, MIN/MAX and the other aggregates) is refused: its result could
-// reveal the column in a form no mask covers.
+// reveal the column in a form no mask covers. Every value, and so every
+// select-list item, function argument and operand, is checked against the
+// size bound (see width).
 func (an *analyzer) value(e Expr, sc *scope, clause string) (Prov, error) {
+	p, err := an.valueOf(e, sc, clause)
+	if err != nil {
+		return Prov{}, err
+	}
+	if err := p.w.check(); err != nil {
+		return Prov{}, err
+	}
+	return p, nil
+}
+
+func (an *analyzer) valueOf(e Expr, sc *scope, clause string) (Prov, error) {
 	switch e := e.(type) {
 	case *ColumnRef:
 		p, err := an.resolve(e, sc, clause == "group by" || clause == "having" || clause == "order by")
@@ -1054,12 +1065,9 @@ func (an *analyzer) value(e Expr, sc *scope, clause string) (Prov, error) {
 			return Prov{}, err
 		}
 		an.touch(p, clause)
-		if p.grown {
-			an.growth++
-		}
 		return p, nil
 	case *Literal:
-		return Prov{Kind: KindConst, Lit: true}, nil
+		return Prov{Kind: KindConst, Lit: true, w: an.literalWidth(e)}, nil
 	case *Paren:
 		return an.value(e.X, sc, clause)
 	case *Subquery:
@@ -1077,7 +1085,7 @@ func (an *analyzer) value(e Expr, sc *scope, clause string) (Prov, error) {
 		if _, err := an.query(e.Query, sc); err != nil {
 			return Prov{}, err
 		}
-		return Prov{Kind: KindExpr}, nil
+		return Prov{Kind: KindExpr, w: width{bytes: numWidth}}, nil
 	case *In:
 		parts := []Expr{e.X}
 		parts = append(parts, e.List...)
@@ -1099,6 +1107,10 @@ func (an *analyzer) value(e Expr, sc *scope, clause string) (Prov, error) {
 		}
 		return p, nil
 	case *Binary:
+		if e.Op == "||" {
+			// Concatenation (MySQL's OR is bounded the same way).
+			return an.combineWith([]Expr{e.L, e.R}, sc, clause, e.Op, sumWidth)
+		}
 		return an.combine([]Expr{e.L, e.R}, sc, clause, e.Op)
 	case *Unary:
 		return an.combine([]Expr{e.X}, sc, clause, e.Op)
@@ -1115,7 +1127,7 @@ func (an *analyzer) value(e Expr, sc *scope, clause string) (Prov, error) {
 		}
 		return an.combine(parts, sc, clause, "CASE")
 	case *Cast:
-		return an.combine([]Expr{e.X}, sc, clause, "CAST")
+		return an.combineWith([]Expr{e.X}, sc, clause, "CAST", func(ws []width) width { return castWidth(e.Type, ws[0]) })
 	case *Collate:
 		return an.combine([]Expr{e.X}, sc, clause, "COLLATE")
 	case *Between:
@@ -1133,25 +1145,35 @@ func (an *analyzer) value(e Expr, sc *scope, clause string) (Prov, error) {
 		}
 		return an.combine(parts, sc, clause, "IS")
 	case *Tuple:
-		return an.combine(e.Items, sc, clause, "a row value")
+		return an.combineWith(e.Items, sc, clause, "a row value", sumWidth)
 	}
 	return Prov{}, refuse("unsupported expression")
 }
 
 // combine is the provenance of an operator or function over parts: KindExpr
-// over their sources. A PII part is refused.
+// over their sources. A PII part is refused. Its result is bounded by its
+// largest part.
 func (an *analyzer) combine(parts []Expr, sc *scope, clause, what string) (Prov, error) {
+	return an.combineWith(parts, sc, clause, what, maxWidth)
+}
+
+// combineWith is combine with the width of the result computed from the
+// widths of the parts.
+func (an *analyzer) combineWith(parts []Expr, sc *scope, clause, what string, wf func([]width) width) (Prov, error) {
 	out := Prov{Kind: KindConst}
+	ws := make([]width, 0, len(parts))
 	for _, x := range parts {
 		p, err := an.value(x, sc, clause)
 		if err != nil {
 			return Prov{}, err
 		}
 		out = an.mix(out, p)
+		ws = append(ws, p.w)
 	}
 	if err := an.noPII(out, what); err != nil {
 		return Prov{}, err
 	}
+	out.w = wf(ws)
 	return out, nil
 }
 
@@ -1200,7 +1222,7 @@ func piiNames(p Prov) string {
 }
 
 // call is the provenance of a function call.
-func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (p Prov, err error) {
+func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 	if !funcAllowed(an.d, f.Name) {
 		return Prov{}, refusef("function %s is not in the allowlist", strings.ToLower(f.Name))
 	}
@@ -1213,31 +1235,6 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (p Prov, err err
 	if err := an.checkFormat(f); err != nil {
 		return Prov{}, err
 	}
-	// A replacement multiplies the length of its input: none takes a size
-	// function in its arguments, and one that grows takes no call that
-	// grows (see grows), at any depth.
-	sized, grown := an.sizeCalls, an.growth
-	defer func() {
-		if err != nil {
-			return
-		}
-		if _, ok := replaceArg[f.Name]; ok && (an.sizeCalls > sized || an.grows(f) && an.growth > grown) {
-			p, err = Prov{}, refusef("%s: an argument calls REPEAT, LPAD, RPAD, SPACE, ZEROBLOB, or a replacement that grows its input", strings.ToLower(f.Name))
-			return
-		}
-		if _, ok := sizeArg[f.Name]; ok && an.growth > grown || concatAggs[f.Name] && an.growth > grown {
-			// One value built from all rows: a size function multiplies
-			// by the row count what it builds per row.
-			p, err = Prov{}, refusef("%s: an argument built by a size function is not allowed", strings.ToLower(f.Name))
-			return
-		}
-		if _, ok := sizeArg[f.Name]; ok {
-			an.sizeCalls++
-		}
-		if an.grows(f) {
-			an.growth++
-		}
-	}()
 	if f.Over != nil {
 		for _, e := range f.Over.PartitionBy {
 			if err := an.noPIIValue(e, sc, "window PARTITION BY"); err != nil {
@@ -1250,7 +1247,16 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (p Prov, err err
 			}
 		}
 		if windowOnly[f.Name] || aggregates[f.Name] {
-			return an.combine(f.Args, sc, clause, "window function "+strings.ToLower(f.Name))
+			var werr error
+			p, err := an.combineWith(f.Args, sc, clause, "window function "+strings.ToLower(f.Name), func(ws []width) width {
+				w, err := an.aggWidth(f, ws)
+				werr = err
+				return w
+			})
+			if err == nil {
+				err = werr
+			}
+			return p, err
 		}
 		return Prov{}, refusef("%s is not a window function", strings.ToLower(f.Name))
 	}
@@ -1261,7 +1267,7 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (p Prov, err err
 		if f.Distinct || f.Filter != nil || f.OrderBy != nil {
 			return Prov{}, refusef("DISTINCT, FILTER and ORDER BY only apply to aggregates")
 		}
-		return an.combine(f.Args, sc, clause, "function "+strings.ToLower(f.Name))
+		return an.combineWith(f.Args, sc, clause, "function "+strings.ToLower(f.Name), func(ws []width) width { return an.funcWidth(f, ws) })
 	}
 	// An aggregate.
 	if sc.node != nil {
@@ -1278,24 +1284,29 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (p Prov, err err
 		}
 	}
 	if f.Star {
-		return Prov{Kind: KindConst}, nil
+		return Prov{Kind: KindConst, w: width{bytes: numWidth}}, nil
 	}
 	var arg Prov
+	var ws []width
 	switch {
 	case len(f.Args) == 1:
 		p, err := an.value(f.Args[0], sc, clause)
 		if err != nil {
 			return Prov{}, err
 		}
-		arg = p
+		arg, ws = p, []width{p.w}
 	default:
 		// string_agg(x, sep), GROUP_CONCAT(a, b), json_object_agg(k, v):
 		// every argument is aggregated as a value.
-		p, err := an.combineLoose(f.Args, sc, clause)
+		p, pws, err := an.combineLoose(f.Args, sc, clause)
 		if err != nil {
 			return Prov{}, err
 		}
-		arg = p
+		arg, ws = p, pws
+	}
+	w, err := an.aggWidth(f, ws)
+	if err != nil {
+		return Prov{}, err
 	}
 	if arg.Kind == KindExpr && arg.Sensitive && an.env.Masking {
 		return Prov{}, refusef("a PII column (%s) is used inside an expression given to %s", piiNames(arg), strings.ToLower(f.Name))
@@ -1308,9 +1319,10 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (p Prov, err err
 	if arg.Sensitive && an.env.Masking && sc.node != nil {
 		sc.node.needK = true
 	}
+	arg.w = w
 	switch {
 	case countAggs[f.Name]:
-		return Prov{Sources: arg.Sources, Kind: KindCount}, nil
+		return Prov{Sources: arg.Sources, Kind: KindCount, w: w}, nil
 	case identityAggs[f.Name] && len(f.Args) == 1:
 		if arg.Kind == KindConst {
 			return arg, nil
@@ -1327,23 +1339,25 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (p Prov, err err
 
 // combineLoose merges the provenance of several aggregate arguments,
 // keeping plain PII references (each is aggregated as a value).
-func (an *analyzer) combineLoose(parts []Expr, sc *scope, clause string) (Prov, error) {
+func (an *analyzer) combineLoose(parts []Expr, sc *scope, clause string) (Prov, []width, error) {
 	out := Prov{Kind: KindConst}
+	ws := make([]width, 0, len(parts))
 	for _, x := range parts {
 		p, err := an.value(x, sc, clause)
 		if err != nil {
-			return Prov{}, err
+			return Prov{}, nil, err
 		}
 		if p.Sensitive && p.Kind != KindIdentity && an.env.Masking {
-			return Prov{}, refusef("a PII column (%s) is used inside an expression given to an aggregate", piiNames(p))
+			return Prov{}, nil, refusef("a PII column (%s) is used inside an expression given to an aggregate", piiNames(p))
 		}
+		ws = append(ws, p.w)
 		k := max(out.Kind, p.Kind)
 		out = Prov{Sources: mergeSources(out.Sources, p.Sources), Kind: k, Sensitive: out.Sensitive || p.Sensitive, Modes: append(out.Modes, p.Modes...)}
 	}
 	if out.Kind == KindIdentity && len(parts) > 1 {
 		out.Kind = KindAggregate
 	}
-	return out, nil
+	return out, ws, nil
 }
 
 // noPIIValue refuses a PII column anywhere in e.

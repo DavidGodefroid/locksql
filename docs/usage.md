@@ -652,17 +652,19 @@ locksql doctor   [--profile P]
   numeric, date and JSON functions, aggregates and window functions;
   schema-qualified functions are refused). `REPEAT`, `LPAD`, `RPAD`, `SPACE`
   and `ZEROBLOB` take a literal length of at most 65 536, and only literals
-  and columns as arguments; `REPEAT` repeats a string literal into at most
-  65 536 bytes. The replacement of `REPLACE`, `REGEXP_REPLACE` and `TRANSLATE`
-  is a string literal of at most 1 024 bytes; their arguments call none of
-  these size functions, and a replacement that grows its input takes no other
-  call that grows it. The format string of `format` (PostgreSQL, SQLite) and
-  `printf` (SQLite) is a literal whose widths and precisions are at most
-  65 536, never `*`. An aggregate that builds one value from all its rows
-  (`STRING_AGG`, `GROUP_CONCAT`, `ARRAY_AGG`, the JSON aggregates) takes no
-  argument built by these functions. System schemas and relations
-  (`information_schema`, `pg_catalog`, `mysql`, `performance_schema`, `sys`,
-  SQLite internals) are refused, and so are `pg_stat_statements` and
+  and columns as arguments; `REPEAT` repeats a string literal. The
+  replacement of `REPLACE`, `REGEXP_REPLACE` and `TRANSLATE` is a string
+  literal of at most 1 024 bytes. The format string of `format` (PostgreSQL,
+  SQLite) and `printf` (SQLite) is a literal whose widths and precisions are
+  at most 65 536, never `*`. locksql bounds the size a statement can build:
+  literals and size functions may contribute at most 65 536 bytes to any
+  value, and a value may combine at most 64 column-width inputs; a
+  concatenating aggregate (`STRING_AGG`, `GROUP_CONCAT`, `ARRAY_AGG`, the
+  JSON aggregates) takes an argument of at most 1 024 bytes. The bound
+  follows a value through CTEs, derived tables and set operations, and a
+  recursive CTE whose values grow on every pass is refused. System schemas
+  and relations (`information_schema`, `pg_catalog`, `mysql`,
+  `performance_schema`, `sys`, SQLite internals) are refused, and so are `pg_stat_statements` and
   `pg_stat_activity` while mask rules exist (they hold the text of past
   statements). Every table and column must resolve against the catalog.
 - Every output column is traced to its source columns, so an alias, a CTE or

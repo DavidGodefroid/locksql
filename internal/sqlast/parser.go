@@ -1811,6 +1811,7 @@ func (p *parser) call(start int, name string) (Expr, error) {
 				if !ok || t.Kind != sqlclass.TokString || p.mysqlDoubleQuoted(0) {
 					return nil, p.unexpected()
 				}
+				f.Separator = &Literal{Kind: LitString, Text: t.Text, Sp: Span{t.Pos, t.End}}
 				p.i++
 			}
 		}

@@ -85,6 +85,18 @@ var dialectFuncs = map[sqlclass.Dialect]set{
 // allocated per cell, and an EXPLAIN plan does not show its cost.
 const maxSizeArg = 65536
 
+// maxValueBytes and maxValueCols bound every value a statement builds (see
+// width): the bytes its literals and length arguments contribute, and the
+// number of column-width inputs it combines.
+const (
+	maxValueBytes = 65536
+	maxValueCols  = 64
+)
+
+// maxConcatArg caps, in bytes, each argument of a concatenating aggregate:
+// the aggregate repeats it once per row.
+const maxConcatArg = 1024
+
 // maxReplacement caps the replacement string of REPLACE, REGEXP_REPLACE and
 // TRANSLATE, in bytes.
 const maxReplacement = 1024
@@ -163,35 +175,6 @@ func (an *analyzer) checkReplaceArgs(f *FuncCall) error {
 		return refusef("%s: the replacement must be a string literal of at most %d bytes", strings.ToLower(f.Name), maxReplacement)
 	}
 	return nil
-}
-
-// grows reports a call whose result may be much larger than its input: a
-// size function, a format (padded to its widths), a REGEXP_REPLACE (an
-// empty match inserts the replacement at every position), a REPLACE whose
-// replacement is longer than a plain literal pattern. TRANSLATE maps
-// characters one to one.
-func (an *analyzer) grows(f *FuncCall) bool {
-	if an.formatArg(f.Name) {
-		return true
-	}
-	switch f.Name {
-	case "REPEAT", "LPAD", "RPAD", "SPACE", "ZEROBLOB", "REGEXP_REPLACE":
-		return true
-	case "REPLACE":
-		if len(f.Args) != 3 {
-			return true
-		}
-		from, ok1 := f.Args[1].(*Literal)
-		to, ok2 := f.Args[2].(*Literal)
-		if !ok1 || !ok2 {
-			return true
-		}
-		fv, ok1 := unquote(an.d, from.Text)
-		tv, ok2 := unquote(an.d, to.Text)
-		// An empty pattern leaves the string unchanged in every dialect.
-		return !ok1 || !ok2 || strings.Contains(fv, "\\") || fv != "" && len(tv) > len(fv)
-	}
-	return false
 }
 
 // formatArg reports the functions whose first argument is a printf-style

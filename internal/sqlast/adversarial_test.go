@@ -356,20 +356,19 @@ func TestAdvSizeFunctionCap(t *testing.T) {
 			}
 		}
 		refused := map[string]string{
-			"SELECT repeat('x', 1073741823), repeat('y', 1073741823) LIMIT 1":                   "repeat: the length argument must be an integer literal at most 65536",
-			"SELECT repeat(repeat('x', 65536), 16000) FROM users LIMIT 1":                       "repeat: arguments must be literals or columns",
-			"SELECT lpad(repeat('x', 10), 10, '0') FROM users LIMIT 1":                          "lpad: arguments must be literals or columns",
-			"SELECT lpad(name, 10, lower(name)) FROM users LIMIT 1":                             "lpad: arguments must be literals or columns",
-			"SELECT repeat(name, 10) FROM users LIMIT 1":                                        "repeat: the string argument must be a string literal",
-			"SELECT repeat('ab', 32769) FROM users LIMIT 1":                                     "repeat: the result would exceed 65536 bytes",
-			"SELECT replace(repeat('x', 65536), 'x', repeat('y', 65536)) FROM users LIMIT 1":    "replace: the replacement must be a string literal of at most 1024 bytes",
-			"SELECT replace(name, 'a', repeat('b', 10)) FROM users LIMIT 1":                     "replace: the replacement must be a string literal of at most 1024 bytes",
-			"SELECT replace(name, 'a', name) FROM users LIMIT 1":                                "replace: the replacement must be a string literal of at most 1024 bytes",
-			"SELECT replace(name, 'a', '" + strings.Repeat("b", 1025) + "') FROM users LIMIT 1": "replace: the replacement must be a string literal of at most 1024 bytes",
-			"SELECT replace(repeat('x', 65536), 'x', 'yy') FROM users LIMIT 1":                  "replace: an argument calls REPEAT",
-			"SELECT replace(lower(lpad(name, 100, 'x')), 'x', 'y') FROM users LIMIT 1":          "replace: an argument calls REPEAT",
-			"SELECT replace(replace(name, 'a', 'bbbb'), 'b', 'cccc') FROM users LIMIT 1":        "replace: an argument calls REPEAT",
-			"SELECT replace(name, (SELECT repeat('x', 10)), 'y') FROM users LIMIT 1":            "replace: an argument calls REPEAT",
+			"SELECT repeat('x', 1073741823), repeat('y', 1073741823) LIMIT 1":                      "repeat: the length argument must be an integer literal at most 65536",
+			"SELECT repeat(repeat('x', 65536), 16000) FROM users LIMIT 1":                          "repeat: arguments must be literals or columns",
+			"SELECT lpad(repeat('x', 10), 10, '0') FROM users LIMIT 1":                             "lpad: arguments must be literals or columns",
+			"SELECT lpad(name, 10, lower(name)) FROM users LIMIT 1":                                "lpad: arguments must be literals or columns",
+			"SELECT repeat(name, 10) FROM users LIMIT 1":                                           "repeat: the string argument must be a string literal",
+			"SELECT repeat('ab', 32769) FROM users LIMIT 1":                                        "repeat: the result would exceed 65536 bytes",
+			"SELECT replace(repeat('x', 65536), 'x', repeat('y', 65536)) FROM users LIMIT 1":       "replace: the replacement must be a string literal of at most 1024 bytes",
+			"SELECT replace(name, 'a', repeat('b', 10)) FROM users LIMIT 1":                        "replace: the replacement must be a string literal of at most 1024 bytes",
+			"SELECT replace(name, 'a', name) FROM users LIMIT 1":                                   "replace: the replacement must be a string literal of at most 1024 bytes",
+			"SELECT replace(name, 'a', '" + strings.Repeat("b", 1025) + "') FROM users LIMIT 1":    "replace: the replacement must be a string literal of at most 1024 bytes",
+			"SELECT replace(repeat('x', 65536), 'x', 'yy') FROM users LIMIT 1":                     "the statement could build a value larger than 65536 bytes",
+			"SELECT replace(name, 'a', '" + strings.Repeat("b", 65) + "') FROM users LIMIT 1":      "the statement could build a value wider than 64 columns",
+			"SELECT replace(replace(name, 'a', 'bbbbbbbbb'), 'b', 'ccccccccc') FROM users LIMIT 1": "the statement could build a value wider than 64 columns",
 		}
 		for sql, msg := range refused {
 			_, err := analyze(t, d, sql)
@@ -386,6 +385,10 @@ func TestAdvSizeFunctionCap(t *testing.T) {
 			"SELECT replace(replace(name, '-', ''), ' ', '') FROM users LIMIT 1",
 			"SELECT replace(replace(name, 'a', 'bbbb'), 'b', '') FROM users LIMIT 1",
 			"SELECT concat(repeat('-', 10), name) FROM users LIMIT 1",
+			// Bounded by the width rule: 100 bytes, 16 columns, the input.
+			"SELECT replace(lower(lpad(name, 100, 'x')), 'x', 'y') FROM users LIMIT 1",
+			"SELECT replace(replace(name, 'a', 'bbbb'), 'b', 'cccc') FROM users LIMIT 1",
+			"SELECT replace(name, (SELECT repeat('x', 10)), 'y') FROM users LIMIT 1",
 		} {
 			if _, err := analyze(t, d, sql); err != nil {
 				t.Errorf("%s %q: %v", d, sql, err)
@@ -394,7 +397,7 @@ func TestAdvSizeFunctionCap(t *testing.T) {
 	}
 	for _, sql := range []string{
 		"SELECT regexp_replace(name, '', repeat('x', 10)) FROM users LIMIT 1",
-		"SELECT replace(regexp_replace(name, '', 'xx', 'g'), 'x', 'yy') FROM users LIMIT 1",
+		"SELECT replace(regexp_replace(name, '', '" + strings.Repeat("x", 40) + "', 'g'), 'x', 'yy') FROM users LIMIT 1",
 		"SELECT translate(name, 'a', name) FROM users LIMIT 1",
 	} {
 		wantRefused(t, sqlclass.Postgres, sql)
@@ -402,6 +405,7 @@ func TestAdvSizeFunctionCap(t *testing.T) {
 	for _, sql := range []string{
 		"SELECT regexp_replace(name, 'a', 'b', 'g') FROM users LIMIT 1",
 		"SELECT replace(translate(name, 'ab', 'cd'), 'c', 'e') FROM users LIMIT 1",
+		"SELECT replace(regexp_replace(name, '', 'xx', 'g'), 'x', 'yy') FROM users LIMIT 1",
 	} {
 		if _, err := analyze(t, sqlclass.Postgres, sql); err != nil {
 			t.Errorf("%q: %v", sql, err)
@@ -462,8 +466,9 @@ func TestAdvFormatWidthCap(t *testing.T) {
 	}
 }
 
-// A concatenating aggregate builds one value from all its rows: a size
-// function in its argument multiplies what it builds by the row count.
+// A concatenating aggregate builds one value from all its rows: an argument
+// of more than 1 024 bytes, or wider than one column, is multiplied by the
+// row count.
 func TestAdvConcatAggregateSize(t *testing.T) {
 	refused := map[sqlclass.Dialect][]string{
 		sqlclass.Postgres: {
@@ -472,13 +477,16 @@ func TestAdvConcatAggregateSize(t *testing.T) {
 			"SELECT array_agg(format('%65536s', name)) FROM users LIMIT 1",
 			"SELECT json_agg(replace(name, 'a', 'bbbb')) FROM users LIMIT 1",
 			"SELECT string_agg(regexp_replace(name, '', 'x', 'g'), '') FROM users LIMIT 1",
-			"SELECT string_agg(name, repeat(',', 1000)) FROM users LIMIT 1",
-			"SELECT string_agg((SELECT repeat('x', 10)), ',') OVER () FROM users LIMIT 1",
+			"SELECT string_agg(name, repeat(',', 2000)) FROM users LIMIT 1",
+			"SELECT string_agg((SELECT repeat('x', 2000)), ',') OVER () FROM users LIMIT 1",
+			"SELECT string_agg(repeat('x', 2000), '') FROM users LIMIT 1",
+			"SELECT string_agg(name || name, ',') FROM users LIMIT 1",
 		},
 		sqlclass.MySQL: {
 			"SELECT group_concat(repeat('x', 65536)) FROM users LIMIT 1",
 			"SELECT group_concat(space(65536) SEPARATOR '') FROM users LIMIT 1",
 			"SELECT json_arrayagg(rpad(name, 65536, 'x')) FROM users LIMIT 1",
+			"SELECT group_concat(name SEPARATOR '" + strings.Repeat(",", 1025) + "') FROM users LIMIT 1",
 		},
 		sqlclass.SQLite: {
 			"SELECT group_concat(repeat('x', 65536), '') FROM users LIMIT 1",
@@ -491,15 +499,16 @@ func TestAdvConcatAggregateSize(t *testing.T) {
 			"SELECT string_agg(name, ',') FROM users LIMIT 1",
 			"SELECT string_agg(replace(name, '-', ''), ',') FROM users LIMIT 1",
 			"SELECT max(repeat('x', 10)) FROM users LIMIT 1",
+			"SELECT string_agg(name, repeat(',', 1000)) FROM users LIMIT 1",
 		},
-		sqlclass.MySQL:  {"SELECT group_concat(name) FROM users LIMIT 1"},
+		sqlclass.MySQL:  {"SELECT group_concat(name) FROM users LIMIT 1", "SELECT group_concat(name SEPARATOR ', ') FROM users LIMIT 1"},
 		sqlclass.SQLite: {"SELECT group_concat(name, ','), json_group_array(name) FROM users LIMIT 1"},
 	}
 	for d, list := range refused {
 		for _, sql := range list {
 			_, err := analyze(t, d, sql)
-			if err == nil || !strings.Contains(err.Error(), ": an argument built by a size function is not allowed") {
-				t.Errorf("%s %q: got %v, want a size-function refusal", d, sql, err)
+			if err == nil || !strings.Contains(err.Error(), ": an argument that may exceed 1024 bytes is not allowed") {
+				t.Errorf("%s %q: got %v, want a concatenating aggregate refusal", d, sql, err)
 			}
 		}
 	}
@@ -512,8 +521,8 @@ func TestAdvConcatAggregateSize(t *testing.T) {
 	}
 }
 
-// A column built by a growing call keeps growing in the queries that read
-// it: a derived table, a CTE or a set operation does not hide the call.
+// A column keeps its width in the queries that read it: a derived table, a
+// CTE or a set operation does not hide a large value.
 func TestAdvGrownColumn(t *testing.T) {
 	b := strings.Repeat("b", 1024)
 	aggs := map[sqlclass.Dialect]string{
@@ -522,27 +531,125 @@ func TestAdvGrownColumn(t *testing.T) {
 		sqlclass.SQLite:   "group_concat(x, '')",
 	}
 	for d, agg := range aggs {
-		refused := []string{
+		refused := map[string]string{
+			"SELECT replace(y, 'b', '" + b + "') FROM (SELECT replace(x, 'a', '" + b + "') AS y FROM (SELECT repeat('a', 65536) AS x) t) u LIMIT 1": "the statement could build a value larger than 65536 bytes",
+			"WITH t AS (SELECT repeat('a', 65536) AS x) SELECT replace(x, 'a', 'bb') FROM t LIMIT 1":                                                "the statement could build a value larger than 65536 bytes",
+		}
+		for _, sql := range []string{
 			"SELECT " + agg + " FROM (SELECT repeat('a', 65536) AS x FROM users) t LIMIT 1",
 			"WITH c AS (SELECT repeat('a', 65536) AS x FROM users) SELECT " + agg + " FROM c LIMIT 1",
 			"SELECT " + agg + " FROM (SELECT y AS x FROM (SELECT lpad(name, 65536, 'a') AS y FROM users) t) u LIMIT 1",
 			"SELECT " + agg + " FROM (SELECT name AS x FROM users UNION ALL SELECT repeat('a', 65536) FROM users) t LIMIT 1",
 			"SELECT " + agg + " FROM (SELECT * FROM (SELECT repeat('a', 65536) AS x FROM users) t) u LIMIT 1",
 			"SELECT " + agg + " FROM (SELECT coalesce(lower(y), '') AS x FROM (SELECT repeat('a', 65536) AS y FROM users) t) u LIMIT 1",
-			"SELECT replace(y, 'b', '" + b + "') FROM (SELECT replace(x, 'a', '" + b + "') AS y FROM (SELECT repeat('a', 65536) AS x) t) u LIMIT 1",
-			"WITH t AS (SELECT repeat('a', 65536) AS x) SELECT replace(x, 'a', 'bb') FROM t LIMIT 1",
-			"SELECT lpad(x, 10, '0') FROM (SELECT repeat('a', 65536) AS x) t LIMIT 1",
+		} {
+			refused[sql] = "an argument that may exceed 1024 bytes is not allowed"
 		}
-		for _, sql := range refused {
+		for sql, msg := range refused {
 			_, err := analyze(t, d, sql)
-			if err == nil || !strings.Contains(err.Error(), "an argument") {
-				t.Errorf("%s %q: got %v, want a growth refusal", d, sql, err)
+			if err == nil || !strings.Contains(err.Error(), msg) {
+				t.Errorf("%s %q: got %v, want %q", d, sql, err, msg)
 			}
 		}
 		for _, sql := range []string{
 			"SELECT " + agg + " FROM (SELECT name AS x FROM users) t LIMIT 1",
 			"SELECT replace(x, '-', '') FROM (SELECT repeat('a-', 100) AS x) t LIMIT 1",
 			"SELECT x FROM (SELECT repeat('a', 65536) AS x) t LIMIT 1",
+			"SELECT lpad(x, 10, '0') FROM (SELECT repeat('a', 65536) AS x) t LIMIT 1",
+		} {
+			if _, err := analyze(t, d, sql); err != nil {
+				t.Errorf("%s %q: %v", d, sql, err)
+			}
+		}
+	}
+}
+
+// Every value carries a width estimate (the bytes its literals and length
+// arguments contribute, and the number of column-width inputs it
+// combines): reusing a value through CTE or derived-table layers multiplies
+// it, whatever the operator (||, concat, format), and the bound refuses the
+// layer that would pass 65 536 bytes or 64 columns.
+func TestAdvValueWidth(t *testing.T) {
+	cat := func(x string, n int) string { return strings.TrimSuffix(strings.Repeat(x+"||", n), "||") }
+	concat := func(x string, n int) string {
+		return "concat(" + strings.TrimSuffix(strings.Repeat(x+", ", n), ", ") + ")"
+	}
+	lit32 := "'" + strings.Repeat("x", 32) + "'"
+	big := "lpad('x', 40000, 'x')"
+	all := []sqlclass.Dialect{sqlclass.MySQL, sqlclass.Postgres, sqlclass.SQLite}
+	// MySQL refuses || (OR or concatenation, depending on sql_mode).
+	pipes := []sqlclass.Dialect{sqlclass.Postgres, sqlclass.SQLite}
+	formats := []sqlclass.Dialect{sqlclass.Postgres, sqlclass.SQLite}
+	refused := map[string][]sqlclass.Dialect{
+		// 32 MiB per cell with || over three layers.
+		"WITH a AS (SELECT lpad('x',65536,'x') AS v), b AS (SELECT " + cat("v", 8) + " AS w FROM a), c AS (SELECT " + cat("w", 8) + " AS z FROM b) SELECT " + cat("z", 8) + " FROM c LIMIT 1": pipes,
+		// The same with nested concat over derived tables.
+		"SELECT " + concat("z", 8) + " FROM (SELECT " + concat("w", 8) + " AS z FROM (SELECT " + concat("v", 8) + " AS w FROM (SELECT lpad('x', 65536, 'x') AS v) a) b) c LIMIT 1": all,
+		// No size function: a 32-byte literal, eight copies per layer, five
+		// layers (1 MiB).
+		"WITH a AS (SELECT " + lit32 + " AS v), b AS (SELECT " + cat("v", 8) + " AS v FROM a), c AS (SELECT " + cat("v", 8) + " AS v FROM b), d AS (SELECT " + cat("v", 8) + " AS v FROM c), e AS (SELECT " + cat("v", 8) + " AS v FROM d) SELECT " + cat("v", 8) + " FROM e LIMIT 1": pipes,
+		"SELECT " + concat("v", 8) + " FROM (SELECT " + concat("v", 8) + " AS v FROM (SELECT " + concat("v", 8) + " AS v FROM (SELECT " + concat("v", 8) + " AS v FROM (SELECT " + lit32 + " AS v) a) b) c) d LIMIT 1":                                                                all,
+		// A position referenced many times, two arguments, two widths.
+		"SELECT format('%1$s%1$s%1$s%1$s', lpad('x', 65536, 'x')) LIMIT 1": formats,
+		"SELECT format('%s%s', " + big + ", " + big + ") LIMIT 1":          formats,
+		"SELECT format('%65536s%65536s', 'a', 'b') LIMIT 1":                formats,
+		"SELECT format('%L', " + big + ") LIMIT 1":                         {sqlclass.Postgres},
+		"SELECT printf('%s%s', " + big + ", " + big + ") LIMIT 1":          {sqlclass.SQLite},
+		// Two values joined, a separator repeated, a padding cast, an
+		// escaping function.
+		"SELECT " + big + " || " + big + " LIMIT 1":                                                     pipes,
+		"SELECT concat_ws(lpad('x', 30000, 'x'), name, name, name, name) FROM users LIMIT 1":            all,
+		"SELECT CAST('x' AS char(100000)) LIMIT 1":                                                      {sqlclass.Postgres},
+		"SELECT hex(" + big + ") LIMIT 1":                                                               all,
+		"SELECT to_json(to_json(to_json(to_json(to_json(to_json(to_json(name))))))) FROM users LIMIT 1": {sqlclass.Postgres},
+		// A comparison operand and a function argument are bounded too.
+		"SELECT id FROM users WHERE name = concat(" + big + ", " + big + ") LIMIT 1": all,
+		"SELECT length(concat(" + big + ", " + big + ")) LIMIT 1":                    all,
+		// A derived column reused 65 times in one concatenation.
+		"SELECT " + concat("x", 65) + " FROM (SELECT name AS x FROM users) t LIMIT 1": all,
+		"SELECT " + cat("x", 65) + " FROM (SELECT name AS x FROM users) t LIMIT 1":    pipes,
+	}
+	for sql, dialects := range refused {
+		for _, d := range dialects {
+			_, err := analyze(t, d, sql)
+			if err == nil || !strings.Contains(err.Error(), "the statement could build a value") {
+				t.Errorf("%s %q: got %v, want a size bound refusal", d, sql, err)
+			}
+		}
+	}
+	accepted := map[string][]sqlclass.Dialect{
+		"SELECT lpad(a, 10, '0') || '-' || b FROM (SELECT name AS a, name AS b FROM users) t LIMIT 1":                                    pipes,
+		"SELECT name||name||name FROM users LIMIT 1":                                                                                     pipes,
+		"SELECT " + cat("x", 64) + " FROM (SELECT name AS x FROM users) t LIMIT 1":                                                       pipes,
+		"WITH a AS (SELECT " + lit32 + " AS v), b AS (SELECT " + cat("v", 8) + " AS v FROM a) SELECT " + cat("v", 8) + " FROM b LIMIT 1": pipes,
+		"SELECT concat(lpad(a, 10, '0'), '-', b) FROM (SELECT name AS a, name AS b FROM users) t LIMIT 1":                                all,
+		"SELECT " + concat("x", 64) + " FROM (SELECT name AS x FROM users) t LIMIT 1":                                                    all,
+		"SELECT lpad('x', 65536, 'x') LIMIT 1":                                                                                           all,
+		"SELECT hex(name), coalesce(name, lpad('x', 65536, 'x')) FROM users LIMIT 1":                                                     all,
+		"SELECT json_build_object('a', name, 'b', name), to_json(name), CAST(name AS char(10)) FROM users LIMIT 1":                       {sqlclass.Postgres},
+		"SELECT format('%1$s-%1$s', name), format('%65536s', 'x') FROM users LIMIT 1":                                                    formats,
+	}
+	for sql, dialects := range accepted {
+		for _, d := range dialects {
+			if _, err := analyze(t, d, sql); err != nil {
+				t.Errorf("%s %q: %v", d, sql, err)
+			}
+		}
+	}
+	// A recursive CTE whose column grows on every pass.
+	for _, d := range all {
+		for _, sql := range []string{
+			"WITH RECURSIVE r(n, s) AS (SELECT 1, 'a' UNION ALL SELECT n + 1, concat(s, 'a') FROM r WHERE n < 10) SELECT s FROM r LIMIT 10",
+			"WITH RECURSIVE r(n, s) AS (SELECT 1, name FROM users UNION ALL SELECT n + 1, concat(s, '-') FROM r WHERE n < 30) SELECT s FROM r LIMIT 10",
+		} {
+			_, err := analyze(t, d, sql)
+			if err == nil || !strings.Contains(err.Error(), "a recursive CTE builds growing values") {
+				t.Errorf("%s %q: got %v, want a growing recursive CTE refusal", d, sql, err)
+			}
+		}
+		for _, sql := range []string{
+			"WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 10) SELECT n FROM r LIMIT 10",
+			"WITH RECURSIVE r(n, s) AS (SELECT 1, 'a' UNION ALL SELECT n + 1, 'abc' FROM r WHERE n < 10) SELECT s FROM r LIMIT 10",
 		} {
 			if _, err := analyze(t, d, sql); err != nil {
 				t.Errorf("%s %q: %v", d, sql, err)
