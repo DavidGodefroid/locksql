@@ -1,0 +1,9 @@
+.git
+.github
+dist
+site
+docs/assets
+/locksql
+*.test
+*.out
+coverage.*

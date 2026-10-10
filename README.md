@@ -540,6 +540,7 @@ iteration, and it is deliberately narrow:
 | | |
 |---|---|
 | 📘 [docs/usage.md](docs/usage.md) | console, client commands, MCP server, agent integration |
+| 🐳 [docs/docker.md](docs/docker.md) | running the console and the agent's MCP server in Docker, with nothing installed |
 | 🛡️ [docs/security-model.md](docs/security-model.md) | threat model and mitigations, and an upstream recommendation (PII encrypted at rest with a blind index) |
 | 🚨 [SECURITY.md](SECURITY.md) | reporting a vulnerability |
 | 🧑‍💻 [CONTRIBUTING.md](CONTRIBUTING.md) | building and testing |
@@ -600,6 +601,15 @@ sudo install -m 0755 locksql /usr/local/bin/locksql
 
 **From source.** `go install github.com/DavidGodefroid/locksql/cmd/locksql@latest`
 (Go 1.26 or later).
+
+**Docker.** Nothing to install but Docker: the image holds the separated
+setup, the console runs in one container and the agent's MCP server in
+another. Read what Docker does and does not separate first:
+[docs/docker.md](docs/docker.md).
+
+```sh
+docker build -t locksql https://github.com/DavidGodefroid/locksql.git
+```
 
 ## Build
 
