@@ -1,6 +1,7 @@
 package sqlast
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -110,14 +111,22 @@ var replaceArg = map[string]int{"REPLACE": 2, "REGEXP_REPLACE": 2, "TRANSLATE": 
 // checkSizeArgs bounds a size function: its arguments are literals or
 // plain columns (no nested call can grow the input), the length is an
 // integer literal of at most maxSizeArg, and REPEAT repeats a string
-// literal into at most maxSizeArg bytes.
+// literal into at most maxSizeArg bytes. The string argument of LPAD and
+// RPAD, whose result has exactly the literal length, may be any expression
+// that calls no size function (a cast, COALESCE, a concatenation).
 func (an *analyzer) checkSizeArgs(f *FuncCall) error {
 	i, ok := sizeArg[f.Name]
 	if !ok {
 		return nil
 	}
 	name := strings.ToLower(f.Name)
-	for _, a := range f.Args {
+	for k, a := range f.Args {
+		if k == 0 && (f.Name == "LPAD" || f.Name == "RPAD") {
+			if callsSizeFunc(a) {
+				return refusef("%s: the string argument may not call REPEAT, LPAD, RPAD, SPACE, ZEROBLOB, format or printf, or hold a subquery", name)
+			}
+			continue
+		}
 		switch a.(type) {
 		case *Literal, *ColumnRef:
 		default:
@@ -141,6 +150,44 @@ func (an *analyzer) checkSizeArgs(f *FuncCall) error {
 		}
 	}
 	return nil
+}
+
+// callsSizeFunc reports an expression that calls a size function or a
+// printf-style format, or holds a subquery (not walked: fail closed).
+func callsSizeFunc(e Expr) bool {
+	switch e := e.(type) {
+	case nil, *Literal, *ColumnRef:
+		return false
+	case *FuncCall:
+		if _, ok := sizeArg[e.Name]; ok || e.Name == "FORMAT" || e.Name == "PRINTF" {
+			return true
+		}
+		if e.Filter != nil || e.Over != nil || e.OrderBy != nil {
+			return true
+		}
+		return slices.ContainsFunc(e.Args, callsSizeFunc)
+	case *Paren:
+		return callsSizeFunc(e.X)
+	case *Cast:
+		return callsSizeFunc(e.X)
+	case *Collate:
+		return callsSizeFunc(e.X)
+	case *Unary:
+		return callsSizeFunc(e.X)
+	case *Binary:
+		return callsSizeFunc(e.L) || callsSizeFunc(e.R)
+	case *Case:
+		if callsSizeFunc(e.Operand) || callsSizeFunc(e.Else) {
+			return true
+		}
+		for _, w := range e.Whens {
+			if callsSizeFunc(w.Cond) || callsSizeFunc(w.Result) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }
 
 // lengthLiteral is the value of an unsigned integer literal of at most

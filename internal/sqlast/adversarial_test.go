@@ -365,7 +365,7 @@ func TestAdvSizeFunctionCap(t *testing.T) {
 		refused := map[string]string{
 			"SELECT repeat('x', 1073741823), repeat('y', 1073741823) LIMIT 1":                      "repeat: the length argument must be an integer literal at most 65536",
 			"SELECT repeat(repeat('x', 65536), 16000) FROM users LIMIT 1":                          "repeat: arguments must be literals or columns",
-			"SELECT lpad(repeat('x', 10), 10, '0') FROM users LIMIT 1":                             "lpad: arguments must be literals or columns",
+			"SELECT lpad(repeat('x', 10), 10, '0') FROM users LIMIT 1":                             "lpad: the string argument may not call REPEAT",
 			"SELECT lpad(name, 10, lower(name)) FROM users LIMIT 1":                                "lpad: arguments must be literals or columns",
 			"SELECT repeat(name, 10) FROM users LIMIT 1":                                           "repeat: the string argument must be a string literal",
 			"SELECT repeat('ab', 32769) FROM users LIMIT 1":                                        "repeat: the result would exceed 65536 bytes",
@@ -687,6 +687,40 @@ func TestAdvINListKnownPlusProbe(t *testing.T) {
 		}
 		if strings.Contains(perValue, " IN (") {
 			t.Errorf("%s: the list is counted as a whole: %q", d, perValue)
+		}
+	}
+}
+
+// LPAD and RPAD build exactly their literal length: their string argument
+// may be an expression (a cast, COALESCE, a concatenation), as long as it
+// calls no size function; the length and the fill stay literals.
+func TestAdvPadExpressionArgument(t *testing.T) {
+	accepted := map[string][]sqlclass.Dialect{
+		"SELECT lpad(id::text, 8, '0') FROM users LIMIT 5":             {sqlclass.Postgres},
+		"SELECT lpad(CAST(id AS CHAR), 8, '0') FROM users LIMIT 5":     {sqlclass.MySQL, sqlclass.SQLite},
+		"SELECT rpad(coalesce(name, '-'), 20, ' ') FROM users LIMIT 5": {sqlclass.MySQL, sqlclass.Postgres, sqlclass.SQLite},
+		"SELECT lpad(name || '-' || name, 30, '*') FROM users LIMIT 5": {sqlclass.Postgres, sqlclass.SQLite},
+		"SELECT lpad(lower(name), 30, '*') FROM users LIMIT 5":         {sqlclass.MySQL, sqlclass.Postgres, sqlclass.SQLite},
+	}
+	for sql, dialects := range accepted {
+		for _, d := range dialects {
+			if _, err := analyze(t, d, sql); err != nil {
+				t.Errorf("%s %q: %v", d, sql, err)
+			}
+		}
+	}
+	for _, d := range []sqlclass.Dialect{sqlclass.MySQL, sqlclass.Postgres, sqlclass.SQLite} {
+		for sql, msg := range map[string]string{
+			"SELECT lpad(repeat('x', 10), 8, '0') FROM users LIMIT 1":                  "lpad: the string argument may not call REPEAT",
+			"SELECT rpad(lower(lpad(name, 10, 'x')), 8, '0') FROM users LIMIT 1":       "rpad: the string argument may not call REPEAT",
+			"SELECT lpad((SELECT name FROM users LIMIT 1), 8, '0') FROM users LIMIT 1": "lpad: the string argument may not call REPEAT",
+			"SELECT lpad(name, 8, lower(name)) FROM users LIMIT 1":                     "lpad: arguments must be literals or columns",
+			"SELECT lpad(name, 4 + 4, '0') FROM users LIMIT 1":                         "lpad: arguments must be literals or columns",
+		} {
+			_, err := analyze(t, d, sql)
+			if err == nil || !strings.Contains(err.Error(), msg) {
+				t.Errorf("%s %q: got %v, want %q", d, sql, err, msg)
+			}
 		}
 	}
 }

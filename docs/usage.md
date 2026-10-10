@@ -443,13 +443,7 @@ The console needs an interactive terminal. At start it:
    `<profile>@<socket path>` for a Unix socket): an item is bound to the
    host and port it was saved for; the pre-upgrade item is moved to the
    default port or removed at the first start. After the first successful
-   login it offers `Save in OS keychain? [y/N]`. An item saved by an earlier
-   version under `<profile>@<host>` is moved to the new name the first time
-   it is read, once, and the console says so; this only happens on the
-   engine's default port (3306, 5432, 22 for an SSH tunnel): on another port
-   the old item is deleted unread, the console says so, and the secret is
-   asked (answer `Save in OS keychain?` to store it for that port). If the
-   stored secret fails, it asks again and offers to replace it. Without a
+   login it offers `Save in OS keychain? [y/N]`. If the stored secret fails, it asks again and offers to replace it. Without a
    usable keychain (for example headless Linux without Secret Service) it
    behaves like `ask`. In separated mode this is the console account's
    keychain. With `credentials_ttl`, the connection is closed once it is that
@@ -659,7 +653,9 @@ locksql doctor   [--profile P]
   numeric, date and JSON functions, aggregates and window functions;
   schema-qualified functions are refused). `REPEAT`, `LPAD`, `RPAD`, `SPACE`
   and `ZEROBLOB` take a literal length of at most 65 536, and only literals
-  and columns as arguments; `REPEAT` repeats a string literal. The
+  and columns as arguments, except the string `LPAD` and `RPAD` pad, which
+  may be any expression that calls none of these functions
+  (`lpad(id::text, 8, '0')`); `REPEAT` repeats a string literal. The
   replacement of `REPLACE`, `REGEXP_REPLACE` and `TRANSLATE` is a string
   literal of at most 1 024 bytes. The format string of `format` (PostgreSQL,
   SQLite) and `printf` (SQLite) is a literal whose widths and precisions are
