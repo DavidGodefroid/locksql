@@ -136,6 +136,14 @@ type fakeIO struct {
 	onAsk func()
 	// secrets answer AskSecret, in order; none left fails the prompt.
 	secrets []string
+	// bells counts the terminal bells, kept out of out.
+	bells int
+}
+
+func (f *fakeIO) Bell() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bells++
 }
 
 func (f *fakeIO) Println(s string) {
@@ -800,9 +808,13 @@ func TestLooseningFileEditBlocksUntilReviewed(t *testing.T) {
 	h.s.CheckPolicy()
 	wantCode(t, h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers}), ipc.CodePolicyPending)
 
-	// :review accepted → applied and recorded.
-	h.io.answers = []string{"y"}
+	// :review accepted (the answer is case-insensitive) → applied and
+	// recorded; the prompt rings the bell.
+	h.io.answers = []string{"Y"}
 	h.s.Command(context.Background(), ":review")
+	if h.io.bells != 1 {
+		t.Errorf("bells = %d, want 1 for the :review prompt", h.io.bells)
+	}
 	h.ok(t, ipc.MethodStatus, nil, &st)
 	if st.Limits.MaxRows != 5000 {
 		t.Fatalf("accepted change not applied: max_rows=%d", st.Limits.MaxRows)
@@ -1361,5 +1373,103 @@ func TestIntentMustBeOneShortLine(t *testing.T) {
 		if resp.Error.Message != "intent must be one line of at most 200 bytes" {
 			t.Errorf("%q: message %q", bad, resp.Error.Message)
 		}
+	}
+}
+
+// "n <reason>" denies with a reason the agent reads and the audit keeps;
+// "Y" approves; "N" denies without a reason. Each approval prompt rings
+// the bell.
+func TestDenyWithReason(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	deny := func(answer string) ipc.Response {
+		t.Helper()
+		pr := h.plan(t, selectUsers, false)
+		h.io.answers = []string{answer}
+		resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+		wantCode(t, resp, ipc.CodeDenied)
+		return resp
+	}
+	lastReason := func() any {
+		t.Helper()
+		recs := h.auditRecords(t)
+		r := recs[len(recs)-1]
+		if r["event"] != "denied" {
+			t.Fatalf("last record %v", r)
+		}
+		return r["reason"]
+	}
+
+	resp := deny("n use the orders table")
+	if want := "denied by the human: use the orders table; do not retry unless asked"; resp.Error.Message != want {
+		t.Errorf("message %q, want %q", resp.Error.Message, want)
+	}
+	if r := lastReason(); r != "use the orders table" {
+		t.Errorf("audit reason %v", r)
+	}
+	if !strings.Contains(h.io.output(), "denied: use the orders table") {
+		t.Errorf("console output:\n%s", h.io.output())
+	}
+
+	resp = deny("  NO   wrong\tdatabase  ")
+	if want := `denied by the human: wrong\x09database; do not retry unless asked`; resp.Error.Message != want {
+		t.Errorf("message %q, want %q", resp.Error.Message, want)
+	}
+
+	resp = deny("n " + strings.Repeat("é", 150))
+	if want := "denied by the human: " + strings.Repeat("é", 100) + "; do not retry unless asked"; resp.Error.Message != want {
+		t.Errorf("a 300-byte reason is not cut at 200 bytes: %q", resp.Error.Message)
+	}
+
+	for _, a := range []string{"N", "n", "no", "nope, wrong table", "n\x00"} {
+		resp = deny(a)
+		if resp.Error.Message != "denied by the human; do not retry unless asked" || lastReason() != nil {
+			t.Errorf("%q: message %q, reason %v", a, resp.Error.Message, lastReason())
+		}
+	}
+
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"Y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	if h.io.bells != h.io.promptCount() {
+		t.Errorf("bells %d for %d approval prompts", h.io.bells, h.io.promptCount())
+	}
+	if strings.Contains(h.io.output(), "\a") {
+		t.Error("the bell reached the output lines")
+	}
+}
+
+// On production the approval answer stays the exact profile name; a
+// reason denies the same way.
+func TestProductionDenyWithReason(t *testing.T) {
+	h := newHarness(t, prodProfile())
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"PROD"}
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeDenied)
+	pr = h.plan(t, selectUsers, false)
+	h.io.answers = []string{"n not on prod"}
+	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	wantCode(t, resp, ipc.CodeDenied)
+	if !strings.Contains(resp.Error.Message, "denied by the human: not on prod;") {
+		t.Errorf("message %q", resp.Error.Message)
+	}
+}
+
+// The value prompt rings the bell too.
+func TestValuePromptRingsTheBell(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	pr := h.plan(t, "SELECT id FROM users WHERE email = '${e}' LIMIT 1", false)
+	h.io.secrets = []string{"a@example.com"}
+	h.io.answers = []string{"n"}
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeDenied)
+	if h.io.bells != 2 {
+		t.Errorf("bells = %d, want 2 (value and approval prompts)", h.io.bells)
+	}
+}
+
+func TestTerminalBell(t *testing.T) {
+	var out strings.Builder
+	NewTerminal(nil, &out).Bell()
+	if out.String() != "\a" {
+		t.Fatalf("bell wrote %q", out.String())
 	}
 }

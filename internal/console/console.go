@@ -48,6 +48,19 @@ type IO interface {
 	AskSecret(ctx context.Context, prompt string) ([]byte, error)
 }
 
+// Beller is implemented by an IO that can ring the terminal bell, so that
+// a human away from the console notices a prompt waiting for them.
+type Beller interface {
+	Bell()
+}
+
+// bell rings io's bell when it has one.
+func bell(io IO) {
+	if b, ok := io.(Beller); ok {
+		b.Bell()
+	}
+}
+
 // LineSource is implemented by an IO that also delivers the lines the human
 // types between requests (console commands such as :review).
 type LineSource interface {

@@ -539,9 +539,15 @@ tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
   k-anonymity counts that run first and the row cap.
 - Statement classes other than READ, a WARN verdict, PII columns and
   `PII: UNMASKED` are printed in red.
-- On a production profile you type the profile name instead of `y`.
-- Anything else, or no answer within 5 minutes, denies the query. A client
-  that disconnects while waiting abandons the approval.
+- `y` or `Y` approves. On a production profile you type the profile name
+  instead, exactly.
+- `n <reason>` (or `no <reason>`) denies and tells the agent why: it gets
+  `denied by the human: <reason>; do not retry unless asked`, and the audit
+  record keeps the reason (`reason`, at most 200 bytes).
+- Anything else, or no answer within 5 minutes, denies the query without a
+  reason. A client that disconnects while waiting abandons the approval.
+- The console rings the terminal bell when a prompt waits for you: the
+  approval, a placeholder value, the production profile name and `:review`.
 - Pending keystrokes are discarded before each prompt.
 - Requests are served one at a time; other clients wait.
 - Only the console terminal approves; no socket method can.

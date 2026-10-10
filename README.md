@@ -275,7 +275,8 @@ only guide the agent; the console's checks are the guarantee.
 - **Human approval.** Every statement is shown and approved in the console
   terminal; no socket method can approve. On a production profile you type the
   profile name, not `y`. Pending keystrokes are flushed before each prompt, so
-  type-ahead never approves. No answer within 5 minutes means denied.
+  type-ahead never approves. No answer within 5 minutes means denied. You can
+  deny with a reason the agent reads (`n use the orders table`).
 - **Fail closed.** A dialect-aware classifier refuses anything it cannot
   classify with certainty: several statements, comments, variables, bind
   parameters, file and OS access, sleeps and locks, session tampering. Reads

@@ -204,6 +204,7 @@ func Run(ctx context.Context, o Options) error {
 		o.IO.Println(red + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + reset)
 		o.IO.Println(red + "  " + ui.MarkWarn + " PRODUCTION profile " + p.Name + " (" + st.where() + ")" + reset)
 		o.IO.Println(red + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + reset)
+		bell(o.IO)
 		ans, ok := o.IO.Ask(ctx, fmt.Sprintf("Type the profile name %q to continue: ", p.Name), ApprovalTimeout)
 		if !ok || strings.TrimSpace(ans) != p.Name {
 			return errors.New("console: production profile not confirmed")
@@ -360,7 +361,7 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 			}
 		}
 		ans, ok := io.Ask(ctx, "Apply these changes? [y/N] ", ApprovalTimeout)
-		if !ok || strings.TrimSpace(ans) != "y" {
+		if !ok || !strings.EqualFold(strings.TrimSpace(ans), "y") {
 			st.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused"})
 			return config.Policy{}, "", errors.New("console: the policy was not approved")
 		}
@@ -396,7 +397,7 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 	if ctx.Err() != nil {
 		return config.Policy{}, "", ctx.Err()
 	}
-	if !ok || strings.TrimSpace(ans) != "y" {
+	if !ok || !strings.EqualFold(strings.TrimSpace(ans), "y") {
 		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused"})
 		io.Println("changes refused: the last approved policy applies")
 		return *ap, config.Fingerprint(cur), nil

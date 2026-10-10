@@ -270,9 +270,10 @@ func (s *Server) review(ctx context.Context) {
 	if s.cfg.SkipPermissions && s.profile.Production && !next.Profile.Production {
 		s.println(red + "--skip-permissions is set: once applied, statements run without a prompt" + reset)
 	}
+	bell(s.cfg.IO)
 	ans, ok := s.cfg.IO.Ask(ctx, "Apply these changes? [y/N] ", ApprovalTimeout)
 	s.pending = nil
-	if !ok || strings.TrimSpace(ans) != "y" {
+	if !ok || !strings.EqualFold(strings.TrimSpace(ans), "y") {
 		s.refused = config.Fingerprint(next)
 		s.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused"})
 		s.println("policy change refused: the last approved policy stays in force")

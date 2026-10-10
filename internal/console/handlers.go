@@ -729,6 +729,7 @@ func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Reco
 	if canRetype {
 		prompt = "(r to retype ${" + strings.Join(reused, "}, ${") + "}) " + prompt
 	}
+	bell(s.cfg.IO)
 	ans, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold(prompt)), ApprovalTimeout)
 	if ok && canRetype && strings.TrimSpace(ans) == "r" {
 		return nil, true
@@ -736,14 +737,45 @@ func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Reco
 	if !ok {
 		return s.unanswered(ctx, id, rec), false
 	}
-	if strings.TrimSpace(ans) != expected {
-		rec.Event, rec.Decision = audit.EventDenied, "denied"
-		s.audit(rec)
-		s.println(paint.Fail("denied"))
-		r := errResp(id, ipc.CodeDenied, "denied by the human; do not retry unless asked")
-		return &r, false
+	ans = strings.TrimSpace(ans)
+	// "y" in any case; the production profile name exactly.
+	if ans == expected || (!s.profile.Production && strings.EqualFold(ans, expected)) {
+		return nil, false
 	}
-	return nil, false
+	rec.Event, rec.Decision = audit.EventDenied, "denied"
+	msg := "denied by the human; do not retry unless asked"
+	if reason := denyReason(ans); reason != "" {
+		rec.Reason = reason
+		msg = "denied by the human: " + reason + "; do not retry unless asked"
+		s.println(paint.Fail("denied: " + reason))
+	} else {
+		s.println(paint.Fail("denied"))
+	}
+	s.audit(rec)
+	r := errResp(id, ipc.CodeDenied, msg)
+	return &r, false
+}
+
+// maxDenyReason bounds the reason given with a denial.
+const maxDenyReason = 200
+
+// denyReason is the reason of an answer "n <text>" or "no <text>" (n and
+// no in any case), trimmed, cut at maxDenyReason bytes and escaped; ""
+// for any other answer.
+func denyReason(ans string) string {
+	word, text, ok := strings.Cut(strings.TrimSpace(ans), " ")
+	if !ok || (!strings.EqualFold(word, "n") && !strings.EqualFold(word, "no")) {
+		return ""
+	}
+	text = strings.TrimSpace(text)
+	if len(text) > maxDenyReason {
+		cut := maxDenyReason
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+		text = text[:cut]
+	}
+	return safeText(text, false)
 }
 
 // unanswered audits and answers a prompt left without an answer: the
@@ -769,6 +801,7 @@ func (s *Server) unanswered(ctx context.Context, id int64, rec audit.Record) *ip
 // than a denial would; --skip-permissions does not skip this prompt.
 func (s *Server) refuseOnScreen(ctx context.Context, id int64, rec audit.Record, reason string) ipc.Response {
 	s.println(paint.Paint(s.frameColour(), "│ ") + red + "verdict REFUSE: this statement cannot be approved" + reset)
+	bell(s.cfg.IO)
 	if _, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold("Press Enter to refuse ")), ApprovalTimeout); !ok {
 		return *s.unanswered(ctx, id, rec)
 	}
