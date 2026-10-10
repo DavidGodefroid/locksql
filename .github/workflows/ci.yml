@@ -60,6 +60,20 @@ jobs:
           version: "~> v2"
           args: check
 
+  # The image of docs/docker.md: it builds, and its separated setup passes
+  # locksql doctor from both accounts.
+  docker:
+    name: docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker build
+        run: docker build -t locksql .
+      - name: doctor (agent and console accounts)
+        run: |
+          docker run --rm -v locksql-run:/run/locksql locksql doctor
+          docker run --rm --user locksql -v locksql-run:/run/locksql -v locksql-home:/home/locksql locksql doctor
+
   # Real servers in Docker. The harness in test/integration starts one
   # throwaway container per image (named ls-it-*, port on 127.0.0.1), seeds
   # it through docker exec and removes it when the test binary exits; the
