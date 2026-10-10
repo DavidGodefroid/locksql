@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -562,6 +563,11 @@ func TestWeightVerdictUnderPIIFilterDecidedAtRun(t *testing.T) {
 	pr := h.plan(t, q, false)
 	h.io.timeout = true
 	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeTimeout)
+	// The audit record keeps the weight reason the human did not see out.
+	recs := h.auditRecords(t)
+	if last := recs[len(recs)-1]; last["event"] != "timeout" || !strings.Contains(fmt.Sprint(last["error"]), "50 000 000") {
+		t.Errorf("timeout record: %v", last)
+	}
 
 	// Without a PII filter the verdict is answered at plan time, as before.
 	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT id FROM users WHERE id = 1 LIMIT 1"})

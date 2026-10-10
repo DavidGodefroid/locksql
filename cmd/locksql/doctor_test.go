@@ -277,7 +277,7 @@ func TestInstallPrint(t *testing.T) {
 // Without setgid the socket is born with the console's own group, which it
 // may not change to the client group it is not a member of.
 func TestLinuxInstallScriptSetgidSocketDir(t *testing.T) {
-	s := linuxInstallScript("/tmp/locksql", "agent", "locksql", "locksql-clients")
+	s := linuxInstallScript("/tmp/locksql", "agent", "locksql", "locksql-clients", "")
 	for _, want := range []string{
 		`printf 'd /run/locksql 2710 locksql locksql-clients -\n' > /etc/tmpfiles.d/locksql.conf`,
 		"|| install -d -m 2710 -o locksql -g locksql-clients /run/locksql",

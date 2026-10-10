@@ -324,7 +324,8 @@ only guide the agent; the console's checks are the guarantee.
   `limits.reference_probe`.
   Warnings never refuse and never carry a value.
 - **Quiet failures.** Clients get a generic message, never the server's error
-  text, and no timings; `query.run` answers on a 250 ms quantum.
+  text, and no timings; once the statement is approved, `query.run` answers
+  on a 250 ms quantum (a refusal before approval is not quantized).
 - **The AI tightens, the human loosens.** Agents may add mask rules and
   request changes. A config edit that loosens the policy (higher tier, larger
   limits, new host, removed PII rule, ...) only takes effect after you
@@ -425,7 +426,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `limits.max_output_bytes` | 65 536 | output is cut with a marker |
 | `limits.k_anonymity` | 5 (production 10) | smallest row count a PII filter, a group or an aggregate of a PII column may cover; lowering it is a loosening |
 | `limits.reference_probe` | 5 | distinct cells of one result the agent may filter on one by one before the console warns (an `IN` list counts once); raising it is a loosening |
-| `limits.idle_timeout` | 20m (production 10m) | the console session ends after this long without activity; at least `1m` and at most `max_session`; raising it is a loosening |
+| `limits.idle_timeout` | 20m (production 10m), or `max_session` when that is shorter | the console session ends after this long without activity; at least `1m` and at most `max_session`; raising it is a loosening |
 | `limits.max_session` | 4h (production 2h) | the console session ends after this long in all; at most `24h`; raising it is a loosening |
 | `limits.explain_cost_refuse` | 0 (off) | refuse plans above this total cost, in the engine's own units; SQLite reports no cost and is not checked |
 | `ssh.host`, `ssh.port`, `ssh.user` | required host and user; port 22 | the bastion; not with sqlite or a Unix socket `host` |
@@ -607,7 +608,7 @@ sudo install -m 0755 locksql /usr/local/bin/locksql
 ```
 
 **From source.** `go install github.com/DavidGodefroid/locksql/cmd/locksql@latest`
-(Go 1.26 or later).
+(Go 1.26 or later), then `sudo locksql install --trust-binary`.
 
 ## Build
 

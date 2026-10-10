@@ -538,7 +538,7 @@ func removedLine(profile, host string, port int) string {
 // profile's name, host and port.
 func (st *starter) offerSaveAs(ctx context.Context, host string, port int, secret []byte, prompt string) {
 	ans, ok := st.io.Ask(ctx, prompt, ApprovalTimeout)
-	if !ok || strings.TrimSpace(ans) != "y" {
+	if !ok || !strings.EqualFold(strings.TrimSpace(ans), "y") {
 		return
 	}
 	if err := secrets.KeychainSet(st.profile.Name, host, port, secret); err != nil {

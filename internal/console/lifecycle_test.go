@@ -275,3 +275,16 @@ func TestConnectRemovesLegacyKeychainItemOnOtherPort(t *testing.T) {
 		}
 	}
 }
+
+// "Y" saves the secret, like the other [y/N] prompts.
+func TestConnectSavesKeychainSecretOnUpperY(t *testing.T) {
+	st, io, p := keychainStarter(t, 3307)
+	io.secrets = []string{"typed"}
+	io.answers = []string{"Y"}
+	if _, err := st.connect(context.Background(), true); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if v, err := keyring.Get(secrets.KeychainService, secrets.KeychainAccount(p.Name, p.Host, p.Port)); err != nil || v != "typed" {
+		t.Errorf("saved item = %q, %v", v, err)
+	}
+}

@@ -664,3 +664,29 @@ func TestAdvValueWidth(t *testing.T) {
 		}
 	}
 }
+
+// An IN list of values known to exist plus one probe: one count over the
+// whole list would pass on the known values and tell whether the probe
+// exists. Each value is counted apart (the smallest count is checked), so
+// the probe has an arm of its own.
+func TestAdvINListKnownPlusProbe(t *testing.T) {
+	for _, d := range []sqlclass.Dialect{sqlclass.MySQL, sqlclass.Postgres, sqlclass.SQLite} {
+		a, err := analyze(t, d, "SELECT id FROM users WHERE email IN ('a','b','c','d','probe') LIMIT 1")
+		if err != nil {
+			t.Fatalf("%s: %v", d, err)
+		}
+		if len(a.KChecks) == 0 {
+			t.Fatalf("%s: no k-check", d)
+		}
+		perValue := a.KChecks[0].SQL
+		if !strings.HasPrefix(perValue, "SELECT MIN(locksql_n) FROM (") || strings.Count(perValue, " UNION ALL ") != 4 {
+			t.Errorf("%s: per-value check %q", d, perValue)
+		}
+		if n := strings.Count(perValue, "= 'probe'"); n != 1 {
+			t.Errorf("%s: %d arms for the probe in %q, want 1", d, n, perValue)
+		}
+		if strings.Contains(perValue, " IN (") {
+			t.Errorf("%s: the list is counted as a whole: %q", d, perValue)
+		}
+	}
+}

@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -42,13 +44,53 @@ func TestInstallRefusesABinaryAnotherAccountCanChange(t *testing.T) {
 
 	o := cli(t, t.TempDir(), "", "install", "--client", "agent", "--print")
 	o.want(t, exitFail, bin+" is owned by ", "could have been replaced by the agent",
-		"scripts/install.sh", "--trust-binary", "sha256 "+sum)
+		"install a release into a root-owned directory (scripts/install.sh with the default /usr/local/bin)",
+		"--trust-binary", "sha256 "+sum)
 	if strings.Contains(o.stdout, "These commands run as root") {
 		t.Errorf("the root script was printed for an untrusted binary:\n%s", o.stdout)
 	}
 
 	o = cli(t, t.TempDir(), "", "install", "--client", "agent", "--print", "--trust-binary")
-	o.want(t, exitOK, "sha256 "+sum, "These commands run as root", "install -m 0755 -o root")
+	check := "sha256sum -c -"
+	if runtime.GOOS == "darwin" {
+		check = "shasum -a 256 -c -"
+	}
+	o.want(t, exitOK, "sha256 "+sum, "These commands run as root", "install -m 0755 -o root",
+		"echo '"+sum+"  '\"$tmp\" | "+check)
+	if !strings.Contains(o.stdout, `-o root -g `) || strings.Contains(o.stdout, "install -m 0755 -o root -g root "+shellQuote(bin)) {
+		t.Errorf("--trust-binary installs the unchecked binary:\n%s", o.stdout)
+	}
+}
+
+// With --trust-binary the root script copies the binary, checks the copy
+// against the printed sha256, and stops before any change when it differs.
+func TestInstallPinnedSourceChecksTheCopy(t *testing.T) {
+	if _, err := exec.LookPath("sha256sum"); err != nil {
+		t.Skip("sha256sum is not installed")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "lock sql")
+	if err := os.WriteFile(bin, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prefix, src := pinnedSource(bin, fileSHA256(t, bin), "sha256sum -c -")
+	run := func() (string, error) {
+		out, err := exec.Command("sh", "-c", "set -eu\n"+prefix+"cat "+src+"; echo; echo DONE").CombinedOutput()
+		return string(out), err
+	}
+	if out, err := run(); err != nil || !strings.Contains(out, "binary\nDONE") {
+		t.Fatalf("unchanged binary: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(bin, []byte("replaced"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run()
+	if err == nil || strings.Contains(out, "DONE") || !strings.Contains(out, "the binary changed since its sha256 was printed") {
+		t.Fatalf("replaced binary: %v\n%s", err, out)
+	}
+	if prefix, src := pinnedSource(bin, "", "sha256sum -c -"); prefix != "" || src != shellQuote(bin) {
+		t.Errorf("without a pin: %q, %q", prefix, src)
+	}
 }
 
 func TestInstallSourceRefusal(t *testing.T) {

@@ -802,10 +802,11 @@ func (s *Server) unanswered(ctx context.Context, id int64, rec audit.Record) *ip
 func (s *Server) refuseOnScreen(ctx context.Context, id int64, rec audit.Record, reason string) ipc.Response {
 	s.println(paint.Paint(s.frameColour(), "│ ") + red + "verdict REFUSE: this statement cannot be approved" + reset)
 	bell(s.cfg.IO)
+	rec.Error = reason // kept when the prompt goes unanswered too
 	if _, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold("Press Enter to refuse ")), ApprovalTimeout); !ok {
 		return *s.unanswered(ctx, id, rec)
 	}
-	rec.Event, rec.Error = audit.EventRefused, reason
+	rec.Event = audit.EventRefused
 	s.audit(rec)
 	s.println(paint.Fail("refused: " + safeText(reason, false)))
 	return errResp(id, ipc.CodeRefused, hiddenWeightRefusal)

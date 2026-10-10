@@ -293,9 +293,12 @@ confirm (`--print` only prints; on macOS it always only prints).
   root and writable by neither group nor others, `install` refuses: run from
   the agent's account, a binary the agent replaced (a `go install` into
   `~/go/bin`) would become the root-owned one the console trusts. Install a
-  release with `scripts/install.sh` (root-owned in `/usr/local/bin`), or pass
-  `--trust-binary` to copy it anyway; both the refusal and `--trust-binary`
-  print its sha256, to compare with the release.
+  release into a root-owned directory (`scripts/install.sh` with the default
+  `/usr/local/bin`), or pass `--trust-binary` to copy it anyway; both the
+  refusal and `--trust-binary` print its sha256, to compare with the release,
+  and with `--trust-binary` the root script checks its copy against that
+  sha256 (`sha256sum -c` on Linux, `shasum -a 256 -c` on macOS) and stops
+  before any change when it differs.
 
 The script:
 
@@ -487,8 +490,9 @@ Between requests you can type:
 | `:quit` | end the session |
 
 The session ends on Ctrl-C, `:quit`, `locksql logout`, after
-`limits.idle_timeout` without activity (default 20 minutes, production 10),
-or after `limits.max_session` (default 4 hours, production 2). A change of
+`limits.idle_timeout` without activity (default 20 minutes, production 10,
+or `max_session` when that is shorter), or after `limits.max_session`
+(default 4 hours, production 2). A change of
 either applied while the console runs counts from the session start and the
 last activity, at the next check. Each end closes the connection, removes
 the socket and is audited.
@@ -620,8 +624,9 @@ locksql doctor   [--profile P]
 - A failed statement gives a generic message
   (`statement refused by the database (the details are shown on the
   console)`), never the server's text; the details go to the console and,
-  redacted, to the audit log. No timings are returned, and `run` answers on
-  a 250 ms quantum, success or failure.
+  redacted, to the audit log. No timings are returned, and once the
+  statement is approved `run` answers on a 250 ms quantum, success or
+  failure; a refusal before approval is not quantized.
 - `tables` and `describe` are catalog reads: they run SQL built by the
   console, need no approval and are audited. `describe` also marks the
   masked columns.
