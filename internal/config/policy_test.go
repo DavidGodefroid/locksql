@@ -259,6 +259,18 @@ func TestReferenceProbeLoosening(t *testing.T) {
 	if ch := Diff(old, a); len(ch) != 0 {
 		t.Errorf("0 -> default reported: %+v", ch)
 	}
+	// ... and the default is what a new value is compared with: raising it
+	// from there loosens, lowering it tightens.
+	huge := a
+	huge.Profile.Limits.ReferenceProbe = 999999
+	if ch := Diff(old, huge); len(ch) != 1 || ch[0].Field != "limits.reference_probe" || !ch[0].Loosens || ch[0].Old != "5" {
+		t.Errorf("0 -> 999999: %+v", ch)
+	}
+	low := a
+	low.Profile.Limits.ReferenceProbe = 2
+	if ch := Diff(old, low); len(ch) != 1 || ch[0].Loosens {
+		t.Errorf("0 -> 2: %+v", ch)
+	}
 }
 
 func TestDiffModesAndNewLimits(t *testing.T) {

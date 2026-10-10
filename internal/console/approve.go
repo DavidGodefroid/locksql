@@ -276,7 +276,7 @@ func (s *Server) review(ctx context.Context) {
 	}
 	s.refused = ""
 	if err := s.adopt(next, "applied"); err != nil {
-		s.println("policy change not applied: " + err.Error())
+		s.println("policy change not applied: " + safeText(err.Error(), false))
 		return
 	}
 	s.println("policy change applied")
@@ -291,7 +291,7 @@ func (s *Server) CheckPolicy() {
 	}
 	cur, err := s.cfg.LoadPolicy()
 	if err != nil {
-		msg := "config error: " + err.Error() + "; the last approved policy stays in force"
+		msg := "config error: " + safeText(err.Error(), false) + "; the last approved policy stays in force"
 		if msg != s.lastLoadErr {
 			s.lastLoadErr = msg
 			s.println(msg)
@@ -312,7 +312,7 @@ func (s *Server) CheckPolicy() {
 	if !loosens(changes) {
 		s.pending = nil
 		if err := s.adopt(cur, "tightened"); err != nil {
-			s.println("policy change not applied: " + err.Error())
+			s.println("policy change not applied: " + safeText(err.Error(), false))
 			return
 		}
 		s.println("policy tightened:")

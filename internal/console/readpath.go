@@ -202,7 +202,7 @@ func (s *Server) readPlan(ctx context.Context, sess engine.Session, pl *plan, sq
 		if errors.Is(err, engine.ErrConnLost) {
 			return "", false, err
 		}
-		s.println("EXPLAIN failed: " + s.errText(err, pl.runSQL, false, pl))
+		s.println("EXPLAIN failed: " + safeText(s.errText(err, pl.runSQL, false, pl), false))
 		return "EXPLAIN failed: " + genericFailure, true, nil
 	}
 	pl.explain = &ep
@@ -212,7 +212,7 @@ func (s *Server) readPlan(ctx context.Context, sess engine.Session, pl *plan, sq
 			if errors.Is(err, engine.ErrConnLost) {
 				return "", false, err
 			}
-			s.println("EXPLAIN of the k-anonymity check failed: " + s.errText(err, k.SQL, false, pl))
+			s.println("EXPLAIN of the k-anonymity check failed: " + safeText(s.errText(err, k.SQL, false, pl), false))
 			return "the k-anonymity check of this statement cannot be planned: " + genericFailure, true, nil
 		}
 		pl.kExplains = append(pl.kExplains, kp)
@@ -303,7 +303,7 @@ func (s *Server) kCheck(ctx context.Context, sess engine.Session, pl *plan) (str
 			if errors.Is(err, engine.ErrConnLost) || ctx.Err() != nil {
 				return "", err
 			}
-			s.println("k-anonymity check failed: " + s.errText(err, c.SQL, false, pl))
+			s.println("k-anonymity check failed: " + safeText(s.errText(err, c.SQL, false, pl), false))
 			return "the k-anonymity check could not run: " + genericFailure, nil
 		}
 		if len(res.Rows) == 0 || len(res.Rows[0]) == 0 {

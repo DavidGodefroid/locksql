@@ -312,7 +312,7 @@ The script:
 | Key | Default | Notes |
 |---|---|---|
 | `service_user` | `locksql` | the account the console must run as |
-| `client_group` | `locksql-clients` | members may connect to the console sockets |
+| `client_group` | `locksql-clients` | members may connect to the console sockets (looked up at every connection: a removed member loses access at once) |
 | `socket_dir` | `/run/locksql` | absolute; owned by `service_user` and `client_group`, mode 0710 or 0750, plus setgid on Linux (2710 or 2750) |
 | `allowed_uids` | none | uids allowed besides the group's members |
 | `x11` | `warn` (`install` writes `refuse`) | what the console does in an X11 session |
@@ -838,7 +838,7 @@ finds the project's consoles.
 | `<user config dir>/locksql/pii.toml` | PII column rules outside a project |
 | `<user config dir>/locksql/config.toml` | personal profiles |
 | `<user state dir>/locksql/approved/*.json` | last approved policies |
-| `<user state dir>/locksql/audit.log` | JSONL audit log, mode 0600 |
+| `<user state dir>/locksql/audit.log` | JSONL audit log, mode 0600; the records of a client request name the requester (`peer_uid`, `peer_pid`, `peer_user`) |
 | `<runtime dir>/<project-hash>-<profile>.sock` | console socket (tests only) |
 | `/etc/locksql/system.toml` | separated mode setup (root-owned) |
 | `<socket_dir>/<project-hash>-<profile>.sock` | console socket (separated mode), mode 0660 |

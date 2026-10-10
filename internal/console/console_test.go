@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -381,6 +383,114 @@ func TestApprovedRunReturnsMaskedRows(t *testing.T) {
 	log := h.auditLog(t)
 	if !strings.Contains(log, `"event":"approved"`) || strings.Contains(log, "alice@example.com") {
 		t.Errorf("audit log:\n%s", log)
+	}
+}
+
+// auditRecords decodes the audit log, one map per line.
+func (h *harness) auditRecords(t *testing.T) []map[string]any {
+	t.Helper()
+	var recs []map[string]any
+	for _, l := range strings.Split(strings.TrimSpace(h.auditLog(t)), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(l), &m); err != nil {
+			t.Fatalf("audit line %q: %v", l, err)
+		}
+		recs = append(recs, m)
+	}
+	return recs
+}
+
+// Every record of a client request names the requester: its uid, pid and
+// account, from the kernel's peer credentials, but not its process name,
+// which the agent chooses.
+func TestAuditNamesTheRequester(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	uid := os.Getuid()
+	ctx := withPeer(context.Background(), ipc.Cred{UID: uid, GID: os.Getgid(), PID: 4242})
+	if r := h.callCtx(t, ctx, ipc.MethodCatalogList, ipc.TablesParams{DB: "app"}); r.Error != nil {
+		t.Fatal(r.Error.Message)
+	}
+	r := h.callCtx(t, ctx, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers})
+	if r.Error != nil {
+		t.Fatal(r.Error.Message)
+	}
+	var pr ipc.PlanResult
+	if err := json.Unmarshal(r.Result, &pr); err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, h.callCtx(t, ctx, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "DELETE FROM users WHERE id = 1"}), ipc.CodeRefused)
+	// The run comes from another process than the plan: it is the one named.
+	h.io.answers = []string{"y"}
+	runCtx := withPeer(context.Background(), ipc.Cred{UID: uid, GID: os.Getgid(), PID: 4343})
+	if r := h.callCtx(t, runCtx, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}); r.Error != nil {
+		t.Fatal(r.Error.Message)
+	}
+	// uid 0 is a uid, not an unknown one.
+	root := withPeer(context.Background(), ipc.Cred{UID: 0, PID: 1})
+	if r := h.callCtx(t, root, ipc.MethodCatalogList, ipc.TablesParams{DB: "app"}); r.Error != nil {
+		t.Fatal(r.Error.Message)
+	}
+
+	name := ""
+	if u, err := user.LookupId(strconv.Itoa(uid)); err == nil {
+		name = u.Username
+	}
+	want := map[string]float64{"catalog": 4242, "refused": 4242, "approved": 4343}
+	seen := map[string]bool{}
+	rootSeen := false
+	for _, rec := range h.auditRecords(t) {
+		ev, _ := rec["event"].(string)
+		for k := range rec {
+			if strings.Contains(k, "comm") || strings.Contains(k, "process") {
+				t.Errorf("%s record carries the process name: %v", ev, rec)
+			}
+		}
+		pid, ok := want[ev]
+		if !ok {
+			continue
+		}
+		if rec["peer_pid"] == float64(1) {
+			rootSeen = rec["peer_uid"] == float64(0)
+			continue
+		}
+		seen[ev] = true
+		if rec["peer_uid"] != float64(uid) || rec["peer_pid"] != pid {
+			t.Errorf("%s record: peer_uid %v peer_pid %v, want %d %v", ev, rec["peer_uid"], rec["peer_pid"], uid, pid)
+		}
+		if name != "" && rec["peer_user"] != name {
+			t.Errorf("%s record: peer_user %v, want %q", ev, rec["peer_user"], name)
+		}
+	}
+	if len(seen) != len(want) {
+		t.Errorf("records seen %v, want %v", seen, want)
+	}
+	if !rootSeen {
+		t.Error("the catalog read of uid 0 does not record peer_uid 0")
+	}
+	// Without a peer in the request there is nothing to name.
+	h2 := newHarness(t, uatProfile())
+	h2.ok(t, ipc.MethodCatalogList, ipc.TablesParams{DB: "app"}, nil)
+	if log := h2.auditLog(t); strings.Contains(log, "peer_") {
+		t.Errorf("a record without a peer names one:\n%s", log)
+	}
+}
+
+// A database error is server text: it reaches the console screen escaped,
+// so that it cannot drive the human's terminal.
+func TestRunErrorIsEscapedOnScreen(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.sess.runErr = errors.New("Deadlock found \x1b]0;approved\x07\x1b[2J when trying to get lock")
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	if r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}); r.Error == nil {
+		t.Fatal("the run error was not reported")
+	}
+	out := h.io.output()
+	if strings.Contains(out, "\x1b]0;") || strings.Contains(out, "\x1b[2J") || strings.Contains(out, "\x07") {
+		t.Errorf("raw control sequences from the server reached the screen: %q", out)
+	}
+	if !strings.Contains(out, `\x1b]0;approved\x07`) {
+		t.Errorf("escaped error text missing from the screen: %q", out)
 	}
 }
 

@@ -193,10 +193,14 @@ func Diff(approved, current Policy) []Change {
 			Loosens: cl.KAnonymity < al.KAnonymity})
 	}
 	// 0 is an approved policy from before reference_probe existed: the
-	// default applies, so it is no change.
-	if ap := al.ReferenceProbe; ap != 0 && ap != cl.ReferenceProbe {
-		out = append(out, Change{Field: "limits.reference_probe", Old: num(int64(ap)), New: num(int64(cl.ReferenceProbe)),
-			Loosens: cl.ReferenceProbe > ap})
+	// default applied, so the current value is compared with it.
+	rp := al.ReferenceProbe
+	if rp == 0 {
+		rp = DefaultLimits(ap.Production).ReferenceProbe
+	}
+	if rp != cl.ReferenceProbe {
+		out = append(out, Change{Field: "limits.reference_probe", Old: num(int64(rp)), New: num(int64(cl.ReferenceProbe)),
+			Loosens: cl.ReferenceProbe > rp})
 	}
 	if ap.CredentialsTTL != cp.CredentialsTTL {
 		out = append(out, Change{Field: "credentials_ttl", Old: dur(int64(ap.CredentialsTTL)), New: dur(int64(cp.CredentialsTTL)),

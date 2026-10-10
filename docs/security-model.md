@@ -118,7 +118,11 @@ line with `AUTO-APPROVE` and audits each decision as `auto`.
 The console appends one JSONL record per event (login, policy change,
 refusal, approval, denial, timeout, auto-approval, abandoned approval,
 catalog read, logout) to `<user state dir>/locksql/audit.log`, mode 0600.
-Records contain the SQL and metadata, never secrets and never row data.
+Records contain the SQL and metadata, never secrets and never row data. The
+records of a client request (refusal, decision, catalog read) name the
+requester from the kernel's peer credentials: `peer_uid`, `peer_pid` and
+`peer_user` (the account name, when it resolves). The process name the
+approval screen shows is the agent's choice and is not recorded.
 
 ## Out of scope and limitations
 

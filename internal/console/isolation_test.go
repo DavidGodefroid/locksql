@@ -23,6 +23,40 @@ func fakeIsolation(sys *sysconf.Config, display string) isolationEnv {
 	}
 }
 
+// A uid removed from the client group loses access at its next connection,
+// not at the next console start.
+func TestPeerCheckLooksUpMembershipPerConnection(t *testing.T) {
+	env := fakeIsolation(separated(), sysconf.DisplayWayland)
+	member := true
+	lookups := 0
+	env.clientAllowed = func(_ *sysconf.Config, uid int) bool {
+		lookups++
+		return uid == 1000 && member
+	}
+	iso, err := checkIsolation(&fakeIO{}, env, uatProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookups = 0
+	check := iso.peerCheck()
+	if !check(ipc.Cred{UID: 1000}) {
+		t.Fatal("member refused")
+	}
+	member = false
+	if check(ipc.Cred{UID: 1000}) {
+		t.Error("a uid removed from the group still connects")
+	}
+	if lookups != 2 {
+		t.Errorf("%d membership lookups for two connections, want 2", lookups)
+	}
+	if !check(ipc.Cred{UID: 900}) {
+		t.Error("the console's own uid refused")
+	}
+	if lookups != 2 {
+		t.Error("the console's own uid is looked up in the group")
+	}
+}
+
 func separated() *sysconf.Config {
 	return &sysconf.Config{ServiceUser: "locksql", ClientGroup: "locksql-clients", SocketDir: "/run/locksql", X11: sysconf.X11Warn}
 }

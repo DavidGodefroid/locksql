@@ -328,7 +328,8 @@ only guide the agent; the console's checks are the guarantee.
   limits, new host, removed PII rule, ...) only takes effect after you
   confirm it in the console.
 - **Audit.** Every login, policy change, refusal, decision, catalog read and
-  logout is appended to a JSONL audit log (mode 0600). Never secrets, never
+  logout is appended to a JSONL audit log (mode 0600). The records of a client
+  request name the requester: its uid, pid and account. Never secrets, never
   row data.
 
 Details and threat model: [docs/security-model.md](docs/security-model.md).

@@ -49,6 +49,13 @@ type Record struct {
 	Truncated  bool     `json:"truncated,omitempty"`
 	Unmasked   bool     `json:"unmasked,omitempty"`
 	Warnings   []string `json:"warnings,omitempty"`
+	// The client behind a request, from the kernel's peer credentials:
+	// set on the records of client requests only. PeerUID is nil when
+	// unknown (uid 0 is root); PeerUser is the account name when it
+	// resolves. The process name is the agent's choice and is not kept.
+	PeerUID  *int   `json:"peer_uid,omitempty"`
+	PeerPID  int    `json:"peer_pid,omitempty"`
+	PeerUser string `json:"peer_user,omitempty"`
 }
 
 // line is the on-disk shape: the timestamp first, then the record.
