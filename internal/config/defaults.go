@@ -57,6 +57,8 @@ func DefaultLimits(production bool) Limits {
 			MaxOutputBytes:    65_536,
 			KAnonymity:        10,
 			ReferenceProbe:    5,
+			IdleTimeout:       10 * time.Minute,
+			MaxSession:        2 * time.Hour,
 		}
 	}
 	return Limits{
@@ -68,8 +70,17 @@ func DefaultLimits(production bool) Limits {
 		MaxOutputBytes:    65_536,
 		KAnonymity:        5,
 		ReferenceProbe:    5,
+		IdleTimeout:       20 * time.Minute,
+		MaxSession:        4 * time.Hour,
 	}
 }
+
+// Bounds of the session limits: MinIdleTimeout <= idle_timeout <=
+// max_session <= MaxMaxSession.
+const (
+	MinIdleTimeout = time.Minute
+	MaxMaxSession  = 24 * time.Hour
+)
 
 // applyDefaults replaces zero values of p with the defaults.
 // detectorsSet reports whether the detectors key was present in the file;
@@ -119,5 +130,12 @@ func applyDefaults(p *Profile, detectorsSet bool) {
 	}
 	if l.ReferenceProbe == 0 {
 		l.ReferenceProbe = d.ReferenceProbe
+	}
+	if l.MaxSession == 0 {
+		l.MaxSession = d.MaxSession
+	}
+	if l.IdleTimeout == 0 {
+		// A defaulted idle timeout never exceeds an explicit max_session.
+		l.IdleTimeout = min(d.IdleTimeout, l.MaxSession)
 	}
 }

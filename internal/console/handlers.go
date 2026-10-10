@@ -99,7 +99,7 @@ func (s *Server) hello(req ipc.Request) ipc.Response {
 }
 
 func (s *Server) status() ipc.StatusResult {
-	left := MaxSession - s.now().Sub(s.started)
+	left := s.profile.Limits.MaxSession - s.now().Sub(s.started)
 	if left < 0 {
 		left = 0
 	}
@@ -115,7 +115,7 @@ func (s *Server) status() ipc.StatusResult {
 		Tier:            s.profile.Tier.String(),
 		Databases:       nonNil(s.cfg.Databases),
 		Limits:          s.profile.Limits,
-		IdleTimeoutInS:  int(IdleTimeout / time.Second),
+		IdleTimeoutInS:  int(s.profile.Limits.IdleTimeout / time.Second),
 		SessionEndsInS:  int(left / time.Second),
 		Health:          s.cfg.Health,
 	}

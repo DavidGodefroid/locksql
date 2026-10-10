@@ -873,7 +873,7 @@ func TestHelloStatusLogout(t *testing.T) {
 	var st ipc.StatusResult
 	h.ok(t, ipc.MethodStatus, nil, &st)
 	if st.Profile != "uat" || st.Engine != "mariadb" || st.Tier != "read" || len(st.Databases) != 2 ||
-		st.IdleTimeoutInS != int(IdleTimeout/time.Second) || st.SessionEndsInS != int(MaxSession/time.Second) {
+		st.IdleTimeoutInS != 20*60 || st.SessionEndsInS != 4*3600 || st.Limits.IdleTimeout != 20*time.Minute || st.Limits.MaxSession != 4*time.Hour {
 		t.Fatalf("status: %+v", st)
 	}
 	h.ok(t, ipc.MethodLogout, nil, nil)
@@ -945,17 +945,75 @@ func TestServedDatabases(t *testing.T) {
 }
 
 func TestIdleAndMaxSession(t *testing.T) {
+	idle := config.DefaultLimits(false).IdleTimeout
 	h := newHarness(t, uatProfile())
-	h.now = h.now.Add(IdleTimeout - time.Second)
+	h.now = h.now.Add(idle - time.Second)
 	h.s.Tick()
 	if _, ended := h.s.Ended(); ended {
 		t.Fatal("ended before the idle timeout")
 	}
 	h.ok(t, ipc.MethodStatus, nil, nil)
-	h.now = h.now.Add(IdleTimeout + time.Second)
+	h.now = h.now.Add(idle + time.Second)
 	h.s.Tick()
 	if reason, ended := h.s.Ended(); !ended || reason != "idle timeout" {
 		t.Fatalf("idle: %q %v", reason, ended)
+	}
+}
+
+// The profile's limits.idle_timeout and limits.max_session drive Tick, and
+// a policy change applied while running takes effect at the next tick.
+func TestCustomSessionLimits(t *testing.T) {
+	p := uatProfile()
+	p.Limits.IdleTimeout, p.Limits.MaxSession = 3*time.Minute, 10*time.Minute
+	cur := config.NewPolicy(p, []string{"app.users.email"}, nil)
+	h := newHarness(t, p, func(c *ServerConfig) {
+		c.LoadPolicy = func() (config.Policy, error) { return cur, nil }
+	})
+	var st ipc.StatusResult
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if st.IdleTimeoutInS != 180 || st.SessionEndsInS != 600 {
+		t.Fatalf("status: idle %ds, ends in %ds", st.IdleTimeoutInS, st.SessionEndsInS)
+	}
+	h.s.Command(context.Background(), ":status")
+	if out := h.io.output(); !strings.Contains(out, "(max_session 10m0s) · idle_timeout 3m0s") {
+		t.Errorf(":status does not show the session limits:\n%s", out)
+	}
+	if got := strings.Join(describePolicy(cur), "\n"); !strings.Contains(got, "session: idle_timeout 3m0s · max_session 10m0s") {
+		t.Errorf("describePolicy does not show the session limits:\n%s", got)
+	}
+	h.now = h.now.Add(3*time.Minute - time.Second)
+	h.s.Tick()
+	if _, ended := h.s.Ended(); ended {
+		t.Fatal("ended before the custom idle timeout")
+	}
+	h.ok(t, ipc.MethodStatus, nil, nil) // activity
+
+	// A shorter idle timeout tightens: applied at once, used by the next tick.
+	p.Limits.IdleTimeout = time.Minute
+	cur = config.NewPolicy(p, []string{"app.users.email"}, nil)
+	h.s.CheckPolicy()
+	if h.io.promptCount() != 0 {
+		t.Fatal("a shorter idle timeout asked for confirmation")
+	}
+	h.now = h.now.Add(time.Minute + time.Second)
+	h.s.Tick()
+	if reason, ended := h.s.Ended(); !ended || reason != "idle timeout" {
+		t.Fatalf("custom idle: %q %v", reason, ended)
+	}
+
+	h = newHarness(t, p)
+	for range 10 {
+		h.now = h.now.Add(59 * time.Second)
+		h.ok(t, ipc.MethodStatus, nil, nil)
+		h.s.Tick()
+	}
+	if _, ended := h.s.Ended(); ended { // 9m50s in, active
+		t.Fatal("ended before the custom max_session")
+	}
+	h.now = h.now.Add(10 * time.Second)
+	h.s.Tick()
+	if reason, ended := h.s.Ended(); !ended || reason != "maximum session length" {
+		t.Fatalf("custom max_session: %q %v", reason, ended)
 	}
 }
 

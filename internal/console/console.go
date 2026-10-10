@@ -28,9 +28,9 @@ import (
 
 // Session timeouts, spec §6.
 const (
+	// The idle timeout and the maximum session length are the profile's
+	// limits.idle_timeout and limits.max_session.
 	ApprovalTimeout = 5 * time.Minute
-	IdleTimeout     = 20 * time.Minute
-	MaxSession      = 4 * time.Hour
 	PlanTTL         = 10 * time.Minute
 	// PolicyPoll is how often the config files are checked for changes.
 	PolicyPoll = 2 * time.Second
@@ -285,13 +285,15 @@ func (s *Server) End(reason string) {
 // Ended reports whether the session is over, and why.
 func (s *Server) Ended() (string, bool) { return s.reason, s.ended }
 
-// Tick ends the session on idle or maximum session timeout.
+// Tick ends the session on idle or maximum session timeout, as set by the
+// policy in force: a policy change applies from the next tick.
 func (s *Server) Tick() {
 	now := s.now()
+	l := s.profile.Limits
 	switch {
-	case now.Sub(s.started) >= MaxSession:
+	case now.Sub(s.started) >= l.MaxSession:
 		s.End("maximum session length")
-	case now.Sub(s.lastSeen) >= IdleTimeout:
+	case now.Sub(s.lastSeen) >= l.IdleTimeout:
 		s.End("idle timeout")
 	}
 }

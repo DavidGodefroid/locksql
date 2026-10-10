@@ -484,8 +484,11 @@ Between requests you can type:
 | `:review` | show the pending policy change and the agent's change requests |
 | `:quit` | end the session |
 
-The session ends on Ctrl-C, `:quit`, `locksql logout`, after 20 minutes
-without activity, or after 4 hours. Each end closes the connection, removes
+The session ends on Ctrl-C, `:quit`, `locksql logout`, after
+`limits.idle_timeout` without activity (default 20 minutes, production 10),
+or after `limits.max_session` (default 4 hours, production 2). A change of
+either applied while the console runs counts from the session start and the
+last activity, at the next check. Each end closes the connection, removes
 the socket and is audited.
 
 ### TLS to the database
@@ -562,8 +565,9 @@ The console watches the config and PII files while it runs.
   larger `k_anonymity`, a new mask rule or detector, a mode changed to
   `redact`) is applied at once.
 - A change that loosens it (higher tier, `production = true → false`, larger
-  limits, a smaller `k_anonymity`, a larger `reference_probe`, a higher or
-  removed `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
+  limits, a smaller `k_anonymity`, a larger `reference_probe`, a longer
+  `idle_timeout` or `max_session`, a higher or removed
+  `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
   host, port, engine, user or database, a weaker `tls` or any change of `tls_ca`,
   any change of the `ssh` table (except `ssh.credentials` set to `ask`),
   `ask → keychain`, a removed mask rule or detector, a mask mode

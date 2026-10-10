@@ -236,8 +236,8 @@ func (s *Server) Command(ctx context.Context, line string) {
 		l := st.Limits
 		s.println(fmt.Sprintf("limits: timeout %s · warn %d · refuse %d · max_rows %d · max_cell_chars %d · max_output_bytes %d",
 			l.StatementTimeout, l.ExplainRowsWarn, l.ExplainRowsRefuse, l.MaxRows, l.MaxCellChars, l.MaxOutputBytes))
-		s.println(fmt.Sprintf("session ends in %d min · %d plans open · pending policy change: %t",
-			st.SessionEndsInS/60, len(s.plans), s.pending != nil))
+		s.println(fmt.Sprintf("session ends in %d min (max_session %s) · idle_timeout %s · %d plans open · pending policy change: %t",
+			st.SessionEndsInS/60, l.MaxSession, l.IdleTimeout, len(s.plans), s.pending != nil))
 	case ":quit":
 		s.End("quit")
 	default:
@@ -425,6 +425,7 @@ func describePolicy(p config.Policy) []string {
 		fmt.Sprintf("  tier %s · production %t · credentials %s", pr.Tier, pr.Production, safeText(pr.Credentials, false)),
 		fmt.Sprintf("  limits: timeout %s · warn %d · refuse %d · max_rows %d · max_cell_chars %d · max_output_bytes %d",
 			l.StatementTimeout, l.ExplainRowsWarn, l.ExplainRowsRefuse, l.MaxRows, l.MaxCellChars, l.MaxOutputBytes),
+		fmt.Sprintf("  session: idle_timeout %s · max_session %s", l.IdleTimeout, l.MaxSession),
 		"  detectors: " + safeText(strings.Join(pr.Detectors, ", "), false),
 		fmt.Sprintf("  PII rules: %d mask, %d allow", len(p.PIIMask), len(p.PIIAllow)),
 	}

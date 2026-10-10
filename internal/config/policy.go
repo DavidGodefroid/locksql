@@ -79,6 +79,16 @@ func canonical(p Policy) Policy {
 		modes[pat] = m
 	}
 	p.PIIModes = modes
+	if l := &p.Profile.Limits; l.IdleTimeout == 0 || l.MaxSession == 0 {
+		// Approved before the session limits existed: the defaults applied.
+		d := DefaultLimits(p.Profile.Production)
+		if l.MaxSession == 0 {
+			l.MaxSession = d.MaxSession
+		}
+		if l.IdleTimeout == 0 {
+			l.IdleTimeout = min(d.IdleTimeout, l.MaxSession)
+		}
+	}
 	if p.Profile.TLS == "" && p.Profile.Engine != EngineSQLite && p.Profile.Engine != "" {
 		p.Profile.TLS = TLSPrefer // approved before the setting existed
 	}
@@ -116,9 +126,10 @@ func SSHString(s *SSHProfile) string {
 
 // Diff lists the changes from approved to current and marks each loosening
 // (spec section 4): a higher tier, production true→false, a larger limit
-// (0 means unlimited), a removed PII rule or detector, an added allow rule,
-// any change of engine, host, port, path, database or user, and a
-// credentials mode other than ask, a weaker tls mode, any change of tls_ca and any change of the ssh table.
+// (0 means unlimited), a longer idle_timeout or max_session, a removed PII
+// rule or detector, an added allow rule, any change of engine, host, port,
+// path, database or user, and a credentials mode other than ask, a weaker
+// tls mode, any change of tls_ca and any change of the ssh table.
 func Diff(approved, current Policy) []Change {
 	a, c := canonical(approved), canonical(current)
 	ap, cp := a.Profile, c.Profile
@@ -201,6 +212,16 @@ func Diff(approved, current Policy) []Change {
 	if rp != cl.ReferenceProbe {
 		out = append(out, Change{Field: "limits.reference_probe", Old: num(int64(rp)), New: num(int64(cl.ReferenceProbe)),
 			Loosens: cl.ReferenceProbe > rp})
+	}
+	// A longer session limit loosens. canonical gave a policy approved
+	// before they existed their defaults.
+	for _, f := range []struct {
+		field string
+		o, n  time.Duration
+	}{{"idle_timeout", al.IdleTimeout, cl.IdleTimeout}, {"max_session", al.MaxSession, cl.MaxSession}} {
+		if f.o != f.n {
+			out = append(out, Change{Field: "limits." + f.field, Old: f.o.String(), New: f.n.String(), Loosens: f.n > f.o})
+		}
 	}
 	if ap.CredentialsTTL != cp.CredentialsTTL {
 		out = append(out, Change{Field: "credentials_ttl", Old: dur(int64(ap.CredentialsTTL)), New: dur(int64(cp.CredentialsTTL)),
