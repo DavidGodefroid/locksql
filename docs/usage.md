@@ -283,11 +283,21 @@ account could read its terminal, type into it and read its keychain session.
 mode as a failure. On Linux and macOS, `locksql install` sets it up once:
 
 ```sh
-locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print]
+locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print] [--trust-binary]
 ```
 
 It prints the root script and, on Linux, runs it with `sudo` after you
-confirm (`--print` only prints; on macOS it always only prints). The script:
+confirm (`--print` only prints; on macOS it always only prints).
+
+- The binary it copies is the one running. Unless that binary is owned by
+  root and writable by neither group nor others, `install` refuses: run from
+  the agent's account, a binary the agent replaced (a `go install` into
+  `~/go/bin`) would become the root-owned one the console trusts. Install a
+  release with `scripts/install.sh` (root-owned in `/usr/local/bin`), or pass
+  `--trust-binary` to copy it anyway; both the refusal and `--trust-binary`
+  print its sha256, to compare with the release.
+
+The script:
 
 | Creates | Detail |
 |---|---|

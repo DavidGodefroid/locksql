@@ -246,7 +246,9 @@ func TestDoctorSameUserMode(t *testing.T) {
 }
 
 func TestInstallPrint(t *testing.T) {
-	o := cli(t, t.TempDir(), "", "install", "--client", "agent", "--print")
+	// The test binary belongs to the test account: see
+	// TestInstallRefusesABinaryAnotherAccountCanChange.
+	o := cli(t, t.TempDir(), "", "install", "--client", "agent", "--print", "--trust-binary")
 	if o.code != 0 {
 		t.Fatalf("exit %d: %s", o.code, o.stderr)
 	}

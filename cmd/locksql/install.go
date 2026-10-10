@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -24,13 +26,14 @@ var accountRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 // console from the agent. It prints the commands, which need root, and on
 // Linux runs them with sudo once the human confirms.
 func runInstall(e env, args []string) int {
-	const usage = "locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print]"
+	const usage = "locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print] [--trust-binary]"
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	client := fs.String("client", "", "the account the agent runs as (default: you)")
 	svc := fs.String("user", sysconf.DefaultServiceUser, "the console account to create")
 	group := fs.String("group", sysconf.DefaultClientGroup, "the group allowed to reach the console")
 	printOnly := fs.Bool("print", false, "print the commands, do not run them")
+	trustBinary := fs.Bool("trust-binary", false, "copy this binary even when another account than root can change it")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		fmt.Fprintln(e.stderr, "usage:", usage)
 		return exitUsage
@@ -59,6 +62,20 @@ func runInstall(e env, args []string) int {
 	}
 	if bin, err = filepath.EvalSymlinks(bin); err != nil {
 		fmt.Fprintln(e.stderr, "locksql install:", err)
+		return exitFail
+	}
+	if *trustBinary {
+		sum, err := fileSum(bin)
+		if err != nil {
+			fmt.Fprintln(e.stderr, "locksql install:", err)
+			return exitFail
+		}
+		fmt.Fprintf(e.stdout, "--trust-binary: copying %s (sha256 %s)\n\n", bin, sum)
+	} else if msg, err := installSourceRefusal(bin); err != nil {
+		fmt.Fprintln(e.stderr, "locksql install:", err)
+		return exitFail
+	} else if msg != "" {
+		fmt.Fprint(e.stderr, msg)
 		return exitFail
 	}
 	script := linuxInstallScript(bin, *client, *svc, *group)
@@ -108,6 +125,55 @@ Done. Next:
   4. locksql doctor               (from both accounts)
 `, *svc, *client)
 	return exitOK
+}
+
+// installSourceRefusal returns the refusal to print when bin, the binary
+// install would copy to /usr/local/bin as root, could have been changed by an
+// account other than root: run from the agent's account, a binary the agent
+// replaced (a go install into ~/go/bin) would become the one the console
+// trusts. It returns "" for a root-owned binary that neither group nor others
+// may write.
+func installSourceRefusal(bin string) (string, error) {
+	fi, err := os.Stat(bin)
+	if err != nil {
+		return "", err
+	}
+	uid, _, ok := fileOwner(fi)
+	if ok && uid == 0 && fi.Mode().Perm()&0o022 == 0 {
+		return "", nil
+	}
+	owner := "an unknown account"
+	if ok {
+		owner = fmt.Sprintf("uid %d", uid)
+		if u, err := user.LookupId(fmt.Sprint(uid)); err == nil {
+			owner = u.Username
+		}
+	}
+	if ok && uid == 0 {
+		owner = "root but writable by group or others"
+	}
+	sum, err := fileSum(bin)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`locksql install: %s is owned by %s and could have been replaced by the agent;
+install a release with scripts/install.sh (root-owned in /usr/local/bin), or pass --trust-binary
+to copy this one (sha256 %s).
+`, bin, owner, sum), nil
+}
+
+// fileSum is the hex sha256 of the file at path.
+func fileSum(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func indent(s string) string {
