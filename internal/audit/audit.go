@@ -49,6 +49,9 @@ type Record struct {
 	Truncated  bool     `json:"truncated,omitempty"`
 	Unmasked   bool     `json:"unmasked,omitempty"`
 	Warnings   []string `json:"warnings,omitempty"`
+	// Intent is the agent's one-line reason for a plan (untrusted text,
+	// like SQL), kept on every record of that plan.
+	Intent string `json:"intent,omitempty"`
 	// The client behind a request, from the kernel's peer credentials:
 	// set on the records of client requests only. PeerUID is nil when
 	// unknown (uid 0 is root); PeerUser is the account name when it

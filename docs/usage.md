@@ -517,6 +517,7 @@ tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
 ```
 ╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
 │ requested by uid 1000 (alice) · pid 48211 (claude)
+│ agent: find in which countries the customer a@example.com ordered
 │
 │   SELECT country, COUNT(*) FROM customers WHERE email = 'a@example.com' GROUP BY country LIMIT 20
 │
@@ -532,7 +533,8 @@ tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
 ```
 
 - The screen names the requesting uid, pid and process (as the kernel reports
-  them), the relations read, the PII columns touched and in which clause
+  them), the agent's `intent` when it gave one (one line of at most 200 bytes,
+  dimmed, untrusted text: the agent's claim, not a fact), the relations read, the PII columns touched and in which clause
   (highlighted in red in the SQL), each masked output and its mode, the
   k-anonymity counts that run first and the row cap.
 - Statement classes other than READ, a WARN verdict, PII columns and
@@ -581,7 +583,7 @@ one profile and never handles a secret.
 locksql status   [--profile P]
 locksql tables   --profile P [--db D]
 locksql describe --profile P [--db D] TABLE
-locksql plan     --profile P [--db D] [--unmask] "SQL" | -   # "-" reads SQL from stdin
+locksql plan     --profile P [--db D] [--unmask] [--intent TEXT] "SQL" | -   # "-" reads SQL from stdin
 locksql run      --profile P PLAN_ID                          # waits for the human's approval
 locksql pii      list|add --profile P [DB.TABLE.COLUMN]
 locksql request  --profile P "tier=write" | "limits.max_rows=500" | "allow=app.t.c"
@@ -789,7 +791,7 @@ finds the project's consoles.
 |---|---|
 | `locksql_status` | none |
 | `locksql_list_tables`, `locksql_describe` | none (catalog reads, audited) |
-| `locksql_plan` | none (validate and EXPLAIN only) |
+| `locksql_plan` | none (validate and EXPLAIN only; an optional `intent` line is shown on the approval screen) |
 | `locksql_run` | the human, in the console |
 | `locksql_pii_list`, `locksql_pii_add` | none (adding a mask rule only tightens) |
 | `locksql_request_change` | queued for the human; never applied by the tool |

@@ -132,6 +132,7 @@ type plan struct {
 	unmask   bool
 	created  time.Time
 	warnings []string
+	intent   string       // the agent's one-line reason, shown and audited
 	explain  *engine.Plan // the EXPLAIN result, assessed again when the plan runs
 	// kExplains are the EXPLAIN results of the k-anonymity counts, assessed
 	// again when the plan runs.

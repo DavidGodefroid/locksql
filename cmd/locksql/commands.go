@@ -50,6 +50,7 @@ type opts struct {
 	profile string
 	db      string
 	unmask  bool
+	intent  string
 	json    bool
 	args    []string
 }
@@ -59,7 +60,7 @@ type opts struct {
 type clientCmd struct {
 	usage    string
 	db       bool // accepts --db
-	unmask   bool // accepts --unmask
+	unmask   bool // accepts --unmask and --intent
 	min, max int  // positional arguments
 	do       func(ctx context.Context, e env, c *client.Client, o *opts) (any, func(io.Writer), error)
 }
@@ -88,13 +89,13 @@ var clientCmds = map[string]clientCmd{
 		},
 	},
 	"plan": {
-		usage: `locksql plan --profile P --db D [--unmask] [--json] "SQL" | -`, db: true, unmask: true, min: 1, max: 1,
+		usage: `locksql plan --profile P --db D [--unmask] [--intent TEXT] [--json] "SQL" | -`, db: true, unmask: true, min: 1, max: 1,
 		do: func(ctx context.Context, e env, c *client.Client, o *opts) (any, func(io.Writer), error) {
 			sql, err := readSQL(e, o.args[0])
 			if err != nil {
 				return nil, nil, err
 			}
-			r, err := c.Plan(ctx, ipc.PlanParams{DB: o.db, SQL: sql, Unmask: o.unmask})
+			r, err := c.Plan(ctx, ipc.PlanParams{DB: o.db, SQL: sql, Unmask: o.unmask, Intent: o.intent})
 			return r, func(w io.Writer) { client.FormatPlan(w, r) }, err
 		},
 	},
@@ -256,6 +257,7 @@ func runClient(e env, name string, args []string) int {
 	}
 	if spec.unmask {
 		fs.BoolVar(&o.unmask, "unmask", false, "ask the human for unmasked output")
+		fs.StringVar(&o.intent, "intent", "", "one line telling the human why the query is needed")
 	}
 	pos, err := parseInterleaved(fs, args)
 	if err != nil {

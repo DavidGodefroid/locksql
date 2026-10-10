@@ -208,6 +208,7 @@ sequenceDiagram
    ```
    ╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
    │ requested by uid 1000 (alice) · pid 48211 (claude)
+   │ agent: list the Belgian customers to check the email campaign
    │
    │   SELECT id, email FROM customers WHERE country = 'BE' LIMIT 20
    │

@@ -271,15 +271,15 @@ func (s *Server) catalog(ctx context.Context, req ipc.Request) ipc.Response {
 	return okResp(req.ID, result)
 }
 
-// refuse audits and reports a refused plan.
-func (s *Server) refuse(ctx context.Context, id int64, db, sql, class, verdict, reason string) ipc.Response {
-	return s.refuseRec(id, withPeerRecord(ctx, audit.Record{Event: audit.EventRefused, DB: db, SQL: sql, Class: class, Verdict: verdict, Error: reason}))
+// refuse audits and reports a refused plan; intent is the agent's.
+func (s *Server) refuse(ctx context.Context, id int64, intent, db, sql, class, verdict, reason string) ipc.Response {
+	return s.refuseRec(id, withPeerRecord(ctx, audit.Record{Event: audit.EventRefused, DB: db, SQL: sql, Class: class, Verdict: verdict, Error: reason, Intent: intent}))
 }
 
 // refuseWarned is refuse for a plan whose warnings are computed: the audit
 // record carries them.
 func (s *Server) refuseWarned(ctx context.Context, id int64, pl *plan, class, reason string) ipc.Response {
-	return s.refuseRec(id, withPeerRecord(ctx, audit.Record{Event: audit.EventRefused, DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Error: reason, Warnings: pl.warnings}))
+	return s.refuseRec(id, withPeerRecord(ctx, audit.Record{Event: audit.EventRefused, DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Error: reason, Warnings: pl.warnings, Intent: pl.intent}))
 }
 
 func (s *Server) refuseRec(id int64, rec audit.Record) ipc.Response {
@@ -309,36 +309,40 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	if strings.TrimSpace(p.SQL) == "" {
 		return errResp(req.ID, ipc.CodeInvalidParams, "query.plan needs sql")
 	}
+	if len(p.Intent) > ipc.MaxIntent || !utf8.ValidString(p.Intent) || strings.ContainsAny(p.Intent, "\r\n") {
+		return errResp(req.ID, ipc.CodeInvalidParams, fmt.Sprintf("intent must be one line of at most %d bytes", ipc.MaxIntent))
+	}
+	p.Intent = strings.TrimSpace(p.Intent)
 	db, r := s.checkDB(req.ID, p.DB)
 	if r != nil {
 		return *r
 	}
 	auditSQL := capSQL(p.SQL)
 	if p.Unmask && !s.cfg.AllowUnmask {
-		return s.refuse(ctx, req.ID, db, auditSQL, "", "", "unmasked output is off in this console: run the query masked, or ask the human to restart the console with --allow-unmask")
+		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "", "", "unmasked output is off in this console: run the query masked, or ask the human to restart the console with --allow-unmask")
 	}
 	inner, explain := splitExplain(s.dialect, p.SQL)
 	st, err := sqlclass.Classify(s.dialect, inner, s.profile.Limits.MaxRows)
 	if err != nil {
-		return s.refuse(ctx, req.ID, db, auditSQL, "", "", err.Error())
+		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "", "", err.Error())
 	}
 	if st.Class == sqlclass.Read && st.Kind != "select" {
-		return s.refuse(ctx, req.ID, db, auditSQL, "read", "", fmt.Sprintf(
+		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "read", "", fmt.Sprintf(
 			"%s is not allowed: only SELECT, WITH ... SELECT and EXPLAIN SELECT are (use the catalog commands to list and describe tables)",
 			strings.ToUpper(st.Kind)))
 	}
 	if explain && st.Class != sqlclass.Read {
-		return s.refuse(ctx, req.ID, db, auditSQL, st.Class.String(), "", "only EXPLAIN SELECT is allowed")
+		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, st.Class.String(), "", "only EXPLAIN SELECT is allowed")
 	}
 	class := st.Class.String()
 	if int(st.Class) > int(s.profile.Tier) {
-		return s.refuse(ctx, req.ID, db, st.SQL, class, "", fmt.Sprintf(
+		return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", fmt.Sprintf(
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
 	}
 	if st.Class != sqlclass.Read && sqlast.HasPlaceholder(s.dialect, st.SQL) {
 		// A write is never analysed for placeholders: it would run with
 		// the literal text '${...}'.
-		return s.refuse(ctx, req.ID, db, st.SQL, class, "", "placeholders are only allowed in read statements, compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")
+		return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", "placeholders are only allowed in read statements, compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")
 	}
 	sess, r := s.session(ctx, req.ID)
 	if r != nil {
@@ -349,11 +353,11 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		// CTE must not move PII under another label, since refusing its
 		// result afterwards would not undo the write.
 		if err := pii.PlanCheck(st, s.rules, s.dialect, sess.OriginColumns()); err != nil {
-			return s.refuse(ctx, req.ID, db, st.SQL, class, "", err.Error())
+			return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", err.Error())
 		}
 	}
 
-	pl := &plan{db: db, st: st, unmask: p.Unmask, created: s.now(), level: weight.OK.String()}
+	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String()}
 	if st.Class == sqlclass.Read {
 		// The read path: the statement is parsed in full and every column
 		// resolved before anything runs.
@@ -363,13 +367,13 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 			return s.failed(req.ID, "plan", err)
 		}
 		if refused {
-			return s.refuse(ctx, req.ID, db, auditSQL, class, "", reason)
+			return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, class, "", reason)
 		}
 		pl.st.SQL = strings.TrimSuffix(full, ";")
 		// Under a PII filter the verdict is a statistic of the filtered
 		// value: it is decided by query.run, on the console.
 		if reason, refused := s.assess(pl); refused && !estimatesHidden(pl) {
-			return s.refuse(ctx, req.ID, db, pl.st.SQL, class, pl.level, reason)
+			return s.refuse(ctx, req.ID, p.Intent, db, pl.st.SQL, class, pl.level, reason)
 		}
 	} else {
 		pl.summary = "no EXPLAIN for " + strings.ToUpper(st.Kind)
@@ -467,7 +471,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	}
 	class := pl.st.Class.String()
 	if int(pl.st.Class) > int(s.profile.Tier) {
-		return s.refuse(ctx, req.ID, pl.db, pl.st.SQL, class, pl.level, fmt.Sprintf(
+		return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, fmt.Sprintf(
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
 	}
 	// The limits may have changed since query.plan (a tightening is applied
@@ -484,7 +488,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		}
 		if refused {
 			if !estimatesHidden(pl) {
-				return s.refuse(ctx, req.ID, pl.db, pl.st.SQL, class, pl.level, reason)
+				return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, reason)
 			}
 			// Under a PII filter an immediate answer would tell the
 			// agent the verdict: the refusal waits for the human.
@@ -496,7 +500,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		return *r
 	}
 	pl.warnings = s.warnings(ctx, sess, pl)
-	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask, Warnings: pl.warnings})
+	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask, Warnings: pl.warnings, Intent: pl.intent})
 
 	s.screen(ctx, pl)
 	if hiddenRefusal != "" {

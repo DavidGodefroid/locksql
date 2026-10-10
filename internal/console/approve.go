@@ -80,10 +80,14 @@ func (s *Server) frameEnd(text string) string {
 	return paint.Paint(s.frameColour(), "╰─ ") + text
 }
 
-// screenBody is the requester, the statement and the verdict.
+// screenBody is the requester, the agent's intent, the statement and the
+// verdict.
 func (s *Server) screenBody(ctx context.Context, pl *plan, add func(string)) {
 	if who := peerText(ctx); who != "" {
 		add(paint.Dim("requested by " + safeText(who, false)))
+	}
+	if pl.intent != "" {
+		add(paint.Dim("agent: " + safeText(pl.intent, false)))
 	}
 	add("")
 	for _, line := range strings.Split(s.highlight(pl), "\n") {

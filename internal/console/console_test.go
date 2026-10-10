@@ -1304,3 +1304,62 @@ func TestFlagNoticesAndReadyLines(t *testing.T) {
 		t.Error("results line without the flag")
 	}
 }
+
+// The agent's intent is one line shown on the approval screen, under the
+// requester, and kept on every audit record of the plan.
+func TestIntentShownAndAudited(t *testing.T) {
+	const intent = "find why order 88123 was not emailed"
+	h := newHarness(t, uatProfile())
+	var pr ipc.PlanResult
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Intent: intent}, &pr)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	screen := ansi.ReplaceAllString(h.io.output(), "")
+	if !strings.Contains(screen, "│ agent: "+intent+"\n") {
+		t.Errorf("approval screen lacks the intent:\n%s", screen)
+	}
+
+	// Refused at plan time and denied at the prompt: the intent is kept.
+	wantCode(t, h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "DELETE FROM users WHERE id = 1", Intent: intent}), ipc.CodeRefused)
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Intent: intent}, &pr)
+	h.io.answers = []string{"n"}
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeDenied)
+	var events []string
+	for _, r := range h.auditRecords(t) {
+		events = append(events, fmt.Sprint(r["event"]))
+		if r["intent"] != intent {
+			t.Errorf("%v record without the intent: %v", r["event"], r)
+		}
+	}
+	if !slices.Equal(events, []string{"approved", "refused", "denied"}) {
+		t.Errorf("events %v", events)
+	}
+
+	// No intent, no line; control characters are escaped.
+	before := len(h.io.out)
+	pr = h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Intent: "a\x1b[2Jb"}, &pr)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	screen = strings.Join(h.io.out[before:], "\n")
+	if n := strings.Count(screen, "agent: "); n != 1 || strings.Contains(screen, "\x1b[2J") {
+		t.Errorf("intent lines %d, screen:\n%q", n, screen)
+	}
+	if rec := h.auditRecords(t)[3]; rec["intent"] != nil {
+		t.Errorf("empty intent audited: %v", rec)
+	}
+}
+
+func TestIntentMustBeOneShortLine(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Intent: strings.Repeat("x", 200)}, nil)
+	for _, bad := range []string{strings.Repeat("x", 201), "two\nlines", "cr\rhere"} {
+		resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Intent: bad})
+		wantCode(t, resp, ipc.CodeInvalidParams)
+		if resp.Error.Message != "intent must be one line of at most 200 bytes" {
+			t.Errorf("%q: message %q", bad, resp.Error.Message)
+		}
+	}
+}
