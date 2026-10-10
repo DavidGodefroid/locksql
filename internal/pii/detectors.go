@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Detector masks personal values found inside a text, in place.
@@ -172,10 +174,28 @@ func mod97(s string) int {
 
 // --- email
 
-var emailRe = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}`)
+// emailRe accepts any letter, digit or combining mark in the local part
+// (jöhn, a decomposed rené) and any letter in the domain labels, so that a
+// non-ASCII character cannot cut the address and leave its prefix in clear.
+var emailRe = regexp.MustCompile(`[\p{L}\p{M}\p{N}._%+\-]+@[\p{L}0-9\-]+(?:\.[\p{L}0-9\-]+)*\.\p{L}{2,}`)
 
+// findEmails accepts a match only at the start of a word, never the tail of
+// a longer local part, or right where the previous address ended: an
+// address glued to a masked one (a@b.com-c@d.org) is masked too.
 func findEmails(s string) []span {
-	return scan(s, emailRe, 0, func(s string, start, end int) (int, bool) { return end, true })
+	last := -1
+	return scan(s, emailRe, 0, func(s string, start, end int) (int, bool) {
+		r, _ := utf8.DecodeLastRuneInString(s[:start])
+		if start > 0 && start != last && emailLocalRune(r) {
+			return 0, false
+		}
+		last = end
+		return end, true
+	})
+}
+
+func emailLocalRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsMark(r) || strings.ContainsRune("._%+-", r)
 }
 
 // --- IBAN (mod 97)

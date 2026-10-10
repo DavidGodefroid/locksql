@@ -64,7 +64,7 @@ func fakeDoctor(sys *sysconf.Config) doctorEnv {
 		},
 		tiocsti:  func() (bool, bool) { return false, true },
 		ptrace:   func() (int, bool) { return 1, true },
-		keychain: func(string, string) error { return secrets.ErrNotFound },
+		keychain: func(string, string, int) error { return secrets.ErrNotFound },
 		status: func(string, string) (*ipc.StatusResult, error) {
 			return &ipc.StatusResult{Tier: "read", Health: &ipc.Health{Separated: true, Display: "wayland", ExplainOK: true}}, nil
 		},
@@ -207,7 +207,7 @@ func TestDoctorFindsProblems(t *testing.T) {
 				return stat(p)
 			}
 		}, "ask", "socket directory", checkFail},
-		"secret in agent keychain": {func(d *doctorEnv) { d.keychain = func(string, string) error { return nil } }, "keychain", "secret store", checkFail},
+		"secret in agent keychain": {func(d *doctorEnv) { d.keychain = func(string, string, int) error { return nil } }, "keychain", "secret store", checkFail},
 		"no console": {func(d *doctorEnv) {
 			d.status = func(string, string) (*ipc.StatusResult, error) { return nil, &client.NoConsoleError{Profile: "uat"} }
 		}, "ask", "uat: console", checkWarn},
@@ -246,7 +246,9 @@ func TestDoctorSameUserMode(t *testing.T) {
 }
 
 func TestInstallPrint(t *testing.T) {
-	o := cli(t, t.TempDir(), "", "install", "--client", "agent", "--print")
+	// The test binary belongs to the test account: see
+	// TestInstallRefusesABinaryAnotherAccountCanChange.
+	o := cli(t, t.TempDir(), "", "install", "--client", "agent", "--print", "--trust-binary")
 	if o.code != 0 {
 		t.Fatalf("exit %d: %s", o.code, o.stderr)
 	}
@@ -275,7 +277,7 @@ func TestInstallPrint(t *testing.T) {
 // Without setgid the socket is born with the console's own group, which it
 // may not change to the client group it is not a member of.
 func TestLinuxInstallScriptSetgidSocketDir(t *testing.T) {
-	s := linuxInstallScript("/tmp/locksql", "agent", "locksql", "locksql-clients")
+	s := linuxInstallScript("/tmp/locksql", "agent", "locksql", "locksql-clients", "")
 	for _, want := range []string{
 		`printf 'd /run/locksql 2710 locksql locksql-clients -\n' > /etc/tmpfiles.d/locksql.conf`,
 		"|| install -d -m 2710 -o locksql -g locksql-clients /run/locksql",

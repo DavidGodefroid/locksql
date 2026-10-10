@@ -139,3 +139,53 @@ func TestParseSpans(t *testing.T) {
 		t.Errorf("limit = %+v", st.Query.Limit)
 	}
 }
+
+// MySQL forms hex, bit and national literals with single quotes only:
+// X"email" is the column x aliased email, never a constant. The parser
+// refuses it, like a double-quoted alias.
+func TestParseMySQLDoubleQuotedPrefix(t *testing.T) {
+	for _, sql := range []string{
+		`SELECT X"email" FROM users LIMIT 1`,
+		`SELECT x"email" FROM users LIMIT 1`,
+		`SELECT B"01" FROM users LIMIT 1`,
+		`SELECT N"name" FROM users LIMIT 1`,
+		`SELECT id FROM users WHERE X"41" = id LIMIT 1`,
+	} {
+		_, err := Parse(my, sql)
+		var r *sqlclass.Refusal
+		if !errors.As(err, &r) {
+			t.Errorf("Parse(%q) = %v, want a refusal", sql, err)
+		}
+	}
+	for _, sql := range []string{
+		"SELECT X'0A', B'01', N'x' FROM users LIMIT 1",
+		"SELECT x'0a', b'01', n'x' FROM users LIMIT 1",
+	} {
+		st, err := Parse(my, sql)
+		if err != nil {
+			t.Errorf("Parse(%q): %v", sql, err)
+			continue
+		}
+		for _, it := range st.Query.Body.(*Select).Items {
+			if l, ok := it.Expr.(*Literal); !ok || l.Kind != LitTyped {
+				t.Errorf("Parse(%q): item %#v, want a typed literal", sql, it.Expr)
+			}
+		}
+	}
+	// PostgreSQL and SQLite quote names with double quotes: X"email" is the
+	// column x aliased email there, as before.
+	for _, d := range []sqlclass.Dialect{pg, sl} {
+		for _, w := range []string{"X", "B", "N"} {
+			sql := `SELECT ` + w + `"email" FROM users LIMIT 1`
+			st, err := Parse(d, sql)
+			if err != nil {
+				t.Errorf("%s: Parse(%q): %v", d, sql, err)
+				continue
+			}
+			it := st.Query.Body.(*Select).Items[0]
+			if c, ok := it.Expr.(*ColumnRef); !ok || len(c.Parts) != 1 || c.Parts[0] != w || it.Alias != "EMAIL" {
+				t.Errorf("%s: Parse(%q): item %#v alias %q, want column %s aliased email", d, sql, it.Expr, it.Alias, w)
+			}
+		}
+	}
+}

@@ -73,8 +73,13 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 	keychain := s.Credentials == config.CredentialsKeychain
 	var fromKeychain, asked []byte
 	if keychain {
-		if v, err := secrets.KeychainGet(p.Name, keychainHost); err == nil {
+		if v, legacy, err := secrets.KeychainGet(p.Name, keychainHost, s.Port, config.DefaultSSHPort); err == nil {
 			fromKeychain = v
+			if legacy == secrets.LegacyMoved {
+				st.io.Println(migratedLine(p.Name, keychainHost, s.Port))
+			}
+		} else if legacy == secrets.LegacyRemoved {
+			st.io.Println(removedLine(p.Name, keychainHost, s.Port))
 		} else if !errors.Is(err, secrets.ErrNotFound) {
 			st.io.Println("OS keychain unavailable, asking instead: " + secrets.Sanitize(err))
 			keychain = false
@@ -115,7 +120,7 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 		st.audit(audit.Record{Event: audit.EventLogin, Decision: "hostkey-added", SSHHost: s.Host, SSHHostKey: added})
 	}
 	if keychain && asked != nil {
-		st.offerSaveAs(ctx, keychainHost, asked, savePrompt)
+		st.offerSaveAs(ctx, keychainHost, s.Port, asked, savePrompt)
 	}
 	st.audit(audit.Record{Event: audit.EventLogin, Decision: "tunnel", SSHHost: s.Host, SSHHostKey: t.HostKey()})
 	return t, nil

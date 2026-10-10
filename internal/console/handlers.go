@@ -99,7 +99,7 @@ func (s *Server) hello(req ipc.Request) ipc.Response {
 }
 
 func (s *Server) status() ipc.StatusResult {
-	left := MaxSession - s.now().Sub(s.started)
+	left := s.profile.Limits.MaxSession - s.now().Sub(s.started)
 	if left < 0 {
 		left = 0
 	}
@@ -115,7 +115,7 @@ func (s *Server) status() ipc.StatusResult {
 		Tier:            s.profile.Tier.String(),
 		Databases:       nonNil(s.cfg.Databases),
 		Limits:          s.profile.Limits,
-		IdleTimeoutInS:  int(IdleTimeout / time.Second),
+		IdleTimeoutInS:  int(s.profile.Limits.IdleTimeout / time.Second),
 		SessionEndsInS:  int(left / time.Second),
 		Health:          s.cfg.Health,
 	}
@@ -144,7 +144,7 @@ func (s *Server) session(ctx context.Context, id int64) (engine.Session, *ipc.Re
 			s.connected = s.now()
 			return sess, nil
 		}
-		s.println("reconnect failed: " + secrets.Sanitize(err))
+		s.println("reconnect failed: " + safeText(secrets.Sanitize(err), false))
 		if errors.Is(err, errPrivilegeAudit) {
 			s.End("privilege audit failed after reconnect")
 		}
@@ -214,7 +214,8 @@ func (s *Server) failedPlan(id int64, what string, err error, pl *plan) ipc.Resp
 }
 
 // checkDB resolves the database of a request: the given one, or the
-// profile's. A named database must be one the session listed.
+// profile's. A named database must be one the console serves: the
+// profile's alone when it names one, else one the session listed.
 func (s *Server) checkDB(id int64, db string) (string, *ipc.Response) {
 	if db == "" {
 		db = s.profile.Database
@@ -222,7 +223,11 @@ func (s *Server) checkDB(id int64, db string) (string, *ipc.Response) {
 	if db == "" || slices.Contains(s.cfg.Databases, db) {
 		return db, nil
 	}
-	r := errResp(id, ipc.CodeRefused, fmt.Sprintf("unknown database %q; databases: %s", db, strings.Join(s.cfg.Databases, ", ")))
+	msg := fmt.Sprintf("unknown database %q; databases: %s", db, strings.Join(s.cfg.Databases, ", "))
+	if s.profile.Database != "" {
+		msg = fmt.Sprintf("database %q is not served: this profile serves %q only (set database = \"\" to serve every database the account can see)", db, s.profile.Database)
+	}
+	r := errResp(id, ipc.CodeRefused, msg)
 	return "", &r
 }
 
@@ -242,7 +247,7 @@ func (s *Server) catalog(ctx context.Context, req ipc.Request) ipc.Response {
 	if r != nil {
 		return *r
 	}
-	rec := audit.Record{Event: audit.EventCatalog, DB: db, Decision: req.Method}
+	rec := withPeerRecord(ctx, audit.Record{Event: audit.EventCatalog, DB: db, Decision: req.Method})
 	var result any
 	var err error
 	if req.Method == ipc.MethodCatalogList {
@@ -266,21 +271,21 @@ func (s *Server) catalog(ctx context.Context, req ipc.Request) ipc.Response {
 	return okResp(req.ID, result)
 }
 
-// refuse audits and reports a refused plan.
-func (s *Server) refuse(id int64, db, sql, class, verdict, reason string) ipc.Response {
-	return s.refuseRec(id, audit.Record{Event: audit.EventRefused, DB: db, SQL: sql, Class: class, Verdict: verdict, Error: reason})
+// refuse audits and reports a refused plan; intent is the agent's.
+func (s *Server) refuse(ctx context.Context, id int64, intent, db, sql, class, verdict, reason string) ipc.Response {
+	return s.refuseRec(id, withPeerRecord(ctx, audit.Record{Event: audit.EventRefused, DB: db, SQL: sql, Class: class, Verdict: verdict, Error: reason, Intent: intent}))
 }
 
 // refuseWarned is refuse for a plan whose warnings are computed: the audit
 // record carries them.
-func (s *Server) refuseWarned(id int64, pl *plan, class, reason string) ipc.Response {
-	return s.refuseRec(id, audit.Record{Event: audit.EventRefused, DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Error: reason, Warnings: pl.warnings})
+func (s *Server) refuseWarned(ctx context.Context, id int64, pl *plan, class, reason string) ipc.Response {
+	return s.refuseRec(id, withPeerRecord(ctx, audit.Record{Event: audit.EventRefused, DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Error: reason, Warnings: pl.warnings, Intent: pl.intent}))
 }
 
 func (s *Server) refuseRec(id int64, rec audit.Record) ipc.Response {
 	reason := rec.Error
 	s.audit(rec)
-	s.println(paint.Fail("refused: " + reason))
+	s.println(paint.Fail("refused: " + safeText(reason, false)))
 	return errResp(id, ipc.CodeRefused, reason)
 }
 
@@ -304,36 +309,40 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	if strings.TrimSpace(p.SQL) == "" {
 		return errResp(req.ID, ipc.CodeInvalidParams, "query.plan needs sql")
 	}
+	if len(p.Intent) > ipc.MaxIntent || !utf8.ValidString(p.Intent) || strings.ContainsAny(p.Intent, "\r\n") {
+		return errResp(req.ID, ipc.CodeInvalidParams, fmt.Sprintf("intent must be one line of at most %d bytes", ipc.MaxIntent))
+	}
+	p.Intent = strings.TrimSpace(p.Intent)
 	db, r := s.checkDB(req.ID, p.DB)
 	if r != nil {
 		return *r
 	}
 	auditSQL := capSQL(p.SQL)
 	if p.Unmask && !s.cfg.AllowUnmask {
-		return s.refuse(req.ID, db, auditSQL, "", "", "unmasked output is off in this console: run the query masked, or ask the human to restart the console with --allow-unmask")
+		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "", "", "unmasked output is off in this console: run the query masked, or ask the human to restart the console with --allow-unmask")
 	}
 	inner, explain := splitExplain(s.dialect, p.SQL)
 	st, err := sqlclass.Classify(s.dialect, inner, s.profile.Limits.MaxRows)
 	if err != nil {
-		return s.refuse(req.ID, db, auditSQL, "", "", err.Error())
+		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "", "", err.Error())
 	}
 	if st.Class == sqlclass.Read && st.Kind != "select" {
-		return s.refuse(req.ID, db, auditSQL, "read", "", fmt.Sprintf(
+		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "read", "", fmt.Sprintf(
 			"%s is not allowed: only SELECT, WITH ... SELECT and EXPLAIN SELECT are (use the catalog commands to list and describe tables)",
 			strings.ToUpper(st.Kind)))
 	}
 	if explain && st.Class != sqlclass.Read {
-		return s.refuse(req.ID, db, auditSQL, st.Class.String(), "", "only EXPLAIN SELECT is allowed")
+		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, st.Class.String(), "", "only EXPLAIN SELECT is allowed")
 	}
 	class := st.Class.String()
 	if int(st.Class) > int(s.profile.Tier) {
-		return s.refuse(req.ID, db, st.SQL, class, "", fmt.Sprintf(
+		return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", fmt.Sprintf(
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
 	}
 	if st.Class != sqlclass.Read && sqlast.HasPlaceholder(s.dialect, st.SQL) {
 		// A write is never analysed for placeholders: it would run with
 		// the literal text '${...}'.
-		return s.refuse(req.ID, db, st.SQL, class, "", "placeholders are only allowed in read statements, compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")
+		return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", "placeholders are only allowed in read statements, compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")
 	}
 	sess, r := s.session(ctx, req.ID)
 	if r != nil {
@@ -344,11 +353,11 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		// CTE must not move PII under another label, since refusing its
 		// result afterwards would not undo the write.
 		if err := pii.PlanCheck(st, s.rules, s.dialect, sess.OriginColumns()); err != nil {
-			return s.refuse(req.ID, db, st.SQL, class, "", err.Error())
+			return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", err.Error())
 		}
 	}
 
-	pl := &plan{db: db, st: st, unmask: p.Unmask, created: s.now(), level: weight.OK.String()}
+	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String()}
 	if st.Class == sqlclass.Read {
 		// The read path: the statement is parsed in full and every column
 		// resolved before anything runs.
@@ -358,11 +367,13 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 			return s.failed(req.ID, "plan", err)
 		}
 		if refused {
-			return s.refuse(req.ID, db, auditSQL, class, "", reason)
+			return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, class, "", reason)
 		}
 		pl.st.SQL = strings.TrimSuffix(full, ";")
-		if reason, refused := s.assess(pl); refused {
-			return s.refuse(req.ID, db, pl.st.SQL, class, pl.level, reason)
+		// Under a PII filter the verdict is a statistic of the filtered
+		// value: it is decided by query.run, on the console.
+		if reason, refused := s.assess(pl); refused && !estimatesHidden(pl) {
+			return s.refuse(ctx, req.ID, p.Intent, db, pl.st.SQL, class, pl.level, reason)
 		}
 	} else {
 		pl.summary = "no EXPLAIN for " + strings.ToUpper(st.Kind)
@@ -373,9 +384,13 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	pl.id = newID()
 	s.plans[pl.id] = pl
 	summary, reasons := clientSummary(pl)
+	verdict := pl.level
+	if estimatesHidden(pl) {
+		verdict = weight.OK.String()
+	}
 	return okResp(req.ID, ipc.PlanResult{
 		PlanID: pl.id, Profile: s.profile.Name, Host: s.host(), DB: db, SQL: pl.st.SQL,
-		Class: class, Verdict: pl.level, Summary: summary, Reasons: reasons, Unmask: pl.unmask,
+		Class: class, Verdict: verdict, Summary: summary, Reasons: reasons, Unmask: pl.unmask,
 		Values: s.typedNames(),
 	})
 }
@@ -456,15 +471,28 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	}
 	class := pl.st.Class.String()
 	if int(pl.st.Class) > int(s.profile.Tier) {
-		return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, fmt.Sprintf(
+		return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, fmt.Sprintf(
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
 	}
 	// The limits may have changed since query.plan (a tightening is applied
 	// at once): the verdict shown and enforced is the one under the policy
 	// in force now.
+	hiddenRefusal := ""
 	if pl.explain != nil {
-		if reason, refused := s.assess(pl); refused {
-			return s.refuse(req.ID, pl.db, pl.st.SQL, class, pl.level, reason)
+		reason, refused := s.assess(pl)
+		if !refused {
+			if reason, refused = s.assessK(pl); refused {
+				pl.level = weight.Refuse.String()
+				pl.reasons = append(pl.reasons, reason)
+			}
+		}
+		if refused {
+			if !estimatesHidden(pl) {
+				return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, reason)
+			}
+			// Under a PII filter an immediate answer would tell the
+			// agent the verdict: the refusal waits for the human.
+			hiddenRefusal = reason
 		}
 	}
 	sess, r := s.session(ctx, req.ID)
@@ -472,9 +500,12 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		return *r
 	}
 	pl.warnings = s.warnings(ctx, sess, pl)
-	rec := audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask, Warnings: pl.warnings}
+	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask, Warnings: pl.warnings, Intent: pl.intent})
 
 	s.screen(ctx, pl)
+	if hiddenRefusal != "" {
+		return s.refuseOnScreen(ctx, req.ID, rec, hiddenRefusal)
+	}
 	// The values are asked before the approval, and asked even when the
 	// approval is skipped: nothing runs while a placeholder has none.
 	missing, _ := s.placeholders(pl)
@@ -519,10 +550,10 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 				s.audit(rec)
 				return s.failedPlan(req.ID, "plan", err, pl)
 			}
-			return s.refuseWarned(req.ID, pl, class, reason)
+			return s.refuseWarned(ctx, req.ID, pl, class, reason)
 		}
 		if missing, _ := s.placeholders(pl); len(missing) > 0 {
-			return s.refuseWarned(req.ID, pl, class, "a placeholder has no value")
+			return s.refuseWarned(ctx, req.ID, pl, class, "a placeholder has no value")
 		}
 	}
 
@@ -541,7 +572,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 			s.audit(rec)
 			return s.failedPlan(req.ID, "k-anonymity check", err, pl)
 		}
-		return s.refuseWarned(req.ID, pl, class, reason+" (approved, but not run)")
+		return s.refuseWarned(ctx, req.ID, pl, class, reason+" (approved, but not run)")
 	}
 	var res engine.Result
 	var err error
@@ -560,7 +591,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		// The audit log never holds row data, even for an unmask run.
 		rec.Error = s.auditErrText(err, pl)
 		s.audit(rec)
-		s.println(paint.Fail("failed: " + s.errText(err, pl.st.SQL, false, pl)))
+		s.println(paint.Fail("failed: " + safeText(s.errText(err, pl.st.SQL, false, pl), false)))
 		if errors.Is(err, engine.ErrConnLost) {
 			return s.failed(req.ID, "statement failed", err)
 		}
@@ -577,14 +608,14 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	}
 	if !pl.unmask && pl.an != nil {
 		if err := s.maskRead(&res, pl, sess); err != nil {
-			s.println(paint.Fail("result dropped: " + err.Error()))
-			return s.refuseWarned(req.ID, pl, class, "the result could not be masked with certainty and was dropped: "+err.Error())
+			s.println(paint.Fail("result dropped: " + safeText(err.Error(), false)))
+			return s.refuseWarned(ctx, req.ID, pl, class, "the result could not be masked with certainty and was dropped: "+err.Error())
 		}
 	} else if !pl.unmask {
 		origin := sess.OriginColumns()
 		if pii.NeedsAliasCheck(res, origin) {
 			if err := pii.ResultAliasViolation(pl.st, s.rules, s.dialect, res.Columns); err != nil {
-				return s.refuseWarned(req.ID, pl, class, err.Error()+" (the result was dropped)")
+				return s.refuseWarned(ctx, req.ID, pl, class, err.Error()+" (the result was dropped)")
 			}
 		}
 		pii.MaskResult(&res, s.rules, s.detectors, origin)
@@ -698,29 +729,87 @@ func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Reco
 	if canRetype {
 		prompt = "(r to retype ${" + strings.Join(reused, "}, ${") + "}) " + prompt
 	}
+	bell(s.cfg.IO)
 	ans, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold(prompt)), ApprovalTimeout)
 	if ok && canRetype && strings.TrimSpace(ans) == "r" {
 		return nil, true
 	}
+	if !ok {
+		return s.unanswered(ctx, id, rec), false
+	}
+	ans = strings.TrimSpace(ans)
+	// "y" in any case; the production profile name exactly.
+	if ans == expected || (!s.profile.Production && strings.EqualFold(ans, expected)) {
+		return nil, false
+	}
+	rec.Event, rec.Decision = audit.EventDenied, "denied"
+	msg := "denied by the human; do not retry unless asked"
+	if reason := denyReason(ans); reason != "" {
+		rec.Reason = reason
+		msg = "denied by the human: " + reason + "; do not retry unless asked"
+		s.println(paint.Fail("denied: " + reason))
+	} else {
+		s.println(paint.Fail("denied"))
+	}
+	s.audit(rec)
+	r := errResp(id, ipc.CodeDenied, msg)
+	return &r, false
+}
+
+// maxDenyReason bounds the reason given with a denial.
+const maxDenyReason = 200
+
+// denyReason is the reason of an answer "n <text>" or "no <text>" (n and
+// no in any case), trimmed, cut at maxDenyReason bytes and escaped; ""
+// for any other answer.
+func denyReason(ans string) string {
+	word, text, ok := strings.Cut(strings.TrimSpace(ans), " ")
+	if !ok || (!strings.EqualFold(word, "n") && !strings.EqualFold(word, "no")) {
+		return ""
+	}
+	text = strings.TrimSpace(text)
+	if len(text) > maxDenyReason {
+		cut := maxDenyReason
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+		text = text[:cut]
+	}
+	return safeText(text, false)
+}
+
+// unanswered audits and answers a prompt left without an answer: the
+// client went away, or the approval timeout passed.
+func (s *Server) unanswered(ctx context.Context, id int64, rec audit.Record) *ipc.Response {
 	var r ipc.Response
-	switch {
-	case !ok && ctx.Err() != nil:
+	if ctx.Err() != nil {
 		rec.Event, rec.Decision = audit.EventAbandoned, "abandoned"
 		s.println(paint.Fail("client gone: request cancelled"))
 		r = errResp(id, ipc.CodeDenied, "the request was cancelled")
-	case !ok:
+	} else {
 		rec.Event, rec.Decision = audit.EventTimeout, "timeout"
 		s.println(paint.Fail("no answer: denied"))
 		r = errResp(id, ipc.CodeTimeout, "no answer from the human within the approval timeout; do not retry unless asked")
-	case strings.TrimSpace(ans) != expected:
-		rec.Event, rec.Decision = audit.EventDenied, "denied"
-		s.println(paint.Fail("denied"))
-		r = errResp(id, ipc.CodeDenied, "denied by the human; do not retry unless asked")
-	default:
-		return nil, false
 	}
 	s.audit(rec)
-	return &r, false
+	return &r
+}
+
+// refuseOnScreen ends the approval screen of a plan refused by the weight
+// check under a PII filter. The agent learns of the refusal only once the
+// human has seen it and pressed Enter, so that answering it tells no more
+// than a denial would; --skip-permissions does not skip this prompt.
+func (s *Server) refuseOnScreen(ctx context.Context, id int64, rec audit.Record, reason string) ipc.Response {
+	s.println(paint.Paint(s.frameColour(), "│ ") + red + "verdict REFUSE: this statement cannot be approved" + reset)
+	bell(s.cfg.IO)
+	rec.Error = reason // kept when the prompt goes unanswered too
+	if _, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold("Press Enter to refuse ")), ApprovalTimeout); !ok {
+		return *s.unanswered(ctx, id, rec)
+	}
+	rec.Event = audit.EventRefused
+	s.audit(rec)
+	s.println(paint.Fail("refused: " + safeText(reason, false)))
+	return errResp(id, ipc.CodeRefused, hiddenWeightRefusal)
 }
 
 // result renders the masked result as capped JSON rows and TSV text.

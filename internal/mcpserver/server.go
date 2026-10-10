@@ -139,6 +139,7 @@ type (
 		DB      string `json:"db,omitempty" jsonschema:"Database. Defaults to the profile's database."`
 		SQL     string `json:"sql" jsonschema:"Exactly one SELECT, WITH ... SELECT or EXPLAIN SELECT (or a write if the tier allows). A SELECT needs a LIMIT. PII columns only plainly, counted/aggregated, joined with = or filtered with =, IN or IS NULL against literals. PII columns may be compared with placeholders '${name}' (typed by the human) or '${rN.R.C}' (a redacted cell). No bind parameters, no statement chaining."`
 		Unmask  bool   `json:"unmask,omitempty" jsonschema:"Ask the human to approve unmasked PII output. Only when the user explicitly needs the raw values. Refused unless the human started the console with --allow-unmask (see locksql_status)."`
+		Intent  string `json:"intent,omitempty" jsonschema:"One line (max 200 bytes) telling the human why this query is needed; it is shown on the approval screen next to the SQL. Treated as untrusted text."`
 	}
 	RunIn struct {
 		Profile string `json:"profile,omitempty" jsonschema:"Profile name from the locksql config. Optional when the server was started with --profile or exactly one profile is configured."`
@@ -200,7 +201,8 @@ func New(o Options) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "locksql_plan",
 		Description: "Validate one SQL statement and weigh it with EXPLAIN, without running it. Returns a one-shot plan_id (valid 10 minutes), the statement class, " +
-			"the verdict (OK, WARN or REFUSE) and a summary. Show the plan to the user before running it. A REFUSE verdict is final." + guidance,
+			"the verdict (OK, WARN or REFUSE) and a summary. Show the plan to the user before running it. A REFUSE verdict is final. " +
+			"When the statement filters on a PII column the verdict is decided on the console at run time and may still be refused there." + guidance,
 		Annotations: readOnly,
 	}, t.plan)
 	no := false
@@ -442,7 +444,7 @@ func (t *tools) plan(ctx context.Context, _ *mcp.CallToolRequest, in PlanIn) (*m
 	}
 	var r ipc.PlanResult
 	err := t.with(in.Profile, func(c Conn) (err error) {
-		r, err = c.Plan(ctx, ipc.PlanParams{DB: in.DB, SQL: in.SQL, Unmask: in.Unmask})
+		r, err = c.Plan(ctx, ipc.PlanParams{DB: in.DB, SQL: in.SQL, Unmask: in.Unmask, Intent: in.Intent})
 		return err
 	})
 	if err != nil {

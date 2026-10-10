@@ -50,6 +50,8 @@ type Prov struct {
 	// Lit is set when some values may be literals of the statement (a
 	// UNION of a column and a constant, for instance).
 	Lit bool
+	// w bounds the size of the value (see width).
+	w width
 }
 
 // Table is one relation of the catalog.
@@ -339,11 +341,65 @@ func (an *analyzer) body(b Body, parent *scope) ([]column, *scope, error) {
 		}
 		out := make([]column, len(l))
 		for i := range l {
+			if err := an.setOpCompare(b, i, l[i].prov, r[i].prov); err != nil {
+				return nil, nil, err
+			}
 			out[i] = column{name: l[i].name, prov: union(l[i].prov, r[i].prov), labeled: l[i].labeled}
 		}
 		return out, nil, nil
 	}
 	return nil, nil, refuse("unsupported query body")
+}
+
+// setOpCompare checks column i of a set operation. UNION (distinct),
+// INTERSECT and EXCEPT compare their arms column by column: like a join, a
+// PII column may only meet values that are themselves all PII, never a
+// literal, an expression, an unmasked column or a mix the agent chose, or
+// the result would tell whether that value is in the column, without any
+// k-anonymity check. Two reads of one PII source column are refused as in a
+// self-join: the result tells whether one subject's value equals
+// another's. UNION ALL compares nothing. The arms of a nested set operation
+// arrive merged, so every level is checked.
+func (an *analyzer) setOpCompare(b *SetOp, i int, l, r Prov) error {
+	if !an.env.Masking || b.All && strings.EqualFold(b.Op, "UNION") {
+		return nil
+	}
+	if !l.Sensitive && !r.Sensitive {
+		return nil
+	}
+	if an.allPII(l) && an.allPII(r) {
+		if sameColumn(l, r) {
+			return selfComparison()
+		}
+		return nil
+	}
+	return refusef("a set operation compares a PII column with a value the agent chose (column %d)", i+1)
+}
+
+// dedupe checks a value whose duplicates are removed (DISTINCT, an
+// aggregate's DISTINCT, GROUP BY): removing duplicates compares the values
+// for equality, so a PII column may only meet values that are all PII,
+// as in a set operation. A column mixing PII with a literal or an unmasked
+// column (through UNION ALL) would tell whether the agent's value is in it.
+func (an *analyzer) dedupe(p Prov, what string) error {
+	if !an.env.Masking || !p.Sensitive || an.allPII(p) {
+		return nil
+	}
+	return refusef("duplicate removal compares a PII column with a value the agent chose (%s)", what)
+}
+
+// allPII reports a plain value whose every source is under a mask rule and
+// which cannot be a literal of the statement.
+func (an *analyzer) allPII(p Prov) bool {
+	if !p.Sensitive || p.Lit || p.Kind != KindIdentity || len(p.Sources) == 0 {
+		return false
+	}
+	for _, s := range p.Sources {
+		if _, ok := an.env.Rule(s); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // union merges the provenance of two values that may each be the result.
@@ -355,7 +411,29 @@ func union(a, b Prov) Prov {
 		Sensitive: a.Sensitive || b.Sensitive,
 		Modes:     mergeSources(a.Modes, b.Modes),
 		Lit:       a.Lit || b.Lit || a.Kind == KindConst || b.Kind == KindConst,
+		w:         a.w.max(b.w),
 	}
+}
+
+// sameColumn reports two plain values that share a source column. An
+// equality between them is a probe on that column whatever the relation
+// instances: on one row it is IS NOT NULL, and a self-join (on a key, or on
+// the column itself) is the same test with no constant to count.
+func sameColumn(a, b Prov) bool {
+	if a.Kind != KindIdentity || b.Kind != KindIdentity {
+		return false
+	}
+	for _, s := range a.Sources {
+		if slices.Contains(b.Sources, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// selfComparison refuses a PII column compared with itself.
+func selfComparison() error {
+	return refuse("a PII column compared with itself selects the rows the k-anonymity check does not count")
 }
 
 // mergeSources appends to a the elements of b it lacks (sources, modes).
@@ -404,7 +482,7 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 	}
 	an.inRecCTE++
 	defer func() { an.inRecCTE-- }()
-	converged := false
+	converged, growing := false, false
 	for i := 0; i < 8; i++ {
 		def.selfCols = cur
 		an.dry++
@@ -420,11 +498,16 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 		for k := range next {
 			next[k].prov = union(next[k].prov, cur[k].prov)
 		}
-		if sameCols(cur, next) {
+		if sameCols(cur, next, true) {
 			converged = true
 			break
 		}
+		// Only the widths changed: a column grows on every pass.
+		growing = sameCols(cur, next, false)
 		cur = next
+	}
+	if !converged && growing {
+		return refusef("a recursive CTE builds growing values (CTE %s): each pass makes a column wider", strings.ToLower(c.Name))
 	}
 	if !converged {
 		// The last iteration may still miss a literal or a source a few
@@ -441,14 +524,15 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 
 // sameCols reports whether a recursive CTE's provenance has converged:
 // every field that decides masking and references (kind, sensitivity,
-// literals, sources, modes) is unchanged.
-func sameCols(a, b []column) bool {
+// literals, sources, modes) is unchanged, and so are the widths when
+// widths is set.
+func sameCols(a, b []column, widths bool) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
 		p, q := a[i].prov, b[i].prov
-		if p.Kind != q.Kind || p.Sensitive != q.Sensitive || p.Lit != q.Lit || !sameSet(p.Sources, q.Sources) || !sameSet(p.Modes, q.Modes) {
+		if p.Kind != q.Kind || p.Sensitive != q.Sensitive || p.Lit != q.Lit || widths && p.w != q.w || !sameSet(p.Sources, q.Sources) || !sameSet(p.Modes, q.Modes) {
 			return false
 		}
 	}
@@ -545,6 +629,13 @@ func (an *analyzer) selectCore(s *Select, parent *scope) ([]column, *scope, erro
 		cols = append(cols, column{name: name, prov: p, labeled: labeled})
 	}
 	sc.aliases = cols
+	if s.Distinct {
+		for _, c := range cols {
+			if err := an.dedupe(c.prov, "DISTINCT"); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
 	// GROUP BY.
 	for _, g := range s.GroupBy {
 		p, err := an.groupKey(g, sc, cols)
@@ -554,6 +645,9 @@ func (an *analyzer) selectCore(s *Select, parent *scope) ([]column, *scope, erro
 		if p.Sensitive && an.env.Masking {
 			if p.Kind != KindIdentity {
 				return nil, nil, refuse("GROUP BY over an expression of a PII column is not allowed")
+			}
+			if err := an.dedupe(p, "GROUP BY"); err != nil {
+				return nil, nil, err
 			}
 			node.needK = true
 		}
@@ -846,7 +940,7 @@ func (an *analyzer) tableName(t *TableName) (*relation, error) {
 }
 
 func (an *analyzer) sourceProv(s Source) Prov {
-	p := Prov{Sources: []Source{s}, Kind: KindIdentity}
+	p := Prov{Sources: []Source{s}, Kind: KindIdentity, w: width{cols: 1}}
 	if mode, ok := an.env.Rule(s); ok {
 		p.Sensitive = true
 		p.Modes = []string{mode}
@@ -957,8 +1051,21 @@ func (an *analyzer) touch(p Prov, clause string) {
 // value computes the provenance of an expression used as a value. An
 // expression that transforms a PII column (anything but a plain reference,
 // COUNT, MIN/MAX and the other aggregates) is refused: its result could
-// reveal the column in a form no mask covers.
+// reveal the column in a form no mask covers. Every value, and so every
+// select-list item, function argument and operand, is checked against the
+// size bound (see width).
 func (an *analyzer) value(e Expr, sc *scope, clause string) (Prov, error) {
+	p, err := an.valueOf(e, sc, clause)
+	if err != nil {
+		return Prov{}, err
+	}
+	if err := p.w.check(); err != nil {
+		return Prov{}, err
+	}
+	return p, nil
+}
+
+func (an *analyzer) valueOf(e Expr, sc *scope, clause string) (Prov, error) {
 	switch e := e.(type) {
 	case *ColumnRef:
 		p, err := an.resolve(e, sc, clause == "group by" || clause == "having" || clause == "order by")
@@ -968,7 +1075,7 @@ func (an *analyzer) value(e Expr, sc *scope, clause string) (Prov, error) {
 		an.touch(p, clause)
 		return p, nil
 	case *Literal:
-		return Prov{Kind: KindConst, Lit: true}, nil
+		return Prov{Kind: KindConst, Lit: true, w: an.literalWidth(e)}, nil
 	case *Paren:
 		return an.value(e.X, sc, clause)
 	case *Subquery:
@@ -986,7 +1093,7 @@ func (an *analyzer) value(e Expr, sc *scope, clause string) (Prov, error) {
 		if _, err := an.query(e.Query, sc); err != nil {
 			return Prov{}, err
 		}
-		return Prov{Kind: KindExpr}, nil
+		return Prov{Kind: KindExpr, w: width{bytes: numWidth}}, nil
 	case *In:
 		parts := []Expr{e.X}
 		parts = append(parts, e.List...)
@@ -1008,6 +1115,10 @@ func (an *analyzer) value(e Expr, sc *scope, clause string) (Prov, error) {
 		}
 		return p, nil
 	case *Binary:
+		if e.Op == "||" {
+			// Concatenation (MySQL's OR is bounded the same way).
+			return an.combineWith([]Expr{e.L, e.R}, sc, clause, e.Op, sumWidth)
+		}
 		return an.combine([]Expr{e.L, e.R}, sc, clause, e.Op)
 	case *Unary:
 		return an.combine([]Expr{e.X}, sc, clause, e.Op)
@@ -1024,7 +1135,7 @@ func (an *analyzer) value(e Expr, sc *scope, clause string) (Prov, error) {
 		}
 		return an.combine(parts, sc, clause, "CASE")
 	case *Cast:
-		return an.combine([]Expr{e.X}, sc, clause, "CAST")
+		return an.combineWith([]Expr{e.X}, sc, clause, "CAST", func(ws []width) width { return castWidth(e.Type, ws[0]) })
 	case *Collate:
 		return an.combine([]Expr{e.X}, sc, clause, "COLLATE")
 	case *Between:
@@ -1042,25 +1153,35 @@ func (an *analyzer) value(e Expr, sc *scope, clause string) (Prov, error) {
 		}
 		return an.combine(parts, sc, clause, "IS")
 	case *Tuple:
-		return an.combine(e.Items, sc, clause, "a row value")
+		return an.combineWith(e.Items, sc, clause, "a row value", sumWidth)
 	}
 	return Prov{}, refuse("unsupported expression")
 }
 
 // combine is the provenance of an operator or function over parts: KindExpr
-// over their sources. A PII part is refused.
+// over their sources. A PII part is refused. Its result is bounded by its
+// largest part.
 func (an *analyzer) combine(parts []Expr, sc *scope, clause, what string) (Prov, error) {
+	return an.combineWith(parts, sc, clause, what, maxWidth)
+}
+
+// combineWith is combine with the width of the result computed from the
+// widths of the parts.
+func (an *analyzer) combineWith(parts []Expr, sc *scope, clause, what string, wf func([]width) width) (Prov, error) {
 	out := Prov{Kind: KindConst}
+	ws := make([]width, 0, len(parts))
 	for _, x := range parts {
 		p, err := an.value(x, sc, clause)
 		if err != nil {
 			return Prov{}, err
 		}
 		out = an.mix(out, p)
+		ws = append(ws, p.w)
 	}
 	if err := an.noPII(out, what); err != nil {
 		return Prov{}, err
 	}
+	out.w = wf(ws)
 	return out, nil
 }
 
@@ -1113,6 +1234,15 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 	if !funcAllowed(an.d, f.Name) {
 		return Prov{}, refusef("function %s is not in the allowlist", strings.ToLower(f.Name))
 	}
+	if err := an.checkSizeArgs(f); err != nil {
+		return Prov{}, err
+	}
+	if err := an.checkReplaceArgs(f); err != nil {
+		return Prov{}, err
+	}
+	if err := an.checkFormat(f); err != nil {
+		return Prov{}, err
+	}
 	if f.Over != nil {
 		for _, e := range f.Over.PartitionBy {
 			if err := an.noPIIValue(e, sc, "window PARTITION BY"); err != nil {
@@ -1125,7 +1255,16 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 			}
 		}
 		if windowOnly[f.Name] || aggregates[f.Name] {
-			return an.combine(f.Args, sc, clause, "window function "+strings.ToLower(f.Name))
+			var werr error
+			p, err := an.combineWith(f.Args, sc, clause, "window function "+strings.ToLower(f.Name), func(ws []width) width {
+				w, err := an.aggWidth(f, ws)
+				werr = err
+				return w
+			})
+			if err == nil {
+				err = werr
+			}
+			return p, err
 		}
 		return Prov{}, refusef("%s is not a window function", strings.ToLower(f.Name))
 	}
@@ -1136,7 +1275,7 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 		if f.Distinct || f.Filter != nil || f.OrderBy != nil {
 			return Prov{}, refusef("DISTINCT, FILTER and ORDER BY only apply to aggregates")
 		}
-		return an.combine(f.Args, sc, clause, "function "+strings.ToLower(f.Name))
+		return an.combineWith(f.Args, sc, clause, "function "+strings.ToLower(f.Name), func(ws []width) width { return an.funcWidth(f, ws) })
 	}
 	// An aggregate.
 	if sc.node != nil {
@@ -1153,34 +1292,45 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 		}
 	}
 	if f.Star {
-		return Prov{Kind: KindConst}, nil
+		return Prov{Kind: KindConst, w: width{bytes: numWidth}}, nil
 	}
 	var arg Prov
+	var ws []width
 	switch {
 	case len(f.Args) == 1:
 		p, err := an.value(f.Args[0], sc, clause)
 		if err != nil {
 			return Prov{}, err
 		}
-		arg = p
+		arg, ws = p, []width{p.w}
 	default:
 		// string_agg(x, sep), GROUP_CONCAT(a, b), json_object_agg(k, v):
 		// every argument is aggregated as a value.
-		p, err := an.combineLoose(f.Args, sc, clause)
+		p, pws, err := an.combineLoose(f.Args, sc, clause)
 		if err != nil {
 			return Prov{}, err
 		}
-		arg = p
+		arg, ws = p, pws
+	}
+	w, err := an.aggWidth(f, ws)
+	if err != nil {
+		return Prov{}, err
 	}
 	if arg.Kind == KindExpr && arg.Sensitive && an.env.Masking {
 		return Prov{}, refusef("a PII column (%s) is used inside an expression given to %s", piiNames(arg), strings.ToLower(f.Name))
 	}
+	if f.Distinct {
+		if err := an.dedupe(arg, strings.ToLower(f.Name)+"(DISTINCT ...)"); err != nil {
+			return Prov{}, err
+		}
+	}
 	if arg.Sensitive && an.env.Masking && sc.node != nil {
 		sc.node.needK = true
 	}
+	arg.w = w
 	switch {
 	case countAggs[f.Name]:
-		return Prov{Sources: arg.Sources, Kind: KindCount}, nil
+		return Prov{Sources: arg.Sources, Kind: KindCount, w: w}, nil
 	case identityAggs[f.Name] && len(f.Args) == 1:
 		if arg.Kind == KindConst {
 			return arg, nil
@@ -1197,23 +1347,25 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 
 // combineLoose merges the provenance of several aggregate arguments,
 // keeping plain PII references (each is aggregated as a value).
-func (an *analyzer) combineLoose(parts []Expr, sc *scope, clause string) (Prov, error) {
+func (an *analyzer) combineLoose(parts []Expr, sc *scope, clause string) (Prov, []width, error) {
 	out := Prov{Kind: KindConst}
+	ws := make([]width, 0, len(parts))
 	for _, x := range parts {
 		p, err := an.value(x, sc, clause)
 		if err != nil {
-			return Prov{}, err
+			return Prov{}, nil, err
 		}
 		if p.Sensitive && p.Kind != KindIdentity && an.env.Masking {
-			return Prov{}, refusef("a PII column (%s) is used inside an expression given to an aggregate", piiNames(p))
+			return Prov{}, nil, refusef("a PII column (%s) is used inside an expression given to an aggregate", piiNames(p))
 		}
+		ws = append(ws, p.w)
 		k := max(out.Kind, p.Kind)
 		out = Prov{Sources: mergeSources(out.Sources, p.Sources), Kind: k, Sensitive: out.Sensitive || p.Sensitive, Modes: append(out.Modes, p.Modes...)}
 	}
 	if out.Kind == KindIdentity && len(parts) > 1 {
 		out.Kind = KindAggregate
 	}
-	return out, nil
+	return out, ws, nil
 }
 
 // noPIIValue refuses a PII column anywhere in e.
@@ -1412,14 +1564,21 @@ func isSubquery(e Expr) bool {
 	return ok
 }
 
-// constFilter notes a PII column compared with constants in a clause: pred
-// is the comparison as it applies to the column ("= 'x'", "IN (1, 2)", "IS
-// NULL"), with its token replacements applied. Besides the k-anonymity check
-// of the node (kCheck), the subjects of every masked source of the column
-// are counted in its own base table: a join cannot multiply them.
-func (an *analyzer) constFilter(sc *scope, clause string, col Prov, pred string) error {
+// constFilter notes a PII column compared with constants in a clause: preds
+// are the comparisons as they apply to the column ("= 'x'", "IS NULL"), with
+// their token replacements applied; an IN list gives one "= v" per literal
+// the agent wrote. Besides the k-anonymity check of the node (kCheck), the
+// subjects of every masked source of the column are counted in its own base
+// table: a join cannot multiply them. Several preds are counted apart and
+// the smallest count is checked, since an IN list is an OR: one count over
+// the whole list would pass on the values the agent knows exist and tell
+// whether the last one does.
+func (an *analyzer) constFilter(sc *scope, clause string, col Prov, preds ...string) error {
 	if clause == "join" {
 		return refuse("compare PII columns with constants in WHERE, not in a JOIN condition")
+	}
+	if len(preds) == 0 {
+		return refusef("a PII column (%s) has no value the k-anonymity check could count", piiNames(col))
 	}
 	var checks []string
 	for _, s := range col.Sources {
@@ -1433,7 +1592,20 @@ func (an *analyzer) constFilter(sc *scope, clause string, col Prov, pred string)
 		if s.DB == "" {
 			table = an.quoteIdent(s.Table)
 		}
-		checks = append(checks, "SELECT COUNT(*) FROM "+table+" WHERE "+table+"."+an.quoteIdent(s.Column)+" "+pred)
+		where := " WHERE " + table + "." + an.quoteIdent(s.Column) + " "
+		if len(preds) == 1 {
+			checks = append(checks, "SELECT COUNT(*) FROM "+table+where+preds[0])
+			continue
+		}
+		arms := make([]string, len(preds))
+		for i, p := range preds {
+			count := "COUNT(*)"
+			if i == 0 {
+				count += " AS locksql_n"
+			}
+			arms[i] = "SELECT " + count + " FROM " + table + where + p
+		}
+		checks = append(checks, "SELECT MIN(locksql_n) FROM ("+strings.Join(arms, " UNION ALL ")+") AS locksql_k")
 	}
 	if len(checks) == 0 {
 		return refusef("a PII column (%s) has no base column the k-anonymity check could count", piiNames(col))
@@ -1457,8 +1629,9 @@ func (an *analyzer) constFilter(sc *scope, clause string, col Prov, pred string)
 // valueLiterals records the placeholders among lits, compared with the PII
 // column col, and plans the substitution of those whose value is known.
 // human reports that every literal is a placeholder: the agent chose none
-// of the values, so the filter needs no k-anonymity check.
-func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human bool, err error) {
+// of the values, so the filter needs no k-anonymity check. agent are the
+// literals that are not placeholders, the values the agent chose.
+func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human bool, agent []Expr, err error) {
 	human = len(lits) > 0
 	var target Source
 	for _, s := range col.Sources {
@@ -1467,7 +1640,8 @@ func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human boo
 			break
 		}
 	}
-	for _, e := range lits {
+	for _, lit := range lits {
+		e := lit
 		for {
 			p, ok := e.(*Paren)
 			if !ok {
@@ -1478,20 +1652,23 @@ func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human boo
 		l, ok := e.(*Literal)
 		if !ok || l.Kind != LitString {
 			human = false
+			agent = append(agent, lit)
 			continue
 		}
 		body, ok := unquote(an.d, l.Text)
 		if !ok {
 			human = false
+			agent = append(agent, lit)
 			continue
 		}
 		kind, name, isPH, valid := ParsePlaceholder(body)
 		if !isPH {
 			human = false
+			agent = append(agent, lit)
 			continue
 		}
 		if !valid {
-			return false, refusef("malformed placeholder %q: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}'", body)
+			return false, nil, refusef("malformed placeholder %q: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}'", body)
 		}
 		if an.dry == 0 {
 			an.a.Values = append(an.a.Values, ValueUse{Kind: kind, Name: name, Column: target, InList: inList, Span: l.Sp})
@@ -1499,7 +1676,7 @@ func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human boo
 		value, known := an.env.Value(kind, name)
 		if !known {
 			if kind == ValueRef {
-				return false, refusef("unknown reference %s: it is not from this console session, or its result is too old", name)
+				return false, nil, refusef("unknown reference %s: it is not from this console session, or its result is too old", name)
 			}
 			continue // the console asks the human before the run
 		}
@@ -1508,15 +1685,15 @@ func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human boo
 			if kind == ValueRef {
 				// The agent never saw this value: the refusal must not
 				// tell it what the value holds.
-				return false, refusef("reference %s cannot be substituted", name)
+				return false, nil, refusef("reference %s cannot be substituted", name)
 			}
-			return false, err
+			return false, nil, err
 		}
 		if an.dry == 0 {
 			an.a.Replacements = append(an.a.Replacements, Replacement{Span: l.Sp, Text: q})
 		}
 	}
-	return human, nil
+	return human, agent, nil
 }
 
 // humanFilter is a PII filter whose values all come from placeholders: no
@@ -1682,7 +1859,7 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 		if !isConstant(otherExpr) {
 			return refusef("a PII column (%s) may only be compared with a literal", piiNames(col))
 		}
-		human, err := an.valueLiterals(col, []Expr{otherExpr}, false)
+		human, _, err := an.valueLiterals(col, []Expr{otherExpr}, false)
 		if err != nil {
 			return err
 		}
@@ -1697,6 +1874,9 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 		}
 		if l.Lit || r.Lit {
 			return litPartner(mixProv(l, r))
+		}
+		if sameColumn(l, r) {
+			return selfComparison()
 		}
 		return nil
 	}
@@ -1775,6 +1955,9 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 			if !sub.Sensitive {
 				return unmaskedPartner(x, sub)
 			}
+			if sameColumn(x, sub) {
+				return selfComparison()
+			}
 			return nil
 		}
 		return refusef("a PII column (%s) may only be compared with constants or another PII column", piiNames(mixProv(x, sub)))
@@ -1802,13 +1985,12 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 	if isSubquery(e.X) {
 		return scalarPII(x)
 	}
-	var items []string
 	for _, it := range e.List {
 		if !isConstant(it) {
 			return refusef("a PII column (%s) may only be tested against a list of literals", piiNames(x))
 		}
 	}
-	human, err := an.valueLiterals(x, e.List, true)
+	human, agent, err := an.valueLiterals(x, e.List, true)
 	if err != nil {
 		return err
 	}
@@ -1816,10 +1998,15 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 		return an.humanFilter(clause)
 	}
 	an.litFilter()
-	for _, it := range e.List {
-		items = append(items, an.frag(it.Span()))
+	// Each value the agent wrote is counted apart; placeholder values are
+	// the human's.
+	var preds []string
+	for _, it := range agent {
+		if p := "= " + an.frag(it.Span()); !slices.Contains(preds, p) {
+			preds = append(preds, p)
+		}
 	}
-	return an.constFilter(sc, clause, x, "IN ("+strings.Join(items, ", ")+")")
+	return an.constFilter(sc, clause, x, preds...)
 }
 
 // unquote returns the value of a plain single-quoted string literal.
@@ -1881,6 +2068,9 @@ func (an *analyzer) joinEquality(l, r column) error {
 	}
 	if l.prov.Lit || r.prov.Lit {
 		return litPartner(mixProv(l.prov, r.prov))
+	}
+	if sameColumn(l.prov, r.prov) {
+		return selfComparison()
 	}
 	return nil
 }

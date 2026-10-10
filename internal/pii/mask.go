@@ -35,17 +35,21 @@ func maskText(s string) string {
 // UNION, an untrusted origin the engine blanked), the column
 // label is matched by name instead, see Rules.MatchesName; the console must
 // then also refuse renamed uses with AliasViolation (see NeedsAliasCheck).
-// Binary cells under a rule become "<masked bytes:N>"; NULL stays NULL.
+// A column under a rule is masked in the rule's mode (Rules.Mode,
+// Rules.ModeByName; several rules with different modes give redact), as
+// MaskValue does: redact gives plain "<redacted>" with no reference, since a
+// write keeps no result in the reference store. A binary cell under a
+// partial or email rule becomes "<masked bytes:N>"; NULL stays NULL.
 //
 // Every other text cell, and every integer (a national number or a card can
 // be stored as one), goes through the detectors in place.
 func MaskResult(res *engine.Result, r Rules, ds []Detector, origin bool) {
-	whole := make([]bool, len(res.Columns))
+	modes := make([]string, len(res.Columns))
 	for i, c := range res.Columns {
 		if origin && c.HasOrigin() {
-			whole[i] = r.Matches(c.OriginDB, c.OriginTable, c.OriginColumn)
+			modes[i], _ = r.Mode(c.OriginDB, c.OriginTable, c.OriginColumn)
 		} else {
-			whole[i] = r.MatchesName(c.Label)
+			modes[i], _ = r.ModeByName(c.Label)
 		}
 	}
 	for _, row := range res.Rows {
@@ -53,8 +57,8 @@ func MaskResult(res *engine.Result, r Rules, ds []Detector, origin bool) {
 			if v == nil {
 				continue
 			}
-			if i < len(whole) && whole[i] {
-				row[i] = maskCell(v)
+			if i < len(modes) && modes[i] != "" {
+				row[i] = MaskValue(v, modes[i])
 				continue
 			}
 			row[i] = detect(v, ds)

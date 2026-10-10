@@ -50,7 +50,7 @@ type doctorEnv struct {
 	ownerOf    func(os.FileInfo) (uid, gid int, ok bool)
 	tiocsti    func() (bool, bool)
 	ptrace     func() (int, bool)
-	keychain   func(profile, host string) error
+	keychain   func(profile, host string, port int) error
 	status     func(cwd, profile string) (*ipc.StatusResult, error)
 }
 
@@ -77,11 +77,7 @@ func realDoctorEnv() doctorEnv {
 		ownerOf:    fileOwner,
 		tiocsti:    sysconf.LegacyTIOCSTI,
 		ptrace:     sysconf.PtraceScope,
-		keychain: func(profile, host string) error {
-			s, err := secrets.KeychainGet(profile, host)
-			secrets.Wipe(s)
-			return err
-		},
+		keychain:   secrets.KeychainHas,
 		status: func(cwd, profile string) (*ipc.StatusResult, error) {
 			c, err := client.Dial(cwd, profile)
 			if err != nil {
@@ -327,7 +323,7 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 	}
 
 	if p.Credentials == config.CredentialsKeychain {
-		err := d.keychain(p.Name, p.Host)
+		err := d.keychain(p.Name, p.Host, p.Port)
 		switch {
 		case sys != nil && err == nil:
 			add(checkFail, "secret store", "a secret for this profile is in this account's keychain, which the agent can read",

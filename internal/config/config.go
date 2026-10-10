@@ -91,6 +91,11 @@ type Limits struct {
 	// filter on, one statement each, before the console warns of equality
 	// probing; raising it is a loosening.
 	ReferenceProbe int `toml:"reference_probe" json:"reference_probe,omitempty"`
+	// IdleTimeout ends the console session after that long without
+	// activity, MaxSession after that long in all; raising either is a
+	// loosening. Bounds: 1m <= IdleTimeout <= MaxSession <= 24h.
+	IdleTimeout time.Duration `toml:"idle_timeout" json:"idle_timeout,omitempty"`
+	MaxSession  time.Duration `toml:"max_session" json:"max_session,omitempty"`
 }
 
 // Profile is one named database target with its policy.
@@ -235,6 +240,8 @@ type rawLimits struct {
 	ExplainCostRefuse float64 `toml:"explain_cost_refuse"`
 	KAnonymity        int     `toml:"k_anonymity"`
 	ReferenceProbe    int     `toml:"reference_probe"`
+	IdleTimeout       string  `toml:"idle_timeout"`
+	MaxSession        string  `toml:"max_session"`
 }
 
 type rawProfile struct {
@@ -444,12 +451,22 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		}
 	}
 
-	if r.Limits.StatementTimeout != "" {
-		d, err := time.ParseDuration(r.Limits.StatementTimeout)
-		if err != nil {
-			return Profile{}, errf("limits.statement_timeout: invalid duration %q", r.Limits.StatementTimeout)
+	for _, f := range []struct {
+		key, val string
+		dst      *time.Duration
+	}{
+		{"statement_timeout", r.Limits.StatementTimeout, &p.Limits.StatementTimeout},
+		{"idle_timeout", r.Limits.IdleTimeout, &p.Limits.IdleTimeout},
+		{"max_session", r.Limits.MaxSession, &p.Limits.MaxSession},
+	} {
+		if f.val == "" {
+			continue
 		}
-		p.Limits.StatementTimeout = d
+		d, err := time.ParseDuration(f.val)
+		if err != nil {
+			return Profile{}, errf("limits.%s: invalid duration %q", f.key, f.val)
+		}
+		*f.dst = d
 	}
 	if r.CredentialsTTL != "" {
 		d, err := time.ParseDuration(r.CredentialsTTL)
@@ -473,6 +490,8 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		{"max_output_bytes", int64(p.Limits.MaxOutputBytes)},
 		{"k_anonymity", int64(p.Limits.KAnonymity)},
 		{"reference_probe", int64(p.Limits.ReferenceProbe)},
+		{"idle_timeout", int64(p.Limits.IdleTimeout)},
+		{"max_session", int64(p.Limits.MaxSession)},
 	} {
 		if f.val < 0 {
 			return Profile{}, errf("limits.%s must not be negative", f.key)
@@ -497,6 +516,14 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	}
 	if p.Limits.ExplainRowsWarn > p.Limits.ExplainRowsRefuse {
 		return Profile{}, errf("limits.explain_rows_warn (%d) is above limits.explain_rows_refuse (%d)", p.Limits.ExplainRowsWarn, p.Limits.ExplainRowsRefuse)
+	}
+	switch l := p.Limits; {
+	case l.MaxSession < MinIdleTimeout || l.MaxSession > MaxMaxSession:
+		return Profile{}, errf("limits.max_session (%s) must be between %s and %s", l.MaxSession, MinIdleTimeout, MaxMaxSession)
+	case l.IdleTimeout < MinIdleTimeout:
+		return Profile{}, errf("limits.idle_timeout (%s) is below %s", l.IdleTimeout, MinIdleTimeout)
+	case l.IdleTimeout > l.MaxSession:
+		return Profile{}, errf("limits.idle_timeout (%s) is above limits.max_session (%s)", l.IdleTimeout, l.MaxSession)
 	}
 	return p, nil
 }
@@ -616,7 +643,7 @@ func buildSSH(r rawSSH, p Profile, errf func(string, ...any) error) (*SSHProfile
 	}
 	s := &SSHProfile{Host: r.Host, Port: r.Port, User: r.User, Auth: r.Auth, Key: r.Key, Credentials: r.Credentials}
 	if s.Port == 0 {
-		s.Port = 22
+		s.Port = DefaultSSHPort
 	}
 	if s.Credentials == "" {
 		s.Credentials = p.Credentials

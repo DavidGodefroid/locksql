@@ -103,7 +103,9 @@ func TestMixedLiteralsKeepKCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(a.KChecks) == 0 || !strings.Contains(a.KChecks[0].SQL, "'a@example.com'") {
+	// The subject count covers the literal the agent wrote; the placeholder
+	// value is the human's and is not counted apart.
+	if len(a.KChecks) == 0 || !strings.Contains(a.KChecks[0].SQL, "= 'x@example.com'") || strings.Contains(a.KChecks[0].SQL, "a@example.com") {
 		t.Errorf("KChecks = %+v", a.KChecks)
 	}
 }

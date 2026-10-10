@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -361,11 +362,11 @@ func TestDeniedRunTellsTheAgentNotToRetry(t *testing.T) {
 func TestPlanPassesArgumentsAndPointsAtRun(t *testing.T) {
 	f := &fakeConn{profile: "uat"}
 	cs := connect(t, withFake(f), nil)
-	r := call(t, cs, "locksql_plan", map[string]any{"db": "app", "sql": "SELECT id FROM users LIMIT 1", "unmask": true})
+	r := call(t, cs, "locksql_plan", map[string]any{"db": "app", "sql": "SELECT id FROM users LIMIT 1", "unmask": true, "intent": "count the users"})
 	if r.IsError {
 		t.Fatalf("error: %s", text(r))
 	}
-	if f.planIn.DB != "app" || f.planIn.SQL != "SELECT id FROM users LIMIT 1" || !f.planIn.Unmask {
+	if f.planIn.DB != "app" || f.planIn.SQL != "SELECT id FROM users LIMIT 1" || !f.planIn.Unmask || f.planIn.Intent != "count the users" {
 		t.Fatalf("plan params = %+v", f.planIn)
 	}
 	got := text(r)
@@ -376,6 +377,36 @@ func TestPlanPassesArgumentsAndPointsAtRun(t *testing.T) {
 	if !strings.Contains(string(b), `"plan_id":"p1"`) {
 		t.Fatalf("structured plan = %s", b)
 	}
+}
+
+// The plan tool's schema offers an optional intent, described as text
+// for the human.
+func TestPlanToolOffersIntent(t *testing.T) {
+	cs := connect(t, withFake(&fakeConn{profile: "uat"}), nil)
+	for _, tool := range listTools(t, cs) {
+		if tool.Name != "locksql_plan" {
+			continue
+		}
+		b, _ := json.Marshal(tool.InputSchema)
+		var schema struct {
+			Properties map[string]struct {
+				Description string `json:"description"`
+			} `json:"properties"`
+			Required []string `json:"required"`
+		}
+		if err := json.Unmarshal(b, &schema); err != nil {
+			t.Fatal(err)
+		}
+		d := schema.Properties["intent"].Description
+		if !strings.Contains(d, "max 200 bytes") || !strings.Contains(d, "approval screen") || !strings.Contains(d, "untrusted") {
+			t.Fatalf("intent description = %q", d)
+		}
+		if slices.Contains(schema.Required, "intent") {
+			t.Fatal("intent is required")
+		}
+		return
+	}
+	t.Fatal("no locksql_plan tool")
 }
 
 func TestDescribeMarksMaskedColumns(t *testing.T) {

@@ -227,8 +227,8 @@ func TestTypedValueNotInErrors(t *testing.T) {
 	}
 }
 
-// The k-anonymity count of a mixed IN list runs with the typed value, never
-// with the raw placeholder.
+// The k-anonymity counts of a mixed IN list never run the raw placeholder:
+// the statement's own count runs with the typed value.
 func TestTypedValueInKCheck(t *testing.T) {
 	h := newHarness(t, uatProfile())
 	h.sess.count = &engine.Result{Columns: []engine.ResultColumn{{Label: "n"}}, Rows: [][]any{{int64(100)}}}
@@ -244,7 +244,9 @@ func TestTypedValueInKCheck(t *testing.T) {
 			counts = append(counts, r)
 		}
 	}
-	if len(counts) == 0 || !strings.Contains(counts[0], "'alice@example.com'") {
+	// The subject count covers the literal the agent wrote; the statement's
+	// own count runs with the typed value.
+	if len(counts) != 2 || !strings.HasSuffix(counts[0], "= 'x'") || !strings.Contains(counts[1], "'alice@example.com'") {
 		t.Errorf("k-checks %q (runs %q)", counts, h.sess.runs)
 	}
 }

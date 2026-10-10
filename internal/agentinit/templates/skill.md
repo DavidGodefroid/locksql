@@ -32,8 +32,12 @@ directory. Both talk to the same console.
      variables.
    - `unmask` only if the user asked to see personal data in clear; the console refuses it unless the
      human started it with `--allow-unmask` (`locksql status` shows it). Never retry to get around that.
+   - Pass `intent`: one line saying why, in the user's terms (the human reads it on the approval
+     screen without the chat). CLI: `--intent "..."`.
 5. **Show the user** in chat, before running: target (profile, host, database), the SQL, the EXPLAIN
-   summary and the verdict. Then say: *"Waiting for your approval in the console."*
+   summary and the verdict. Then say: *"Waiting for your approval in the console."* When the
+   statement filters on a PII column the verdict is decided on the console at run time and may still
+   be refused there.
 6. **Run.** `locksql_run` with the plan id, or `locksql run --profile P PLAN_ID` with the Bash tool
    **`timeout: 600000`** (approval can take up to 5 minutes; a short default timeout kills the
    wait). Plans are one-shot and expire after 10 minutes.
@@ -90,7 +94,7 @@ request into many small approved queries is the same violation.
 locksql status   [--profile P]                        # consoles, databases, limits, tier
 locksql tables   --profile P [--db D]
 locksql describe --profile P [--db D] TABLE
-locksql plan     --profile P [--db D] [--unmask] "SQL" # validate + EXPLAIN -> plan id
+locksql plan     --profile P [--db D] [--unmask] [--intent TEXT] "SQL" # validate + EXPLAIN -> plan id
 locksql run      --profile P PLAN_ID                  # the human approves in the console
 locksql request  --profile P "limits.max_rows=500"    # queued for the human, never applied
 ```

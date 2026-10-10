@@ -26,6 +26,13 @@ var defaultPorts = map[string]int{
 	EnginePostgres: 5432,
 }
 
+// DefaultPort is the port of engine when a profile leaves port unset, 0
+// for an engine without one (sqlite).
+func DefaultPort(engine string) int { return defaultPorts[engine] }
+
+// DefaultSSHPort is the port of an ssh table that leaves port unset.
+const DefaultSSHPort = 22
+
 // knownDetectors lists the value detectors a profile may enable.
 var knownDetectors = map[string]bool{
 	"email": true, "phone": true, "iban": true, "card": true,
@@ -50,6 +57,8 @@ func DefaultLimits(production bool) Limits {
 			MaxOutputBytes:    65_536,
 			KAnonymity:        10,
 			ReferenceProbe:    5,
+			IdleTimeout:       10 * time.Minute,
+			MaxSession:        2 * time.Hour,
 		}
 	}
 	return Limits{
@@ -61,8 +70,17 @@ func DefaultLimits(production bool) Limits {
 		MaxOutputBytes:    65_536,
 		KAnonymity:        5,
 		ReferenceProbe:    5,
+		IdleTimeout:       20 * time.Minute,
+		MaxSession:        4 * time.Hour,
 	}
 }
+
+// Bounds of the session limits: MinIdleTimeout <= idle_timeout <=
+// max_session <= MaxMaxSession.
+const (
+	MinIdleTimeout = time.Minute
+	MaxMaxSession  = 24 * time.Hour
+)
 
 // applyDefaults replaces zero values of p with the defaults.
 // detectorsSet reports whether the detectors key was present in the file;
@@ -112,5 +130,12 @@ func applyDefaults(p *Profile, detectorsSet bool) {
 	}
 	if l.ReferenceProbe == 0 {
 		l.ReferenceProbe = d.ReferenceProbe
+	}
+	if l.MaxSession == 0 {
+		l.MaxSession = d.MaxSession
+	}
+	if l.IdleTimeout == 0 {
+		// A defaulted idle timeout never exceeds an explicit max_session.
+		l.IdleTimeout = min(d.IdleTimeout, l.MaxSession)
 	}
 }

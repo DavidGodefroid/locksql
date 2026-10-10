@@ -178,9 +178,11 @@ type FuncCall struct {
 	// OrderBy is an ordered-set argument: string_agg(x, ',' ORDER BY y),
 	// GROUP_CONCAT(x ORDER BY y).
 	OrderBy []*OrderItem
-	Filter  Expr
-	Over    *Window
-	Sp      Span
+	// Separator is the SEPARATOR string of a MySQL GROUP_CONCAT.
+	Separator *Literal
+	Filter    Expr
+	Over      *Window
+	Sp        Span
 }
 
 // Window is an OVER clause.

@@ -1,6 +1,8 @@
 package sqlast
 
 import (
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
@@ -24,6 +26,9 @@ var (
 		"BIT_AND", "BIT_OR", "BIT_XOR", "BOOL_AND", "BOOL_OR", "EVERY", "TOTAL", "JSON_AGG", "JSONB_AGG",
 		"JSON_ARRAYAGG", "JSON_GROUP_ARRAY", "JSON_OBJECT_AGG", "JSONB_OBJECT_AGG", "JSON_OBJECTAGG",
 		"JSON_GROUP_OBJECT")
+	// concatAggs build one value from the values of all their rows.
+	concatAggs = newSet("GROUP_CONCAT", "STRING_AGG", "ARRAY_AGG", "JSON_AGG", "JSONB_AGG", "JSON_ARRAYAGG",
+		"JSON_GROUP_ARRAY", "JSON_OBJECT_AGG", "JSONB_OBJECT_AGG", "JSON_OBJECTAGG", "JSON_GROUP_OBJECT", "XMLAGG")
 	// windowOnly are window functions that are not aggregates.
 	windowOnly = newSet("ROW_NUMBER", "RANK", "DENSE_RANK", "PERCENT_RANK", "CUME_DIST", "NTILE", "LAG",
 		"LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE")
@@ -75,6 +80,211 @@ var dialectFuncs = map[sqlclass.Dialect]set{
 		"JSON_OBJECT", "JSON_TYPE", "JSON_VALID", "JSON_ARRAY_LENGTH", "JSON_QUOTE",
 	),
 }
+
+// maxSizeArg caps the length argument of the functions that build a value
+// of a given size, and the result of REPEAT, in bytes: the result is
+// allocated per cell, and an EXPLAIN plan does not show its cost.
+const maxSizeArg = 65536
+
+// maxValueBytes and maxValueCols bound every value a statement builds (see
+// width): the bytes its literals and length arguments contribute, and the
+// number of column-width inputs it combines.
+const (
+	maxValueBytes = 65536
+	maxValueCols  = 64
+)
+
+// maxConcatArg caps, in bytes, each argument of a concatenating aggregate:
+// the aggregate repeats it once per row.
+const maxConcatArg = 1024
+
+// maxReplacement caps the replacement string of REPLACE, REGEXP_REPLACE and
+// TRANSLATE, in bytes.
+const maxReplacement = 1024
+
+// sizeArg is, per size function, the index of its length argument.
+var sizeArg = map[string]int{"REPEAT": 1, "LPAD": 1, "RPAD": 1, "SPACE": 0, "ZEROBLOB": 0}
+
+// replaceArg is, per replacing function, the index of its replacement.
+var replaceArg = map[string]int{"REPLACE": 2, "REGEXP_REPLACE": 2, "TRANSLATE": 2}
+
+// checkSizeArgs bounds a size function: its arguments are literals or
+// plain columns (no nested call can grow the input), the length is an
+// integer literal of at most maxSizeArg, and REPEAT repeats a string
+// literal into at most maxSizeArg bytes. The string argument of LPAD and
+// RPAD, whose result has exactly the literal length, may be any expression
+// that calls no size function (a cast, COALESCE, a concatenation).
+func (an *analyzer) checkSizeArgs(f *FuncCall) error {
+	i, ok := sizeArg[f.Name]
+	if !ok {
+		return nil
+	}
+	name := strings.ToLower(f.Name)
+	for k, a := range f.Args {
+		if k == 0 && (f.Name == "LPAD" || f.Name == "RPAD") {
+			if callsSizeFunc(a) {
+				return refusef("%s: the string argument may not call REPEAT, LPAD, RPAD, SPACE, ZEROBLOB, format or printf, or hold a subquery", name)
+			}
+			continue
+		}
+		switch a.(type) {
+		case *Literal, *ColumnRef:
+		default:
+			return refusef("%s: arguments must be literals or columns", name)
+		}
+	}
+	if i >= len(f.Args) {
+		return nil // the engine refuses the call
+	}
+	n, ok := lengthLiteral(f.Args[i])
+	if !ok {
+		return refusef("%s: the length argument must be an integer literal at most %d", name, maxSizeArg)
+	}
+	if f.Name == "REPEAT" {
+		str, ok := an.stringLiteral(f.Args[0])
+		if !ok {
+			return refuse("repeat: the string argument must be a string literal")
+		}
+		if len(str)*n > maxSizeArg {
+			return refusef("repeat: the result would exceed %d bytes", maxSizeArg)
+		}
+	}
+	return nil
+}
+
+// callsSizeFunc reports an expression that calls a size function or a
+// printf-style format, or holds a subquery (not walked: fail closed).
+func callsSizeFunc(e Expr) bool {
+	switch e := e.(type) {
+	case nil, *Literal, *ColumnRef:
+		return false
+	case *FuncCall:
+		if _, ok := sizeArg[e.Name]; ok || e.Name == "FORMAT" || e.Name == "PRINTF" {
+			return true
+		}
+		if e.Filter != nil || e.Over != nil || e.OrderBy != nil {
+			return true
+		}
+		return slices.ContainsFunc(e.Args, callsSizeFunc)
+	case *Paren:
+		return callsSizeFunc(e.X)
+	case *Cast:
+		return callsSizeFunc(e.X)
+	case *Collate:
+		return callsSizeFunc(e.X)
+	case *Unary:
+		return callsSizeFunc(e.X)
+	case *Binary:
+		return callsSizeFunc(e.L) || callsSizeFunc(e.R)
+	case *Case:
+		if callsSizeFunc(e.Operand) || callsSizeFunc(e.Else) {
+			return true
+		}
+		for _, w := range e.Whens {
+			if callsSizeFunc(w.Cond) || callsSizeFunc(w.Result) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
+
+// lengthLiteral is the value of an unsigned integer literal of at most
+// maxSizeArg.
+func lengthLiteral(e Expr) (int, bool) {
+	l, ok := e.(*Literal)
+	if !ok || l.Kind != LitNumber || l.Text == "" || strings.Trim(l.Text, "0123456789") != "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(l.Text)
+	return n, err == nil && n <= maxSizeArg
+}
+
+// stringLiteral is the text of a string literal (escapes are not decoded:
+// the text is at least as long as the value).
+func (an *analyzer) stringLiteral(e Expr) (string, bool) {
+	l, ok := e.(*Literal)
+	if !ok || l.Kind != LitString {
+		return "", false
+	}
+	return StringValue(an.d, l.Text)
+}
+
+// checkReplaceArgs bounds a replacing function: its replacement is a string
+// literal of at most maxReplacement bytes.
+func (an *analyzer) checkReplaceArgs(f *FuncCall) error {
+	i, ok := replaceArg[f.Name]
+	if !ok || i >= len(f.Args) {
+		return nil
+	}
+	if s, ok := an.stringLiteral(f.Args[i]); !ok || len(s) > maxReplacement {
+		return refusef("%s: the replacement must be a string literal of at most %d bytes", strings.ToLower(f.Name), maxReplacement)
+	}
+	return nil
+}
+
+// formatArg reports the functions whose first argument is a printf-style
+// format string: PostgreSQL format(), SQLite printf() and format(). MySQL
+// FORMAT(x, d) formats a number with at most 30 decimals.
+func (an *analyzer) formatArg(name string) bool {
+	switch an.d {
+	case sqlclass.Postgres:
+		return name == "FORMAT"
+	case sqlclass.SQLite:
+		return name == "FORMAT" || name == "PRINTF"
+	}
+	return false
+}
+
+// checkFormat bounds a format function: its format string is a literal
+// and every width or precision it writes is at most maxSizeArg; a width
+// taken from an argument (*) is refused.
+func (an *analyzer) checkFormat(f *FuncCall) error {
+	if !an.formatArg(f.Name) || len(f.Args) == 0 {
+		return nil
+	}
+	name := strings.ToLower(f.Name)
+	fs, ok := an.stringLiteral(f.Args[0])
+	if !ok || strings.Contains(fs, "\\") {
+		// A backslash may be an escape (E'...') hiding a digit.
+		return refusef("%s: the format string must be a literal", name)
+	}
+	for i := 0; i < len(fs); i++ {
+		if fs[i] != '%' {
+			continue
+		}
+		i++
+		if i < len(fs) && fs[i] == '%' {
+			continue
+		}
+		// Flags, position, width and precision, up to the first letter.
+		for ; i < len(fs) && !isLetter(fs[i]); i++ {
+			if fs[i] == '*' {
+				return refusef("%s: a width or precision taken from an argument (*) is not allowed", name)
+			}
+			if fs[i] < '0' || fs[i] > '9' {
+				continue
+			}
+			j := i
+			for j < len(fs) && fs[j] >= '0' && fs[j] <= '9' {
+				j++
+			}
+			if j < len(fs) && fs[j] == '$' {
+				i = j // a position (PostgreSQL %2$s), not a size
+				continue
+			}
+			digits := strings.TrimLeft(fs[i:j], "0")
+			if n, err := strconv.Atoi(digits); len(digits) > 6 || err == nil && n > maxSizeArg {
+				return refusef("%s: a width or precision exceeds %d", name, maxSizeArg)
+			}
+			i = j - 1
+		}
+	}
+	return nil
+}
+
+func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
 
 // funcAllowed reports whether the function name may be called.
 func funcAllowed(d sqlclass.Dialect, name string) bool {

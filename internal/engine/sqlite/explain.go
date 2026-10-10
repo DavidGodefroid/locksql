@@ -115,7 +115,8 @@ type tnode struct {
 //   - "USE TEMP B-TREE FOR ..." marks its group Temp (and Sort for ORDER BY,
 //     GROUP BY and DISTINCT);
 //   - every other row is a group (subquery, co-routine, compound arm...),
-//     Correlated for "CORRELATED ..." and Temp for "MATERIALIZE ...".
+//     Correlated for "CORRELATED ...", Temp for "MATERIALIZE ..." and
+//     Recursive for the "RECURSIVE STEP" of a recursive CTE.
 //
 // A table scanned after another table of the same pipeline is marked
 // NoJoinCond: every outer row reads all of it.
@@ -149,6 +150,7 @@ func parsePlan(rows []eqpRow, st stats, alias map[string]string) engine.PlanNode
 				EstRows:    -1,
 				Correlated: strings.HasPrefix(d, "CORRELATED "),
 				Temp:       strings.HasPrefix(d, "MATERIALIZE"),
+				Recursive:  strings.HasPrefix(d, "RECURSIVE STEP"),
 			}
 		}
 		t := &tnode{n: node}
