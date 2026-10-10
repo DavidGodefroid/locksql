@@ -353,7 +353,7 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 			if prev, err := config.LoadApproved(stateDir, userKey); err == nil {
 				if changes := config.Diff(*prev, cur); len(changes) > 0 {
 					io.Println(bold + "This project's profile " + cur.Profile.Name + " differs from the user-config profile approved under that name:" + reset)
-					for _, line := range formatChanges(changes, usesKeychain(cur)) {
+					for _, line := range formatChanges(changes) {
 						io.Println(line)
 					}
 				}
@@ -382,14 +382,14 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 			return config.Policy{}, "", err
 		}
 		io.Println("policy tightened since the last session:")
-		for _, line := range formatChanges(changes, usesKeychain(cur)) {
+		for _, line := range formatChanges(changes) {
 			io.Println(line)
 		}
 		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "tightened"})
 		return cur, "", nil
 	}
 	io.Println(bold + "The policy of profile " + cur.Profile.Name + " changed since it was approved:" + reset)
-	for _, line := range formatChanges(changes, usesKeychain(cur)) {
+	for _, line := range formatChanges(changes) {
 		io.Println(line)
 	}
 	ans, ok := io.Ask(ctx, "Apply these changes? [y/N] ", ApprovalTimeout)
@@ -460,7 +460,7 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 	var secret []byte
 	fromKeychain := false
 	if keychain {
-		s, migrated, err := secrets.KeychainGet(p.Name, p.Host, p.Port)
+		s, migrated, err := secrets.KeychainGet(p.Name, p.Host, p.Port, defaultPort(p.Engine))
 		switch {
 		case err == nil:
 			secret, fromKeychain = s, true
@@ -510,6 +510,10 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 func (st *starter) offerSave(ctx context.Context, secret []byte, prompt string) {
 	st.offerSaveAs(ctx, st.profile.Host, st.profile.Port, secret, prompt)
 }
+
+// defaultPort is config.DefaultPort; tests that connect through a fake
+// engine replace it.
+var defaultPort = config.DefaultPort
 
 // migratedLine tells the human that a keychain item stored under its old
 // name, without the port, now has the new one.

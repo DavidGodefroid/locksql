@@ -616,7 +616,7 @@ func buildSSH(r rawSSH, p Profile, errf func(string, ...any) error) (*SSHProfile
 	}
 	s := &SSHProfile{Host: r.Host, Port: r.Port, User: r.User, Auth: r.Auth, Key: r.Key, Credentials: r.Credentials}
 	if s.Port == 0 {
-		s.Port = 22
+		s.Port = DefaultSSHPort
 	}
 	if s.Credentials == "" {
 		s.Credentials = p.Credentials

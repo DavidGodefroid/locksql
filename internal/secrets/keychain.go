@@ -72,17 +72,19 @@ func get(account string) ([]byte, error) {
 }
 
 // KeychainGet reads the secret of profile at host and port from the OS
-// keychain. When the item is missing but a legacy one named
-// "<profile>@<host>" exists, the legacy item is moved to the new name once
-// and migrated is true: the caller tells the human.
-func KeychainGet(profile, host string, port int) (secret []byte, migrated bool, err error) {
+// keychain. When the item is missing, port is defaultPort and a legacy
+// item named "<profile>@<host>" exists, the legacy item is moved to the new
+// name once and migrated is true: the caller tells the human. The legacy
+// name says nothing of the port, so on any other port it is not used (a
+// changed port must not get the secret); it stays for locksql forget.
+func KeychainGet(profile, host string, port, defaultPort int) (secret []byte, migrated bool, err error) {
 	if err := checkItem(profile, host, port); err != nil {
 		return nil, false, err
 	}
 	account := KeychainAccount(profile, host, port)
 	s, err := get(account)
 	legacy := legacyAccount(profile, host)
-	if !errors.Is(err, ErrNotFound) || legacy == account {
+	if !errors.Is(err, ErrNotFound) || legacy == account || port != defaultPort {
 		return s, false, err
 	}
 	s, err = get(legacy)

@@ -197,21 +197,37 @@ func TestPIIScanQuasiAnswers(t *testing.T) {
 	}
 }
 
-// A keychain item stored before the port was part of its name is moved to
-// the new name at connect, once, and the human is told.
-func TestConnectMigratesLegacyKeychainItem(t *testing.T) {
+// keychainStarter returns a starter connecting through the fake engine with
+// credentials = "keychain", port as given, and a legacy keychain item
+// "<profile>@<host>" stored before the port was part of the name. The fake
+// engine counts as one whose default port is 3306.
+func keychainStarter(t *testing.T, port int) (*starter, *fakeIO, config.Profile) {
+	t.Helper()
 	keyring.MockInit()
 	p := uatProfile()
-	p.Engine, p.Credentials = fakeEngineName, config.CredentialsKeychain
-	legacy := p.Name + "@" + p.Host
-	if err := keyring.Set(secrets.KeychainService, legacy, "s3cret"); err != nil {
+	p.Engine, p.Credentials, p.Port = fakeEngineName, config.CredentialsKeychain, port
+	if err := keyring.Set(secrets.KeychainService, p.Name+"@"+p.Host, "s3cret"); err != nil {
 		t.Fatal(err)
 	}
-	old := fakeNext
+	oldNext, oldPort := fakeNext, defaultPort
 	fakeNext = &fakeSession{}
-	t.Cleanup(func() { fakeNext = old })
+	defaultPort = func(engine string) int {
+		if engine == fakeEngineName {
+			return 3306
+		}
+		return oldPort(engine)
+	}
+	t.Cleanup(func() { fakeNext, defaultPort = oldNext, oldPort })
 	io := &fakeIO{}
-	st := &starter{io: io, profile: p, user: p.User}
+	return &starter{io: io, profile: p, user: p.User}, io, p
+}
+
+// On the engine's default port, a keychain item stored before the port was
+// part of its name is moved to the new name at connect, once, and the human
+// is told.
+func TestConnectMigratesLegacyKeychainItem(t *testing.T) {
+	st, io, p := keychainStarter(t, 3306)
+	legacy := p.Name + "@" + p.Host
 	for range 2 {
 		sess, err := st.connect(context.Background(), true)
 		if err != nil || sess == nil {
@@ -227,5 +243,28 @@ func TestConnectMigratesLegacyKeychainItem(t *testing.T) {
 	}
 	if _, err := keyring.Get(secrets.KeychainService, legacy); !errors.Is(err, keyring.ErrNotFound) {
 		t.Errorf("legacy item kept: %v", err)
+	}
+}
+
+// On another port the legacy item, which names no port, is not used: the
+// secret is asked and the legacy item stays for locksql forget.
+func TestConnectSkipsLegacyKeychainItemOnOtherPort(t *testing.T) {
+	st, io, p := keychainStarter(t, 3307)
+	io.secrets = []string{"typed"}
+	io.answers = []string{"n"} // do not save
+	if _, err := st.connect(context.Background(), true); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if len(io.prompts) == 0 || !strings.HasPrefix(io.prompts[0], "Password for ") {
+		t.Errorf("prompts %q: the secret was not asked", io.prompts)
+	}
+	if strings.Contains(io.output(), "moved the keychain secret") {
+		t.Errorf("migrated on a non-default port: %q", io.output())
+	}
+	if v, err := keyring.Get(secrets.KeychainService, p.Name+"@"+p.Host); err != nil || v != "s3cret" {
+		t.Errorf("legacy item = %q, %v", v, err)
+	}
+	if _, err := keyring.Get(secrets.KeychainService, secrets.KeychainAccount(p.Name, p.Host, p.Port)); !errors.Is(err, keyring.ErrNotFound) {
+		t.Errorf("new item created: %v", err)
 	}
 }

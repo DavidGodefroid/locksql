@@ -73,7 +73,7 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 	keychain := s.Credentials == config.CredentialsKeychain
 	var fromKeychain, asked []byte
 	if keychain {
-		if v, migrated, err := secrets.KeychainGet(p.Name, keychainHost, s.Port); err == nil {
+		if v, migrated, err := secrets.KeychainGet(p.Name, keychainHost, s.Port, config.DefaultSSHPort); err == nil {
 			fromKeychain = v
 			if migrated {
 				st.io.Println(migratedLine(p.Name, keychainHost, s.Port))

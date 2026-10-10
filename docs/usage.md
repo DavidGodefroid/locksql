@@ -224,7 +224,7 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   passphrase or SSH password like the database password. With `keychain` the
   secret is the OS keychain item of account `<profile>@ssh:<ssh host>:<ssh port>`,
   separate from the database's (an item saved under `<profile>@ssh:<ssh host>`
-  is moved to that name the first time it is read). When the bastion refuses the keychain secret
+  is moved to that name the first time it is read, on port 22 only). When the bastion refuses the keychain secret
   (or it does not decrypt the key), the console asks once and offers
   `Replace the SSH secret stored in the OS keychain? [y/N]`; other failures
   (bastion unreachable, host key refused) are reported without asking.
@@ -431,7 +431,9 @@ The console needs an interactive terminal. At start it:
    never gets the stored secret; after the
    first successful login it offers `Save in OS keychain? [y/N]`. An item
    saved by an earlier version under `<profile>@<host>` is moved to the new
-   name the first time it is read, once, and the console says so. If the
+   name the first time it is read, once, and the console says so; this only
+   happens on the engine's default port (3306, 5432): on another port the
+   secret is asked and the old item stays until `locksql forget`. If the
    stored secret fails, it asks again and offers to replace it. Without a
    usable keychain (for example headless Linux without Secret Service) it
    behaves like `ask`. In separated mode this is the console account's

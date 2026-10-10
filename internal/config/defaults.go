@@ -26,6 +26,13 @@ var defaultPorts = map[string]int{
 	EnginePostgres: 5432,
 }
 
+// DefaultPort is the port of engine when a profile leaves port unset, 0
+// for an engine without one (sqlite).
+func DefaultPort(engine string) int { return defaultPorts[engine] }
+
+// DefaultSSHPort is the port of an ssh table that leaves port unset.
+const DefaultSSHPort = 22
+
 // knownDetectors lists the value detectors a profile may enable.
 var knownDetectors = map[string]bool{
 	"email": true, "phone": true, "iban": true, "card": true,

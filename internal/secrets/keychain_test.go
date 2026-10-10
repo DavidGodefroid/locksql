@@ -31,19 +31,19 @@ func TestKeychainPortIsPartOfTheItem(t *testing.T) {
 	if err := KeychainSet("uat", "h", 5432, []byte("pw")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := KeychainGet("uat", "h", 5433); !errors.Is(err, ErrNotFound) {
+	if _, _, err := KeychainGet("uat", "h", 5433, 5432); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("other port: err = %v", err)
 	}
 	if err := KeychainHas("uat", "h", 5433); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("has, other port: err = %v", err)
 	}
-	if _, _, err := KeychainGet("uat", "h", 0); err == nil {
+	if _, _, err := KeychainGet("uat", "h", 0, 3306); err == nil {
 		t.Fatal("TCP host without a port accepted")
 	}
 }
 
 // A legacy "<profile>@<host>" item is moved to the new name on the first
-// read, once.
+// read on the default port, once; on another port it is not used.
 func TestKeychainMigratesLegacyItem(t *testing.T) {
 	keyring.MockInit()
 	if err := keyring.Set(KeychainService, "uat@h", "old"); err != nil {
@@ -55,7 +55,17 @@ func TestKeychainMigratesLegacyItem(t *testing.T) {
 	if _, err := keyring.Get(KeychainService, "uat@h"); err != nil {
 		t.Fatalf("has moved the legacy item: %v", err)
 	}
-	got, migrated, err := KeychainGet("uat", "h", 5432)
+	// Not on the default port: the legacy name says nothing of the port.
+	if _, migrated, err := KeychainGet("uat", "h", 5433, 5432); !errors.Is(err, ErrNotFound) || migrated {
+		t.Fatalf("other port: migrated %t, err = %v", migrated, err)
+	}
+	if v, err := keyring.Get(KeychainService, "uat@h"); err != nil || v != "old" {
+		t.Fatalf("legacy item after a non-default port = %q, %v", v, err)
+	}
+	if _, err := keyring.Get(KeychainService, "uat@h:5433"); !errors.Is(err, keyring.ErrNotFound) {
+		t.Fatalf("item created for the other port: %v", err)
+	}
+	got, migrated, err := KeychainGet("uat", "h", 5432, 5432)
 	if err != nil || string(got) != "old" || !migrated {
 		t.Fatalf("get = %q, %t, %v", got, migrated, err)
 	}
@@ -65,7 +75,7 @@ func TestKeychainMigratesLegacyItem(t *testing.T) {
 	if _, err := keyring.Get(KeychainService, "uat@h"); !errors.Is(err, keyring.ErrNotFound) {
 		t.Fatalf("legacy item kept: %v", err)
 	}
-	got, migrated, err = KeychainGet("uat", "h", 5432)
+	got, migrated, err = KeychainGet("uat", "h", 5432, 5432)
 	if err != nil || string(got) != "old" || migrated {
 		t.Fatalf("second get = %q, %t, %v", got, migrated, err)
 	}
@@ -80,7 +90,7 @@ func TestKeychainDeleteRemovesLegacyItem(t *testing.T) {
 	if err := KeychainSet("uat", "h", 5432, []byte("new")); err != nil {
 		t.Fatal(err)
 	}
-	got, migrated, err := KeychainGet("uat", "h", 5432)
+	got, migrated, err := KeychainGet("uat", "h", 5432, 5432)
 	if err != nil || string(got) != "new" || migrated {
 		t.Fatalf("get = %q, %t, %v", got, migrated, err)
 	}
@@ -111,7 +121,7 @@ func TestKeychainSocketItem(t *testing.T) {
 	if err := keyring.Set(KeychainService, "uat@"+sock, "pw"); err != nil {
 		t.Fatal(err)
 	}
-	got, migrated, err := KeychainGet("uat", sock, 3306)
+	got, migrated, err := KeychainGet("uat", sock, 3306, 3306)
 	if err != nil || string(got) != "pw" || migrated {
 		t.Fatalf("get = %q, %t, %v", got, migrated, err)
 	}
@@ -122,13 +132,13 @@ func TestKeychainSocketItem(t *testing.T) {
 
 func TestKeychainMock(t *testing.T) {
 	keyring.MockInit()
-	if _, _, err := KeychainGet("uat", "h", 5432); !errors.Is(err, ErrNotFound) {
+	if _, _, err := KeychainGet("uat", "h", 5432, 5432); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing item: err = %v", err)
 	}
 	if err := KeychainSet("uat", "h", 5432, []byte("pw")); err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := KeychainGet("uat", "h", 5432)
+	got, _, err := KeychainGet("uat", "h", 5432, 5432)
 	if err != nil || string(got) != "pw" {
 		t.Fatalf("get = %q, %v", got, err)
 	}
@@ -152,7 +162,7 @@ func TestKeychainRefusesEmpty(t *testing.T) {
 
 func TestKeychainErrorsHideSecret(t *testing.T) {
 	keyring.MockInitWithError(errors.New("backend said hunter2"))
-	_, _, err := KeychainGet("uat", "h", 5432)
+	_, _, err := KeychainGet("uat", "h", 5432, 5432)
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v", err)
 	}
@@ -173,14 +183,14 @@ func TestKeychainReal(t *testing.T) {
 	if err := KeychainSet(profile, host, port, []byte("t3st")); err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := KeychainGet(profile, host, port)
+	got, _, err := KeychainGet(profile, host, port, port)
 	if err != nil || string(got) != "t3st" {
 		t.Fatalf("get = %q, %v", got, err)
 	}
 	if err := KeychainDelete(profile, host, port); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := KeychainGet(profile, host, port); !errors.Is(err, ErrNotFound) {
+	if _, _, err := KeychainGet(profile, host, port, port); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("after delete: %v", err)
 	}
 }
