@@ -175,7 +175,7 @@ Records contain the SQL and metadata, never secrets and never row data.
   the human types `yes` (on a production profile, the fingerprint's last 8
   characters), and a changed key is refused with no override. The key
   passphrase or SSH password follows the same rules as the database password
-  (`ask` or the keychain item `ssh:<host>`, never in argv, environment, files
+  (`ask` or the keychain item `ssh:<host>:<port>`, never in argv, environment, files
   or logs). The SSH leg is encrypted and the bastion authenticated; the leg
   from the bastion to the database is protected only by `tls`, unless the
   database runs on the bastion (`host` loopback). The `tls` default is

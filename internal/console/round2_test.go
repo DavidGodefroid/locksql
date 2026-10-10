@@ -16,7 +16,7 @@ func TestPolicyTextIsEscaped(t *testing.T) {
 	lines := formatChanges([]config.Change{
 		{Field: "pii.allow", New: evil, Loosens: true},
 		{Field: "host", Old: "db", New: "db\x1b[2K", Loosens: true},
-	})
+	}, true)
 	p := config.NewPolicy(uatProfile(), nil, []string{evil})
 	p.Profile.Host = "db\u202e"
 	lines = append(lines, describePolicy(p)...)
@@ -103,6 +103,50 @@ func TestAdoptTransportChangeEndsSession(t *testing.T) {
 		}
 		if _, ended := h.s.Ended(); ended != c.ends {
 			t.Errorf("%s: session ended = %v, want %v", c.name, ended, c.ends)
+		}
+	}
+}
+
+// :review says that a new connection target would get the keychain secret.
+func TestReviewWarnsKeychainSecretGoesToNewTarget(t *testing.T) {
+	const note = "(the stored secret would be sent to the new target)"
+	for _, c := range []struct {
+		name  string
+		cred  string
+		field string
+		want  bool
+	}{
+		{"port, keychain", config.CredentialsKeychain, "port", true},
+		{"host, keychain", config.CredentialsKeychain, "host", true},
+		{"port, ask", config.CredentialsAsk, "port", false},
+		{"limits, keychain", config.CredentialsKeychain, "limits", false},
+	} {
+		prof := uatProfile()
+		prof.Credentials = c.cred
+		h := newHarness(t, prof)
+		next := h.s.approved
+		switch c.field {
+		case "port":
+			next.Profile.Port++
+		case "host":
+			next.Profile.Host = "other.example"
+		default:
+			next.Profile.Limits.MaxRows *= 2
+		}
+		h.s.pending = &next
+		h.io.answers = []string{"n"}
+		h.s.Command(context.Background(), ":review")
+		var line string
+		for _, l := range strings.Split(h.io.output(), "\n") {
+			if strings.Contains(l, "~ "+c.field) {
+				line = l
+			}
+		}
+		if line == "" {
+			t.Fatalf("%s: no %s line in %q", c.name, c.field, h.io.output())
+		}
+		if got := strings.Contains(line, note); got != c.want {
+			t.Errorf("%s: line %q, note shown %t, want %t", c.name, line, got, c.want)
 		}
 	}
 }

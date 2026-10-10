@@ -64,7 +64,7 @@ func fakeDoctor(sys *sysconf.Config) doctorEnv {
 		},
 		tiocsti:  func() (bool, bool) { return false, true },
 		ptrace:   func() (int, bool) { return 1, true },
-		keychain: func(string, string) error { return secrets.ErrNotFound },
+		keychain: func(string, string, int) error { return secrets.ErrNotFound },
 		status: func(string, string) (*ipc.StatusResult, error) {
 			return &ipc.StatusResult{Tier: "read", Health: &ipc.Health{Separated: true, Display: "wayland", ExplainOK: true}}, nil
 		},
@@ -207,7 +207,7 @@ func TestDoctorFindsProblems(t *testing.T) {
 				return stat(p)
 			}
 		}, "ask", "socket directory", checkFail},
-		"secret in agent keychain": {func(d *doctorEnv) { d.keychain = func(string, string) error { return nil } }, "keychain", "secret store", checkFail},
+		"secret in agent keychain": {func(d *doctorEnv) { d.keychain = func(string, string, int) error { return nil } }, "keychain", "secret store", checkFail},
 		"no console": {func(d *doctorEnv) {
 			d.status = func(string, string) (*ipc.StatusResult, error) { return nil, &client.NoConsoleError{Profile: "uat"} }
 		}, "ask", "uat: console", checkWarn},

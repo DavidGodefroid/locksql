@@ -222,8 +222,9 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   - `password`: asks `SSH password for <user>@<host>:`.
 - `credentials` (`ask` or `keychain`, default the profile's own) governs the
   passphrase or SSH password like the database password. With `keychain` the
-  secret is the OS keychain item of account `<profile>@ssh:<ssh host>`,
-  separate from the database's. When the bastion refuses the keychain secret
+  secret is the OS keychain item of account `<profile>@ssh:<ssh host>:<ssh port>`,
+  separate from the database's (an item saved under `<profile>@ssh:<ssh host>`
+  is moved to that name the first time it is read). When the bastion refuses the keychain secret
   (or it does not decrypt the key), the console asks once and offers
   `Replace the SSH secret stored in the OS keychain? [y/N]`; other failures
   (bastion unreachable, host key refused) are reported without asking.
@@ -425,8 +426,12 @@ The console needs an interactive terminal. At start it:
    and asks you to type the profile name.
 3. **Credentials.** It asks for the database user when the profile has none,
    then for the password (no echo). With `credentials = "keychain"` it reads
-   the OS keychain (service `locksql`, account `<profile>@<host>`); after the
-   first successful login it offers `Save in OS keychain? [y/N]`. If the
+   the OS keychain (service `locksql`, account `<profile>@<host>:<port>`, or
+   `<profile>@<socket path>` for a Unix socket), so a changed host or port
+   never gets the stored secret; after the
+   first successful login it offers `Save in OS keychain? [y/N]`. An item
+   saved by an earlier version under `<profile>@<host>` is moved to the new
+   name the first time it is read, once, and the console says so. If the
    stored secret fails, it asks again and offers to replace it. Without a
    usable keychain (for example headless Linux without Secret Service) it
    behaves like `ask`. In separated mode this is the console account's

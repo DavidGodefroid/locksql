@@ -353,7 +353,7 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 			if prev, err := config.LoadApproved(stateDir, userKey); err == nil {
 				if changes := config.Diff(*prev, cur); len(changes) > 0 {
 					io.Println(bold + "This project's profile " + cur.Profile.Name + " differs from the user-config profile approved under that name:" + reset)
-					for _, line := range formatChanges(changes) {
+					for _, line := range formatChanges(changes, usesKeychain(cur)) {
 						io.Println(line)
 					}
 				}
@@ -382,14 +382,14 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 			return config.Policy{}, "", err
 		}
 		io.Println("policy tightened since the last session:")
-		for _, line := range formatChanges(changes) {
+		for _, line := range formatChanges(changes, usesKeychain(cur)) {
 			io.Println(line)
 		}
 		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "tightened"})
 		return cur, "", nil
 	}
 	io.Println(bold + "The policy of profile " + cur.Profile.Name + " changed since it was approved:" + reset)
-	for _, line := range formatChanges(changes) {
+	for _, line := range formatChanges(changes, usesKeychain(cur)) {
 		io.Println(line)
 	}
 	ans, ok := io.Ask(ctx, "Apply these changes? [y/N] ", ApprovalTimeout)
@@ -460,10 +460,13 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 	var secret []byte
 	fromKeychain := false
 	if keychain {
-		s, err := secrets.KeychainGet(p.Name, p.Host)
+		s, migrated, err := secrets.KeychainGet(p.Name, p.Host, p.Port)
 		switch {
 		case err == nil:
 			secret, fromKeychain = s, true
+			if migrated {
+				st.io.Println(migratedLine(p.Name, p.Host, p.Port))
+			}
 		case errors.Is(err, secrets.ErrNotFound):
 			if first {
 				st.io.Println("no secret in the OS keychain yet")
@@ -505,17 +508,24 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 }
 
 func (st *starter) offerSave(ctx context.Context, secret []byte, prompt string) {
-	st.offerSaveAs(ctx, st.profile.Host, secret, prompt)
+	st.offerSaveAs(ctx, st.profile.Host, st.profile.Port, secret, prompt)
+}
+
+// migratedLine tells the human that a keychain item stored under its old
+// name, without the port, now has the new one.
+func migratedLine(profile, host string, port int) string {
+	return "moved the keychain secret of " + safeText(profile+"@"+host, false) + " to " +
+		safeText(secrets.KeychainAccount(profile, host, port), false) + " (the port is now part of its name)"
 }
 
 // offerSaveAs offers to store secret in the OS keychain under the
-// profile's name and host.
-func (st *starter) offerSaveAs(ctx context.Context, host string, secret []byte, prompt string) {
+// profile's name, host and port.
+func (st *starter) offerSaveAs(ctx context.Context, host string, port int, secret []byte, prompt string) {
 	ans, ok := st.io.Ask(ctx, prompt, ApprovalTimeout)
 	if !ok || strings.TrimSpace(ans) != "y" {
 		return
 	}
-	if err := secrets.KeychainSet(st.profile.Name, host, secret); err != nil {
+	if err := secrets.KeychainSet(st.profile.Name, host, port, secret); err != nil {
 		st.io.Println("not saved: " + secrets.Sanitize(err, secret))
 		return
 	}

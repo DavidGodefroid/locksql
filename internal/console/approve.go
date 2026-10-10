@@ -260,7 +260,7 @@ func (s *Server) review(ctx context.Context) {
 	}
 	next := *s.pending
 	s.println("pending policy change for profile " + s.profile.Name + ":")
-	for _, line := range formatChanges(config.Diff(s.approved, next)) {
+	for _, line := range formatChanges(config.Diff(s.approved, next), usesKeychain(next)) {
 		s.println(line)
 	}
 	if s.cfg.SkipPermissions && s.profile.Production && !next.Profile.Production {
@@ -316,13 +316,19 @@ func (s *Server) CheckPolicy() {
 			return
 		}
 		s.println("policy tightened:")
-		for _, line := range formatChanges(changes) {
+		for _, line := range formatChanges(changes, usesKeychain(cur)) {
 			s.println(line)
 		}
 		return
 	}
 	s.pending = &cur
 	s.println(red + "pending policy change (loosening) — type :review to see it" + reset)
+}
+
+// usesKeychain reports whether p takes the database secret from the OS
+// keychain.
+func usesKeychain(p config.Policy) bool {
+	return p.Profile.Credentials == config.CredentialsKeychain
 }
 
 func loosens(changes []config.Change) bool {
@@ -381,10 +387,13 @@ func sameSSH(a, b *config.SSHProfile) bool {
 
 // formatChanges renders a policy diff, loosenings in red. Every value is
 // escaped: a pattern or a host could otherwise carry terminal escapes that
-// hide a loosening from the human.
-func formatChanges(changes []config.Change) []string {
+// hide a loosening from the human. keychain is true when the new policy
+// takes the secret from the OS keychain: a change of the connection target
+// then says that the stored secret would go to the new one.
+func formatChanges(changes []config.Change, keychain bool) []string {
 	var out []string
 	for _, c := range changes {
+		target := keychain && (c.Field == "host" || c.Field == "port" || c.Field == "path")
 		c.Field, c.Old, c.New = safeText(c.Field, false), safeText(c.Old, false), safeText(c.New, false)
 		var line string
 		switch {
@@ -396,7 +405,11 @@ func formatChanges(changes []config.Change) []string {
 			line = fmt.Sprintf("  ~ %s: %s → %s", c.Field, c.Old, c.New)
 		}
 		if c.Loosens {
-			line = red + line + "  (loosens)" + reset
+			line += "  (loosens)"
+			if target {
+				line += "  (the stored secret would be sent to the new target)"
+			}
+			line = red + line + reset
 		} else {
 			line = green + line + reset
 		}

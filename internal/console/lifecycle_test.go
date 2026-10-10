@@ -2,15 +2,19 @@ package console
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/zalando/go-keyring"
+
 	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/pii"
+	"github.com/DavidGodefroid/locksql/internal/secrets"
 )
 
 type columnsSession struct {
@@ -190,5 +194,38 @@ func TestPIIScanQuasiAnswers(t *testing.T) {
 	}
 	if got := strings.Join(ap.PIIAllow, ","); got != "app.users.gender,app.users.zip_code" {
 		t.Errorf("allow = %s", got)
+	}
+}
+
+// A keychain item stored before the port was part of its name is moved to
+// the new name at connect, once, and the human is told.
+func TestConnectMigratesLegacyKeychainItem(t *testing.T) {
+	keyring.MockInit()
+	p := uatProfile()
+	p.Engine, p.Credentials = fakeEngineName, config.CredentialsKeychain
+	legacy := p.Name + "@" + p.Host
+	if err := keyring.Set(secrets.KeychainService, legacy, "s3cret"); err != nil {
+		t.Fatal(err)
+	}
+	old := fakeNext
+	fakeNext = &fakeSession{}
+	t.Cleanup(func() { fakeNext = old })
+	io := &fakeIO{}
+	st := &starter{io: io, profile: p, user: p.User}
+	for range 2 {
+		sess, err := st.connect(context.Background(), true)
+		if err != nil || sess == nil {
+			t.Fatalf("connect: %v", err)
+		}
+	}
+	if io.promptCount() != 0 {
+		t.Errorf("prompts %q: the migrated secret was not used", io.prompts)
+	}
+	want := "moved the keychain secret of " + legacy + " to " + secrets.KeychainAccount(p.Name, p.Host, p.Port)
+	if n := strings.Count(io.output(), want); n != 1 {
+		t.Errorf("migration line shown %d times in %q", n, io.output())
+	}
+	if _, err := keyring.Get(secrets.KeychainService, legacy); !errors.Is(err, keyring.ErrNotFound) {
+		t.Errorf("legacy item kept: %v", err)
 	}
 }
