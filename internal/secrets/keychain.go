@@ -71,37 +71,64 @@ func get(account string) ([]byte, error) {
 	return []byte(s), nil
 }
 
+// Legacy says what KeychainGet did with a pre-upgrade item, named
+// "<profile>@<host>" without the port.
+type Legacy int
+
+const (
+	// LegacyNone: no pre-upgrade item was involved.
+	LegacyNone Legacy = iota
+	// LegacyMoved: the item was moved to the name of the default port, and
+	// its secret returned.
+	LegacyMoved
+	// LegacyRemoved: the profile is on another port; the item was deleted
+	// unread and ErrNotFound returned.
+	LegacyRemoved
+)
+
 // KeychainGet reads the secret of profile at host and port from the OS
-// keychain. When the item is missing, port is defaultPort and a legacy
-// item named "<profile>@<host>" exists, the legacy item is moved to the new
-// name once and migrated is true: the caller tells the human. The legacy
-// name says nothing of the port, so on any other port it is not used (a
-// changed port must not get the secret); it stays for locksql forget.
-func KeychainGet(profile, host string, port, defaultPort int) (secret []byte, migrated bool, err error) {
+// keychain. When the item is missing and a pre-upgrade item named
+// "<profile>@<host>" exists, the caller tells the human what happened to
+// it (legacy): on the default port it is moved to the new name once and
+// its secret returned; on any other port it is deleted without being read.
+// The legacy name says nothing of the port, so a changed port must not get
+// the secret, and an item left behind would reach whatever listens on the
+// default port later.
+func KeychainGet(profile, host string, port, defaultPort int) (secret []byte, legacy Legacy, err error) {
 	if err := checkItem(profile, host, port); err != nil {
-		return nil, false, err
+		return nil, LegacyNone, err
 	}
 	account := KeychainAccount(profile, host, port)
 	s, err := get(account)
-	legacy := legacyAccount(profile, host)
-	if !errors.Is(err, ErrNotFound) || legacy == account || port != defaultPort {
-		return s, false, err
+	old := legacyAccount(profile, host)
+	if !errors.Is(err, ErrNotFound) || old == account {
+		return s, LegacyNone, err
 	}
-	s, err = get(legacy)
+	if port != defaultPort {
+		switch err := keyring.Delete(KeychainService, old); {
+		case err == nil:
+			return nil, LegacyRemoved, ErrNotFound
+		case errors.Is(err, keyring.ErrNotFound):
+			return nil, LegacyNone, ErrNotFound
+		default:
+			return nil, LegacyNone, keychainErr("delete", err, nil)
+		}
+	}
+	s, err = get(old)
 	if err != nil {
-		return nil, false, err
+		return nil, LegacyNone, err
 	}
 	if err := keyring.Set(KeychainService, account, string(s)); err != nil {
 		err = keychainErr("set", err, s)
 		Wipe(s)
-		return nil, false, err
+		return nil, LegacyNone, err
 	}
-	if err := keyring.Delete(KeychainService, legacy); err != nil && !errors.Is(err, keyring.ErrNotFound) {
+	if err := keyring.Delete(KeychainService, old); err != nil && !errors.Is(err, keyring.ErrNotFound) {
 		err = keychainErr("delete", err, s)
 		Wipe(s)
-		return nil, false, err
+		return nil, LegacyNone, err
 	}
-	return s, true, nil
+	return s, LegacyMoved, nil
 }
 
 // KeychainHas reports whether the keychain holds a secret for profile at

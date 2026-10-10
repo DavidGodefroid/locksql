@@ -43,7 +43,7 @@ func TestKeychainPortIsPartOfTheItem(t *testing.T) {
 }
 
 // A legacy "<profile>@<host>" item is moved to the new name on the first
-// read on the default port, once; on another port it is not used.
+// read on the default port, once.
 func TestKeychainMigratesLegacyItem(t *testing.T) {
 	keyring.MockInit()
 	if err := keyring.Set(KeychainService, "uat@h", "old"); err != nil {
@@ -55,19 +55,9 @@ func TestKeychainMigratesLegacyItem(t *testing.T) {
 	if _, err := keyring.Get(KeychainService, "uat@h"); err != nil {
 		t.Fatalf("has moved the legacy item: %v", err)
 	}
-	// Not on the default port: the legacy name says nothing of the port.
-	if _, migrated, err := KeychainGet("uat", "h", 5433, 5432); !errors.Is(err, ErrNotFound) || migrated {
-		t.Fatalf("other port: migrated %t, err = %v", migrated, err)
-	}
-	if v, err := keyring.Get(KeychainService, "uat@h"); err != nil || v != "old" {
-		t.Fatalf("legacy item after a non-default port = %q, %v", v, err)
-	}
-	if _, err := keyring.Get(KeychainService, "uat@h:5433"); !errors.Is(err, keyring.ErrNotFound) {
-		t.Fatalf("item created for the other port: %v", err)
-	}
-	got, migrated, err := KeychainGet("uat", "h", 5432, 5432)
-	if err != nil || string(got) != "old" || !migrated {
-		t.Fatalf("get = %q, %t, %v", got, migrated, err)
+	got, legacy, err := KeychainGet("uat", "h", 5432, 5432)
+	if err != nil || string(got) != "old" || legacy != LegacyMoved {
+		t.Fatalf("get = %q, %v, %v", got, legacy, err)
 	}
 	if v, err := keyring.Get(KeychainService, "uat@h:5432"); err != nil || v != "old" {
 		t.Fatalf("new item = %q, %v", v, err)
@@ -75,9 +65,52 @@ func TestKeychainMigratesLegacyItem(t *testing.T) {
 	if _, err := keyring.Get(KeychainService, "uat@h"); !errors.Is(err, keyring.ErrNotFound) {
 		t.Fatalf("legacy item kept: %v", err)
 	}
-	got, migrated, err = KeychainGet("uat", "h", 5432, 5432)
-	if err != nil || string(got) != "old" || migrated {
-		t.Fatalf("second get = %q, %t, %v", got, migrated, err)
+	got, legacy, err = KeychainGet("uat", "h", 5432, 5432)
+	if err != nil || string(got) != "old" || legacy != LegacyNone {
+		t.Fatalf("second get = %q, %v, %v", got, legacy, err)
+	}
+}
+
+// On another port the legacy item, which names no port, is deleted unread:
+// it must not reach whatever listens on the default port later.
+func TestKeychainRemovesLegacyItemOnOtherPort(t *testing.T) {
+	keyring.MockInit()
+	if err := keyring.Set(KeychainService, "uat@h", "old"); err != nil {
+		t.Fatal(err)
+	}
+	got, legacy, err := KeychainGet("uat", "h", 5433, 5432)
+	if !errors.Is(err, ErrNotFound) || got != nil || legacy != LegacyRemoved {
+		t.Fatalf("other port = %q, %v, %v", got, legacy, err)
+	}
+	for _, account := range []string{"uat@h", "uat@h:5433", "uat@h:5432"} {
+		if _, err := keyring.Get(KeychainService, account); !errors.Is(err, keyring.ErrNotFound) {
+			t.Errorf("%s after a non-default port: %v", account, err)
+		}
+	}
+	if _, legacy, err := KeychainGet("uat", "h", 5433, 5432); !errors.Is(err, ErrNotFound) || legacy != LegacyNone {
+		t.Fatalf("second get: %v, %v", legacy, err)
+	}
+	// The default port then finds nothing to migrate.
+	if _, legacy, err := KeychainGet("uat", "h", 5432, 5432); !errors.Is(err, ErrNotFound) || legacy != LegacyNone {
+		t.Fatalf("default port after removal: %v, %v", legacy, err)
+	}
+}
+
+// The SSH item of a tunnel follows the same rule on port 22.
+func TestKeychainLegacySSHItem(t *testing.T) {
+	keyring.MockInit()
+	const host = "ssh:bastion.example.com"
+	if err := keyring.Set(KeychainService, "uat@"+host, "old"); err != nil {
+		t.Fatal(err)
+	}
+	if _, legacy, err := KeychainGet("uat", host, 2222, 22); !errors.Is(err, ErrNotFound) || legacy != LegacyRemoved {
+		t.Fatalf("port 2222: %v, %v", legacy, err)
+	}
+	if err := keyring.Set(KeychainService, "uat@"+host, "old"); err != nil {
+		t.Fatal(err)
+	}
+	if got, legacy, err := KeychainGet("uat", host, 22, 22); err != nil || string(got) != "old" || legacy != LegacyMoved {
+		t.Fatalf("port 22 = %q, %v, %v", got, legacy, err)
 	}
 }
 
@@ -90,9 +123,9 @@ func TestKeychainDeleteRemovesLegacyItem(t *testing.T) {
 	if err := KeychainSet("uat", "h", 5432, []byte("new")); err != nil {
 		t.Fatal(err)
 	}
-	got, migrated, err := KeychainGet("uat", "h", 5432, 5432)
-	if err != nil || string(got) != "new" || migrated {
-		t.Fatalf("get = %q, %t, %v", got, migrated, err)
+	got, legacy, err := KeychainGet("uat", "h", 5432, 5432)
+	if err != nil || string(got) != "new" || legacy != LegacyNone {
+		t.Fatalf("get = %q, %v, %v", got, legacy, err)
 	}
 	if err := KeychainDelete("uat", "h", 5432); err != nil {
 		t.Fatal(err)
@@ -121,9 +154,9 @@ func TestKeychainSocketItem(t *testing.T) {
 	if err := keyring.Set(KeychainService, "uat@"+sock, "pw"); err != nil {
 		t.Fatal(err)
 	}
-	got, migrated, err := KeychainGet("uat", sock, 3306, 3306)
-	if err != nil || string(got) != "pw" || migrated {
-		t.Fatalf("get = %q, %t, %v", got, migrated, err)
+	got, legacy, err := KeychainGet("uat", sock, 3306, 3306)
+	if err != nil || string(got) != "pw" || legacy != LegacyNone {
+		t.Fatalf("get = %q, %v, %v", got, legacy, err)
 	}
 	if err := KeychainDelete("uat", sock, 0); err != nil {
 		t.Fatal(err)

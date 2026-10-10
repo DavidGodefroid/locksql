@@ -437,13 +437,15 @@ The console needs an interactive terminal. At start it:
 3. **Credentials.** It asks for the database user when the profile has none,
    then for the password (no echo). With `credentials = "keychain"` it reads
    the OS keychain (service `locksql`, account `<profile>@<host>:<port>`, or
-   `<profile>@<socket path>` for a Unix socket), so a changed host or port
-   never gets the stored secret; after the
-   first successful login it offers `Save in OS keychain? [y/N]`. An item
-   saved by an earlier version under `<profile>@<host>` is moved to the new
-   name the first time it is read, once, and the console says so; this only
-   happens on the engine's default port (3306, 5432): on another port the
-   secret is asked and the old item stays until `locksql forget`. If the
+   `<profile>@<socket path>` for a Unix socket): an item is bound to the
+   host and port it was saved for; the pre-upgrade item is moved to the
+   default port or removed at the first start. After the first successful
+   login it offers `Save in OS keychain? [y/N]`. An item saved by an earlier
+   version under `<profile>@<host>` is moved to the new name the first time
+   it is read, once, and the console says so; this only happens on the
+   engine's default port (3306, 5432, 22 for an SSH tunnel): on another port
+   the old item is deleted unread, the console says so, and the secret is
+   asked (answer `Save in OS keychain?` to store it for that port). If the
    stored secret fails, it asks again and offers to replace it. Without a
    usable keychain (for example headless Linux without Secret Service) it
    behaves like `ask`. In separated mode this is the console account's

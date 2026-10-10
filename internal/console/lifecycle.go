@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -461,13 +462,15 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 	var secret []byte
 	fromKeychain := false
 	if keychain {
-		s, migrated, err := secrets.KeychainGet(p.Name, p.Host, p.Port, defaultPort(p.Engine))
+		s, legacy, err := secrets.KeychainGet(p.Name, p.Host, p.Port, defaultPort(p.Engine))
 		switch {
 		case err == nil:
 			secret, fromKeychain = s, true
-			if migrated {
+			if legacy == secrets.LegacyMoved {
 				st.io.Println(migratedLine(p.Name, p.Host, p.Port))
 			}
+		case errors.Is(err, secrets.ErrNotFound) && legacy == secrets.LegacyRemoved:
+			st.io.Println(removedLine(p.Name, p.Host, p.Port))
 		case errors.Is(err, secrets.ErrNotFound):
 			if first {
 				st.io.Println("no secret in the OS keychain yet")
@@ -521,6 +524,14 @@ var defaultPort = config.DefaultPort
 func migratedLine(profile, host string, port int) string {
 	return "moved the keychain secret of " + safeText(profile+"@"+host, false) + " to " +
 		safeText(secrets.KeychainAccount(profile, host, port), false) + " (the port is now part of its name)"
+}
+
+// removedLine tells the human that a keychain item stored under its old
+// name, without the port, was deleted because the profile is on another
+// port than the one it was migrated to.
+func removedLine(profile, host string, port int) string {
+	return "removed the pre-upgrade keychain item " + safeText(profile+"@"+host, false) +
+		"; answer \"Save in OS keychain?\" to store the secret for " + safeText(host+":"+strconv.Itoa(port), false)
 }
 
 // offerSaveAs offers to store secret in the OS keychain under the

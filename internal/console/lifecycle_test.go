@@ -246,25 +246,32 @@ func TestConnectMigratesLegacyKeychainItem(t *testing.T) {
 	}
 }
 
-// On another port the legacy item, which names no port, is not used: the
-// secret is asked and the legacy item stays for locksql forget.
-func TestConnectSkipsLegacyKeychainItemOnOtherPort(t *testing.T) {
+// On another port the legacy item, which names no port, is deleted unread:
+// the human is told once, the secret is asked, and nothing is stored unless
+// the human saves it. A later start on the default port finds nothing to
+// migrate to an agent-run listener.
+func TestConnectRemovesLegacyKeychainItemOnOtherPort(t *testing.T) {
 	st, io, p := keychainStarter(t, 3307)
-	io.secrets = []string{"typed"}
-	io.answers = []string{"n"} // do not save
-	if _, err := st.connect(context.Background(), true); err != nil {
-		t.Fatalf("connect: %v", err)
+	io.secrets = []string{"typed", "typed"}
+	io.answers = []string{"n", "n"} // do not save
+	for range 2 {
+		if _, err := st.connect(context.Background(), true); err != nil {
+			t.Fatalf("connect: %v", err)
+		}
 	}
-	if len(io.prompts) == 0 || !strings.HasPrefix(io.prompts[0], "Password for ") {
-		t.Errorf("prompts %q: the secret was not asked", io.prompts)
+	if n := strings.Count(strings.Join(io.prompts, "\n"), "Password for "); n != 2 {
+		t.Errorf("prompts %q: the secret was not asked at each start", io.prompts)
+	}
+	want := `removed the pre-upgrade keychain item ` + p.Name + "@" + p.Host + `; answer "Save in OS keychain?" to store the secret for ` + p.Host + ":3307"
+	if n := strings.Count(io.output(), want); n != 1 {
+		t.Errorf("removal line shown %d times in %q", n, io.output())
 	}
 	if strings.Contains(io.output(), "moved the keychain secret") {
 		t.Errorf("migrated on a non-default port: %q", io.output())
 	}
-	if v, err := keyring.Get(secrets.KeychainService, p.Name+"@"+p.Host); err != nil || v != "s3cret" {
-		t.Errorf("legacy item = %q, %v", v, err)
-	}
-	if _, err := keyring.Get(secrets.KeychainService, secrets.KeychainAccount(p.Name, p.Host, p.Port)); !errors.Is(err, keyring.ErrNotFound) {
-		t.Errorf("new item created: %v", err)
+	for _, account := range []string{p.Name + "@" + p.Host, secrets.KeychainAccount(p.Name, p.Host, p.Port), secrets.KeychainAccount(p.Name, p.Host, 3306)} {
+		if _, err := keyring.Get(secrets.KeychainService, account); !errors.Is(err, keyring.ErrNotFound) {
+			t.Errorf("%s after a start on another port: %v", account, err)
+		}
 	}
 }

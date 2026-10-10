@@ -73,11 +73,13 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 	keychain := s.Credentials == config.CredentialsKeychain
 	var fromKeychain, asked []byte
 	if keychain {
-		if v, migrated, err := secrets.KeychainGet(p.Name, keychainHost, s.Port, config.DefaultSSHPort); err == nil {
+		if v, legacy, err := secrets.KeychainGet(p.Name, keychainHost, s.Port, config.DefaultSSHPort); err == nil {
 			fromKeychain = v
-			if migrated {
+			if legacy == secrets.LegacyMoved {
 				st.io.Println(migratedLine(p.Name, keychainHost, s.Port))
 			}
+		} else if legacy == secrets.LegacyRemoved {
+			st.io.Println(removedLine(p.Name, keychainHost, s.Port))
 		} else if !errors.Is(err, secrets.ErrNotFound) {
 			st.io.Println("OS keychain unavailable, asking instead: " + secrets.Sanitize(err))
 			keychain = false
