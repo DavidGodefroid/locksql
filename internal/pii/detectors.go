@@ -179,14 +179,17 @@ func mod97(s string) int {
 // non-ASCII character cannot cut the address and leave its prefix in clear.
 var emailRe = regexp.MustCompile(`[\p{L}\p{M}\p{N}._%+\-]+@[\p{L}0-9\-]+(?:\.[\p{L}0-9\-]+)*\.\p{L}{2,}`)
 
-// findEmails accepts a match only at the start of a word: never the tail of
-// a longer local part.
+// findEmails accepts a match only at the start of a word, never the tail of
+// a longer local part, or right where the previous address ended: an
+// address glued to a masked one (a@b.com-c@d.org) is masked too.
 func findEmails(s string) []span {
+	last := -1
 	return scan(s, emailRe, 0, func(s string, start, end int) (int, bool) {
 		r, _ := utf8.DecodeLastRuneInString(s[:start])
-		if start > 0 && emailLocalRune(r) {
+		if start > 0 && start != last && emailLocalRune(r) {
 			return 0, false
 		}
+		last = end
 		return end, true
 	})
 }
