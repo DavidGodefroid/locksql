@@ -10,6 +10,9 @@ issue.
   approach. locksql is a security tool: features that loosen a default, add a
   way around the console, or add a dependency need a clear case.
 - Code, comments, docs and commit messages are in English.
+- Changes to the parser, the analyzer or the masking start with
+  [docs/pii-analysis.md](docs/pii-analysis.md), which explains how they fit
+  together.
 - By contributing you agree that your work is licensed under the Apache
   License 2.0.
 

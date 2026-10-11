@@ -38,6 +38,27 @@ Issues of interest include, among others:
 Attacks that require running code as the same OS user as the console are out
 of scope, as documented in the threat model.
 
+## External review
+
+No external review of locksql has been done yet. The threat model
+([docs/security-model.md](docs/security-model.md)) and the parser and
+analyzer that decide what is masked (`internal/sqlast`, explained in
+[docs/pii-analysis.md](docs/pii-analysis.md)) have been reviewed by the
+maintainer only. An external review is a criterion for 1.0
+([docs/1.0.md](docs/1.0.md)).
+
+To contribute one:
+
+- Review the threat model, `internal/sqlast`, `internal/pii` or
+  `internal/console`, or try to break them: a statement that returns an
+  unmasked value, runs without approval or loosens the policy.
+- Report vulnerabilities privately, as above. Write up the rest (scope,
+  version or commit reviewed, method, findings, and what you did not
+  cover) in a public issue or a pull request adding the report under
+  `docs/reviews/`.
+- Reports are linked here with the reviewer's name (or anonymously if you
+  prefer) and the fixes they led to.
+
 ## Supported versions
 
 Only the latest release receives security fixes.

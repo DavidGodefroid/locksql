@@ -578,6 +578,8 @@ deliberately narrow:
 | 📘 [docs/usage.md](docs/usage.md) | console, client commands, MCP server, agent integration |
 | 🐳 [docs/docker.md](docs/docker.md) | running the console and the agent's MCP server in Docker, with nothing installed |
 | 🛡️ [docs/security-model.md](docs/security-model.md) | threat model and mitigations, and an upstream recommendation (PII encrypted at rest with a blind index) |
+| 🔍 [docs/pii-analysis.md](docs/pii-analysis.md) | how the PII analysis works: parser, provenance, usage rules, k-anonymity counts, masking (for contributors) |
+| 🏁 [docs/1.0.md](docs/1.0.md) | the 1.0 criteria and the versioning policy from 1.0 |
 | 🚨 [SECURITY.md](SECURITY.md) | reporting a vulnerability |
 | 🧑‍💻 [CONTRIBUTING.md](CONTRIBUTING.md) | building and testing |
 
