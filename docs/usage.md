@@ -728,8 +728,15 @@ PII columns (columns under a mask rule) may be used as follows:
   never auto-approved. Once it has run, the console prints the clear result
   under `PII: UNMASKED result`, so you see what the agent received; the audit
   log still holds no row data.
-- At tiers above `read`, a write's `RETURNING` list (or a data-modifying CTE)
-  must not alias or transform a masked column.
+- At tiers above `read`, while mask rules exist, a write whose rows come
+  back (`RETURNING`, or a `SELECT` over PostgreSQL data-modifying CTEs) or
+  that stores a query's rows (`INSERT ... SELECT`) is parsed and analysed
+  like a read before it runs. Its returned columns are masked by where they
+  come from, so renaming a masked column is fine; an expression over one, a
+  function outside the allowlist, a PII filter, grouping or aggregate in the
+  outer `SELECT`, and syntax the parser does not read (`MERGE`, multi-table
+  MySQL writes, ...) are refused. Filters in the write's own `WHERE` are
+  yours to approve: the read rules do not apply there.
 - While mask rules exist, a write may store into a column under a mask rule
   (matched by name) only `NULL` or `DEFAULT`: a literal, an expression or
   another column is refused (`a masked column cannot receive values the agent
