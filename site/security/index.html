@@ -64,6 +64,7 @@
     <li><strong>The agent</strong> (and anything that can steer it, such as text stored in the database or in files it reads) is <em>not</em> trusted. It runs the client commands and the MCP server.</li>
     <li><strong>Other local users</strong> are not trusted.</li>
   </ul>
+  <p class="prose">locksql supports Linux and macOS only; on Windows it runs inside WSL2, a Linux system, where the agent must run too for this boundary to hold (<a href="../install/#windows">Windows: inside WSL2</a>).</p>
 </section>
 
 <section aria-labelledby="principles">
@@ -117,10 +118,10 @@ refused. A filter, grouping or aggregate on PII must cover at least
     <p>The agent can filter a PII column on a value it never sees: a placeholder (<code>'${email}'</code>) that you type in the console without echo, or the reference of a redacted cell (<code>'${r1.2.3}'</code>) whose clear value only the console holds, in memory. Both work only compared with a PII column, and the values never reach the agent, the audit log or a client error. The approval screen warns, in red and in the audit log, on a clear value from the agent, a reference with a unique-key filter, and probing beyond <code>limits.reference_probe</code>. <a href="../how-it-works/#blind-search">How it works</a>.</p>
 
     <h3 id="unmask-gate">Raw values only on your say-so</h3>
-    <p>An agent can ask for unmasked output only when the console was started with <code>--allow-unmask</code>; without it the request is refused and audited. Ctrl-O in the console (or <code>--show-results</code>) shows you the clear rows there while the agent still gets them masked. Both are console-only: no client or config file can turn them on.</p>
+    <p>An agent can ask for unmasked output only when you allowed it in the console: <code>--allow-unmask</code> at start, or <code>:unmask</code> while it runs, a typed command confirmed with <code>y</code>, never a single key; without it the request is refused and audited. Each switch is audited. Ctrl-O in the console (or <code>--show-results</code>) shows you the clear rows there while the agent still gets them masked. Both are console-only: no client or config file can turn them on.</p>
 
     <h3 id="quiet">Quiet failures</h3>
-    <p>Clients get a generic message, never the server’s error text, and no timings; <code>query.run</code> answers on a 250 ms quantum.</p>
+    <p>Clients get a generic message, never the server’s error text, and no timings; <code>query.run</code> answers on a 250 ms quantum. A refusal’s structured form (code, retry rule, hint, place) is written by locksql: the place points into the agent’s own statement and names a keyword, an operator or a name, never a literal, the database’s text or a substituted value.</p>
 
     <h3 id="tighten">The AI tightens, the human loosens</h3>
     
@@ -130,7 +131,7 @@ takes effect after you confirm it in the console.</p>
 
 
     <h3 id="audit">Audit</h3>
-    <p>Every login, policy change, refusal, decision, catalog read and logout is appended to a JSONL audit log (mode 0600). Records contain the SQL and metadata, never secrets and never row data.</p>
+    <p>Every login, policy change, refusal (with its code), decision, catalog read, console switch (approval mode, clear results, unmasked output) and logout is appended to a JSONL audit log (mode 0600). Records contain the SQL and metadata, never secrets and never row data.</p>
 
     <h3 id="untrusted">Untrusted rows</h3>
     <p>Rows are framed as untrusted data in every output; the generated agent instructions say so; control and bidirectional characters are escaped in client output and on the console screen, so data cannot spoof the approval prompt.</p>
@@ -163,7 +164,7 @@ takes effect after you confirm it in the console.</p>
 <tr><td><code>prefer</code></td><td>if offered</td><td>no</td><td>no</td></tr>
 <tr><td><code>require</code></td><td>yes, else refuse</td><td>only with <code>tls_ca</code></td><td>no</td></tr>
 <tr><td><code>verify-ca</code></td><td>yes, else refuse</td><td>yes</td><td>no</td></tr>
-<tr><td><code>verify-full</code></td><td>yes, else refuse</td><td>yes</td><td>yes (<code>host</code>)</td></tr>
+<tr><td><code>verify-full</code></td><td>yes, else refuse</td><td>yes</td><td>yes (<code>host</code>, or <code>tls_server_name</code>)</td></tr>
 </tbody>
 </table>
 <p>The default is <code>verify-full</code>, except <code>prefer</code> when
@@ -172,19 +173,36 @@ or a loopback IP literal). <code>production = true</code> refuses
 <code>disable</code> and <code>prefer</code> unless the host is loopback or a
 socket path. <code>tls_ca</code> is a PEM bundle that replaces the system roots;
 it is refused with <code>disable</code> and <code>prefer</code>, and with
-<code>require</code> it verifies the chain, as libpq does. A weaker
-<code>tls</code> or any change of <code>tls_ca</code> loosens the approved policy
-and needs the human’s confirmation.</p>
+<code>require</code> it verifies the chain, as libpq does. <code>tls_server_name</code>
+replaces <code>host</code> as the name <code>verify-full</code> checks.
+<code>tls_cert</code> and <code>tls_key</code> present a client certificate (the
+key must be mode 0600, in the console account’s files). A weaker
+<code>tls</code> or any change of <code>tls_ca</code>, <code>tls_cert</code>,
+<code>tls_key</code> or <code>tls_server_name</code> loosens the approved policy
+and needs the human’s confirmation. <code>locksql doctor</code> checks these
+files and their expiry, and, for a profile without <code>ssh</code>, fetches the
+server’s certificate with a TLS handshake that sends no secret, and reports a
+chain or a name that would not verify and a certificate close to its end.</p>
 <p>Below <code>verify-ca</code> an active attacker on the path can intercept or
-downgrade the connection, and obtain the password. The MariaDB/MySQL clear-text
-guard protects plain TCP connections only: over TLS the driver answers
-<code>mysql_clear_password</code>, <code>sha256_password</code> and a
-<code>caching_sha2_password</code> full authentication (the MySQL 8 default) in
-clear, so an attacker terminating TLS gets the password. On plain TCP
-(<code>disable</code>, or <code>prefer</code> after a fallback) the guard refuses
-a full authentication, so a MySQL 8 account logs in only while the server’s
-authentication cache holds it. PostgreSQL likewise sends the password to a
-server that asks for cleartext authentication. <code>verify-ca</code> and
+downgrade the connection, read and change the traffic, and relay a login, but
+is not handed the password. On MariaDB/MySQL, a connection whose server is not
+authenticated (plain TCP, and TLS to a remote host under <code>prefer</code> or
+<code>require</code> without <code>tls_ca</code>) answers no request for the
+password in clear: an auth switch to <code>mysql_clear_password</code> or
+<code>sha256_password</code>, or a <code>caching_sha2_password</code> full
+authentication (the MySQL 8 default), is refused before the driver can answer.
+A MySQL 8 account therefore logs in over such a connection only while the
+server’s authentication cache holds it, and the refusal names the remedy
+(<code>tls = "verify-full"</code>, with <code>tls_ca</code> for a private CA, or
+an account with <code>mysql_native_password</code> or <code>ed25519</code>). Under
+<code>verify-ca</code> and <code>verify-full</code> a full authentication sends
+the password inside the verified TLS connection, as the MySQL clients do. On
+PostgreSQL, a connection to a remote host under <code>disable</code>,
+<code>prefer</code> or <code>require</code> without <code>tls_ca</code> answers no
+clear-text or MD5 password request (libpq’s
+<code>require_auth=!password,!md5</code>), and the console names the remedy
+(<code>tls = "verify-full"</code>, or a SCRAM-SHA-256 password for the account).
+A loopback host or a socket path is not guarded. <code>verify-ca</code> and
 <code>verify-full</code> prevent the impersonation. A plain or unverified
 connection is reported on the console and in the audit log.</p>
 <p>A profile with an <code>ssh</code> table reaches its database through a
@@ -205,7 +223,11 @@ certificate host keys and forwarding to a Unix socket on the bastion.</p>
 
 
     <h3 id="write-tiers">Write tiers</h3>
-    <p>Above tier <code>read</code>, the human’s approval is the gate. The classifier assigns the class shown on the screen, but the server does not restrict what an approved write statement does within the account’s privileges. The column analysis covers reads; a write’s <code>RETURNING</code> list or a data-modifying CTE may not alias or transform a masked column.</p>
+    <p>Above tier <code>read</code>, the human’s approval is the gate. The classifier assigns the class shown on the screen, but the server does not restrict what an approved write statement does within the account’s privileges.</p>
+    <p>While mask rules exist, a write whose rows come back (a <code>RETURNING</code> list on PostgreSQL, MariaDB or SQLite, or a PostgreSQL <code>WITH</code> whose data-modifying CTEs feed an outer <code>SELECT</code>) or that stores a query’s rows (<code>INSERT</code>/<code>REPLACE ... SELECT</code>, a query in a CTE or in <code>VALUES</code>) is parsed and analysed like a read before it runs. Every returned column is resolved to its base columns; a target column returned by an <code>INSERT</code> or an <code>UPDATE</code> carries both its own provenance and that of the values stored in it. The rows are masked by that provenance, whatever label the engine reports, and carry no cell reference. Those parts follow the read rules; anything the parser does not read (<code>MERGE</code>, multi-table MySQL <code>UPDATE</code>/<code>DELETE</code>, PostgreSQL 18 <code>RETURNING old/new</code>, ...) is refused, and so is a PII filter, grouping or aggregate that needs a k-anonymity count, since the count would run the data-modifying CTEs a second time. The PII filter rules do not apply to the write’s own clauses (its <code>WHERE</code>, <code>FROM</code>/<code>USING</code> items, conflict target): they decide which rows change, which the affected-row count reveals anyway, and the human approves them. A write that returns no rows and stores no query’s rows is checked by column name only (see <a href="#copies">copies and planted values</a>).</p>
+
+    <h3 id="size-bound">Size bound</h3>
+    <p>The statement’s size bound counts bytes built from literals and string functions; numeric arithmetic (<code>1e131071</code>, <code>^</code>) and formatting of stored data (<code>jsonb_pretty</code>) can still make the server compute and send a value of hundreds of megabytes, bounded by <code>statement_timeout</code>. The console keeps at most 64 KiB of each cell (<code>cut_cells</code> tells the agent which were cut): PostgreSQL columns are cut while they are read off the wire; MariaDB and MySQL rows are read whole by the driver, up to the server’s <code>max_allowed_packet</code>, and cut before they are copied; SQLite runs in the console’s process, so a value is cut after the driver has copied it out of the database file.</p>
 
     <h3 id="best-effort">Masking is best effort</h3>
     <p>Column rules depend on the rules being right, and value detectors catch common formats only. Use a database account that cannot read what the agent must never see.</p>
@@ -225,8 +247,8 @@ certificate host keys and forwarding to a Unix socket on the bastion.</p>
     <h3 id="views">Views and inherited tables</h3>
     <p>A view, a materialized view or a foreign table is masked by column name only: a view that renames a rule column (<code>firstname AS contact</code>) needs its own rule for the new name. The same holds for a classic-inheritance table (<code>INHERITS</code>) read through a parent or a child the rule does not name. A PostgreSQL partition is resolved to the root of its partition tree, so a rule on the partitioned table covers its partitions.</p>
 
-    <h3 id="copies">Copies at higher tiers</h3>
-    <p>A write (<code>INSERT ... SELECT</code>, <code>UPDATE ... SET</code>, <code>MERGE</code>) that copies a rule column into another column is refused, with or without <code>RETURNING</code>. DDL such as <code>CREATE TABLE ... AS SELECT</code> is not checked that way: at tier <code>ddl</code> and above the human’s approval is the gate.</p>
+    <h3 id="copies">Copies and planted values at higher tiers</h3>
+    <p>A write (<code>INSERT ... SELECT</code>, <code>UPDATE ... SET</code>, <code>MERGE</code>) that copies a rule column into another column is refused, with or without <code>RETURNING</code>, and so is a write that stores into a rule column anything but <code>NULL</code> or <code>DEFAULT</code>. Columns match by name, so an updatable view that renames a rule column, a trigger, or a value written before the rule existed (or by another client) can still put a value the agent knows behind a reference. For the writes analysed like a read, these checks also follow provenance: a value stored from a query that derives from a masked column through an alias, a table alias column list, a CTE or a derived table is refused, and a masked target never receives a query’s values. DDL such as <code>CREATE TABLE ... AS SELECT</code>, <code>CREATE VIEW</code>, a column default or a column rename is not checked that way: at tier <code>ddl</code> and above the human’s approval is the gate.</p>
 
     <h3 id="catalog">Catalog metadata</h3>
     <p>Catalog metadata (database, table, column and index names) is returned without approval.</p>
@@ -236,6 +258,16 @@ certificate host keys and forwarding to a Unix socket on the bastion.</p>
 
     <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md#out-of-scope-and-limitations">Out of scope and limitations (full text)</a> · <a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md#limitations">Limitations in the README</a></p>
   </div>
+</section>
+
+<section aria-labelledby="assurance">
+  <h2 id="assurance">How it is tested</h2>
+  <ul class="prose">
+    <li><strong>Fuzzing.</strong> The SQL parser and provenance analyzer are fuzzed nightly in CI. Besides panics, the analyzer target checks that an accepted statement never returns a value of a masked column unmasked.</li>
+    <li><strong>Metamorphic tests.</strong> Rewrites that keep a statement’s meaning (an alias, a CTE, a subquery, a swapped join, <code>UNION ALL</code> with itself) must keep its provenance in every dialect: a rewrite may be refused, never accepted with a cleaner provenance.</li>
+    <li><strong>PII canary suite.</strong> Masked columns are seeded with random canary values on MariaDB 10.11 and 11.4, MySQL 8.0 and 8.4, PostgreSQL 13 and 17 and SQLite; a generated corpus of reads runs through plan, approval, run and masking, and the suite fails when an answer to the agent holds a canary, four letters of one, or its hex, base64 or reversed form.</li>
+    <li><strong>No external review yet.</strong> The threat model and the analyzer have been reviewed by the maintainer only. An external review is one of the <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/1.0.md">criteria for 1.0</a>; <a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md#external-review">how to contribute one</a>. How the analysis works: <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/pii-analysis.md">docs/pii-analysis.md</a>.</li>
+  </ul>
 </section>
 
 <section aria-labelledby="upstream">

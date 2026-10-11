@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Install locksql — Linux and macOS packages</title>
-  <meta name="description" content="Install locksql on Linux or macOS with a checked script, deb, rpm or apk packages, a cosign-verified archive, or go install. No Go toolchain needed.">
+  <meta name="description" content="Install locksql on Linux or macOS (Windows through WSL2) with a checked script, deb, rpm or apk packages, a cosign-verified archive, or go install, then run locksql setup.">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
@@ -12,7 +12,7 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="locksql">
   <meta property="og:title" content="Install locksql — Linux and macOS packages">
-  <meta property="og:description" content="Install locksql on Linux or macOS with a checked script, deb, rpm or apk packages, a cosign-verified archive, or go install. No Go toolchain needed.">
+  <meta property="og:description" content="Install locksql on Linux or macOS (Windows through WSL2) with a checked script, deb, rpm or apk packages, a cosign-verified archive, or go install, then run locksql setup.">
   <meta property="og:url" content="https://locksql.com/install/">
   <meta property="og:image" content="https://locksql.com/assets/og.png">
   <meta property="og:image:type" content="image/png">
@@ -22,7 +22,7 @@
   <meta property="og:locale" content="en_US">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Install locksql — Linux and macOS packages">
-  <meta name="twitter:description" content="Install locksql on Linux or macOS with a checked script, deb, rpm or apk packages, a cosign-verified archive, or go install. No Go toolchain needed.">
+  <meta name="twitter:description" content="Install locksql on Linux or macOS (Windows through WSL2) with a checked script, deb, rpm or apk packages, a cosign-verified archive, or go install, then run locksql setup.">
   <meta name="twitter:image" content="https://locksql.com/assets/og.png">
   <meta name="twitter:image:alt" content="locksql — Your AI writes the query. You hold the key.">
   <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -52,7 +52,7 @@
 <h1>Install locksql</h1>
 <div class="prose">
   <p class="lead">Every release ships a static binary for Linux and macOS (amd64, arm64), Linux packages, a <code>checksums.txt</code> and its cosign signature. No Go toolchain is needed.</p>
-  <p>locksql is a pre-release (<code>v0.4.x</code>). It supports Linux and macOS only, on amd64 and arm64.</p>
+  <p>locksql is a pre-release (<code>v0.4.x</code>). It supports Linux and macOS, on amd64 and arm64. On Windows it runs inside WSL2 (<a href="#windows">see below</a>); native Windows is not supported.</p>
 </div>
 
 <section aria-labelledby="script">
@@ -105,17 +105,28 @@ sudo install -m 0755 locksql /usr/local/bin/locksql</code></pre>
 <section aria-labelledby="setup">
   <h2 id="setup">After installing: set up</h2>
 
+  <h3 id="setup-command">One command: <code>locksql setup</code></h3>
+  <p class="prose">From your account (the one your agents run as), in the project:</p>
+  <pre tabindex="0"><code>locksql setup [--project DIR] [--client USER] [--trust-binary] [--yes]</code></pre>
+  <div class="prose">
+    <p>It wires every installed agent for your account, creates the <code>locksql</code> console account with <code>sudo</code> once you confirm, asks for the database profile (engine, host, user, whether the console account’s keychain keeps the password; never the password itself) and writes it to the project’s <code>.locksql/config.toml</code>, gives the console account access to the project, and prints the command that starts the console. Run again, it changes nothing already in place.</p>
+    <p>Log out and in again after the first setup: your account joins the <code>locksql-clients</code> group. On macOS, setup prints the root commands for an administrator to run, then you run setup again. Without a terminal (CI, scripts), setup needs <code>--yes</code> and the profile as flags:</p>
+  </div>
+  <pre tabindex="0"><code>locksql setup --yes --engine sqlite --path demo.db
+locksql setup --yes --profile uat --engine postgres --host db.internal --user reporting</code></pre>
+  <p class="prose">The steps below are what setup does, one by one. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#locksql-setup"><code>locksql setup</code> in the usage guide</a>.</p>
+
   <h3 id="wire">Wire your agents</h3>
   <div class="prose">
-    <p>Bare <code>locksql</code> in a terminal wires every installed agent (Claude Code, Codex, Gemini CLI, Cursor) for your user account, so that they work from any directory. The console must run in a separate account, so when that is not set up yet it explains why and offers to run <code>sudo locksql install</code>. It then prints the next steps: put your database profile in the project’s <code>.locksql/config.toml</code> (<code>locksql init &lt;agent&gt;</code> writes a commented example) and run <code>locksql console --project DIR</code> in the <code>locksql</code> session. Later runs only wire agents installed since. Run in the service account, bare <code>locksql</code> starts the console.</p>
+    <p>Setup, and bare <code>locksql</code> in a terminal, wire every installed agent (Claude Code, Codex, Gemini CLI, Cursor) for your user account, so that they work from any directory. Later runs of bare <code>locksql</code> only wire agents installed since. Run in the service account, bare <code>locksql</code> starts the console.</p>
     <p>What is written for each agent, and how to undo it: <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#agent-wiring">Agent wiring in the usage guide</a>.</p>
   </div>
 
   <h3 id="separate">Separate the console from the agent</h3>
   <p class="prose">The console runs only in an account of its own: an agent in the console’s account could read its terminal, type into it and read its keychain session. <code>locksql console</code> refuses to start without this setup. On Linux and macOS, <code>locksql install</code> sets it up once:</p>
-  <pre tabindex="0"><code>locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print]</code></pre>
+  <pre tabindex="0"><code>locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print] [--trust-binary] [--yes]</code></pre>
   <div class="prose">
-    <p>It prints the root script and, on Linux, runs it with <code>sudo</code> after you confirm (<code>--print</code> only prints; on macOS it always only prints). It creates the <code>locksql</code> account, the <code>locksql-clients</code> group, a root-owned <code>/usr/local/bin/locksql</code> and <code>/etc/locksql/system.toml</code>, and the socket directory.</p>
+    <p>It prints the root script and, on Linux, runs it with <code>sudo</code> after you confirm (<code>--yes</code> runs it without asking, and without a terminal; <code>--print</code> only prints; on macOS it always only prints). It creates the <code>locksql</code> account, the <code>locksql-clients</code> group, a root-owned <code>/usr/local/bin/locksql</code> and <code>/etc/locksql/system.toml</code>, and the socket directory.</p>
     <p>Then set a password for the console account, log out and in again (the group applies at login), open a separate login session as <code>locksql</code> (switch user, preferably Wayland) and start the console there with <code>--project</code> pointing at the agent’s project directory.</p>
     <p>The console writes <code>.locksql/pii.toml</code> by replacing it, so its account needs the <code>.locksql/</code> directory itself: <code>sudo chown locksql &lt;project&gt;/.locksql</code>, mode <code>0755</code>. On Linux the socket directory <code>/run/locksql</code> is mode <code>2710</code> (setgid); an install made before v0.1.3 leaves it <code>0710</code> and the console stops: run <code>sudo locksql install</code> again. <code>locksql doctor</code> checks both.</p>
     <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#2-separate-the-console-from-the-agent">Full separation steps in the usage guide</a></p>
@@ -135,6 +146,9 @@ database    = ""                    # empty: chosen per query (--db)
 credentials = "ask"                 # ask | keychain
 tls         = "verify-full"         # disable | prefer | require | verify-ca | verify-full
 tls_ca      = ""                    # optional PEM bundle replacing the system roots
+tls_cert    = ""                    # optional client certificate (PEM)
+tls_key     = ""                    # its private key (PEM, unencrypted, mode 0600)
+tls_server_name = ""                # optional: the name verify-full checks instead of host
 credentials_ttl = "20m"             # optional: ask for the secret again
 tier        = "read"                # read | write | ddl | admin
 production  = false
@@ -149,7 +163,8 @@ max_cell_chars      = 200
 max_output_bytes    = 65536
 k_anonymity         = 5
 explain_cost_refuse = 0             # engine cost units; 0 = off</code></pre>
-  <p class="prose">A remote host defaults to <code>tls = "verify-full"</code>: the server certificate must verify, against <code>tls_ca</code> for a private CA. A database reachable only from a bastion gets an <code>ssh</code> table: the console opens the SSH connection itself, with no local listening port, and checks the bastion against the console account’s <code>~/.ssh/known_hosts</code>, asking on first use and refusing a changed key. <code>host</code> is then the database as seen from the bastion.</p>
+  <p class="prose">A remote host defaults to <code>tls = "verify-full"</code>: the server certificate must verify, against <code>tls_ca</code> for a private CA; <code>tls_server_name</code> names the certificate’s host when <code>host</code> is an IP address or an alias. <code>tls_cert</code> and <code>tls_key</code> go together, need <code>require</code> or stronger, and present a client certificate when the server asks for one (PostgreSQL <code>clientcert</code>/<code>cert</code> in <code>pg_hba.conf</code>, MySQL <code>REQUIRE X509</code>); keep both files in the console account’s home, the key readable by that account only. On MariaDB and MySQL, a remote host whose certificate is not verified answers no request for the password in clear: connect with <code>verify-ca</code> or <code>verify-full</code>, or use an account with <code>mysql_native_password</code> or <code>ed25519</code>. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#tls-to-the-database">TLS to the database</a>.</p>
+  <p class="prose">A database reachable only from a bastion gets an <code>ssh</code> table: the console opens the SSH connection itself, with no local listening port, and checks the bastion against the console account’s <code>~/.ssh/known_hosts</code>, asking on first use and refusing a changed key. <code>host</code> is then the database as seen from the bastion.</p>
   <pre tabindex="0"><code>[profiles.prod]
 engine      = "postgres"
 host        = "db.internal"         # as seen from the bastion
@@ -164,13 +179,31 @@ key         = "~/.ssh/id_ed25519"   # in the console account's home</code></pre>
   <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md#configuration">All profile keys</a></p>
 
   <h3 id="doctor">Check the machine</h3>
-  <pre tabindex="0"><code>locksql doctor [--profile P]</code></pre>
-  <p class="prose">Run it from both accounts. Each check prints ✓ (ok), ▲ (warning) or ✗ (failed), with a remediation under each one that is not ✓, then a count of each; the exit code is 1 when any check fails. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#locksql-doctor">More on <code>locksql doctor</code></a>.</p>
+  <pre tabindex="0"><code>locksql doctor [--profile P] [--fix [--yes]]</code></pre>
+  <div class="prose">
+    <p>Run it from both accounts. Each check prints ✓ (ok), ▲ (warning) or ✗ (failed), with a remediation under each one that is not ✓, then a count of each; the exit code is 1 when any check fails.</p>
+    <p>For each profile it checks that <code>tls_ca</code>, <code>tls_cert</code> and <code>tls_key</code> are readable PEM files and not about to expire, and, for a profile without <code>ssh</code>, fetches the server’s certificate with a TLS handshake that sends no user name and no secret: it reports a chain or a name that would not verify and a certificate that expires within 30 days.</p>
+    <p><code>--fix</code> then makes the small, idempotent repairs the checks offer (the agents’ wiring, the client group, the socket directory, the project’s access for the console account, config file modes), shows the root ones as one script and runs it with <code>sudo</code> after you confirm (at once with <code>--yes</code>), and runs the checks again. A binary or <code>system.toml</code> that root does not own, a secret in the agent’s keychain and <code>sudo</code> rules are never touched. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#locksql-doctor">More on <code>locksql doctor</code></a>.</p>
+  </div>
 
   <h3 id="console">Start the console</h3>
-  <p class="prose">In a terminal you keep in view, in the <code>locksql</code> session:</p>
+  <p class="prose">In a terminal you keep in view, in the <code>locksql</code> session (switch user on the desktop, or log in on a text console with Ctrl-Alt-F3):</p>
   <pre tabindex="0"><code>locksql console [--profile dev] [--project DIR] [--auto] [--allow-unmask] [--show-results]</code></pre>
+  <p class="prose">Never in a terminal of your account, where the agents run and could read what you type: run from there, <code>locksql console</code> prints the command for the <code>locksql</code> session instead of starting. When your agents run under an account of their own, <code>locksql console</code> from yours opens the console as <code>locksql</code> through <code>sudo -u</code>, <code>machinectl shell</code> or <code>su -l</code>.</p>
   <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#3-start-the-console">Starting the console, in the usage guide</a></p>
+</section>
+
+<section aria-labelledby="windows">
+  <h2 id="windows">Windows: inside WSL2</h2>
+  <div class="prose">
+    <p>locksql does not run natively on Windows: the separation relies on Unix accounts, socket peer credentials and terminals, and the Windows build refuses every command but <code>version</code> and <code>help</code>. Run it inside a WSL2 distribution instead: install the Linux release there and everything on this page applies inside it.</p>
+    <ul>
+      <li>Turn on systemd in <code>/etc/wsl.conf</code>, keep the project in the distribution’s own file system (<code>/home/...</code>, not <code>/mnt/c</code>), and start the console from a Windows terminal with <code>wsl.exe -d &lt;distro&gt; -u locksql</code>, not with <code>su</code> or <code>sudo -u</code>.</li>
+      <li><strong>Recommended:</strong> run the agent inside WSL too, as your WSL account, with WSL interop turned off. The Linux kernel then separates the agent from the console, as on a Linux host.</li>
+      <li>An agent on Windows can start <code>locksql mcp</code> through <code>wsl.exe</code>, but any Windows process of your account can become root or <code>locksql</code> in the distribution: like Docker mode, that layout keeps the credentials out of the agent’s process but is no boundary against an agent that runs commands of its own.</li>
+    </ul>
+    <p>The guide has not yet been verified end to end on Windows 11. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#windows-wsl2">Windows (WSL2) in the usage guide</a>.</p>
+  </div>
 </section>
 
     </div>
