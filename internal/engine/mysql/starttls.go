@@ -1,10 +1,18 @@
 package mysql
 
 import (
+	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
+
+	gomysql "github.com/go-mysql-org/go-mysql/mysql"
+
+	"github.com/DavidGodefroid/locksql/internal/config"
+	"github.com/DavidGodefroid/locksql/internal/engine"
 )
 
 // clientSSL is the CLIENT_SSL capability flag.
@@ -177,3 +185,42 @@ func (c *startTLS) send(pkt []byte) error {
 }
 
 func (c *startTLS) Close() error { return c.conn.Close() }
+
+// ProbeTLS reads the server greeting, sends the SSL request (capabilities
+// only: no user, no password) and makes the TLS handshake. See
+// engine.TLSProber.
+func (Engine) ProbeTLS(ctx context.Context, p config.Profile) ([]*x509.Certificate, error) {
+	nc, err := engine.ProbeDial(ctx, p, 3306)
+	if err != nil {
+		return nil, err
+	}
+	defer nc.Close()
+	h := make([]byte, 4)
+	if _, err := io.ReadFull(nc, h); err != nil {
+		return nil, err
+	}
+	size := int(h[0]) | int(h[1])<<8 | int(h[2])<<16
+	if size > 1<<16 {
+		return nil, errors.New("mysql: oversized server greeting")
+	}
+	greeting := make([]byte, size)
+	if _, err := io.ReadFull(nc, greeting); err != nil {
+		return nil, err
+	}
+	if size > 0 && greeting[0] == 0xff {
+		return nil, errors.New("mysql: the server refused the connection")
+	}
+	if !greetingOffersTLS(greeting) {
+		return nil, engine.ErrNoServerTLS
+	}
+	req := make([]byte, 4+32)
+	req[0], req[3] = 32, 1
+	caps := uint32(clientSSL | gomysql.CLIENT_PROTOCOL_41 | gomysql.CLIENT_SECURE_CONNECTION)
+	binary.LittleEndian.PutUint32(req[4:], caps)
+	binary.LittleEndian.PutUint32(req[8:], maxPacket)
+	req[12] = 0x21 // utf8_general_ci
+	if _, err := nc.Write(req); err != nil {
+		return nil, err
+	}
+	return engine.ProbeHandshake(nc, p)
+}

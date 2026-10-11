@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
+	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/secrets"
 	"github.com/DavidGodefroid/locksql/internal/sysconf"
@@ -52,6 +54,10 @@ type doctorEnv struct {
 	ptrace     func() (int, bool)
 	keychain   func(profile, host string, port int) error
 	status     func(cwd, profile string) (*ipc.StatusResult, error)
+	readFile   func(string) ([]byte, error)
+	// tlsProbe returns the certificates the profile's server presents,
+	// without authenticating (engine.TLSProber); nil skips the check.
+	tlsProbe func(config.Profile) ([]*x509.Certificate, error)
 }
 
 func realDoctorEnv() doctorEnv {
@@ -78,6 +84,20 @@ func realDoctorEnv() doctorEnv {
 		tiocsti:    sysconf.LegacyTIOCSTI,
 		ptrace:     sysconf.PtraceScope,
 		keychain:   secrets.KeychainHas,
+		readFile:   os.ReadFile,
+		tlsProbe: func(p config.Profile) ([]*x509.Certificate, error) {
+			e, err := engine.Get(p.Engine)
+			if err != nil {
+				return nil, err
+			}
+			prober, ok := e.(engine.TLSProber)
+			if !ok {
+				return nil, errors.New("engine " + p.Engine + " cannot be probed")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			return prober.ProbeTLS(ctx, p)
+		},
 		status: func(cwd, profile string) (*ipc.StatusResult, error) {
 			c, err := client.Dial(cwd, profile)
 			if err != nil {
@@ -357,6 +377,8 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 				"set tls = \"verify-full\" (and tls_ca if the server's CA is private), or reach the server through an ssh tunnel")
 		}
 	}
+
+	out = append(out, tlsChecks(d, p, sys, name)...)
 
 	if s := p.SSH; s != nil {
 		add(checkOK, "ssh", "reached through "+s.User+"@"+s.Host+":"+strconv.Itoa(s.Port)+" ("+s.Auth+")", "")

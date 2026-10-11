@@ -161,6 +161,26 @@ func noNotices(t *testing.T, s engine.Session) {
 	}
 }
 
+// probeLeaf checks that the doctor's probe, which sends no secret, gets the
+// server certificate.
+func probeLeaf(t *testing.T, p config.Profile) {
+	t.Helper()
+	e, err := engine.Get(p.Engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prober, ok := e.(engine.TLSProber)
+	if !ok {
+		t.Fatalf("engine %s is not a TLSProber", p.Engine)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	certs, err := prober.ProbeTLS(ctx, p)
+	if err != nil || len(certs) == 0 || certs[0].Subject.CommonName != tlsServerName {
+		t.Errorf("probe: %d certificates, err = %v, want the server certificate", len(certs), err)
+	}
+}
+
 func TestTLS(t *testing.T) {
 	if !DockerAvailable() {
 		t.Skip("docker is not available")
@@ -208,6 +228,7 @@ func testMySQLTLS(t *testing.T, m mysqlTarget, pki testPKI) {
 	base := config.Profile{Engine: string(m.flavor), Host: srv.Host, Port: srv.Port, User: "tlsu"}
 	with := func(f func(p *config.Profile)) config.Profile { p := base; f(&p); return p }
 	mysql8 := m.flavor == engine.FlavorMySQL
+	probeLeaf(t, base)
 
 	// An unverified TLS connection to a remote host never answers a request
 	// for the password in clear. A MySQL 8 account (caching_sha2_password)
@@ -304,6 +325,7 @@ func testPostgresTLS(t *testing.T, version string, pki testPKI) {
 	srv := startPostgresTLS(t, version, pki)
 	base := config.Profile{Engine: config.EnginePostgres, Host: srv.Host, Port: srv.Port, User: "tlsu", Database: "app"}
 	with := func(f func(p *config.Profile)) config.Profile { p := base; f(&p); return p }
+	probeLeaf(t, base)
 
 	if _, err := tlsConnect(t, with(func(p *config.Profile) { p.TLS, p.TLSCA = config.TLSVerifyFull, pki.ca }), TLSPassword, nil); err == nil ||
 		!strings.Contains(err.Error(), "certificate") {

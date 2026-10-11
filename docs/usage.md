@@ -393,6 +393,8 @@ each; the exit code is 1 when any check fails.
 | binary | the running binary can be changed by a non-root account (fails in separated mode) |
 | secret store | separated mode with a secret for the profile left in the agent's keychain; keychain unavailable |
 | tls, ssh, ssh key (per profile) | a remote database that verifies nothing (through a bastion: the bastion-to-database leg); an `ssh.key` that is missing or readable by group or others (not checked from the agent's account in a separated setup) |
+| tls_ca, tls_cert, tls_key (per profile) | a file that is missing or holds no PEM certificate, a certificate expired or expiring within 30 days, a key readable by group or others (files the agent's account cannot read are not checked) |
+| server certificate (per profile without `ssh`) | a TLS handshake that sends no user name and no secret: the server offers no TLS under `require` or stronger, its chain does not verify against `tls_ca` (or the system roots), it does not name `host` (or `tls_server_name`) under `verify-full`, it is expired or expires within 30 days; under `prefer` or `require` it says whether `verify-full` would pass |
 | console (per profile) | not running; then, from its `health`: not separated, an X11 display, database privileges beyond the tier, EXPLAIN failing |
 
 ## 3. Start the console
@@ -550,7 +552,11 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
 - Through an `ssh` bastion, `tls` protects the leg from the bastion to the
   database, and its default follows `host` as seen from the bastion (see
   [Reaching a remote server through SSH](#reaching-a-remote-server-through-ssh)).
-- `locksql doctor` warns when a remote profile verifies nothing. See
+- `locksql doctor` warns when a remote profile verifies nothing, checks
+  that `tls_ca`, `tls_cert` and `tls_key` are readable PEM files (from the
+  console account), reports certificates that expire within 30 days, and
+  verifies the server's certificate chain with a TLS handshake that sends
+  no secret (a profile without `ssh`). See
   [Transport security](security-model.md#out-of-scope-and-limitations) for the modes.
 
 ### Approving a query

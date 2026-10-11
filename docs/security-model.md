@@ -169,9 +169,15 @@ it append-only for the console account too.
   `production = true` refuses `disable` and `prefer` unless the host is
   loopback or a socket path. `tls_ca` is a PEM bundle that replaces the
   system roots; it is refused with `disable` and `prefer`, and with
-  `require` it verifies the chain, as libpq does. A weaker `tls` or
-  any change of `tls_ca` loosens the approved policy and needs the human's
-  confirmation.
+  `require` it verifies the chain, as libpq does. `tls_server_name`
+  replaces `host` as the name `verify-full` checks. `tls_cert` and
+  `tls_key` present a client certificate (the key must be mode 0600, in the
+  console account's files). A weaker `tls` or any change of `tls_ca`,
+  `tls_cert`, `tls_key` or `tls_server_name` loosens the approved policy and
+  needs the human's confirmation. `locksql doctor` checks these files and
+  their expiry, and, for a profile without `ssh`, fetches the server's
+  certificate with a TLS handshake that sends no secret, and reports a chain
+  or a name that would not verify and a certificate close to its end.
 
   Below `verify-ca` an active attacker on the path can intercept or downgrade
   the connection, read and change the traffic, and relay a login, but is
