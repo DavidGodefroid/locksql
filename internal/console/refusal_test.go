@@ -147,25 +147,15 @@ func TestRefusalDataHoldsNoLiteral(t *testing.T) {
 	}
 }
 
-// Run-time refusals carry their code too: k-anonymity, and a weight
-// refusal under a PII filter, which tells the agent nothing beyond its
-// code (no span, no reason, the code's default hint).
+// Run-time refusals carry their code too: a weight refusal under a PII
+// filter tells the agent nothing beyond its code (no span, no reason, the
+// code's default hint).
 func TestRunRefusalsCarryACode(t *testing.T) {
 	h := newHarness(t, uatProfile())
-	h.sess.count = countResult(int64(2))
-	pr := h.plan(t, "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1", false)
-	h.io.answers = []string{"y"}
-	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
-	wantCode(t, resp, ipc.CodeRefused)
-	if d := resp.Error.Data; d.Code != refusal.KAnon || d.Retry != refusal.RetryStop {
-		t.Errorf("k-anonymity refusal: %+v", d)
-	}
-
-	h = newHarness(t, uatProfile())
 	h.sess.plan = heavyPlan()
-	pr = h.plan(t, "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1", false)
+	pr := h.plan(t, "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1", false)
 	h.io.answers = []string{""}
-	resp = h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
 	wantCode(t, resp, ipc.CodeRefused)
 	want := refusal.Info{Code: refusal.Cost, Retry: refusal.Cost.Retry(), Hint: refusal.Cost.Hint()}
 	if d := resp.Error.Data; *d != want {

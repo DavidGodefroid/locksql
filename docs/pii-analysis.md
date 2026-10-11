@@ -34,10 +34,14 @@ A `query.plan` request goes through these steps in the console
    placeholders and cell references. The result is an `Analysis` (below).
 4. **Weigh.** The console runs `EXPLAIN` on the statement and on each
    k-anonymity count, and `internal/weight` turns the plans into a verdict.
-5. **Approve.** The human sees the statement, the PII columns it touches
-   (`Analysis.Uses`), the masked outputs and the counts.
-6. **Count.** After approval and before the statement, the k-anonymity
-   counts run; fewer than `k_anonymity` rows refuses it.
+5. **Count.** Before the approval prompt (after any placeholder values,
+   which an `IN` list mixing them with literals needs), the k-anonymity
+   counts run (`console.kCount`). Fewer than `k_anonymity` rows is a
+   warning, never a refusal.
+6. **Approve.** The human sees the statement, the PII columns it touches
+   (`Analysis.Uses`), the masked outputs, the counts and, just above the
+   prompt, a `▲ k-anonymity` warning for each count under k. In auto mode
+   the statement runs and the warning goes to the console and the audit.
 7. **Run and mask** (`pii.MaskOutputs`, `modes.go`). The rows are masked
    column by column from the analysis, then go through the value
    detectors, then through the output caps (`internal/render`).
@@ -116,7 +120,8 @@ refuses what would turn a masked column into an oracle. The checks are in
 ## k-anonymity counts
 
 A filter, grouping or aggregate on a PII column needs row counts, planned
-by the analyzer and run by the console after approval (`KCheck`):
+by the analyzer (`KCheck`) and run by the console before the approval
+prompt (`console.kCount`):
 
 - `kCheck` builds `SELECT COUNT(*)` from the statement's own `FROM`,
   `WHERE`, `GROUP BY` and `HAVING` text (the smallest group for a grouped
@@ -131,6 +136,15 @@ by the analyzer and run by the console after approval (`KCheck`):
   the filter skips the counts and the console warns instead
   (`console/warnings.go`). `Analysis.Replacements` substitutes the values
   into the statement that runs; the agent never sees them.
+
+A count under `k_anonymity` (or one that cannot run) does not refuse the
+statement. `kCount` returns it as a warning: the console prints it in the
+approval frame, adds it to the audit record's `warnings`, and the human
+decides. Before v0.5.2 it was a refusal (`E_K_ANON`, now retired). The
+agent learns nothing of a count: its answer is the same either way, and in
+auto mode `query.run` levels its response time from the counts on. The
+structural rules that make a count meaningful (equality only, `AND` only,
+no self-comparison, no view column under a constant filter) still refuse.
 
 `PIIFilter` marks a statement whose row estimates must stay on the
 console; `LitFilter` marks one that compares a PII column with a literal

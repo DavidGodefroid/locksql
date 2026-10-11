@@ -306,7 +306,7 @@ func ErrorText(err error) string {
 
 // retryText says what each retry rule lets the agent do.
 var retryText = map[refusal.Retry]string{
-	refusal.RetryRewrite: "rewrite: fix the statement as the hint says and plan it again, once; the console checks it in full. Never reword it to get around a PII or k-anonymity rule",
+	refusal.RetryRewrite: "rewrite: fix the statement as the hint says and plan it again, once; the console checks it in full. Never reword it to get around a PII or policy rule",
 	refusal.RetryAskUser: "ask_user: only the human can change this; tell the user (a change request only queues a proposal) and do not retry",
 	refusal.RetryStop:    "stop: final for this question; tell the user, and do not retry, reword or split it",
 }

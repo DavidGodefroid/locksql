@@ -23,7 +23,13 @@ import (
 // yesIO approves every prompt.
 type yesIO struct{ t *testing.T }
 
-func (y yesIO) Println(string) {}
+// Println fails on a k-anonymity count the server rejects: the console
+// only warns of it, and the bug would go unseen.
+func (y yesIO) Println(s string) {
+	if strings.Contains(s, "k-anonymity check failed") {
+		y.t.Errorf("console: %s", s)
+	}
+}
 func (y yesIO) Ask(context.Context, string, time.Duration) (string, bool) {
 	return "y", true
 }
@@ -48,7 +54,7 @@ func assertNoLeak(t *testing.T, s engine.Session, d sqlclass.Dialect, rules pii.
 // (plan, approval, run, mask), and hands seen every answer the agent gets:
 // the plan or its refusal (run false), then the result or the error of the
 // run (run true). It fails on a k-anonymity check that cannot be planned
-// or run: that is a refusal hiding a bug.
+// (a refusal hiding a bug) or run (see yesIO.Println).
 func asAgent(t *testing.T, s engine.Session, db string, rules pii.Rules, queries []string, seen func(q string, run bool, answer string)) {
 	t.Helper()
 	call := leakServer(t, s, db, rules)
@@ -73,9 +79,6 @@ func asAgent(t *testing.T, s engine.Session, db string, rules pii.Rules, queries
 		}
 		resp = call(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
 		seen(q, true, answer(resp))
-		if resp.Error != nil && strings.Contains(resp.Error.Message, "k-anonymity check could not run") {
-			t.Errorf("%s: %s", q, resp.Error.Message)
-		}
 	}
 }
 

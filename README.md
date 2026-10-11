@@ -57,7 +57,7 @@ locksql moves the decision **out of the agent**.
 | Every read parsed down to its source columns | ❌ | ✅ |
 | `EXPLAIN` cost check before running | ❌ | ✅ |
 | PII masked on its source column, not its label | ❌ | ✅ |
-| k-anonymity on PII filters and aggregates | ❌ | ✅ |
+| k-anonymity warning on PII filters and aggregates | ❌ | ✅ |
 | Search on a PII value the agent never sees | ❌ | ✅ |
 | Policy loosening needs a human confirmation | ❌ | ✅ |
 | Append-only audit log | ❌ | ✅ |
@@ -204,9 +204,10 @@ sequenceDiagram
     D-->>C: plan & row estimate
     C-->>A: plan id + verdict (OK / WARN / REFUSE)
     A->>C: run PLAN_ID
-    C->>H: approval screen
+    C->>D: k-anonymity counts
+    C->>H: approval screen (warns of a count under k)
     H-->>C: y
-    C->>D: k-anonymity counts, then the statement
+    C->>D: the statement
     D-->>C: rows
     C-->>A: masked, capped rows (untrusted data)
 ```
@@ -215,8 +216,10 @@ sequenceDiagram
    The console classifies it, parses and analyses a read down to the source
    column of every output, runs `EXPLAIN`, weighs the plan and returns a
    one-shot plan id with a verdict (`OK`, `WARN` or `REFUSE`).
-2. The agent calls `locksql run PLAN_ID`. The console shows you the approval
-   screen and waits:
+2. The agent calls `locksql run PLAN_ID`. When the statement filters, groups
+   or aggregates PII, the console first runs its k-anonymity counts. It shows
+   you the approval screen, with a `▲ k-anonymity` warning above the prompt
+   for each count under `k_anonymity`, and waits:
 
    ```
    ╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
@@ -234,10 +237,8 @@ sequenceDiagram
    ╰─ Approve? [y/N]
    ```
 
-3. On approval the console runs its k-anonymity counts when the statement
-   filters, groups or aggregates PII, then the statement itself, masks PII,
-   caps the output and hands the rows back to the agent, framed as untrusted
-   data.
+3. On approval the console runs the statement, masks PII, caps the output
+   and hands the rows back to the agent, framed as untrusted data.
 
 <details>
 <summary>Process layout</summary>
@@ -323,14 +324,17 @@ only guide the agent; the console's checks are the guarantee.
 - **PII usage.** PII columns may be selected, counted, joined with `=` and
   filtered with `=`, `IN (literals)` or `IS NULL`. Expressions over them,
   `LIKE`, ranges and `ORDER BY` are refused. A filter, grouping or aggregate on
-  PII must cover at least `k_anonymity` rows (default 5, production 10).
+  PII that covers fewer than `k_anonymity` rows (default 5, production 10)
+  warns you on the approval screen, since it could single out one person; you
+  decide. In auto mode it runs, and the warning goes to the console and the
+  audit log. The agent is told nothing of the count.
 - **Placeholders and references.** To filter a PII column on a value the agent
   does not know, it writes `col = '${email}'` and the human types the value in
   the console (no echo); the value never reaches the agent, the audit log or a
   client error. Redacted cells come back as `<redacted:r1.2.3>` (result, row,
   column), and the agent filters on one with `col = '${r1.2.3}'`; the console
   keeps the clear values of the last results in memory only. Both work only
-  compared with a PII column, and skip the k-anonymity check, since the agent
+  compared with a PII column, and skip the k-anonymity count, since the agent
   did not choose the value. The approval screen warns, in red and in the audit
   log, when the agent put a clear value in its statement, when a reference is
   combined with a unique-key filter or an output with no plain column, and
@@ -439,7 +443,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `limits.max_rows` | 200 | upper bound for `LIMIT n` and for returned rows |
 | `limits.max_cell_chars` | 200 | longer cells are cut with `…` |
 | `limits.max_output_bytes` | 65 536 | output is cut with a marker |
-| `limits.k_anonymity` | 5 (production 10) | smallest row count a PII filter, a group or an aggregate of a PII column may cover; lowering it is a loosening |
+| `limits.k_anonymity` | 5 (production 10) | a PII filter, a group or an aggregate of a PII column covering fewer rows warns on the approval screen (it no longer refuses); lowering it is a loosening |
 | `limits.reference_probe` | 5 | distinct cells of one result the agent may filter on one by one before the console warns (an `IN` list counts once); raising it is a loosening |
 | `limits.idle_timeout` | 20m (production 10m), or `max_session` when that is shorter | the console session ends after this long without activity; at least `1m` and at most `max_session`; raising it is a loosening |
 | `limits.max_session` | 4h (production 2h) | the console session ends after this long in all; at most `24h`; raising it is a loosening |
@@ -551,9 +555,10 @@ deliberately narrow:
   can read its own terminals. Run `locksql doctor` to see what your machine
   allows.
   Malware running as the console account, or as root, is out of scope.
-- **k-anonymity is a query-set-size control.** It refuses a single query
-  whose PII filter covers fewer than `k` rows; it does not stop differencing
-  attacks that combine several approved queries.
+- **k-anonymity is a decision aid, not a guarantee.** A count under `k` warns
+  you before you approve; it refuses nothing, and in auto mode the statement
+  runs. Even heeded, it is a query-set-size control: it does not stop
+  differencing attacks that combine several approved queries.
 - **Placeholders leave room for a patient agent.** Equality probing through
   cell references only raises a warning: an agent that spreads its probes
   under `limits.reference_probe`, across results or sessions, is not stopped.

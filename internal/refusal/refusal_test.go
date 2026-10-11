@@ -49,6 +49,17 @@ func TestIssueCodesExist(t *testing.T) {
 	}
 }
 
+// A retired code stays known, for the audit records that carry it, but is
+// no longer listed among the codes a refusal may carry.
+func TestRetiredCodeStaysKnown(t *testing.T) {
+	if !KAnon.Known() || KAnon.Hint() == "" {
+		t.Fatal("E_K_ANON is no longer known")
+	}
+	if slices.Contains(Codes(), KAnon) {
+		t.Fatal("E_K_ANON is listed among the codes a refusal may carry")
+	}
+}
+
 func TestNewAndError(t *testing.T) {
 	e := Newf(NoLimit, "a top-level %s is required", "LIMIT")
 	if e.Error() != "a top-level LIMIT is required" || e.Code != NoLimit || e.Pos != -1 {
@@ -139,7 +150,7 @@ func TestFromFallsBackClosed(t *testing.T) {
 	if r := From(&Error{Reason: "no code", Pos: -1}); r.Code != Policy {
 		t.Fatalf("%+v", r)
 	}
-	e := New(KAnon, "k")
+	e := New(NoLimit, "k")
 	if From(e) != e {
 		t.Fatal("a coded refusal was replaced")
 	}

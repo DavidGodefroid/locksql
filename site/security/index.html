@@ -74,7 +74,7 @@
     <li><strong>The console is the enforcement point.</strong> Skills, rules and tool descriptions are guidance. Every check that matters runs in the console.</li>
     <li><strong>The AI tightens, the human loosens.</strong> Agents may add mask rules or request changes; every loosening needs the human’s confirmation in the console.</li>
     <li><strong>Fail closed.</strong> What cannot be classified with certainty is refused.</li>
-    <li><strong>Defence in depth.</strong> Server-side read-only and timeouts, a client-side classifier, a full parse and column analysis of reads, a privilege audit, an EXPLAIN gate, k-anonymity counts, result caps, then human approval.</li>
+    <li><strong>Defence in depth.</strong> Server-side read-only and timeouts, a client-side classifier, a full parse and column analysis of reads, a privilege audit, an EXPLAIN gate, result caps, then human approval, informed by k-anonymity counts.</li>
     <li><strong>Results are data, not instructions.</strong></li>
   </ol>
 </section>
@@ -111,8 +111,9 @@
 <p>PII columns may be selected, counted, joined with <code>=</code> and
 filtered with <code>=</code>, <code>IN (literals)</code> or <code>IS NULL</code>.
 Expressions over them, <code>LIKE</code>, ranges and <code>ORDER BY</code> are
-refused. A filter, grouping or aggregate on PII must cover at least
-<code>k_anonymity</code> rows (default 5, production 10).</p>
+refused. A filter, grouping or aggregate on PII that covers fewer than
+<code>k_anonymity</code> rows (default 5, production 10) warns you on the
+approval screen; you decide.</p>
 
     <h3 id="placeholders">Placeholders and references</h3>
     <p>The agent can filter a PII column on a value it never sees: a placeholder (<code>'${email}'</code>) that you type in the console without echo, or the reference of a redacted cell (<code>'${r1.2.3}'</code>) whose clear value only the console holds, in memory. Both work only compared with a PII column, and the values never reach the agent, the audit log or a client error. The approval screen warns, in red and in the audit log, on a clear value from the agent, a reference with a unique-key filter, and probing beyond <code>limits.reference_probe</code>. <a href="../how-it-works/#blind-search">How it works</a>.</p>
@@ -232,11 +233,11 @@ certificate host keys and forwarding to a Unix socket on the bastion.</p>
     <h3 id="best-effort">Masking is best effort</h3>
     <p>Column rules depend on the rules being right, and value detectors catch common formats only. Use a database account that cannot read what the agent must never see.</p>
 
-    <h3 id="k-anonymity">k-anonymity is a query-set-size control</h3>
-    <p>It refuses a single query whose PII filter, group or aggregate covers fewer than <code>k</code> rows. Each constant PII filter is counted twice: the subjects of the column in its own base table (a join cannot multiply them; a column of a view, which has no base table to count in, cannot be filtered on), and the rows the statement’s own <code>FROM</code>/<code>WHERE</code> selects. A join still multiplies the second count: <code>WHERE u.id = 3 AND u.salary IN (...)</code> joined with a large table passes when at least <code>k</code> users earn one of those salaries, and tells the agent that user 3 is among them. It does not stop differencing attacks: two approved queries whose sets differ by one row (all customers of a city, then the same minus one email) still reveal that row’s other columns. The approval screen shows each PII filter so the human can spot such sequences; <code>--unmask</code> queries skip the check.</p>
+    <h3 id="k-anonymity">k-anonymity is a decision aid, not a guarantee</h3>
+    <p>A query whose PII filter, group or aggregate covers fewer than <code>k</code> rows warns you on the approval screen; it is not refused, and in auto mode it runs with the warning on the console and in the audit log only. An approved warned query can single out one person. The counts remain a query-set-size control. Each constant PII filter is counted twice: the subjects of the column in its own base table (a join cannot multiply them; a column of a view, which has no base table to count in, cannot be filtered on), and the rows the statement’s own <code>FROM</code>/<code>WHERE</code> selects. A join still multiplies the second count: <code>WHERE u.id = 3 AND u.salary IN (...)</code> joined with a large table passes when at least <code>k</code> users earn one of those salaries, and tells the agent that user 3 is among them. It does not stop differencing attacks: two approved queries whose sets differ by one row (all customers of a city, then the same minus one email) still reveal that row’s other columns. The approval screen shows each PII filter so the human can spot such sequences; <code>--unmask</code> queries skip the check.</p>
 
     <h3 id="equality">Equality still leaks equality</h3>
-    <p>A filter <code>WHERE email = 'x@example.com'</code> tells the agent whether that value exists among at least <code>k</code> rows. That is the purpose of this feature.</p>
+    <p>A filter <code>WHERE email = 'x@example.com'</code> tells the agent whether that value exists. Under <code>k</code> rows you are warned before approving; once approved, the answer is the agent’s. That is the purpose of this feature.</p>
 
     <h3 id="patient-agent">Placeholders leave room for a patient agent</h3>
     <p>Equality probing through cell references only raises a warning: an agent that spreads its probes under <code>limits.reference_probe</code>, across results or sessions, is not stopped. The unmasked columns of a targeted row still identify it, and free text without a detector is not masked.</p>

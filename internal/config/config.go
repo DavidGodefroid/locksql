@@ -85,7 +85,8 @@ type Limits struct {
 	// (SQLite) are not checked.
 	ExplainCostRefuse float64 `toml:"explain_cost_refuse" json:"explain_cost_refuse,omitempty"`
 	// KAnonymity is the smallest number of rows a PII filter, a grouping
-	// on a PII column or an aggregate of one may cover.
+	// on a PII column or an aggregate of one may cover without a warning
+	// on the approval screen.
 	KAnonymity int `toml:"k_anonymity" json:"k_anonymity,omitempty"`
 	// ReferenceProbe is how many distinct cells of one result the agent may
 	// filter on, one statement each, before the console warns of equality

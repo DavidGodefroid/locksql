@@ -96,7 +96,7 @@
 <tr><th scope="row">Every read parsed down to its source columns</th><td class="no">No</td><td class="yes">Yes</td></tr>
 <tr><th scope="row"><code>EXPLAIN</code> cost check before running</th><td class="no">No</td><td class="yes">Yes</td></tr>
 <tr><th scope="row">PII masked on its source column, not its label</th><td class="no">No</td><td class="yes">Yes</td></tr>
-<tr><th scope="row">k-anonymity on PII filters and aggregates</th><td class="no">No</td><td class="yes">Yes</td></tr>
+<tr><th scope="row">k-anonymity warning on PII filters and aggregates</th><td class="no">No</td><td class="yes">Yes</td></tr>
 <tr><th scope="row">Search on a PII value the agent never sees</th><td class="no">No</td><td class="yes">Yes</td></tr>
 <tr><th scope="row">Policy loosening needs a human confirmation</th><td class="no">No</td><td class="yes">Yes</td></tr>
 <tr><th scope="row">Append-only audit log</th><td class="no">No</td><td class="yes">Yes</td></tr>
@@ -122,7 +122,7 @@
 │ masked outputs: email → redact
 │ PII: masked (4 column rules; detectors: email, phone, iban, card)
 ╰─ Approve? [y/N]</code></pre>
-    <figcaption>On approval the console runs its k-anonymity counts when the statement filters, groups or aggregates PII, then the statement itself, masks PII, caps the output and hands the rows back to the agent, framed as untrusted data.</figcaption>
+    <figcaption>On approval the console runs the statement, masks PII, caps the output and hands the rows back to the agent, framed as untrusted data.</figcaption>
   </figure>
   <p class="prose">On a production profile you type the profile name, not <code>y</code>. No answer within 5 minutes means denied.</p>
 </section>
@@ -165,7 +165,7 @@ locksql console --project DIR</code></pre>
   <h2 id="limits">Know the limits</h2>
   <div class="prose">
     <p>The console is the enforcement point. Skills, rules and MCP tool descriptions only guide the agent; the console’s checks are the guarantee.</p>
-    <p>locksql has documented limits: masking is best effort and k-anonymity does not stop differencing attacks.</p>
+    <p>locksql has documented limits: masking is best effort, and k-anonymity is a warning that does not stop differencing attacks.</p>
     <p><a href="security/">Read the security model</a></p>
   </div>
 </section>

@@ -382,15 +382,15 @@ func TestRefusalIsStructured(t *testing.T) {
 	}
 
 	// A refusal at run time is structured the same way.
-	f = &fakeConn{profile: "uat", runErr: &ipc.RPCError{Code: ipc.CodeRefused, Message: "fewer than 5 rows match the PII filter (k-anonymity)",
-		Data: &refusal.Info{Code: refusal.KAnon, Retry: refusal.RetryStop, Hint: refusal.KAnon.Hint()}}}
+	f = &fakeConn{profile: "uat", runErr: &ipc.RPCError{Code: ipc.CodeRefused, Message: "the k-anonymity check could not run",
+		Data: &refusal.Info{Code: refusal.Engine, Retry: refusal.RetryStop, Hint: refusal.Engine.Hint()}}}
 	cs = connect(t, withFake(f), nil)
 	r = call(t, cs, "locksql_run", map[string]any{"plan_id": "p1"})
-	if !r.IsError || !strings.Contains(text(r), "refused [E_K_ANON]") || !strings.Contains(text(r), "retry: stop") {
+	if !r.IsError || !strings.Contains(text(r), "refused [E_ENGINE]") || !strings.Contains(text(r), "retry: stop") {
 		t.Fatalf("run refusal: %v %s", r.IsError, text(r))
 	}
 	b, _ = json.Marshal(r.StructuredContent)
-	if !strings.Contains(string(b), `"code":"E_K_ANON"`) {
+	if !strings.Contains(string(b), `"code":"E_ENGINE"`) {
 		t.Fatalf("structured content %s", b)
 	}
 }
