@@ -178,7 +178,7 @@ func TestTypedValueQuoting(t *testing.T) {
 }
 
 func TestSkipPermissionsStillAsksValues(t *testing.T) {
-	h := newHarness(t, uatProfile(), func(c *ServerConfig) { c.SkipPermissions = true })
+	h := newHarness(t, uatProfile(), func(c *ServerConfig) { c.Auto = true })
 	pr := h.plan(t, typedQ, false)
 	h.io.secrets = []string{"alice@example.com"}
 	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)

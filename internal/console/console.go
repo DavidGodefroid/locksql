@@ -67,14 +67,33 @@ type LineSource interface {
 	Lines() <-chan string
 }
 
+// KeySource is implemented by an IO that reports the control keys pressed
+// in the console: on Keys between prompts, to the handler during one.
+type KeySource interface {
+	Keys() <-chan Key
+	SetKeyHandler(func(Key))
+}
+
+// StatusLine is implemented by an IO that keeps a status row on screen.
+type StatusLine interface {
+	SetStatus(string)
+}
+
+// Sized is implemented by an IO that knows its width in columns.
+type Sized interface {
+	Width() int
+}
+
 // Options configure Run.
 type Options struct {
-	Profile         string
-	SkipPermissions bool
+	Profile string
+	// Auto starts the console in auto mode (--auto); Shift+Tab switches
+	// the mode while it runs.
+	Auto bool
 	// AllowUnmask lets clients ask for unmasked output (--allow-unmask).
 	AllowUnmask bool
-	// ShowResults prints masked results in clear in the console
-	// (--show-results).
+	// ShowResults starts with the clear results on (--show-results);
+	// Ctrl-O switches them while the console runs.
 	ShowResults bool
 	Cwd         string
 	IO          IO
@@ -107,14 +126,17 @@ type ServerConfig struct {
 	Audit     *audit.Log
 	IO        IO
 	Now       func() time.Time
-	// SkipPermissions auto-approves on non-production profiles (never
-	// unmask, never REFUSE).
-	SkipPermissions bool
+	// Auto starts in auto mode: on non-production profiles, statements
+	// allowed by the tier and the weight check run without a prompt (never
+	// unmask, never REFUSE). Shift+Tab switches the mode while the console
+	// runs.
+	Auto bool
 	// AllowUnmask lets clients ask for unmasked output; without it an
 	// unmask plan is refused before anything else.
 	AllowUnmask bool
-	// ShowResults prints in the console, in clear, the result of each
-	// masked run; the client still gets it masked.
+	// ShowResults starts with the clear results on: the result of each
+	// masked run printed in the console, in clear; the client still gets
+	// it masked. Ctrl-O switches them while the console runs.
 	ShowResults bool
 	Version     string
 	// LoadPolicy re-reads the current policy from the config files. Nil
@@ -188,6 +210,10 @@ type Server struct {
 	catalogCache map[string][]engine.ColumnInfo
 	// quantum levels response times (ResponseQuantum; 0 in tests).
 	quantum time.Duration
+	// auto and showResults are the live switches (modes.go), started from
+	// the config and changed from the console's keyboard only.
+	auto        bool
+	showResults bool
 	// connected is when the current connection was opened (credentials_ttl).
 	connected time.Time
 
@@ -214,7 +240,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		cfg.Now = time.Now
 	}
 	cfg.Databases = servedDatabases(cfg.Policy.Profile.Database, cfg.Databases)
-	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, probes: map[int]map[string]bool{}, keys: map[string]bool{}, quantum: cfg.Quantum}
+	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, probes: map[int]map[string]bool{}, keys: map[string]bool{}, quantum: cfg.Quantum,
+		auto: cfg.Auto, showResults: cfg.ShowResults}
 	if err := s.apply(cfg.Policy); err != nil {
 		return nil, err
 	}
@@ -222,8 +249,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	s.lastSeen = s.started
 	s.connected = s.started
 	if s.autoApprove() {
-		s.println("--skip-permissions: statements allowed by the tier and the weight check run without a prompt")
+		s.println(paint.Yellow("auto mode: statements allowed by the tier and the weight check run without a prompt (Shift+Tab: manual)"))
 	}
+	s.refreshStatus()
 	return s, nil
 }
 
@@ -245,18 +273,8 @@ func (s *Server) apply(p config.Policy) error {
 	return nil
 }
 
-// autoApprove reports whether --skip-permissions is in effect: never on a
-// production profile.
-func (s *Server) autoApprove() bool { return s.cfg.SkipPermissions && !s.profile.Production }
-
-// println writes one console line, with the AUTO-APPROVE marker while
-// --skip-permissions is in effect.
-func (s *Server) println(line string) {
-	if s.autoApprove() {
-		line = "AUTO-APPROVE " + line
-	}
-	s.cfg.IO.Println(line)
-}
+// println writes one console line.
+func (s *Server) println(line string) { s.cfg.IO.Println(line) }
 
 func (s *Server) audit(rec audit.Record) {
 	rec.Profile = s.profile.Name
@@ -311,11 +329,19 @@ const flushWait = 2 * time.Second
 
 // Serve accepts clients on ln and serves their requests one at a time until
 // ctx ends or the session ends (logout, timeouts, :quit). lines are the
-// console commands typed by the human (nil for none). ln is closed on
-// return, which removes the socket.
+// console commands typed by the human (nil for none); the control keys
+// come from the IO when it is a KeySource. ln is closed on return, which
+// removes the socket.
 func (s *Server) Serve(ctx context.Context, ln net.Listener, lines <-chan string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	var keys <-chan Key
+	if ks, ok := s.cfg.IO.(KeySource); ok {
+		keys = ks.Keys()
+		ks.SetKeyHandler(s.Key)
+	}
+	s.refreshStatus()
+	defer s.clearStatus()
 	jobs := make(chan job)
 	// inflight counts responses handed to connections but not yet written.
 	var wg, inflight sync.WaitGroup
@@ -355,6 +381,8 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener, lines <-chan string
 				continue
 			}
 			s.Command(ctx, line)
+		case k := <-keys:
+			s.Key(k)
 		case <-tick.C:
 			if time.Since(lastPoll) >= PolicyPoll {
 				lastPoll = time.Now()
@@ -362,6 +390,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener, lines <-chan string
 			}
 			s.Tick()
 		}
+		s.refreshStatus()
 	}
 }
 

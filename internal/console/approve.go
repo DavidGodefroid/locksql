@@ -42,8 +42,8 @@ func (s *Server) screen(ctx context.Context, pl *plan) {
 	} else {
 		add(fmt.Sprintf("PII: masked (%d column rules; detectors: %s)",
 			len(s.rules.Mask), strings.Join(s.profile.Detectors, ", ")))
-		if s.cfg.ShowResults {
-			add(paint.Yellow("result: shown here in clear (--show-results); the agent gets it masked"))
+		if s.showResults {
+			add(paint.Yellow("result: shown here in clear (results on); the agent gets it masked"))
 		}
 	}
 	for _, w := range pl.warnings {
@@ -230,19 +230,55 @@ func (s *Server) Command(ctx context.Context, line string) {
 	case ":review":
 		s.review(ctx)
 	case ":status":
-		st := s.status()
-		s.println(fmt.Sprintf("profile %s · %s %s · tier %s · production %t · databases %s",
-			st.Profile, st.Engine, safeText(st.Host, false), st.Tier, st.Production, safeText(strings.Join(st.Databases, ", "), false)))
-		l := st.Limits
-		s.println(fmt.Sprintf("limits: timeout %s · warn %d · refuse %d · max_rows %d · max_cell_chars %d · max_output_bytes %d",
-			l.StatementTimeout, l.ExplainRowsWarn, l.ExplainRowsRefuse, l.MaxRows, l.MaxCellChars, l.MaxOutputBytes))
-		s.println(fmt.Sprintf("session ends in %d min (max_session %s) · idle_timeout %s · %d plans open · pending policy change: %t",
-			st.SessionEndsInS/60, l.MaxSession, l.IdleTimeout, len(s.plans), s.pending != nil))
+		for _, l := range s.statusLines() {
+			s.println(l)
+		}
+	case ":mode":
+		s.toggleMode()
+	case ":results":
+		s.toggleResults()
 	case ":quit":
 		s.End("quit")
 	default:
-		s.println("commands: :review (pending policy change and change requests), :status, :quit")
+		s.println("commands: :review (pending policy change and change requests) · :status · :mode (Shift+Tab) · :results (Ctrl-O) · :quit")
 	}
+}
+
+// statusLines is the :status screen.
+func (s *Server) statusLines() []string {
+	st := s.status()
+	l := st.Limits
+	mode := "manual: every statement is prompted"
+	switch {
+	case s.autoApprove():
+		mode = paint.Yellow("auto: statements allowed by the tier and the weight check run without a prompt")
+	case s.profile.Production:
+		mode += " (production: auto mode unavailable)"
+	}
+	results := "masked (the agent's view)"
+	if s.showResults {
+		results = paint.Yellow("shown here in clear, PII included")
+	}
+	unmask := "refused (start the console with --allow-unmask to allow it)"
+	if s.cfg.AllowUnmask {
+		unmask = paint.Red("allowed: clients may ask for unmasked output, approved here each time")
+	}
+	pending := "none"
+	if s.pending != nil {
+		pending = paint.Red("a loosening awaits :review")
+	}
+	return keyValues([][2]string{
+		{"profile", fmt.Sprintf("%s · %s %s · tier %s · production %t", st.Profile, st.Engine, safeText(st.Host, false), st.Tier, st.Production)},
+		{"databases", safeText(strings.Join(st.Databases, ", "), false)},
+		{"mode", mode + paint.Dim(" (Shift+Tab or :mode)")},
+		{"results", results + paint.Dim(" (Ctrl-O or :results)")},
+		{"unmask", unmask},
+		{"limits", fmt.Sprintf("timeout %s · warn %d · refuse %d · max_rows %d · max_cell_chars %d · max_output_bytes %d",
+			l.StatementTimeout, l.ExplainRowsWarn, l.ExplainRowsRefuse, l.MaxRows, l.MaxCellChars, l.MaxOutputBytes)},
+		{"session", fmt.Sprintf("ends in %d min (max_session %s) · idle_timeout %s", st.SessionEndsInS/60, l.MaxSession, l.IdleTimeout)},
+		{"plans open", fmt.Sprint(len(s.plans))},
+		{"policy change", pending},
+	})
 }
 
 // review shows the queued change requests and the pending policy change,
@@ -267,8 +303,8 @@ func (s *Server) review(ctx context.Context) {
 	for _, line := range formatChanges(config.Diff(s.approved, next)) {
 		s.println(line)
 	}
-	if s.cfg.SkipPermissions && s.profile.Production && !next.Profile.Production {
-		s.println(red + "--skip-permissions is set: once applied, statements run without a prompt" + reset)
+	if s.auto && s.profile.Production && !next.Profile.Production {
+		s.println(red + "auto mode is on: once applied, statements run without a prompt" + reset)
 	}
 	bell(s.cfg.IO)
 	ans, ok := s.cfg.IO.Ask(ctx, "Apply these changes? [y/N] ", ApprovalTimeout)

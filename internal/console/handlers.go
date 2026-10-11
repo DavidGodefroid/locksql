@@ -104,20 +104,20 @@ func (s *Server) status() ipc.StatusResult {
 		left = 0
 	}
 	return ipc.StatusResult{
-		Profile:         s.profile.Name,
-		Engine:          s.profile.Engine,
-		Host:            s.host(),
-		HostConfirmed:   true, // the host is part of the approved policy
-		Production:      s.profile.Production,
-		SkipPermissions: s.autoApprove(),
-		AllowUnmask:     s.cfg.AllowUnmask,
-		ShowResults:     s.cfg.ShowResults,
-		Tier:            s.profile.Tier.String(),
-		Databases:       nonNil(s.cfg.Databases),
-		Limits:          s.profile.Limits,
-		IdleTimeoutInS:  int(s.profile.Limits.IdleTimeout / time.Second),
-		SessionEndsInS:  int(left / time.Second),
-		Health:          s.cfg.Health,
+		Profile:        s.profile.Name,
+		Engine:         s.profile.Engine,
+		Host:           s.host(),
+		HostConfirmed:  true, // the host is part of the approved policy
+		Production:     s.profile.Production,
+		AutoApprove:    s.autoApprove(),
+		AllowUnmask:    s.cfg.AllowUnmask,
+		ShowResults:    s.showResults,
+		Tier:           s.profile.Tier.String(),
+		Databases:      nonNil(s.cfg.Databases),
+		Limits:         s.profile.Limits,
+		IdleTimeoutInS: int(s.profile.Limits.IdleTimeout / time.Second),
+		SessionEndsInS: int(left / time.Second),
+		Health:         s.cfg.Health,
 	}
 }
 
@@ -514,7 +514,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	}
 	if s.autoApprove() && !pl.unmask {
 		rec.Event, rec.Decision = audit.EventAuto, "auto"
-		s.println(s.frameEnd(paint.Yellow("auto-approved") + " (--skip-permissions)"))
+		s.println(s.frameEnd(paint.Yellow("auto-approved") + paint.Dim(" (auto mode)")))
 	} else {
 		for {
 			r, retype := s.approve(ctx, req.ID, pl, rec)
@@ -604,7 +604,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		return errResp(req.ID, ipc.CodeInternal, genericFailure)
 	}
 	var clear *engine.Result
-	if s.cfg.ShowResults && !pl.unmask && len(res.Columns) > 0 {
+	if s.showResults && !pl.unmask && len(res.Columns) > 0 {
 		c := cloneResult(res)
 		clear = &c
 	}
@@ -663,62 +663,6 @@ func cloneResult(res engine.Result) engine.Result {
 		c.Rows[i] = slices.Clone(r)
 	}
 	return c
-}
-
-// showTable prints a result in the console, under the profile's output
-// caps, so that the human sees the clear values. With masked, the result
-// as the client got it, each cell the client got masked is yellow and
-// followed by its reference name when it has one. The audit log never
-// holds row data.
-func (s *Server) showTable(title string, res engine.Result, masked *engine.Result) {
-	t := render.TSVTable(res, s.profile.Limits)
-	var m render.Table
-	if masked != nil {
-		m = render.TSVTable(*masked, s.profile.Limits)
-	}
-	maskedAt := func(i, j int) (bool, string) {
-		if i >= len(m.Rows) || j >= len(m.Rows[i]) || j >= len(t.Rows[i]) || m.Rows[i][j] == t.Rows[i][j] {
-			return false, ""
-		}
-		mc := m.Rows[i][j]
-		if strings.HasPrefix(mc, "<redacted:") && strings.HasSuffix(mc, ">") {
-			return true, strings.TrimSuffix(strings.TrimPrefix(mc, "<redacted:"), ">")
-		}
-		return true, ""
-	}
-	col := make([]bool, len(t.Header))
-	for i := range t.Rows {
-		for j := range t.Rows[i] {
-			if ok, _ := maskedAt(i, j); ok && j < len(col) {
-				col[j] = true
-			}
-		}
-	}
-	s.println(title)
-	head := make([]string, len(t.Header))
-	for j, h := range t.Header {
-		head[j] = safeText(h, false)
-		if col[j] {
-			head[j] = paint.Yellow(head[j])
-		}
-	}
-	s.println("  " + strings.Join(head, " │ "))
-	for i, r := range t.Rows {
-		cells := make([]string, len(r))
-		for j, c := range r {
-			cells[j] = safeText(c, false)
-			if ok, ref := maskedAt(i, j); ok {
-				cells[j] = paint.Yellow(cells[j])
-				if ref != "" {
-					cells[j] += " " + paint.Dim("‹"+safeText(ref, false)+"›")
-				}
-			}
-		}
-		s.println("  " + strings.Join(cells, " │ "))
-	}
-	for _, f := range t.Footer {
-		s.println("  " + safeText(f, false))
-	}
 }
 
 // approve shows the prompt and waits for the human. It returns nil when

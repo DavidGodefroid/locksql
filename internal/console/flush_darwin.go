@@ -31,3 +31,8 @@ func echoOff(f *os.File) (func(), error) {
 	}
 	return func() { _ = unix.IoctlSetTermios(fd, unix.TIOCSETA, old) }, nil
 }
+
+// getTermios and setTermios read and set the terminal attributes.
+func getTermios(fd int) (*unix.Termios, error) { return unix.IoctlGetTermios(fd, unix.TIOCGETA) }
+
+func setTermios(fd int, t *unix.Termios) error { return unix.IoctlSetTermios(fd, unix.TIOCSETA, t) }

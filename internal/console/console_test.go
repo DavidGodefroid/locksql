@@ -138,6 +138,20 @@ type fakeIO struct {
 	secrets []string
 	// bells counts the terminal bells, kept out of out.
 	bells int
+	// status is the last status line set (StatusLine).
+	status string
+}
+
+func (f *fakeIO) SetStatus(s string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.status = s
+}
+
+func (f *fakeIO) statusLine() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return ansi.ReplaceAllString(f.status, "")
 }
 
 func (f *fakeIO) Bell() {
@@ -576,7 +590,7 @@ func TestProductionNeedsProfileName(t *testing.T) {
 	}
 }
 
-func skip(c *ServerConfig) { c.SkipPermissions = true }
+func skip(c *ServerConfig) { c.Auto = true }
 
 func allowUnmask(c *ServerConfig) { c.AllowUnmask = true }
 
@@ -595,8 +609,8 @@ func TestSkipPermissions(t *testing.T) {
 		if !strings.Contains(h.auditLog(t), `"decision":"auto"`) {
 			t.Error("auto-approval not audited")
 		}
-		if !strings.Contains(h.io.output(), "AUTO-APPROVE") {
-			t.Error("no AUTO-APPROVE marker")
+		if !strings.Contains(h.io.output(), "auto-approved") {
+			t.Error("no auto-approved line")
 		}
 	})
 	t.Run("prompts on prod", func(t *testing.T) {
@@ -1375,7 +1389,7 @@ func TestFlagNoticesAndReadyLines(t *testing.T) {
 	if !strings.Contains(r, "shown in clear in this console (--show-results)") {
 		t.Errorf("Ready block lacks the results line: %q", r)
 	}
-	if strings.Contains(strings.Join(readyLines("/run/x.sock", "", false), "\n"), "results") {
+	if strings.Contains(strings.Join(readyLines("/run/x.sock", "", false), "\n"), "shown in clear") {
 		t.Error("results line without the flag")
 	}
 }
