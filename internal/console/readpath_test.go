@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -235,6 +236,9 @@ func TestApprovalOnlyFromTheTerminal(t *testing.T) {
 // Over a real socket: bytes a client writes after its run request (a bare
 // "y", a forged response) never reach the approval prompt.
 func TestSocketCannotAnswerThePrompt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs the peer credentials of a Unix socket")
+	}
 	h := newHarness(t, uatProfile())
 	dir, err := os.MkdirTemp("", "lsa")
 	if err != nil {

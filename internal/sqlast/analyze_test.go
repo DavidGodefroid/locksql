@@ -28,6 +28,7 @@ var testCatalog = fakeCatalog{
 	"app.users":    {"id", "email", "name", "salary", "status"},
 	"app.orders":   {"id", "user_id", "email", "total"},
 	"app.contacts": {"id", "email"},
+	"app.notes":    {"id", "v"},
 }
 
 var testRules = map[string]string{
@@ -423,5 +424,42 @@ func TestRecursiveCTENotConvergedRefused(t *testing.T) {
 	p := union(Prov{Modes: []string{"redact", "partial"}}, Prov{Modes: []string{"partial", "redact"}})
 	if len(p.Modes) != 2 {
 		t.Errorf("modes %v", p.Modes)
+	}
+}
+
+// COUNT() without arguments (SQLite reads it as COUNT(*)) counts rows: an
+// aggregate over it is a constant, not the value of a source it lacks.
+func TestCountWithoutArgumentsIsRowCount(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT COUNT() FROM users LIMIT 1",
+		"SELECT MIN(n) FROM (SELECT COUNT() AS n FROM users) s LIMIT 1",
+		"SELECT MAX(n) FROM (SELECT 1 AS n UNION SELECT COUNT() FROM users) s LIMIT 1",
+	} {
+		a, err := analyze(t, sqlclass.SQLite, sql)
+		if err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		if p := a.Outputs[0].Prov; p.Kind != KindConst || len(p.Sources) > 0 {
+			t.Errorf("%s: %+v, want a constant", sql, p)
+		}
+	}
+}
+
+// MIN and MAX of a count are a count, not a column value: the console's
+// "no plain column" warning (on a statement testing a cell reference)
+// must still see that the result holds only counts.
+func TestMinMaxOfCountIsCount(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT MIN(n) FROM (SELECT COUNT(0) AS n FROM users) s LIMIT 1",
+		"SELECT MAX(n) AS m FROM (SELECT COUNT(email) AS n FROM users GROUP BY status) s LIMIT 1",
+		"WITH c(n) AS (SELECT COUNT(id) FROM users) SELECT MIN(n) FROM c LIMIT 1",
+	} {
+		a, err := analyze(t, sqlclass.Postgres, sql)
+		if err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		if p := a.Outputs[0].Prov; p.Kind != KindCount || p.Sensitive || a.Outputs[0].Mask != "" {
+			t.Errorf("%s: %+v, want an unmasked count", sql, p)
+		}
 	}
 }

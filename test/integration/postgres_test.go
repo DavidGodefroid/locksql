@@ -266,6 +266,14 @@ func testPostgresServer(t *testing.T, version string, srv Server) {
 		assertNoLeak(t, s, sqlclass.Postgres, pii.Rules{Mask: []string{"public.big.email"}}, writeLeakQueries(sqlclass.Postgres))
 	})
 
+	t.Run("rows returned by a write are masked by provenance", func(t *testing.T) {
+		s := connectPG(t, srv, "rw", config.TierWrite, 5*time.Second)
+		rules := pii.Rules{Mask: []string{"public.big.email"}}
+		seedReturned(t, s)
+		assertWriteRowsMasked(t, s, rules, writeMaskedQueries(sqlclass.Postgres))
+		assertPlanRefused(t, s, rules, writeRefusedQueries(sqlclass.Postgres))
+	})
+
 	t.Run("placeholder and reference round trip", func(t *testing.T) {
 		id := insertObrien(t, connectPG(t, srv, "rw", config.TierWrite, 5*time.Second), "big")
 		s := connectPG(t, srv, "ro", config.TierRead, 5*time.Second)

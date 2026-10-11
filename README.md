@@ -127,7 +127,8 @@ on a redacted cell's reference (`'${r1.2.3}'`). The value never reaches it.
 
 **👁️ Clear for you only**<br>
 Ctrl-O in the console prints the clear rows there while the agent gets
-them masked; `--allow-unmask` is the only way an agent can ask for raw PII.
+them masked; `--allow-unmask` (or `:unmask` in the console) is the only
+way an agent can ask for raw PII.
 
 </td>
 </tr>
@@ -145,34 +146,46 @@ itself, checks the bastion's host key and listens on no local port.
 
 ## Quick start
 
+A first approved query in three commands (CI runs this path on a fresh
+Ubuntu VM and in fresh Ubuntu and Fedora containers):
+
 ```sh
 # 1. Install (see Install below for packages, checksums and signatures)
 curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh
 
-# 2. Wire your agents and set up the console account
-locksql
+# 2. In your project: the console account, your agents, a database profile
+locksql setup
 
-# 3. In the locksql session (a separate login), start the console
-#    (keep this terminal open)
+# 3. In a session of the locksql account (switch user, or a text console
+#    with Ctrl-Alt-F3), start the console it printed and keep it open
 locksql console --project DIR
-
-# 4. In your agent, anywhere: "how many orders were placed yesterday on dev?"
-#    Approve or deny each query in the console.
 ```
 
-Bare `locksql` in a terminal wires every installed agent (Claude Code, Codex,
-Gemini CLI, Cursor) for your user account, so that they work from any
-directory. The console must run in a separate account, so when that is not
-set up yet it explains why and offers to run `sudo locksql install`. It then
-prints the next steps: put your database profile in the project's
-`.locksql/config.toml` (`locksql init <agent>` writes a commented example)
-and run `locksql console --project DIR` in the `locksql` session. Later runs
-only wire agents installed since. Run in the service account, bare `locksql`
-starts the console.
+Then ask your agent, anywhere in the project: "how many orders were placed
+yesterday?". Each query waits for your `y` in the console.
 
-The setup is described in [docs/usage.md](docs/usage.md) (`sudo locksql
-install`, then `locksql doctor`; project mode with `.locksql/config.toml`
-committed with the repository). Both accounts read the project config.
+`locksql setup` wires every installed agent (Claude Code, Codex, Gemini CLI,
+Cursor) for your account, creates the `locksql` console account with
+`sudo` once you confirm, asks for the database profile (engine, host, user,
+whether the console account's keychain keeps the password; never the
+password itself) and writes it to the project's `.locksql/config.toml`,
+gives the console account access to the project, and prints the command of
+step 3. Log out and in again after the first setup: your account joins the
+`locksql-clients` group. On macOS, setup prints the root commands for an
+administrator to run, then you run setup again.
+
+The console runs in the `locksql` account's own session, never in a
+terminal of your account, where the agents run and could read what you
+type. Run from your account, `locksql console` therefore prints the
+command for that session instead of starting. When your agents run under
+an account of their own, `locksql console` from yours opens the console as
+`locksql` through `sudo -u`, `machinectl shell` or `su -l`.
+
+`locksql doctor` checks the setup from either account, and
+`locksql doctor --fix` repairs what it safely can (permissions, the socket
+directory, the project's access, the agents' wiring). Bare `locksql`
+re-wires agents installed since; in the service account it starts the
+console. The details are in [docs/usage.md](docs/usage.md).
 
 ## How it works
 
@@ -256,7 +269,8 @@ Full walkthrough: [docs/usage.md](docs/usage.md).
 | `sqlite` | 3 (pure Go, in-process) | `mode=ro` + `query_only` | interrupt on deadline | `EXPLAIN QUERY PLAN` + `sqlite_stat1` (run `ANALYZE` once, or every full scan is a WARN of unknown size) |
 
 All engines are pure Go: the binary is built with `CGO_ENABLED=0`. locksql
-supports Linux and macOS only, on amd64 and arm64.
+supports Linux and macOS, on amd64 and arm64. On Windows it runs inside
+WSL2 ([guide](docs/usage.md#windows-wsl2)); native Windows is not supported.
 
 ## Safety model
 
@@ -473,28 +487,30 @@ On PostgreSQL the first segment is the schema (`public.users.email`).
 ## `--allow-unmask`
 
 An agent can ask for unmasked PII output (`locksql plan --unmask`, or
-`unmask` in the MCP `locksql_plan` tool) only when the human started the
-console with `locksql console --allow-unmask`. Without it, the console
-refuses every unmask request before anything runs and audits the refusal.
-Like auto mode, it is console-only: no client or config file can turn it
-on. With it, each unmasked query still needs the human's
+`unmask` in the MCP `locksql_plan` tool) only when the human allowed it in
+the console: `locksql console --allow-unmask` at start, or `:unmask` while
+it runs (confirmed with `y`; `:unmask` again turns it off). Without it, the
+console refuses every unmask request before anything runs and audits the
+refusal. Like auto mode, it is console-only: no client or config file can
+turn it on, and each change is audited (`unmask` record). With it, each unmasked query still needs the human's
 approval, shown as `PII: UNMASKED` in red, and is never auto-approved. The
 console then prints the clear result, so you see exactly what the agent
 received (the audit log still holds no row data).
 
 ## Console keys and status line
 
-The console runs its own line editor, so two keys switch its behaviour
-while it runs, and a status row fixed at the bottom of the terminal always
-shows the state: the profile and tier, the approval mode, whether results
+The console runs its own line editor, so two keys and one command switch
+its behaviour while it runs, without a restart, and a status row fixed at
+the bottom of the terminal always shows the state: the profile and tier, the approval mode, whether results
 are shown in clear, `unmask allowed`, the open plans and what awaits
-`:review`. Both switches are console-only (no client, config file or
+`:review`. The switches are console-only (no client, config file or
 environment variable can set them) and each change is audited.
 
 | Key | Typed | Effect |
 |---|---|---|
 | Shift+Tab | `:mode` | manual ⇄ auto approval mode |
 | Ctrl-O | `:results` | results masked ⇄ shown here in clear |
+| | `:unmask` | unmasked output off ⇄ allowed (allowing asks for `y`) |
 
 ## Clear results (Ctrl-O)
 
@@ -528,9 +544,12 @@ deliberately narrow:
 
 ## Limitations
 
-- **The console runs only in a separate account.** `sudo locksql install`
-  sets it up; `locksql console` refuses to start without it and names
-  `locksql doctor`. Run `locksql doctor` to see what your machine allows.
+- **The console runs only in a separate account.** `locksql setup` (or
+  `sudo locksql install`) sets it up; `locksql console` refuses to start
+  without it and names `locksql doctor`. Starting it takes a session of
+  that account (switch user, or a text console), since the agent's account
+  can read its own terminals. Run `locksql doctor` to see what your machine
+  allows.
   Malware running as the console account, or as root, is out of scope.
 - **k-anonymity is a query-set-size control.** It refuses a single query
   whose PII filter covers fewer than `k` rows; it does not stop differencing
@@ -574,6 +593,8 @@ deliberately narrow:
 | 📘 [docs/usage.md](docs/usage.md) | console, client commands, MCP server, agent integration |
 | 🐳 [docs/docker.md](docs/docker.md) | running the console and the agent's MCP server in Docker, with nothing installed |
 | 🛡️ [docs/security-model.md](docs/security-model.md) | threat model and mitigations, and an upstream recommendation (PII encrypted at rest with a blind index) |
+| 🔍 [docs/pii-analysis.md](docs/pii-analysis.md) | how the PII analysis works: parser, provenance, usage rules, k-anonymity counts, masking (for contributors) |
+| 🏁 [docs/1.0.md](docs/1.0.md) | the 1.0 criteria and the versioning policy from 1.0 |
 | 🚨 [SECURITY.md](SECURITY.md) | reporting a vulnerability |
 | 🧑‍💻 [CONTRIBUTING.md](CONTRIBUTING.md) | building and testing |
 

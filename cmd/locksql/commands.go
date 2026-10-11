@@ -32,6 +32,17 @@ type env struct {
 	sys func() (*sysconf.Config, error)
 	// install runs `locksql install` with args; nil means runInstall.
 	install func(args []string) int
+	// installer runs the install step of `locksql setup`; nil means
+	// doInstall.
+	installer func(o installOpts) (code int, ran bool)
+	// root runs a shell script as root; nil means sudo sh -c.
+	root func(script string) error
+	// handoff is how `locksql console` reaches the console account from
+	// another one; nil means the real system.
+	handoff *handoffEnv
+	// doc is what locksql doctor reads from the system; nil means the
+	// real one.
+	doc *doctorEnv
 	// euid is the effective user id; nil means os.Geteuid.
 	euid func() int
 	// paint colours human-facing output on stdout; the zero value is plain.

@@ -1,2 +1,8 @@
-# Every change needs a review from the maintainer.
-* @DavidGodefroid
+# Every change needs a review from a code owner. The analysis that decides
+# what is masked (sqlast, pii) and the enforcement point (console) are listed
+# apart so that a second reviewer can be added to them alone; see
+# docs/1.0.md.
+*                  @DavidGodefroid
+/internal/sqlast/  @DavidGodefroid
+/internal/pii/     @DavidGodefroid
+/internal/console/ @DavidGodefroid

@@ -10,6 +10,9 @@ issue.
   approach. locksql is a security tool: features that loosen a default, add a
   way around the console, or add a dependency need a clear case.
 - Code, comments, docs and commit messages are in English.
+- Changes to the parser, the analyzer or the masking start with
+  [docs/pii-analysis.md](docs/pii-analysis.md), which explains how they fit
+  together.
 - By contributing you agree that your work is licensed under the Apache
   License 2.0.
 
@@ -32,6 +35,18 @@ go test ./...
 Unit tests need no database: SQLite runs in-process, and the EXPLAIN
 fixtures under `testdata/explain/` cover the other engines.
 
+The module also builds for Windows, where locksql refuses to run (see
+[docs/usage.md](docs/usage.md#windows-wsl2)), and CI runs the unit tests on
+`windows-latest`. A test file that needs Unix accounts, file modes, sockets
+or terminals starts with `//go:build unix`; a single test skips with
+`t.Skip` and the reason. To check that the tests still compile for
+Windows:
+
+```sh
+GOOS=windows go vet ./...
+GOOS=windows go test -exec /bin/true ./...
+```
+
 ### Integration tests
 
 Integration tests run real servers in Docker (MariaDB 10.11 and 11.4, MySQL
@@ -43,6 +58,15 @@ go test -tags integration ./test/integration/
 ```
 
 - `LOCKSQL_IT_MYSQL` and `LOCKSQL_IT_POSTGRES` select a subset of versions.
+- The canary suite (`test/integration/canary_test.go`, `-run Canary`) seeds
+  masked columns with random `CANARY-<id>` values on every server and on
+  SQLite, runs a generated corpus of reads (joins, CTEs, unions, casts,
+  JSON, string, aggregate and window functions) through plan, approval, run
+  and masking, and fails when an answer to the agent holds a canary, 4
+  letters of one, or its hex, base64 or reversed form. A refusal is safe. A
+  leak it finds is fixed in the analyzer or the masker, with a regression
+  case in `internal/sqlast/adversarial_test.go` or the `pii` tests; a new
+  construct goes in `canaryDialectFor`.
 - The console test drives the binary in a pseudo-terminal and runs on Linux
   only.
 - `LOCKSQL_TEST_KEYCHAIN=1` also runs the keychain test against the real OS
@@ -60,6 +84,18 @@ Never point a test at a real or remote database.
   per version.
 - Fuzz targets run nightly in CI; run one locally with, for example,
   `go test -run '^$' -fuzz '^FuzzLexNoPanic$' -fuzztime 30s ./internal/sqlclass/`.
+  A failing input is written under the package's `testdata/fuzz/`; commit it
+  with the fix, so `go test` replays it from then on.
+- The SQL parser and provenance analyzer (`internal/sqlast`) have
+  `FuzzParseNoPanic` and `FuzzAnalyzeNoPanic`, seeded from the classifier
+  corpus and the package's tests. Besides panics, the analyze target checks
+  the provenance of every accepted statement (an output that reveals column
+  values names its sources; a value of a masked column is never returned
+  unmasked). `metamorphic_test.go` checks that rewrites which keep a
+  statement's meaning (alias, CTE, subquery, swapped join, `UNION ALL` with
+  itself) keep its provenance in every dialect: a rewrite may be refused,
+  never accepted with a cleaner provenance. New syntax should get a base
+  statement there.
 
 ## Pull requests
 

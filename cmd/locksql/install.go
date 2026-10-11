@@ -15,75 +15,116 @@ import (
 	"runtime"
 	"strings"
 
-	"golang.org/x/term"
-
 	"github.com/DavidGodefroid/locksql/internal/sysconf"
 )
 
 var accountRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
+// installOpts are the settings of `locksql install`.
+type installOpts struct {
+	client, svc, group string
+	printOnly          bool
+	trustBinary        bool
+	// yes runs the root commands without asking (sudo may still ask for
+	// a password); it works without a terminal.
+	yes bool
+}
+
 // runInstall is `locksql install`: the one-time setup that separates the
 // console from the agent. It prints the commands, which need root, and on
 // Linux runs them with sudo once the human confirms.
 func runInstall(e env, args []string) int {
-	const usage = "locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print] [--trust-binary]"
+	const usage = "locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print] [--trust-binary] [--yes]"
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	client := fs.String("client", "", "the account the agent runs as (default: you)")
-	svc := fs.String("user", sysconf.DefaultServiceUser, "the console account to create")
-	group := fs.String("group", sysconf.DefaultClientGroup, "the group allowed to reach the console")
-	printOnly := fs.Bool("print", false, "print the commands, do not run them")
-	trustBinary := fs.Bool("trust-binary", false, "copy this binary even when another account than root can change it")
+	var o installOpts
+	fs.StringVar(&o.client, "client", "", "the account the agent runs as (default: you)")
+	fs.StringVar(&o.svc, "user", sysconf.DefaultServiceUser, "the console account to create")
+	fs.StringVar(&o.group, "group", sysconf.DefaultClientGroup, "the group allowed to reach the console")
+	fs.BoolVar(&o.printOnly, "print", false, "print the commands, do not run them")
+	fs.BoolVar(&o.trustBinary, "trust-binary", false, "copy this binary even when another account than root can change it")
+	fs.BoolVar(&o.yes, "yes", false, "run the commands without asking")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		fmt.Fprintln(e.stderr, "usage:", usage)
 		return exitUsage
 	}
-	if *client == "" {
-		if s := os.Getenv("SUDO_USER"); s != "" {
-			*client = s
-		} else if u, err := user.Current(); err == nil {
-			*client = u.Username
-		}
+	code, ran := doInstall(e, o)
+	if code != exitOK || !ran {
+		return code
 	}
-	for what, v := range map[string]string{"--client": *client, "--user": *svc, "--group": *group} {
+	fmt.Fprintf(e.stdout, `
+Done. Next:
+  1. sudo passwd %[1]s            (a password for the console account)
+  2. log out and in again as %[2]s (the new group applies at login)
+  3. open a separate session as %[1]s (switch user, Wayland), then run there:
+       locksql console --profile <name> --project <the agent's project dir>
+  4. locksql doctor               (from both accounts)
+`, o.svc, o.client)
+	return exitOK
+}
+
+// installClient fills in the default agent account: the account sudo was
+// run from, else this one.
+func installClient(o *installOpts) {
+	if o.client != "" {
+		return
+	}
+	if s := os.Getenv("SUDO_USER"); s != "" {
+		o.client = s
+	} else if u, err := user.Current(); err == nil {
+		o.client = u.Username
+	}
+}
+
+// doInstall prints the root script of a separated install and, on Linux,
+// runs it once the human confirms (or o.yes). ran reports whether it ran.
+func doInstall(e env, o installOpts) (code int, ran bool) {
+	if o.svc == "" {
+		o.svc = sysconf.DefaultServiceUser
+	}
+	if o.group == "" {
+		o.group = sysconf.DefaultClientGroup
+	}
+	installClient(&o)
+	for what, v := range map[string]string{"--client": o.client, "--user": o.svc, "--group": o.group} {
 		if !accountRe.MatchString(v) {
 			fmt.Fprintf(e.stderr, "locksql install: invalid %s %q\n", what, v)
-			return exitUsage
+			return exitUsage, false
 		}
 	}
-	if *client == *svc {
+	if o.client == o.svc {
 		fmt.Fprintln(e.stderr, "locksql install: the agent's account and the console account must differ")
-		return exitUsage
+		return exitUsage, false
 	}
 	bin, err := os.Executable()
 	if err != nil {
 		fmt.Fprintln(e.stderr, "locksql install:", err)
-		return exitFail
+		return exitFail, false
 	}
 	if bin, err = filepath.EvalSymlinks(bin); err != nil {
 		fmt.Fprintln(e.stderr, "locksql install:", err)
-		return exitFail
+		return exitFail, false
 	}
 	// pin is the sha256 the root script checks its copy against: with
 	// --trust-binary, the binary could change between this check and the
 	// script's copy.
 	pin := ""
-	if *trustBinary {
+	if o.trustBinary {
 		if pin, err = fileSum(bin); err != nil {
 			fmt.Fprintln(e.stderr, "locksql install:", err)
-			return exitFail
+			return exitFail, false
 		}
 		fmt.Fprintf(e.stdout, "--trust-binary: copying %s (sha256 %s, checked again before it is installed)\n\n", bin, pin)
 	} else if msg, err := installSourceRefusal(bin); err != nil {
 		fmt.Fprintln(e.stderr, "locksql install:", err)
-		return exitFail
+		return exitFail, false
 	} else if msg != "" {
 		fmt.Fprint(e.stderr, msg)
-		return exitFail
+		return exitFail, false
 	}
-	script := linuxInstallScript(bin, *client, *svc, *group, pin)
+	script := linuxInstallScript(bin, o.client, o.svc, o.group, pin)
 	if runtime.GOOS == "darwin" {
-		script = darwinInstallScript(bin, *client, *svc, *group, pin)
+		script = darwinInstallScript(bin, o.client, o.svc, o.group, pin)
 	}
 	fmt.Fprintf(e.stdout, `locksql install separates the console from the agent:
   - the console runs as %[1]q, in its own login session (use Wayland), and alone
@@ -96,38 +137,55 @@ func runInstall(e env, args []string) int {
 These commands run as root:
 
 %[4]s
-`, *svc, *client, *group, indent(script))
-	if *printOnly || runtime.GOOS != "linux" {
+`, o.svc, o.client, o.group, indent(script))
+	if o.printOnly || runtime.GOOS != "linux" {
 		if runtime.GOOS != "linux" {
 			fmt.Fprintln(e.stdout, "Run them in a terminal as an administrator.")
 		}
-		return exitOK
+		return exitOK, false
 	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		fmt.Fprintln(e.stderr, "locksql install: confirm in a terminal, or run with --print")
-		return exitUsage
+	if !o.yes {
+		if !e.tty {
+			fmt.Fprintln(e.stderr, "locksql install: confirm in a terminal, or run with --print or --yes")
+			return exitUsage, false
+		}
+		if !confirm(e, "Run them now with sudo? [y/N] ") {
+			fmt.Fprintln(e.stdout, "nothing done")
+			return exitOK, false
+		}
 	}
-	fmt.Fprint(e.stdout, "Run them now with sudo? [y/N] ")
-	ans, _ := bufio.NewReader(e.stdin).ReadString('\n')
-	if !strings.EqualFold(strings.TrimSpace(ans), "y") {
-		fmt.Fprintln(e.stdout, "nothing done")
-		return exitOK
+	if err := e.asRoot(script); err != nil {
+		fmt.Fprintln(e.stderr, "locksql install:", err)
+		return exitFail, false
+	}
+	return exitOK, true
+}
+
+// confirm asks a y/N question on e's terminal.
+func confirm(e env, question string) bool {
+	fmt.Fprint(e.stdout, question)
+	ans, _ := lineReader(e).ReadString('\n')
+	return strings.EqualFold(strings.TrimSpace(ans), "y")
+}
+
+// lineReader is e.stdin as a buffered reader; it reuses e.stdin when it is
+// one already, so that successive questions lose no buffered input.
+func lineReader(e env) *bufio.Reader {
+	if br, ok := e.stdin.(*bufio.Reader); ok {
+		return br
+	}
+	return bufio.NewReader(e.stdin)
+}
+
+// asRoot runs a shell script as root: through e.root when set (tests),
+// else sudo sh -c on the human's terminal. The script holds no secret.
+func (e env) asRoot(script string) error {
+	if e.root != nil {
+		return e.root(script)
 	}
 	cmd := exec.Command("sudo", "sh", "-c", script)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, e.stdout, e.stderr
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintln(e.stderr, "locksql install:", err)
-		return exitFail
-	}
-	fmt.Fprintf(e.stdout, `
-Done. Next:
-  1. sudo passwd %[1]s            (a password for the console account)
-  2. log out and in again as %[2]s (the new group applies at login)
-  3. open a separate session as %[1]s (switch user, Wayland), then run there:
-       locksql console --profile <name> --project <the agent's project dir>
-  4. locksql doctor               (from both accounts)
-`, *svc, *client)
-	return exitOK
+	return cmd.Run()
 }
 
 // installSourceRefusal returns the refusal to print when bin, the binary
@@ -223,8 +281,7 @@ func linuxInstallScript(bin, client, svc, group, pin string) string {
 id -u %[2]s >/dev/null 2>&1 || useradd --create-home --shell /bin/bash --comment "locksql console" %[2]s
 chmod 0700 "$(getent passwd %[2]s | cut -d: -f6)"
 usermod -aG %[3]s %[1]s
-install -m 0755 -o root -g root %[4]s /usr/local/bin/locksql
-install -d -m 0755 -o root -g root /etc/locksql
+%[4]sinstall -d -m 0755 -o root -g root /etc/locksql
 cat > /etc/locksql/system.toml <<'LOCKSQL'
 %[5]sLOCKSQL
 chown root:root /etc/locksql/system.toml
@@ -232,7 +289,22 @@ chmod 0644 /etc/locksql/system.toml
 install -d -m 0755 -o root -g root /etc/tmpfiles.d
 printf 'd %[6]s 2710 %[2]s %[3]s -\n' > /etc/tmpfiles.d/locksql.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/locksql.conf 2>/dev/null || install -d -m 2710 -o %[2]s -g %[3]s %[6]s
-`, client, svc, group, src, systemToml(svc, group, dir), dir, prefix)
+`, client, svc, group, copyBinary(bin, pin, src, "root"), systemToml(svc, group, dir), dir, prefix)
+}
+
+// installedBinary is where install puts the binary the console runs.
+const installedBinary = "/usr/local/bin/locksql"
+
+// copyBinary is the script line that installs src as installedBinary, or
+// nothing when the running binary is that file already (a release
+// installed by scripts/install.sh, or a second install): install(1)
+// refuses to copy a file onto itself, and installSourceRefusal has checked
+// that root alone may change it.
+func copyBinary(bin, pin, src, group string) string {
+	if pin == "" && bin == installedBinary {
+		return ""
+	}
+	return fmt.Sprintf("install -m 0755 -o root -g %s %s %s\n", group, src, installedBinary)
 }
 
 func darwinInstallScript(bin, client, svc, group, pin string) string {
@@ -242,13 +314,12 @@ func darwinInstallScript(bin, client, svc, group, pin string) string {
 %[7]sdseditgroup -o read %[3]s >/dev/null 2>&1 || dseditgroup -o create %[3]s
 id -u %[2]s >/dev/null 2>&1 || sysadminctl -addUser %[2]s -fullName "locksql console" -password -
 dseditgroup -o edit -a %[1]s -t user %[3]s
-install -m 0755 -o root -g wheel %[4]s /usr/local/bin/locksql
-install -d -m 0755 -o root -g wheel /etc/locksql
+%[4]sinstall -d -m 0755 -o root -g wheel /etc/locksql
 cat > /etc/locksql/system.toml <<'LOCKSQL'
 %[5]sLOCKSQL
 chown root:wheel /etc/locksql/system.toml
 chmod 0644 /etc/locksql/system.toml
 install -d -m 0755 -o root -g wheel /usr/local/var/run
 install -d -m 0710 -o %[2]s -g %[3]s %[6]s
-`, client, svc, group, src, systemToml(svc, group, dir), dir, prefix)
+`, client, svc, group, copyBinary(bin, pin, src, "wheel"), systemToml(svc, group, dir), dir, prefix)
 }

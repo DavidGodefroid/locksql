@@ -270,6 +270,45 @@ func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan,
 	return nil, nil
 }
 
+// writePlan checks a write before it runs. While mask rules exist, a
+// write whose rows come back or that stores a query's rows
+// (sqlast.NeedsWriteAnalysis) is parsed and analysed like a read: its
+// RETURNING list and the outer SELECT of its data-modifying CTEs are
+// resolved to their base columns and masked by provenance when it runs,
+// and anything the analysis cannot resolve is refused. Other writes pass
+// the checks by column name (pii.PlanCheck).
+func (s *Server) writePlan(ctx context.Context, sess engine.Session, pl *plan) (*refusal.Error, error) {
+	st := pl.st
+	if len(s.rules.Mask) == 0 || !sqlast.NeedsWriteAnalysis(s.dialect, st.SQL) {
+		if err := pii.PlanCheck(st, s.rules, s.dialect, sess.OriginColumns()); err != nil {
+			return shifted(err, pl.base), nil
+		}
+		return nil, nil
+	}
+	if err := pii.WriteValuesViolation(st, s.rules, s.dialect); err != nil {
+		return shifted(err, pl.base), nil
+	}
+	parsed, err := sqlast.ParseWrite(s.dialect, st.SQL)
+	if err != nil {
+		return shifted(err, pl.base), nil
+	}
+	an, err := sqlast.Analyze(parsed, s.astEnv(ctx, sess, pl.db, false))
+	if err != nil {
+		var r *sqlclass.Refusal
+		if errors.As(err, &r) {
+			return shifted(err, pl.base), nil
+		}
+		return nil, err
+	}
+	for _, rel := range an.Relations {
+		if pii.StatementTextRelation(s.dialect, rel) {
+			return refusal.New(refusal.SystemObject, rel[strings.LastIndexByte(rel, '.')+1:]+" holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist"), nil
+		}
+	}
+	pl.an, pl.runSQL = an, st.SQL
+	return nil, nil
+}
+
 // clientSummary is the plan summary a client may see: row estimates and
 // costs are hidden when the statement filters on a PII column, since the
 // planner's statistics would answer the question the k-anonymity check
@@ -398,10 +437,14 @@ func (s *Server) maskRead(res *engine.Result, pl *plan, sess engine.Session) err
 		pii.MaskResult(res, pii.Rules{}, s.detectors, false)
 		return nil
 	}
+	if pl.st.Class != sqlclass.Read && len(res.Columns) == 0 {
+		return nil // a write that returned no rows (SQLite does not read them)
+	}
 	// A PII filter on a literal of the agent: the agent chose the value
-	// behind every cell it selects, so no cell gets a reference.
+	// behind every cell it selects, so no cell gets a reference. Nor does
+	// a write's: it keeps no result in the reference store.
 	var cell func(row, col int, v any) string
-	if !pl.an.LitFilter {
+	if !pl.an.LitFilter && pl.st.Class == sqlclass.Read {
 		n := s.refs.begin()
 		cell = func(row, col int, v any) string { return s.refs.put(n, row, col, pii.CellText(v)) }
 	}

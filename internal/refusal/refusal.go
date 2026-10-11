@@ -110,7 +110,7 @@ var table = map[Code]entry{
 	DatabaseNotServed: {RetryAskUser, "a database this profile does not serve",
 		"use a database listed by locksql_status, or ask the user"},
 	UnmaskOff: {RetryAskUser, "unmasked output is off in this console",
-		"run the query masked, or ask the user to restart the console with --allow-unmask"},
+		"run the query masked, or ask the user to allow unmasked output in the console (:unmask, or --allow-unmask at start)"},
 	Cost: {RetryRewrite, "the weight check refused the plan",
 		"make it cheaper: filter on an indexed column, narrow the range, join less; or ask the user to raise limits.explain_rows_refuse"},
 	KAnon: {RetryStop, "fewer than k rows match a PII filter, group or aggregate (k-anonymity)",

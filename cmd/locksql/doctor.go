@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DavidGodefroid/locksql/internal/agentinit"
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
@@ -34,6 +35,9 @@ const (
 
 type check struct {
 	state, title, detail, fix string
+	// repair is what `locksql doctor --fix` does about a check that is not
+	// ok, or nil.
+	repair *repair
 }
 
 // doctorEnv holds what the doctor reads from the system; tests replace it.
@@ -52,6 +56,15 @@ type doctorEnv struct {
 	ptrace     func() (int, bool)
 	keychain   func(profile, host string, port int) error
 	status     func(cwd, profile string) (*ipc.StatusResult, error)
+	// groupIDs lists the groups of an account.
+	groupIDs func(u *user.User) []int
+	// acl reads the POSIX ACL of a path (nil: none, or not read).
+	acl func(path string) []byte
+	// agents is the account the agents are wired for; nil skips the
+	// wiring check.
+	agents   func() (agentinit.Env, error)
+	lookPath func(string) (string, error)
+	run      func(name string, args ...string) ([]byte, error)
 }
 
 func realDoctorEnv() doctorEnv {
@@ -71,6 +84,22 @@ func realDoctorEnv() doctorEnv {
 			cmd := exec.CommandContext(ctx, "sudo", "-n", "true")
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 			return cmd.Run() == nil
+		},
+		groupIDs: func(u *user.User) []int {
+			ids, _ := u.GroupIds()
+			var out []int
+			for _, id := range ids {
+				if n, err := strconv.Atoi(id); err == nil {
+					out = append(out, n)
+				}
+			}
+			return out
+		},
+		acl:      readACL,
+		agents:   agentinit.SystemEnv,
+		lookPath: exec.LookPath,
+		run: func(name string, args ...string) ([]byte, error) {
+			return exec.Command(name, args...).CombinedOutput()
 		},
 		executable: os.Executable,
 		stat:       os.Stat,
@@ -96,17 +125,42 @@ func realDoctorEnv() doctorEnv {
 }
 
 // runDoctor is `locksql doctor`: it checks that this machine is ready to
-// keep the agent away from the credentials and the data.
+// keep the agent away from the credentials and the data. With --fix it
+// then makes the repairs the checks offer and checks again.
 func runDoctor(e env, args []string) int {
-	const usage = "locksql doctor [--profile P]"
+	const usage = "locksql doctor [--profile P] [--fix [--yes]]"
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	profile := fs.String("profile", "", "profile whose console to check (default: every profile)")
-	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
+	fix := fs.Bool("fix", false, "repair permissions, the socket directory, the project's access and the agents' wiring")
+	yes := fs.Bool("yes", false, "with --fix: run the root commands without asking")
+	if err := fs.Parse(args); err != nil || fs.NArg() > 0 || *yes && !*fix {
 		fmt.Fprintln(e.stderr, "usage:", usage)
 		return exitUsage
 	}
-	checks := doctor(realDoctorEnv(), e.cwd, *profile)
+	d := realDoctorEnv()
+	if e.doc != nil {
+		d = *e.doc
+	}
+	checks := doctor(d, e.cwd, *profile)
+	code := printChecks(e, checks)
+	if !*fix {
+		return code
+	}
+	if own, root := repairsOf(checks); len(own)+len(root) == 0 {
+		fmt.Fprintln(e.stdout, "\nNothing doctor --fix can repair; the remaining items need the steps shown.")
+		return code
+	}
+	changed, code := applyRepairs(e, "doctor", checks, *yes)
+	if code != exitOK || !changed {
+		return code
+	}
+	fmt.Fprintln(e.stdout, "\n"+e.paint.Bold("After the repairs:"))
+	return printChecks(e, doctor(d, e.cwd, *profile))
+}
+
+// printChecks prints the checks and their count; exitFail when one failed.
+func printChecks(e env, checks []check) int {
 	p := e.paint
 	counts := map[string]int{}
 	for _, c := range checks {
@@ -136,13 +190,79 @@ func runDoctor(e env, args []string) int {
 	return exitOK
 }
 
+// repairsOf splits the repairs of the checks that are not ok into the
+// changes this account makes and those that run as root.
+func repairsOf(checks []check) (own, root []*repair) {
+	for _, c := range checks {
+		if c.state == checkOK || c.repair == nil {
+			continue
+		}
+		if c.repair.apply != nil {
+			own = append(own, c.repair)
+		}
+		if c.repair.root != "" {
+			root = append(root, c.repair)
+		}
+	}
+	return own, root
+}
+
+// applyRepairs makes the repairs of the checks that are not ok: the
+// changes this account can make first, then one root script, shown and
+// confirmed (or yes) before sudo runs it. It reports each change and
+// whether anything changed.
+func applyRepairs(e env, cmd string, checks []check, yes bool) (changed bool, code int) {
+	own, root := repairsOf(checks)
+	if len(own) == 0 && len(root) == 0 {
+		return false, exitOK
+	}
+	fmt.Fprintln(e.stdout)
+	if len(root) > 0 && !yes && !e.tty {
+		fmt.Fprintf(e.stderr, "locksql %s: some repairs run as root: confirm in a terminal, or run with --yes\n", cmd)
+		return false, exitUsage
+	}
+	code = exitOK
+	for _, r := range own {
+		if err := r.apply(); err != nil {
+			fmt.Fprintf(e.stdout, "%s %s: %v\n", e.paint.Fail("not repaired:"), r.what, err)
+			code = exitFail
+			continue
+		}
+		fmt.Fprintf(e.stdout, "%s %s\n", e.paint.OK("repaired:"), r.what)
+		changed = true
+	}
+	if len(root) == 0 {
+		return changed, code
+	}
+	var cmds []string
+	for _, r := range root {
+		cmds = append(cmds, r.root)
+	}
+	script := "set -eu\n" + strings.Join(cmds, "\n") + "\n"
+	fmt.Fprintf(e.stdout, "These repairs run as root:\n%s\n", indent(script))
+	if !yes {
+		if !confirm(e, "Run them now with sudo? [y/N] ") {
+			fmt.Fprintln(e.stdout, "root repairs not made")
+			return changed, code
+		}
+	}
+	if err := e.asRoot(script); err != nil {
+		fmt.Fprintf(e.stderr, "locksql %s: %v\n", cmd, err)
+		return changed, exitFail
+	}
+	for _, r := range root {
+		fmt.Fprintf(e.stdout, "%s %s\n", e.paint.OK("repaired:"), r.what)
+	}
+	return true, code
+}
+
 func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 	var out []check
 	add := func(state, title, detail, fix string) {
-		out = append(out, check{state, title, detail, fix})
+		out = append(out, check{state: state, title: title, detail: detail, fix: fix})
 	}
 
-	// 1. Operating system (the build is Linux or macOS only).
+	// 1. Operating system (Linux or macOS; a Windows build refuses to run).
 	add(checkOK, "operating system", d.goos, "")
 
 	// 2. Graphical session.
@@ -185,6 +305,17 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 		}
 	default:
 		out = append(out, separationChecks(d, sys, me, myUID)...)
+	}
+	svc, isService := consoleAccount(d, sys, myUID)
+
+	// The agents of this account, and the project the console serves.
+	if !isService && myUID != 0 {
+		out = append(out, wiringChecks(d)...)
+	}
+	if sys != nil && !isService && svc.uid >= 0 {
+		if root, ok := config.FindProjectRoot(cwd); ok {
+			out = append(out, projectChecks(d, root, svc, myUID)...)
+		}
 	}
 
 	// 4. Binary.
@@ -230,9 +361,72 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 	return out
 }
 
+// consoleAccount is the console account of a separated setup (uid -1 when
+// there is none), and whether this account (uid me) is it.
+func consoleAccount(d doctorEnv, sys *sysconf.Config, me int) (svcAccount, bool) {
+	if sys == nil {
+		return svcAccount{uid: -1}, false
+	}
+	u, err := d.lookupUser(sys.ServiceUser)
+	if err != nil {
+		return svcAccount{name: sys.ServiceUser, uid: -1}, false
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return svcAccount{name: sys.ServiceUser, uid: -1}, false
+	}
+	a := svcAccount{name: sys.ServiceUser, uid: uid}
+	if d.groupIDs != nil {
+		a.gids = d.groupIDs(u)
+	}
+	return a, uid == me
+}
+
+// wiringChecks reports the installed agents that are not wired for this
+// account; --fix wires them as bare locksql does.
+func wiringChecks(d doctorEnv) []check {
+	if d.agents == nil {
+		return nil
+	}
+	ae, err := d.agents()
+	if err != nil {
+		return nil
+	}
+	found := agentinit.Detect(ae)
+	if len(found) == 0 {
+		return []check{{state: checkOK, title: "agent wiring", detail: "no agent found (" + strings.Join(agentinit.Agents(), ", ") + ")"}}
+	}
+	var pending []string
+	for _, a := range found {
+		if p, err := agentinit.PendingUser(ae, a); err != nil || p {
+			pending = append(pending, a)
+		}
+	}
+	if len(pending) == 0 {
+		return []check{{state: checkOK, title: "agent wiring", detail: "wired: " + strings.Join(found, ", ")}}
+	}
+	return []check{{state: checkWarn, title: "agent wiring", detail: "installed but not wired: " + strings.Join(pending, ", "),
+		fix: "locksql doctor --fix (or bare locksql)",
+		repair: &repair{what: "wire " + strings.Join(pending, ", ") + " for this account", apply: func() error {
+			var errs []error
+			for _, a := range pending {
+				if _, err := agentinit.InitUser(ae, a); err != nil {
+					errs = append(errs, fmt.Errorf("%s: %w", a, err))
+				}
+			}
+			return errors.Join(errs...)
+		}}}}
+}
+
 func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int) []check {
 	var out []check
-	add := func(state, title, detail, fix string) { out = append(out, check{state, title, detail, fix}) }
+	add := func(state, title, detail, fix string) {
+		out = append(out, check{state: state, title: title, detail: detail, fix: fix})
+	}
+	// fixable adds a check that --fix repairs with root commands.
+	fixable := func(state, title, detail, fix, what, root string) {
+		out = append(out, check{state: state, title: title, detail: detail, fix: fix, repair: &repair{what: what, root: root}})
+	}
 	add(checkOK, "system setup", sysconf.Path+" (root-owned)", "")
 	svc, err := d.lookupUser(sys.ServiceUser)
 	if err != nil {
@@ -242,8 +436,12 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 	svcUID, _ := strconv.Atoi(svc.Uid)
 	add(checkOK, "console account", fmt.Sprintf("%s (uid %d)", sys.ServiceUser, svcUID), "")
 	if d.inGroup(svcUID, sys.ClientGroup) {
-		add(checkFail, "console account isolated", fmt.Sprintf("%s is in the client group %s: it could talk to itself as a client", sys.ServiceUser, sys.ClientGroup),
-			fmt.Sprintf("sudo gpasswd -d %s %s", sys.ServiceUser, sys.ClientGroup))
+		cmd := fmt.Sprintf("gpasswd -d %s %s", shellQuote(sys.ServiceUser), shellQuote(sys.ClientGroup))
+		if d.goos == "darwin" {
+			cmd = fmt.Sprintf("dseditgroup -o edit -d %s -t user %s", shellQuote(sys.ServiceUser), shellQuote(sys.ClientGroup))
+		}
+		fixable(checkFail, "console account isolated", fmt.Sprintf("%s is in the client group %s: it could talk to itself as a client", sys.ServiceUser, sys.ClientGroup),
+			"sudo "+cmd, "remove "+sys.ServiceUser+" from "+sys.ClientGroup, cmd)
 	} else {
 		add(checkOK, "console account isolated", "not a member of "+sys.ClientGroup, "")
 	}
@@ -253,8 +451,16 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 		if d.inGroup(myUID, sys.ClientGroup) || containsInt(sys.AllowedUIDs, myUID) {
 			add(checkOK, "client access", me.Username+" may reach the console", "")
 		} else {
-			add(checkFail, "client access", me.Username+" is not in "+sys.ClientGroup,
-				fmt.Sprintf("sudo usermod -aG %s %s, then log out and in again", sys.ClientGroup, me.Username))
+			cmd := fmt.Sprintf("usermod -aG %s %s", shellQuote(sys.ClientGroup), shellQuote(me.Username))
+			if d.goos == "darwin" {
+				cmd = fmt.Sprintf("dseditgroup -o edit -a %s -t user %s", shellQuote(me.Username), shellQuote(sys.ClientGroup))
+			}
+			if myUID == 0 { // root is no agent's account: nothing to add
+				add(checkFail, "client access", me.Username+" is not in "+sys.ClientGroup, "run locksql doctor from the agent's account")
+			} else {
+				fixable(checkFail, "client access", me.Username+" is not in "+sys.ClientGroup,
+					"sudo "+cmd+", then log out and in again", "add "+me.Username+" to "+sys.ClientGroup+" (log out and in again)", cmd)
+			}
 		}
 		if d.sudoNoPass() {
 			add(checkFail, "privilege escalation", me.Username+" can run sudo without a password: the agent could become "+sys.ServiceUser+" or root",
@@ -277,8 +483,14 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 	}
 
 	// The socket directory.
+	wantMode := "0710"
+	if d.goos == "linux" {
+		wantMode = "2710"
+	}
+	dirFix := socketDirScript(d.goos, sys, wantMode)
+	dirWhat := fmt.Sprintf("create %s %s %s:%s", sys.SocketDir, wantMode, sys.ServiceUser, sys.ClientGroup)
 	if fi, err := d.stat(sys.SocketDir); err != nil {
-		add(checkFail, "socket directory", sys.SocketDir+" is missing", "run sudo locksql install (or systemd-tmpfiles --create)")
+		fixable(checkFail, "socket directory", sys.SocketDir+" is missing", "run sudo locksql install (or systemd-tmpfiles --create)", dirWhat, dirFix)
 	} else {
 		uid, gid, ok := d.ownerOf(fi)
 		perm := fi.Mode().Perm()
@@ -286,28 +498,25 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 		if fi.Mode()&os.ModeSetgid != 0 {
 			shown |= 0o2000
 		}
-		wantMode := "0710"
-		if d.goos == "linux" {
-			wantMode = "2710"
-		}
 		want := ""
 		if g, err := user.LookupGroup(sys.ClientGroup); err == nil {
 			want = g.Gid
 		}
+		dirWhat = fmt.Sprintf("set %s to %s %s:%s", sys.SocketDir, wantMode, sys.ServiceUser, sys.ClientGroup)
 		switch {
 		case !ok:
 		case uid != svcUID:
-			add(checkFail, "socket directory", fmt.Sprintf("%s belongs to uid %d, not %s", sys.SocketDir, uid, sys.ServiceUser),
-				fmt.Sprintf("sudo chown %s:%s %s", sys.ServiceUser, sys.ClientGroup, sys.SocketDir))
+			fixable(checkFail, "socket directory", fmt.Sprintf("%s belongs to uid %d, not %s", sys.SocketDir, uid, sys.ServiceUser),
+				fmt.Sprintf("sudo chown %s:%s %s", sys.ServiceUser, sys.ClientGroup, sys.SocketDir), dirWhat, dirFix)
 		case want != "" && strconv.Itoa(gid) != want:
-			add(checkFail, "socket directory", sys.SocketDir+" does not belong to group "+sys.ClientGroup,
-				fmt.Sprintf("sudo chown %s:%s %s", sys.ServiceUser, sys.ClientGroup, sys.SocketDir))
+			fixable(checkFail, "socket directory", sys.SocketDir+" does not belong to group "+sys.ClientGroup,
+				fmt.Sprintf("sudo chown %s:%s %s", sys.ServiceUser, sys.ClientGroup, sys.SocketDir), dirWhat, dirFix)
 		case perm&0o027 != 0 || perm&0o010 == 0:
-			add(checkFail, "socket directory", fmt.Sprintf("%s has mode %04o", sys.SocketDir, shown), "sudo chmod "+wantMode+" "+sys.SocketDir)
+			fixable(checkFail, "socket directory", fmt.Sprintf("%s has mode %04o", sys.SocketDir, shown), "sudo chmod "+wantMode+" "+sys.SocketDir, dirWhat, dirFix)
 		case d.goos == "linux" && fi.Mode()&os.ModeSetgid == 0:
 			// The console cannot give its socket to the client group.
-			add(checkFail, "socket directory", fmt.Sprintf("%s has mode %04o, without setgid", sys.SocketDir, shown),
-				"sudo locksql install (it also fixes /etc/tmpfiles.d/locksql.conf)")
+			fixable(checkFail, "socket directory", fmt.Sprintf("%s has mode %04o, without setgid", sys.SocketDir, shown),
+				"sudo locksql install (it also fixes /etc/tmpfiles.d/locksql.conf)", dirWhat, dirFix)
 		default:
 			add(checkOK, "socket directory", fmt.Sprintf("%s %04o %s:%s", sys.SocketDir, shown, sys.ServiceUser, sys.ClientGroup), "")
 		}
@@ -315,11 +524,23 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 	return out
 }
 
+// socketDirScript (re)creates the socket directory with its owner, group
+// and mode, and on Linux the tmpfiles.d entry that recreates it at boot.
+func socketDirScript(goos string, sys *sysconf.Config, mode string) string {
+	dir, owner := shellQuote(sys.SocketDir), shellQuote(sys.ServiceUser)+":"+shellQuote(sys.ClientGroup)
+	s := fmt.Sprintf("mkdir -p %s\nchown %s %s\nchmod %s %s", dir, owner, dir, mode, dir)
+	if goos == "linux" {
+		s += fmt.Sprintf("\ninstall -d -m 0755 -o root -g root /etc/tmpfiles.d\nprintf 'd %%s %s %%s %%s -\\n' %s %s %s > /etc/tmpfiles.d/locksql.conf",
+			mode, dir, shellQuote(sys.ServiceUser), shellQuote(sys.ClientGroup))
+	}
+	return s
+}
+
 func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd string) []check {
 	var out []check
 	name := "profile " + p.Name
 	add := func(state, title, detail, fix string) {
-		out = append(out, check{state, name + ": " + title, detail, fix})
+		out = append(out, check{state: state, title: name + ": " + title, detail: detail, fix: fix})
 	}
 
 	if p.Credentials == config.CredentialsKeychain {

@@ -31,7 +31,7 @@ directory. Both talk to the same console.
      `LIMIT n` within the profile's max_rows (`LIMIT 1` for counts). One statement, no comments, no
      variables.
    - `unmask` only if the user asked to see personal data in clear; the console refuses it unless the
-     human started it with `--allow-unmask` (`locksql status` shows it). Never retry to get around that.
+     human allowed it there (`--allow-unmask` or `:unmask`; `locksql status` shows it). Never retry to get around that.
    - Pass `intent`: one line saying why, in the user's terms (the human reads it on the approval
      screen without the chat). CLI: `--intent "..."`.
 5. **Show the user** in chat, before running: target (profile, host, database), the SQL, the EXPLAIN

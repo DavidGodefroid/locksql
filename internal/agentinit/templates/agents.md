@@ -15,7 +15,7 @@ Workflow (MCP tools `locksql_*`, or the `locksql` CLI from any directory):
 3. `locksql_list_tables` / `locksql_describe` if needed (no approval).
 4. `locksql_plan` with one narrow statement: indexed predicates, an explicit `LIMIT`, no comments, no
    variables. Use `unmask` only if the user asked to see personal data in clear; it is refused unless
-   the human started the console with `--allow-unmask`.
+   the human allowed it in the console (`--allow-unmask` or `:unmask`).
    Pass `intent`: one line saying why, in the user's terms (the human reads it on the approval
    screen without the chat).
 5. Show the user the target, the SQL, the EXPLAIN summary and the verdict, then say you are waiting

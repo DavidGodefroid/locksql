@@ -779,7 +779,7 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 func flagNotices(o Options, p config.Profile) []string {
 	var out []string
 	if o.AllowUnmask {
-		out = append(out, paint.Warn("--allow-unmask: clients may ask for unmasked PII output; each such query is approved here, never auto-approved"))
+		out = append(out, paint.Warn("--allow-unmask: clients may ask for unmasked PII output; each such query is approved here, never auto-approved (:unmask: off)"))
 	}
 	if o.ShowResults {
 		msg := "--show-results: the result of each query is printed here in clear, PII included; the agent still gets it masked (Ctrl-O: hide)"
@@ -803,7 +803,7 @@ func readyLines(socket, root string, showResults bool) []string {
 		out = append(out, "  "+paint.Dim("results  ")+paint.Yellow("shown in clear in this console (--show-results)"))
 	}
 	out = append(out, "  "+paint.Dim("keys     ")+paint.Accent("Shift+Tab")+" manual/auto mode  "+paint.Accent("Ctrl-O")+" results masked/clear"+paint.Dim(" · the status line below shows both"))
-	return append(out, "  "+paint.Dim("commands ")+paint.Accent(":review")+"  "+paint.Accent(":status")+"  "+paint.Accent(":mode")+"  "+paint.Accent(":results")+"  "+paint.Accent(":quit")+paint.Dim(" · Ctrl-C ends the session"))
+	return append(out, "  "+paint.Dim("commands ")+paint.Accent(":review")+"  "+paint.Accent(":status")+"  "+paint.Accent(":mode")+"  "+paint.Accent(":results")+"  "+paint.Accent(":unmask")+"  "+paint.Accent(":quit")+paint.Dim(" · Ctrl-C ends the session"))
 }
 
 // servedDatabases is what the console serves: the profile's database alone

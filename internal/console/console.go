@@ -131,8 +131,10 @@ type ServerConfig struct {
 	// unmask, never REFUSE). Shift+Tab switches the mode while the console
 	// runs.
 	Auto bool
-	// AllowUnmask lets clients ask for unmasked output; without it an
-	// unmask plan is refused before anything else.
+	// AllowUnmask starts with unmasked output allowed: clients may ask for
+	// it, and each such query is approved in the console. Without it an
+	// unmask plan is refused before anything else. :unmask switches it
+	// while the console runs.
 	AllowUnmask bool
 	// ShowResults starts with the clear results on: the result of each
 	// masked run printed in the console, in clear; the client still gets
@@ -172,7 +174,8 @@ type plan struct {
 	// kExplains are the EXPLAIN results of the k-anonymity counts, assessed
 	// again when the plan runs.
 	kExplains []engine.Plan
-	// an is the analysis of a read statement (nil for other classes);
+	// an is the analysis of a read statement, or of a write whose rows
+	// come back or that stores a query's rows (nil otherwise);
 	// runSQL is the statement that runs; isExplain marks an EXPLAIN
 	// SELECT, answered with the plan.
 	an        *sqlast.Analysis
@@ -214,10 +217,11 @@ type Server struct {
 	catalogCache map[string][]engine.ColumnInfo
 	// quantum levels response times (ResponseQuantum; 0 in tests).
 	quantum time.Duration
-	// auto and showResults are the live switches (modes.go), started from
-	// the config and changed from the console's keyboard only.
+	// auto, showResults and allowUnmask are the live switches (modes.go),
+	// started from the config and changed from the console's keyboard only.
 	auto        bool
 	showResults bool
+	allowUnmask bool
 	// connected is when the current connection was opened (credentials_ttl).
 	connected time.Time
 
@@ -245,7 +249,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	cfg.Databases = servedDatabases(cfg.Policy.Profile.Database, cfg.Databases)
 	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, probes: map[int]map[string]bool{}, keys: map[string]bool{}, quantum: cfg.Quantum,
-		auto: cfg.Auto, showResults: cfg.ShowResults}
+		auto: cfg.Auto, showResults: cfg.ShowResults, allowUnmask: cfg.AllowUnmask}
 	if err := s.apply(cfg.Policy); err != nil {
 		return nil, err
 	}

@@ -34,11 +34,12 @@ const (
 	// approval record, which is written before anything runs.
 	EventRun     = "run"
 	EventCatalog = "catalog" // catalog read
-	// EventMode and EventResults are the console's switches, changed from
-	// its keyboard: Decision is the new state (manual or auto; shown or
-	// hidden).
+	// EventMode, EventResults and EventUnmask are the console's switches,
+	// changed from its keyboard: Decision is the new state (manual or
+	// auto; shown or hidden; allowed or off).
 	EventMode    = "mode"
 	EventResults = "results"
+	EventUnmask  = "unmask"
 	EventLogout  = "logout"
 )
 

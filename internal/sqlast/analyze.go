@@ -217,6 +217,8 @@ type analyzer struct {
 	inRecCTE  int
 	relations map[string]bool
 	uses      map[Use]bool
+	// writes is set once a data-modifying statement is analysed.
+	writes bool
 }
 
 // Analyze resolves the provenance of every output column of st, checks the
@@ -230,9 +232,20 @@ func Analyze(st *Statement, env Env) (*Analysis, error) {
 		env.Value = func(ValueKind, string) (string, bool) { return "", false }
 	}
 	an := &analyzer{env: env, st: st, d: st.Dialect, a: &Analysis{}, relations: map[string]bool{}, uses: map[Use]bool{}}
-	cols, err := an.query(st.Query, nil)
+	var cols []column
+	var err error
+	if st.Write != nil {
+		cols, err = an.write(st.Write, nil)
+	} else {
+		cols, err = an.query(st.Query, nil)
+	}
 	if err != nil {
 		return nil, err
+	}
+	if an.writes && (an.a.PIIFilter || len(an.a.KChecks) > 0 || len(an.a.Values) > 0) {
+		// The count would run before the statement, with its WITH: the
+		// data-modifying CTEs would run twice.
+		return nil, refuse(refusal.MaskedFilter, "a statement that modifies data cannot filter, group or aggregate a PII column under the k-anonymity check (nor take placeholders): read the rows in a separate statement")
 	}
 	for _, c := range cols {
 		label := ""
@@ -456,8 +469,21 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 			return refusef(refusal.InvalidSQL, "CTE %s is defined twice", strings.ToLower(c.Name))
 		}
 	}
-	def := &cteDef{name: c.Name, cte: c, recursive: recursive && an.selfReferencing(c)}
+	def := &cteDef{name: c.Name, cte: c, recursive: recursive && c.Query != nil && an.selfReferencing(c)}
 	*defs = append(*defs, def)
+	if c.Write != nil {
+		// A data-modifying CTE: its columns are its RETURNING list, none
+		// without one.
+		cols, err := an.write(c.Write, parent)
+		if err != nil {
+			return err
+		}
+		def.cols, err = renameCols(cols, c.Columns, "CTE "+strings.ToLower(c.Name))
+		if def.cols == nil {
+			def.cols = []column{}
+		}
+		return err
+	}
 	if !def.recursive {
 		cols, err := an.query(c.Query, parent)
 		if err != nil {
@@ -1308,7 +1334,8 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 			return Prov{}, err
 		}
 	}
-	if f.Star {
+	// COUNT() without arguments is SQLite's COUNT(*).
+	if f.Star || countAggs[f.Name] && len(f.Args) == 0 {
 		return Prov{Kind: KindConst, w: width{bytes: numWidth}}, nil
 	}
 	var arg Prov
@@ -1349,7 +1376,8 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 	case countAggs[f.Name]:
 		return Prov{Sources: arg.Sources, Kind: KindCount, w: w}, nil
 	case identityAggs[f.Name] && len(f.Args) == 1:
-		if arg.Kind == KindConst {
+		// MIN or MAX of a constant or of a count is one of them.
+		if arg.Kind == KindConst || arg.Kind == KindCount {
 			return arg, nil
 		}
 		arg.Kind = max(arg.Kind, KindIdentity)
