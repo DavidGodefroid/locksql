@@ -257,7 +257,8 @@ Full walkthrough: [docs/usage.md](docs/usage.md).
 | `sqlite` | 3 (pure Go, in-process) | `mode=ro` + `query_only` | interrupt on deadline | `EXPLAIN QUERY PLAN` + `sqlite_stat1` (run `ANALYZE` once, or every full scan is a WARN of unknown size) |
 
 All engines are pure Go: the binary is built with `CGO_ENABLED=0`. locksql
-supports Linux and macOS only, on amd64 and arm64.
+supports Linux and macOS, on amd64 and arm64. On Windows it runs inside
+WSL2 ([guide](docs/usage.md#windows-wsl2)); native Windows is not supported.
 
 ## Safety model
 

@@ -3,6 +3,7 @@ package pii
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -132,6 +133,9 @@ func TestDefaultModeIsRedact(t *testing.T) {
 // The console replaces pii.toml through a temporary file next to it: a
 // directory it cannot write is named with the fix.
 func TestSaveRulesFileUnwritableDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix directory modes: Windows ignores a read-only directory mode")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root writes anywhere")
 	}

@@ -15,8 +15,10 @@ weaknesses as described in [SECURITY.md](../SECURITY.md).
   commands and the MCP server.
 - **Other local users** are not trusted.
 
-locksql supports Linux and macOS only. Where the agent runs depends on the
-mode:
+locksql supports Linux and macOS only; on Windows it runs inside WSL2, a
+Linux system, where the agent must run too for the boundary below to hold
+(see [Windows (WSL2)](usage.md#windows-wsl2)). Where the agent runs depends
+on the mode:
 
 | Mode | Console runs as | Agent runs as | Boundary |
 |---|---|---|---|

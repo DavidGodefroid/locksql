@@ -142,7 +142,7 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 		out = append(out, check{state, title, detail, fix})
 	}
 
-	// 1. Operating system (the build is Linux or macOS only).
+	// 1. Operating system (Linux or macOS; a Windows build refuses to run).
 	add(checkOK, "operating system", d.goos, "")
 
 	// 2. Graphical session.

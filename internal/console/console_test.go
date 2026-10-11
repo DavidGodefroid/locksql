@@ -11,6 +11,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -1048,6 +1049,9 @@ func TestRunErrorIsSanitisedAndConnLostMapped(t *testing.T) {
 // that disconnects while its run waits for approval cancels the prompt, and
 // the next client is served.
 func TestClientGoneDuringApproval(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs the peer credentials of a Unix socket")
+	}
 	h := newHarness(t, uatProfile())
 	dir, err := os.MkdirTemp("", "lsc")
 	if err != nil {

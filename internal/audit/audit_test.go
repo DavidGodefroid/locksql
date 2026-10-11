@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -36,6 +37,9 @@ func readLines(t *testing.T, path string) []map[string]any {
 }
 
 func TestOpenPathAndModes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file modes: Windows reports none")
+	}
 	dir := t.TempDir()
 	l, err := Open(dir)
 	if err != nil {
@@ -65,6 +69,9 @@ func TestOpenPathAndModes(t *testing.T) {
 }
 
 func TestOpenTightensLooseFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file modes: Windows reports none")
+	}
 	dir := t.TempDir()
 	p := filepath.Join(dir, "locksql", "audit.log")
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

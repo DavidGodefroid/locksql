@@ -280,7 +280,8 @@ The console runs only in an account of its own: an agent in the console's
 account could read its terminal, type into it and read its keychain session.
 `locksql console` refuses to start without the setup below (it names
 `locksql doctor` and `sudo locksql install`), and `doctor` reports same-user
-mode as a failure. On Linux and macOS, `locksql install` sets it up once:
+mode as a failure. On Linux and macOS (and inside WSL2 on Windows, see
+[Windows (WSL2)](#windows-wsl2)), `locksql install` sets it up once:
 
 ```sh
 locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print] [--trust-binary]
@@ -383,7 +384,7 @@ each; the exit code is 1 when any check fails.
 
 | Check | Fails or warns when |
 |---|---|
-| operating system | never (informational: locksql builds for Linux and macOS only) |
+| operating system | never (informational: locksql runs on Linux and macOS; on Windows, inside WSL2) |
 | graphical session | X11 |
 | separation | same-user mode (fails; the console refuses to start); doctor then also warns on `dev.tty.legacy_tiocsti = 1` (terminal injection) and `kernel.yama.ptrace_scope = 0` (ptrace) |
 | system setup, console account | `system.toml` invalid or not root-owned; the console account missing or in the client group |
@@ -394,6 +395,129 @@ each; the exit code is 1 when any check fails.
 | secret store | separated mode with a secret for the profile left in the agent's keychain; keychain unavailable |
 | tls, ssh, ssh key (per profile) | a remote database that verifies nothing (through a bastion: the bastion-to-database leg); an `ssh.key` that is missing or readable by group or others (not checked from the agent's account in a separated setup) |
 | console (per profile) | not running; then, from its `health`: not separated, an X11 display, database privileges beyond the tier, EXPLAIN failing |
+
+### Windows (WSL2)
+
+locksql does not run natively on Windows: the separation relies on Unix
+accounts, socket peer credentials and terminals. The Windows build exists
+so that CI runs the unit tests there; it refuses every command but
+`version` and `help` and points here. A native server (a named pipe ACL'd
+to a dedicated local account, `GetNamedPipeClientProcessId` for the peer
+check, Windows Credential Manager for secrets) is not implemented.
+
+Run locksql inside a WSL2 distribution instead. WSL2 is a Linux system:
+install the Linux release there (`scripts/install.sh`, into
+`/usr/local/bin`), and everything in this guide applies inside it. What
+differs is where the agent runs, and that decides what the separation is
+worth.
+
+| Layout | Agent | Console | Boundary |
+|---|---|---|---|
+| A (recommended) | inside WSL, as your WSL account | inside WSL, as `locksql` | the Linux kernel, as on a Linux host, once WSL interop is off |
+| B | on Windows (Claude Code, Cursor, Codex for Windows) | inside WSL, as `locksql` | none against the agent: like [Docker mode](docker.md#what-docker-does-and-does-not-separate) |
+
+The MCP client always reaches the console through its socket in
+`/run/locksql`, inside the distribution: no Windows process can open it.
+In layout B the agent's MCP server is therefore a Linux process too,
+started through `wsl.exe`.
+
+**Set up the distribution** (both layouts), in a WSL shell of your account:
+
+1. Turn on systemd, so that `/run/locksql`, which lives on a tmpfs, is
+   created again at every start of the distribution (from
+   `/etc/tmpfiles.d/locksql.conf`). In `/etc/wsl.conf`:
+
+   ```ini
+   [boot]
+   systemd = true
+   ```
+
+   Without systemd, run `sudo locksql install` again after each restart
+   of the distribution.
+2. Install the release and run `sudo locksql install` (section 2 above):
+   your WSL account becomes the client, `locksql` the console account.
+3. Keep the project in the distribution's own file system (`/home/...`),
+   not under `/mnt/c`: the Windows drives are mounted with fixed owners and
+   modes, so the console account cannot be given `.locksql/` as described
+   above. Windows tools reach the project at `\\wsl$\<distro>\home\...`.
+4. Apply the changes with `wsl.exe --shutdown` from Windows, then open the
+   distribution again.
+
+**Start the console** in a session of the console account of its own.
+Open it from Windows (a Windows Terminal tab, for instance), not with
+`su` or `sudo -u` from your WSL shell, which the console refuses
+(`loginuid`):
+
+```powershell
+wsl.exe -d <distro> -u locksql --cd /home/you/project
+```
+
+then, in that shell, `locksql console --project /home/you/project`.
+`locksql doctor` from both accounts checks the setup; under WSL its
+`separate session` check may warn that `locksql` has no login session,
+because WSL opens no desktop session for it. The console's own checks
+(account, `loginuid`, terminal owner) still run.
+
+**Layout A: the agent inside WSL.** Run Claude Code, Codex or Gemini CLI
+in the distribution, as your WSL account, and wire them with `locksql`
+there (section 1). An editor on Windows that runs its MCP servers inside
+WSL (a WSL remote window) counts as layout A when the server's command
+runs in the distribution. Then turn interop off, so that a Linux process
+cannot start Windows programs. With it on, the agent can run
+`wsl.exe -u root` (or `-u locksql`) and become root or the console account
+without a password, which the threat model excludes. In `/etc/wsl.conf`:
+
+```ini
+[interop]
+enabled = false
+appendWindowsPath = false
+```
+
+and `wsl.exe --shutdown`. Check that your editor's WSL integration still
+works without interop; if it needs interop, you are in layout B's trust
+level. Your WSL account must not have password-less `sudo` (`doctor`
+checks it).
+
+**Layout B: the agent on Windows.** The agent starts the MCP server in the
+distribution through `wsl.exe`, as your default WSL account (the client
+account), in the project directory; `wsl.exe` passes stdin and stdout
+through. Claude Code, for every project:
+
+```powershell
+claude mcp add --scope user locksql -- wsl.exe -d <distro> --cd /home/you/project -e /usr/local/bin/locksql mcp
+```
+
+or in `.mcp.json` (Codex, Gemini CLI and Cursor take the same `command`
+and `args`, as in [Agent wiring](#agent-wiring)):
+
+```json
+{
+  "mcpServers": {
+    "locksql": {
+      "type": "stdio",
+      "command": "wsl.exe",
+      "args": ["-d", "<distro>", "--cd", "/home/you/project", "-e", "/usr/local/bin/locksql", "mcp"]
+    }
+  }
+}
+```
+
+`--cd` must name the project the console serves: the socket name is
+derived from the project path. The client commands run the same way
+(`wsl.exe -d <distro> --cd /home/you/project -e /usr/local/bin/locksql status`).
+`locksql init`, run inside WSL, writes `locksql mcp` for the agents it
+finds there, not for the Windows ones: add the entry above by hand.
+
+In layout B the separation holds against the agent only as long as it runs
+no shell commands of its own: any process of your Windows account can run
+`wsl.exe -u root` or `wsl.exe -u locksql` without a password, attach to the
+console's session or read its memory. As with Docker, the credentials stay
+out of the agent's process and the approval stays in your terminal, but an
+agent determined to go around the console can. Use layout A for the
+boundary.
+
+This guide has not yet been verified end to end on Windows 11; report what
+differs in an issue.
 
 ## 3. Start the console
 
