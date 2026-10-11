@@ -15,8 +15,10 @@ weaknesses as described in [SECURITY.md](../SECURITY.md).
   commands and the MCP server.
 - **Other local users** are not trusted.
 
-locksql supports Linux and macOS only. Where the agent runs depends on the
-mode:
+locksql supports Linux and macOS only; on Windows it runs inside WSL2, a
+Linux system, where the agent must run too for the boundary below to hold
+(see [Windows (WSL2)](usage.md#windows-wsl2)). Where the agent runs depends
+on the mode:
 
 | Mode | Console runs as | Agent runs as | Boundary |
 |---|---|---|---|
@@ -58,7 +60,7 @@ root.
 | Statement smuggling | The classifier refuses several statements, comments, variables, bind parameters and unbalanced quotes, and classifies by keywords outside literals per dialect. Reads are limited to `SELECT`, `WITH ... SELECT` and `EXPLAIN SELECT` and parsed in full by a fail-closed parser: unknown syntax is refused. Multi-statements are off in every driver; PostgreSQL uses the extended protocol only. Tier `read` is also enforced by a read-only session and transaction on the server. |
 | Dangerous functions and statements | Reads may call only allowlisted functions (`internal/sqlast/funcs.go`); schema-qualified (possibly user-defined) functions and system schemas and relations are refused. At every tier: file and OS access, engine escape hatches (`ATTACH`, `load_extension`, `dblink`), SQLite raw storage tables (`sqlite_dbpage`, `dbstat`), sleeps, benchmarks, advisory locks, `FOR UPDATE`, session tampering (`SET ROLE`, `set_config`, guarded `SET` targets) and statements carrying credentials are refused. On PostgreSQL a read's transaction is rolled back, so a `SET` smuggled through a function it calls does not outlive the statement. |
 | Server overload | READ statements need `LIMIT n <= max_rows`; `EXPLAIN` estimates the rows examined and refuses heavy plans, and `explain_cost_refuse` caps the engine's total cost (not on SQLite); k-anonymity counts are weighed too; under a PII filter the verdict is decided at run time: a REFUSE verdict is shown to the human on the console before the agent is told, and the agent only learns that the weight check refused; a server-side timeout plus a client-side cancel (on MySQL the server-side `max_execution_time` covers SELECT only: a write or DDL is ended by the client-side `KILL QUERY` at the deadline); one request at a time. A recursive CTE gets a WARN on PostgreSQL and SQLite, whose planners mark it and can only guess how often it iterates. The parser bounds the bytes a statement can build from literals and size functions (65 536 per value, at most 64 column-width inputs, through every CTE and derived-table layer); `string_agg`-like aggregates over large stored columns remain bounded only by `statement_timeout`. |
-| PII exposure | Column rules proposed from the schema at every start; per-rule mask modes (`redact` by default); quasi-identifiers proposed apart and masked only on acceptance; value detectors with checksums; unmasking is off unless the console runs with `--allow-unmask`, then per query, shown in red and never auto-approved. A profile that names a `database` serves that database only, the one its scan covers, so another database the account can see is never read without rules. |
+| PII exposure | Column rules proposed from the schema at every start; per-rule mask modes (`redact` by default); quasi-identifiers proposed apart and masked only on acceptance; value detectors with checksums; unmasking is off unless the human allows it in the console (`--allow-unmask` at start, `:unmask` while it runs), then per query, shown in red and never auto-approved. A profile that names a `database` serves that database only, the one its scan covers, so another database the account can see is never read without rules. |
 | Alias or expression bypass | Every output column of a read is resolved to its base source columns through aliases, functions, subqueries, CTEs (recursive ones by fixpoint), set operations, joins and `*`, and masked on that source, not on its label. Expressions and functions over PII columns are refused; aggregates other than `COUNT`, `MIN` and `MAX` are redacted. The result's column count and labels must match the analysis or the result is dropped; the engine's origin metadata is a second check. |
 | Predicate oracles | A PII column may only be compared for equality with a literal (`=`, `IN (literals)`, `IS NULL`) in `WHERE`/`HAVING`, or joined with `=` (also `IN (subquery)`, `USING`, `NATURAL`) to another PII column: a join with an unmasked column would copy its values where no mask applies. These atoms must be positive and reached through `AND` only: a PII atom under `NOT`, `OR` or `XOR`, and `<>`, `!=`, `NOT IN`, `IS NOT NULL`, `IS DISTINCT FROM` on a PII column, would select the complement of what the k-anonymity check counts and are refused. A scalar subquery returning a PII value cannot be a filter operand. A `UNION`, `INTERSECT` or `EXCEPT` between a PII column and a non-PII arm (a literal, an expression, an unmasked column) is refused, because `INTERSECT`, `EXCEPT` and the duplicate removal of `UNION` are equality tests no k-anonymity check counts; `UNION ALL` compares nothing and stays allowed, but `DISTINCT`, an aggregate's `DISTINCT` or `GROUP BY` over a column it mixed is refused for the same reason. `LIKE`, ranges, functions over it, `ORDER BY`, window `PARTITION BY`/`ORDER BY`, `FILTER`, `DISTINCT ON` and constant comparisons in `JOIN ... ON` are refused, so a query cannot compare it character by character with generated values. |
 | Inference through aggregates and filters | A filter, grouping or aggregate on a PII column runs console-built `COUNT` queries (from the statement's own `FROM`, `WHERE`, `GROUP BY` and `HAVING`, shown on the approval screen) after approval and before the statement; fewer than `k_anonymity` rows (default 5, production 10) refuses it. Row estimates are hidden from the agent, a filter on a PII column has its weight verdict decided at run time on the console (`query.plan` answers `OK`; a REFUSE verdict is shown to the human on the console before the agent is told, without its reasons), and `EXPLAIN` is refused for such statements, since the planner's figures would answer the same question. |
@@ -87,27 +89,51 @@ root.
 - REFUSE verdicts cannot be overridden from the console; the human has to
   raise the limits, which is itself a confirmed loosening.
 
-## `--allow-unmask`
+## Unmasked output
 
-Unmasked output is off unless the human starts the console with
-`--allow-unmask`, a console-only flag: no client or config file can turn it
-on, so an agent cannot ask for raw PII values by itself. Without it, an
-unmask request is refused before parsing and audited; with it, each unmasked
-query is still approved by the human and never auto-approved, and its clear
-result is printed in the console, never in the audit log.
+Unmasked output is off unless the human allows it in the console:
+`--allow-unmask` at start, or `:unmask` while it runs. Both are
+console-only: no client or config file can turn it on, so an agent cannot
+ask for raw PII values by itself. While it is off, an unmask request is
+refused before parsing and audited; while it is on, each unmasked query is
+still approved by the human and never auto-approved, and its clear result
+is printed in the console, never in the audit log.
 
-## Console switches: clear results and auto mode
+## Console switches: clear results, auto mode, unmasked output
 
-Two behaviours of the console switch while it runs, from its own keyboard
-only: Ctrl-O (or `:results`) prints the clear result of each masked query
-in the console, Shift+Tab (or `:mode`) turns auto mode on and off.
-`--show-results` and `--auto` only set the starting state. No client,
-config file or environment variable can set either: the keys are read from
-the console's terminal, which the separated setup keeps away from the
-agent, and no socket method or config field reaches them. Each switch is
-audited (`mode` and `results` records with the new state), announced on
-the console and shown on the status row fixed at the bottom of the
-terminal, so the state is visible at all times, not only at start.
+Three behaviours of the console switch while it runs, from its own
+keyboard only: Ctrl-O (or `:results`) prints the clear result of each
+masked query in the console, Shift+Tab (or `:mode`) turns auto mode on and
+off, and `:unmask` allows or stops unmasked output. `--show-results`,
+`--auto` and `--allow-unmask` only set the starting state. No client,
+config file or environment variable can set any of them: the keys and
+commands are read from the console's terminal, which the separated setup
+keeps away from the agent, and no socket method or config field reaches
+them (`locksql status` and `locksql_status` only report them). Each switch
+is audited (`mode`, `results` and `unmask` records with the new state),
+announced on the console and shown on the status row fixed at the bottom of
+the terminal, so the state is visible at all times, not only at start.
+
+The transitions:
+
+| Switch | Change | How | Confirmation | Audit record | Takes effect |
+|---|---|---|---|---|---|
+| Approval mode | manual → auto | Shift+Tab, `:mode` | none; refused on a production profile (nothing audited) | `mode` / `auto` | the next `query.run` |
+| Approval mode | auto → manual | Shift+Tab, `:mode` | none | `mode` / `manual` | the next `query.run` |
+| Clear results | hidden → shown | Ctrl-O, `:results` | none (red warning on production) | `results` / `shown` | the next run |
+| Clear results | shown → hidden | Ctrl-O, `:results` | none | `results` / `hidden` | the next run |
+| Unmasked output | off → allowed | `:unmask` only, never a single key | `y` to a prompt (anything else, or no answer within 5 minutes, leaves it off, unaudited) | `unmask` / `allowed` | the next `query.plan` |
+| Unmasked output | allowed → off | `:unmask` | none | `unmask` / `off` | at once: an open unmask plan is refused at `query.run` |
+
+Tightening transitions (auto → manual, results hidden, unmask off) need no
+confirmation. Allowing unmasked output is the one that widens what a client
+may ask for, so it is a typed command confirmed with `y`, never a key that
+an accidental press could trigger. Turning on auto mode or the clear
+results is a single key because neither widens what reaches the agent:
+auto mode never covers an unmasked query or a REFUSE verdict, and the clear
+results are printed only on the console. A key pressed while an approval
+prompt waits is applied at once and covers the next statement; the
+statement on screen still waits for the human's answer.
 
 **Clear results** change nothing for the agent, which still gets the masked
 cells: the human is the trusted party and already sees the SQL and holds
@@ -124,7 +150,7 @@ auto-approved frame with `auto-approved` and audits each decision as
 
 The console appends one JSONL record per event (login, policy change,
 refusal, approval, denial, timeout, auto-approval, abandoned approval, run,
-catalog read, mode and results switch, logout) to
+catalog read, mode, results and unmask switch, logout) to
 `<user state dir>/locksql/audit.log`, mode 0600.
 Records contain the SQL and metadata, never secrets and never row data. The
 approval (or auto-approval) of a statement is written before anything runs,

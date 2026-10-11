@@ -128,6 +128,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 // runEnv is run with an explicit environment.
 func runEnv(e env, args []string) int {
 	stdout, stderr := e.stdout, e.stderr
+	first := ""
+	if len(args) > 0 {
+		first = args[0]
+	}
+	if !platformAllows(first) {
+		fmt.Fprintln(stderr, windowsRefusal)
+		return exitFail
+	}
 	if len(args) == 0 {
 		if e.tty {
 			return runOnboard(e)

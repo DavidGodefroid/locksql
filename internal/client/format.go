@@ -336,7 +336,7 @@ func allowedOff(b bool) string {
 	if b {
 		return "allowed (each query approved in the console)"
 	}
-	return "off (console started without --allow-unmask)"
+	return "off (allowed only by the human in the console: --allow-unmask or :unmask)"
 }
 
 func onOff(b bool) string {

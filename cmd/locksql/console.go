@@ -28,7 +28,7 @@ func runConsole(e env, args []string) int {
 	profile := fs.String("profile", "", "profile to open")
 	auto := fs.Bool("auto", false, "start in auto mode: statements allowed by the tier and the weight check run without a prompt (never on production, never unmask); Shift+Tab switches the mode while the console runs")
 	skip := fs.Bool("skip-permissions", false, "same as --auto (older name)")
-	allowUnmask := fs.Bool("allow-unmask", false, "let clients ask for unmasked PII output; each such query is still approved here, never auto-approved (off by default: unmask requests are refused)")
+	allowUnmask := fs.Bool("allow-unmask", false, "let clients ask for unmasked PII output; each such query is still approved here, never auto-approved (off by default: unmask requests are refused); :unmask switches it while the console runs")
 	showResults := fs.Bool("show-results", false, "print in this console, in clear, the result of each masked query it runs; the client still gets it masked")
 	project := fs.String("project", "", "project directory (default: the current directory); the console account opens the agent's project from its own session")
 	if err := fs.Parse(args); err != nil {

@@ -178,6 +178,9 @@ func TestNewPolicySortsAndDedupes(t *testing.T) {
 }
 
 func TestApprovedRoundTrip(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file modes: Windows reports none")
+	}
 	state := t.TempDir()
 	key := ApprovedKey("/proj", "uat")
 	if _, err := LoadApproved(state, key); !errors.Is(err, fs.ErrNotExist) {

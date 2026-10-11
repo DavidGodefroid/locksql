@@ -7,11 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -91,17 +89,11 @@ func (t *Terminal) Interactive() error {
 	if t.restore != nil {
 		return nil
 	}
-	old, err := getTermios(t.fd)
+	restore, err := cbreak(t.fd)
 	if err != nil {
 		return fmt.Errorf("console: terminal mode: %w", err)
 	}
-	raw := *old
-	raw.Lflag &^= syscall.ICANON | syscall.ECHO | syscall.IEXTEN
-	raw.Cc[syscall.VMIN], raw.Cc[syscall.VTIME] = 1, 0
-	if err := setTermios(t.fd, &raw); err != nil {
-		return fmt.Errorf("console: terminal mode: %w", err)
-	}
-	t.restore = func() { _ = setTermios(t.fd, old) }
+	t.restore = restore
 	t.echo = true
 	t.size()
 	go t.watchSize()
@@ -135,8 +127,8 @@ func (t *Terminal) size() {
 // terminal is resized.
 func (t *Terminal) watchSize() {
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGWINCH)
-	defer signal.Stop(sig)
+	stop := notifyResize(sig)
+	defer stop()
 	for range sig {
 		t.mu.Lock()
 		if t.restore == nil {

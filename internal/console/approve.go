@@ -237,10 +237,12 @@ func (s *Server) Command(ctx context.Context, line string) {
 		s.toggleMode()
 	case ":results":
 		s.toggleResults()
+	case ":unmask":
+		s.toggleUnmask(ctx)
 	case ":quit":
 		s.End("quit")
 	default:
-		s.println("commands: :review (pending policy change and change requests) · :status · :mode (Shift+Tab) · :results (Ctrl-O) · :quit")
+		s.println("commands: :review (pending policy change and change requests) · :status · :mode (Shift+Tab) · :results (Ctrl-O) · :unmask · :quit")
 	}
 }
 
@@ -259,8 +261,8 @@ func (s *Server) statusLines() []string {
 	if s.showResults {
 		results = paint.Yellow("shown here in clear, PII included")
 	}
-	unmask := "refused (start the console with --allow-unmask to allow it)"
-	if s.cfg.AllowUnmask {
+	unmask := "refused (:unmask allows it)"
+	if s.allowUnmask {
 		unmask = paint.Red("allowed: clients may ask for unmasked output, approved here each time")
 	}
 	pending := "none"
@@ -272,7 +274,7 @@ func (s *Server) statusLines() []string {
 		{"databases", safeText(strings.Join(st.Databases, ", "), false)},
 		{"mode", mode + paint.Dim(" (Shift+Tab or :mode)")},
 		{"results", results + paint.Dim(" (Ctrl-O or :results)")},
-		{"unmask", unmask},
+		{"unmask", unmask + paint.Dim(" (:unmask)")},
 		{"limits", fmt.Sprintf("timeout %s · warn %d · refuse %d · max_rows %d · max_cell_chars %d · max_output_bytes %d",
 			l.StatementTimeout, l.ExplainRowsWarn, l.ExplainRowsRefuse, l.MaxRows, l.MaxCellChars, l.MaxOutputBytes)},
 		{"session", fmt.Sprintf("ends in %d min (max_session %s) · idle_timeout %s", st.SessionEndsInS/60, l.MaxSession, l.IdleTimeout)},

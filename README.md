@@ -127,7 +127,8 @@ on a redacted cell's reference (`'${r1.2.3}'`). The value never reaches it.
 
 **👁️ Clear for you only**<br>
 Ctrl-O in the console prints the clear rows there while the agent gets
-them masked; `--allow-unmask` is the only way an agent can ask for raw PII.
+them masked; `--allow-unmask` (or `:unmask` in the console) is the only
+way an agent can ask for raw PII.
 
 </td>
 </tr>
@@ -256,7 +257,8 @@ Full walkthrough: [docs/usage.md](docs/usage.md).
 | `sqlite` | 3 (pure Go, in-process) | `mode=ro` + `query_only` | interrupt on deadline | `EXPLAIN QUERY PLAN` + `sqlite_stat1` (run `ANALYZE` once, or every full scan is a WARN of unknown size) |
 
 All engines are pure Go: the binary is built with `CGO_ENABLED=0`. locksql
-supports Linux and macOS only, on amd64 and arm64.
+supports Linux and macOS, on amd64 and arm64. On Windows it runs inside
+WSL2 ([guide](docs/usage.md#windows-wsl2)); native Windows is not supported.
 
 ## Safety model
 
@@ -473,28 +475,30 @@ On PostgreSQL the first segment is the schema (`public.users.email`).
 ## `--allow-unmask`
 
 An agent can ask for unmasked PII output (`locksql plan --unmask`, or
-`unmask` in the MCP `locksql_plan` tool) only when the human started the
-console with `locksql console --allow-unmask`. Without it, the console
-refuses every unmask request before anything runs and audits the refusal.
-Like auto mode, it is console-only: no client or config file can turn it
-on. With it, each unmasked query still needs the human's
+`unmask` in the MCP `locksql_plan` tool) only when the human allowed it in
+the console: `locksql console --allow-unmask` at start, or `:unmask` while
+it runs (confirmed with `y`; `:unmask` again turns it off). Without it, the
+console refuses every unmask request before anything runs and audits the
+refusal. Like auto mode, it is console-only: no client or config file can
+turn it on, and each change is audited (`unmask` record). With it, each unmasked query still needs the human's
 approval, shown as `PII: UNMASKED` in red, and is never auto-approved. The
 console then prints the clear result, so you see exactly what the agent
 received (the audit log still holds no row data).
 
 ## Console keys and status line
 
-The console runs its own line editor, so two keys switch its behaviour
-while it runs, and a status row fixed at the bottom of the terminal always
-shows the state: the profile and tier, the approval mode, whether results
+The console runs its own line editor, so two keys and one command switch
+its behaviour while it runs, without a restart, and a status row fixed at
+the bottom of the terminal always shows the state: the profile and tier, the approval mode, whether results
 are shown in clear, `unmask allowed`, the open plans and what awaits
-`:review`. Both switches are console-only (no client, config file or
+`:review`. The switches are console-only (no client, config file or
 environment variable can set them) and each change is audited.
 
 | Key | Typed | Effect |
 |---|---|---|
 | Shift+Tab | `:mode` | manual ⇄ auto approval mode |
 | Ctrl-O | `:results` | results masked ⇄ shown here in clear |
+| | `:unmask` | unmasked output off ⇄ allowed (allowing asks for `y`) |
 
 ## Clear results (Ctrl-O)
 
@@ -574,6 +578,8 @@ deliberately narrow:
 | 📘 [docs/usage.md](docs/usage.md) | console, client commands, MCP server, agent integration |
 | 🐳 [docs/docker.md](docs/docker.md) | running the console and the agent's MCP server in Docker, with nothing installed |
 | 🛡️ [docs/security-model.md](docs/security-model.md) | threat model and mitigations, and an upstream recommendation (PII encrypted at rest with a blind index) |
+| 🔍 [docs/pii-analysis.md](docs/pii-analysis.md) | how the PII analysis works: parser, provenance, usage rules, k-anonymity counts, masking (for contributors) |
+| 🏁 [docs/1.0.md](docs/1.0.md) | the 1.0 criteria and the versioning policy from 1.0 |
 | 🚨 [SECURITY.md](SECURITY.md) | reporting a vulnerability |
 | 🧑‍💻 [CONTRIBUTING.md](CONTRIBUTING.md) | building and testing |
 

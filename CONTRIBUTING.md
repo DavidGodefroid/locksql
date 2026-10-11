@@ -10,6 +10,9 @@ issue.
   approach. locksql is a security tool: features that loosen a default, add a
   way around the console, or add a dependency need a clear case.
 - Code, comments, docs and commit messages are in English.
+- Changes to the parser, the analyzer or the masking start with
+  [docs/pii-analysis.md](docs/pii-analysis.md), which explains how they fit
+  together.
 - By contributing you agree that your work is licensed under the Apache
   License 2.0.
 
@@ -31,6 +34,18 @@ go test ./...
 
 Unit tests need no database: SQLite runs in-process, and the EXPLAIN
 fixtures under `testdata/explain/` cover the other engines.
+
+The module also builds for Windows, where locksql refuses to run (see
+[docs/usage.md](docs/usage.md#windows-wsl2)), and CI runs the unit tests on
+`windows-latest`. A test file that needs Unix accounts, file modes, sockets
+or terminals starts with `//go:build unix`; a single test skips with
+`t.Skip` and the reason. To check that the tests still compile for
+Windows:
+
+```sh
+GOOS=windows go vet ./...
+GOOS=windows go test -exec /bin/true ./...
+```
 
 ### Integration tests
 
