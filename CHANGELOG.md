@@ -4,7 +4,7 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## v0.5.2 (unreleased)
+## v0.5.2 (2026-10-11)
 
 ### Changed
 
