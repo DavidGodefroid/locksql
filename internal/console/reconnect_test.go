@@ -168,7 +168,7 @@ func TestProductionTighteningReauditsLiveSession(t *testing.T) {
 
 func TestReviewWarnsAboutSkipPermissions(t *testing.T) {
 	p := prodProfile()
-	h := newHarness(t, p, func(c *ServerConfig) { c.SkipPermissions = true })
+	h := newHarness(t, p, func(c *ServerConfig) { c.Auto = true })
 	next := p
 	next.Production = false
 	h.s.pending = new(config.Policy)

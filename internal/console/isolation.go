@@ -205,11 +205,29 @@ func peerText(ctx context.Context) string {
 	}
 	if c.PID > 0 {
 		who += " · pid " + strconv.Itoa(c.PID)
-		if runtime.GOOS == "linux" {
-			if b, err := os.ReadFile("/proc/" + strconv.Itoa(c.PID) + "/comm"); err == nil {
-				who += " (" + strings.TrimSpace(string(b)) + ")"
-			}
+		if p := processText(c.PID); p != "" {
+			who += " · " + p
 		}
 	}
 	return who
+}
+
+// processText names the process behind pid on Linux: its executable path
+// when the kernel lets the console read it (a process of its own account),
+// else the name the process gave itself, labelled as such; "" elsewhere.
+// The uid and pid are the kernel's; the name is the process's choice.
+func processText(pid int) string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	dir := "/proc/" + strconv.Itoa(pid)
+	if exe, err := os.Readlink(dir + "/exe"); err == nil && exe != "" {
+		return "exe " + exe
+	}
+	if b, err := os.ReadFile(dir + "/comm"); err == nil {
+		if name := strings.TrimSpace(string(b)); name != "" {
+			return "process " + strconv.Quote(name) + " (self-reported name)"
+		}
+	}
+	return ""
 }

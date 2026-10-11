@@ -288,3 +288,19 @@ func TestConnectSavesKeychainSecretOnUpperY(t *testing.T) {
 		t.Errorf("saved item = %q, %v", v, err)
 	}
 }
+
+// A failed core-dump protection is a warning outside production and a
+// refusal on a production profile, where it is a credential mitigation.
+func TestHardenRefusal(t *testing.T) {
+	if hardenRefusal(nil, true) != nil || hardenRefusal(nil, false) != nil {
+		t.Error("refused without a harden error")
+	}
+	err := errors.New("prctl: operation not permitted")
+	if hardenRefusal(err, false) != nil {
+		t.Error("refused outside production")
+	}
+	got := hardenRefusal(err, true)
+	if got == nil || !strings.Contains(got.Error(), "refused") || !strings.Contains(got.Error(), "not permitted") {
+		t.Errorf("production: %v", got)
+	}
+}

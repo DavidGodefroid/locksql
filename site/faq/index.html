@@ -70,7 +70,7 @@
 </section>
 <section aria-labelledby="self-approve">
   <h2 id="self-approve">Can the agent approve its own queries, or turn approval off?</h2>
-  <p>Approval comes only from the console terminal: no socket method approves, and no socket method loosens the policy. <a href="../how-it-works/#skip"><code>--skip-permissions</code></a> is a console flag only; no client or config file can turn it on, and it is ignored on production profiles. The agent’s account must be separate from the console’s.</p>
+  <p>Approval comes only from the console terminal: no socket method approves, and no socket method loosens the policy. <a href="../how-it-works/#skip">Auto mode</a> switches only from the console's keyboard; no client or config file can turn it on, and it is unavailable on production profiles. The agent’s account must be separate from the console’s.</p>
 </section>
 <section aria-labelledby="own-account">
   <h2 id="own-account">Why does the console need its own OS account?</h2>
@@ -94,7 +94,7 @@
 </section>
 <section aria-labelledby="see-values">
   <h2 id="see-values">Can I see the real values myself?</h2>
-  <p>Yes: start the console with <code>--show-results</code> and it prints each result in clear, in the console only; the agent still gets the masked cells. If the agent itself must see raw values, start the console with <code>--allow-unmask</code>: only then may it ask for an unmasked query, which you still approve one by one. <a href="../how-it-works/#show-results">More on these flags</a>.</p>
+  <p>Yes: press Ctrl-O in the console (or start it with <code>--show-results</code>) and it prints each result in clear, in the console only; the agent still gets the masked cells. If the agent itself must see raw values, start the console with <code>--allow-unmask</code>: only then may it ask for an unmasked query, which you still approve one by one. <a href="../how-it-works/#show-results">More on these flags</a>.</p>
 </section>
 <section aria-labelledby="k-anonymity">
   <h2 id="k-anonymity">Does k-anonymity stop all inference?</h2>
@@ -114,11 +114,11 @@
 </section>
 <section aria-labelledby="audit">
   <h2 id="audit">What is logged?</h2>
-  <p>Every login, policy change, refusal, decision, catalog read and logout, in a JSONL audit log (mode 0600). Records contain the SQL and metadata, never secrets and never row data.</p>
+  <p>Every login, policy change, refusal, decision, run, catalog read, console switch and logout, in a JSONL audit log (mode 0600); the approval is written before the statement runs, its outcome after. Records contain the SQL and metadata, never secrets and never row data.</p>
 </section>
 <section aria-labelledby="skip-permissions">
-  <h2 id="skip-permissions">What is <code>--skip-permissions</code> for?</h2>
-  <p>Fast local iteration: it auto-approves statements that the tier and the weight check allow. It is ignored on production profiles, never auto-approves an unmasked query, never overrides a <code>REFUSE</code> verdict, and each auto-approval is audited.</p>
+  <h2 id="skip-permissions">What is auto mode for?</h2>
+  <p>Fast local iteration: Shift+Tab in the console (or <code>--auto</code> at start) auto-approves statements that the tier and the weight check allow, until Shift+Tab again. It is unavailable on production profiles, never auto-approves an unmasked query, never overrides a <code>REFUSE</code> verdict, shows on the console's status line, and each switch and each auto-approval is audited.</p>
 </section>
 <section aria-labelledby="sharing">
   <h2 id="sharing">Can several people share one console, or export data?</h2>

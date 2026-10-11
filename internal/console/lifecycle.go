@@ -124,8 +124,9 @@ func Run(ctx context.Context, o Options) error {
 	if err := SameUserRefused(sys); err != nil {
 		return err
 	}
-	if err := harden(); err != nil {
-		o.IO.Println("warning: could not disable core dumps: " + err.Error())
+	hardenErr := hardenProcess()
+	if hardenErr != nil {
+		o.IO.Println(paint.Warn(red + "could not disable core dumps: " + safeText(hardenErr.Error(), false) + reset))
 	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -192,6 +193,10 @@ func Run(ctx context.Context, o Options) error {
 	}
 	p = approved.Profile
 	st.profile = p
+	if err := hardenRefusal(hardenErr, p.Production); err != nil {
+		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
+		return err
+	}
 
 	// Separation from the agent, before any secret is asked for.
 	iso, err := checkIsolation(o.IO, isoEnv, p)
@@ -210,8 +215,8 @@ func Run(ctx context.Context, o Options) error {
 		if !ok || strings.TrimSpace(ans) != p.Name {
 			return errors.New("console: production profile not confirmed")
 		}
-		if o.SkipPermissions {
-			o.IO.Println("--skip-permissions is ignored on production profiles: every statement is prompted")
+		if o.Auto {
+			o.IO.Println("--auto is ignored on production profiles: every statement is prompted")
 		}
 	}
 
@@ -292,7 +297,7 @@ func Run(ctx context.Context, o Options) error {
 	s, err := NewServer(ServerConfig{
 		Policy: approved, RulesPath: rulesPath, StateDir: o.StateDir, ApprovedKey: key,
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Now: o.Now,
-		SkipPermissions: o.SkipPermissions, AllowUnmask: o.AllowUnmask, ShowResults: o.ShowResults, Version: o.Version, LoadPolicy: loadPolicy,
+		Auto: o.Auto, AllowUnmask: o.AllowUnmask, ShowResults: o.ShowResults, Version: o.Version, LoadPolicy: loadPolicy,
 		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health,
 	})
 	if err != nil {
@@ -321,6 +326,20 @@ func Run(ctx context.Context, o Options) error {
 	s.audit(audit.Record{Event: audit.EventLogout, Decision: reason})
 	o.IO.Println(paint.Step("session ended: " + reason))
 	return serveErr
+}
+
+// hardenProcess is harden; tests replace it.
+var hardenProcess = harden
+
+// hardenRefusal is the error of a console whose core-dump protection could
+// not be set up (hardenErr) on a production profile, where that protection
+// is part of the credential mitigations; nil otherwise, where the console
+// only warned.
+func hardenRefusal(hardenErr error, production bool) error {
+	if hardenErr == nil || !production {
+		return nil
+	}
+	return fmt.Errorf("console: refused: core dumps could not be disabled (%v) and the profile is production; the secret would be exposed in a dump", hardenErr)
 }
 
 // where is the profile's host (and port) or SQLite path, escaped for the
@@ -763,7 +782,7 @@ func flagNotices(o Options, p config.Profile) []string {
 		out = append(out, paint.Warn("--allow-unmask: clients may ask for unmasked PII output; each such query is approved here, never auto-approved"))
 	}
 	if o.ShowResults {
-		msg := "--show-results: the result of each query is printed here in clear, PII included; the agent still gets it masked"
+		msg := "--show-results: the result of each query is printed here in clear, PII included; the agent still gets it masked (Ctrl-O: hide)"
 		if p.Production {
 			out = append(out, red+ui.MarkWarn+" "+msg+" (PRODUCTION data: mind screen sharing and the terminal's scrollback)"+reset)
 		} else {
@@ -783,7 +802,8 @@ func readyLines(socket, root string, showResults bool) []string {
 	if showResults {
 		out = append(out, "  "+paint.Dim("results  ")+paint.Yellow("shown in clear in this console (--show-results)"))
 	}
-	return append(out, "  "+paint.Dim("commands ")+paint.Accent(":review")+"  "+paint.Accent(":status")+"  "+paint.Accent(":quit")+paint.Dim(" · Ctrl-C ends the session"))
+	out = append(out, "  "+paint.Dim("keys     ")+paint.Accent("Shift+Tab")+" manual/auto mode  "+paint.Accent("Ctrl-O")+" results masked/clear"+paint.Dim(" · the status line below shows both"))
+	return append(out, "  "+paint.Dim("commands ")+paint.Accent(":review")+"  "+paint.Accent(":status")+"  "+paint.Accent(":mode")+"  "+paint.Accent(":results")+"  "+paint.Accent(":quit")+paint.Dim(" · Ctrl-C ends the session"))
 }
 
 // servedDatabases is what the console serves: the profile's database alone

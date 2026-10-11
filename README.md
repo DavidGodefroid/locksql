@@ -126,7 +126,7 @@ on a redacted cell's reference (`'${r1.2.3}'`). The value never reaches it.
 <td valign="top">
 
 **👁️ Clear for you only**<br>
-`--show-results` prints the clear rows in the console while the agent gets
+Ctrl-O in the console prints the clear rows there while the agent gets
 them masked; `--allow-unmask` is the only way an agent can ask for raw PII.
 
 </td>
@@ -251,9 +251,9 @@ Full walkthrough: [docs/usage.md](docs/usage.md).
 | Engine | Versions | Read-only session (tier `read`) | Server-side timeout | Plan source |
 |---|---|---|---|---|
 | `mariadb` | 10.1+ (tested 10.11, 11.4) | `SET SESSION TRANSACTION READ ONLY` + `START TRANSACTION READ ONLY` | `max_statement_time` + `KILL QUERY` | `EXPLAIN FORMAT=JSON` |
-| `mysql` | 8.0+ (tested 8.0, 8.4) | same as MariaDB | `max_execution_time` + `KILL QUERY` | `EXPLAIN FORMAT=JSON` |
+| `mysql` | 8.0+ (tested 8.0, 8.4) | same as MariaDB | `max_execution_time` (SELECT only; writes rely on `KILL QUERY`) + `KILL QUERY` | `EXPLAIN FORMAT=JSON` |
 | `postgres` | 13+ (tested 13, 17) | `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY` + `BEGIN READ ONLY` … `ROLLBACK` | `statement_timeout` + cancel request | `EXPLAIN (FORMAT JSON, VERBOSE)` |
-| `sqlite` | 3 (pure Go, in-process) | `mode=ro` + `query_only` | interrupt on deadline | `EXPLAIN QUERY PLAN` + `sqlite_stat1` |
+| `sqlite` | 3 (pure Go, in-process) | `mode=ro` + `query_only` | interrupt on deadline | `EXPLAIN QUERY PLAN` + `sqlite_stat1` (run `ANALYZE` once, or every full scan is a WARN of unknown size) |
 
 All engines are pure Go: the binary is built with `CGO_ENABLED=0`. locksql
 supports Linux and macOS only, on amd64 and arm64.
@@ -330,8 +330,9 @@ only guide the agent; the console's checks are the guarantee.
   request changes. A config edit that loosens the policy (higher tier, larger
   limits, new host, removed PII rule, ...) only takes effect after you
   confirm it in the console.
-- **Audit.** Every login, policy change, refusal, decision, catalog read and
-  logout is appended to a JSONL audit log (mode 0600). The records of a client
+- **Audit.** Every login, policy change, refusal, decision, run, catalog
+  read and logout is appended to a JSONL audit log (mode 0600): the approval
+  before the statement runs, its outcome after. The records of a client
   request name the requester: its uid, pid and account. Never secrets, never
   row data.
 
@@ -416,7 +417,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `credentials` | `ask` | `keychain` offers to save the secret after the first successful login; `locksql forget --profile P` removes it |
 | `credentials_ttl` | none | a duration of at least `1m` (`"20m"`, `"1h"`): the connection is closed and the secret asked again once it is that old |
 | `tier` | `read` | highest statement class allowed |
-| `production` | `false` | stricter limits, typed approval, `--skip-permissions` ignored |
+| `production` | `false` | stricter limits, typed approval, auto mode unavailable |
 | `detectors` | `email`, `phone`, `iban`, `card` | also `be_niss`, `fr_nir`, `nl_bsn`, `us_ssn`; `[]` disables them |
 | `limits.statement_timeout` | 30s (production 10s) | |
 | `limits.explain_rows_warn` | 100 000 (production 20 000) | |
@@ -475,36 +476,55 @@ An agent can ask for unmasked PII output (`locksql plan --unmask`, or
 `unmask` in the MCP `locksql_plan` tool) only when the human started the
 console with `locksql console --allow-unmask`. Without it, the console
 refuses every unmask request before anything runs and audits the refusal.
-Like `--skip-permissions`, it is a console flag only: no client or config
-file can turn it on. With it, each unmasked query still needs the human's
+Like auto mode, it is console-only: no client or config file can turn it
+on. With it, each unmasked query still needs the human's
 approval, shown as `PII: UNMASKED` in red, and is never auto-approved. The
 console then prints the clear result, so you see exactly what the agent
 received (the audit log still holds no row data).
 
-## `--show-results`
+## Console keys and status line
 
-`locksql console --show-results` prints in the console, in clear, the result
-of each masked query it runs, so you see who the rows are while the agent
-still gets the masked cells. The cells the agent got masked are yellow and
-carry their reference (`‹r1.1.2›`); the output caps apply as for the agent.
-It is a console flag only, off by default: no client or config file can turn
-it on. The console warns at start (in red on production), says so in the
-Ready block and on every approval screen, and `locksql status` reports
-`show results on`. The audit log still holds no row data.
+The console runs its own line editor, so two keys switch its behaviour
+while it runs, and a status row fixed at the bottom of the terminal always
+shows the state: the profile and tier, the approval mode, whether results
+are shown in clear, `unmask allowed`, the open plans and what awaits
+`:review`. Both switches are console-only (no client, config file or
+environment variable can set them) and each change is audited.
 
-## `--skip-permissions`
+| Key | Typed | Effect |
+|---|---|---|
+| Shift+Tab | `:mode` | manual ⇄ auto approval mode |
+| Ctrl-O | `:results` | results masked ⇄ shown here in clear |
 
-`locksql console --profile dev --skip-permissions` auto-approves statements
-that the tier and the weight check allow. It exists for fast local
-iteration, and it is deliberately narrow:
+## Clear results (Ctrl-O)
 
-- it is a console flag only; no client or config file can turn it on;
-- it is **ignored on production profiles** (the console says so and prompts
-  as usual);
+Ctrl-O (or `locksql console --show-results` to start that way) prints in
+the console, in clear, the result of each masked query it runs, as an
+aligned table, so you see who the rows are while the agent still gets the
+masked cells. The cells the agent got masked are yellow and carry their
+reference (`‹r1.1.2›`); the output caps apply as for the agent. Off by
+default. The console warns when it goes on (in red on production), the
+status row reads `results clear`, every approval screen says `result:
+shown here in clear`, and `locksql status` reports `show results on`. The
+audit log still holds no row data.
+
+## Approval mode (Shift+Tab)
+
+The console starts in **manual** mode: every statement is prompted.
+Shift+Tab (or `locksql console --auto` to start that way) switches to
+**auto** mode, where statements that the tier and the weight check allow
+run without a prompt. It exists for fast local iteration, and it is
+deliberately narrow:
+
+- it switches only from the console's keyboard; no client or config file
+  can turn it on;
+- it is **unavailable on production profiles** (the key says so and the
+  console prompts as usual);
 - it never auto-approves an unmasked query and never overrides a REFUSE
   verdict;
-- every console line is prefixed with `AUTO-APPROVE` while it is in effect,
-  and each auto-approval is audited with `decision: "auto"`.
+- the status row reads `mode AUTO`, each auto-approved frame ends with
+  `auto-approved`, and each auto-approval is audited with
+  `decision: "auto"`; the switch itself is audited as `mode`.
 
 ## Limitations
 
@@ -520,8 +540,8 @@ iteration, and it is deliberately narrow:
   under `limits.reference_probe`, across results or sessions, is not stopped.
   The unmasked columns of a targeted row still identify it, and free text
   without a detector is not masked.
-- **Clear results stay on the console's screen.** With `--show-results` (and
-  for an unmasked run) the clear rows stay in the scrollback of the console's
+- **Clear results stay on the console's screen.** With the clear results on
+  (Ctrl-O, `--show-results`) and for an unmasked run, the clear rows stay in the scrollback of the console's
   terminal, visible to anyone who sees that screen (screen sharing, recording,
   a terminal that logs its output). locksql does not clear it.
 - **Transport security depends on `tls`.** A remote profile defaults to
@@ -532,11 +552,14 @@ iteration, and it is deliberately narrow:
   protects plain TCP connections only, and go-mysql answers
   `mysql_clear_password`, `sha256_password` and a `caching_sha2_password`
   full authentication (the MySQL 8 default) in clear over any TLS, so an
-  attacker terminating TLS gets the MySQL/MariaDB password; PostgreSQL sends
-  it in clear to a server that asks for cleartext authentication. On plain
+  attacker terminating TLS gets the MySQL/MariaDB password. On plain
   TCP (`disable`, or `prefer` after a fallback) the guard refuses a full
   authentication, so a MySQL 8 account logs in only while the server's
-  authentication cache holds it. `verify-ca`
+  authentication cache holds it. On PostgreSQL, a remote host under
+  `disable`, `prefer` or `require` without `tls_ca` answers no clear-text or
+  MD5 password request (libpq's `require_auth=!password,!md5`): the
+  connection is refused with the remedy, `tls = "verify-full"` or a
+  SCRAM-SHA-256 password for the account. `verify-ca`
   and `verify-full` prevent the impersonation. Through an `ssh` bastion the
   SSH leg is encrypted and verified, but the bastion-to-database leg is
   protected only by `tls`, unless the database runs on the bastion. See

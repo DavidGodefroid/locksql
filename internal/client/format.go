@@ -76,7 +76,7 @@ func FormatStatus(w io.Writer, s ipc.StatusResult) {
 	kv("host", s.Host)
 	kv("tier", s.Tier)
 	kv("production", yesNo(s.Production))
-	kv("auto-approve", yesNo(s.SkipPermissions))
+	kv("auto-approve", yesNo(s.AutoApprove))
 	kv("unmask", allowedOff(s.AllowUnmask))
 	kv("show results", onOff(s.ShowResults))
 	kv("databases", strings.Join(s.Databases, ", "))

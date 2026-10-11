@@ -400,7 +400,7 @@ each; the exit code is 1 when any check fails.
 In a terminal you keep in view, in the `locksql` session:
 
 ```sh
-locksql console [--profile dev] [--project DIR] [--skip-permissions] [--allow-unmask] [--show-results]
+locksql console [--profile dev] [--project DIR] [--auto] [--allow-unmask] [--show-results]
 ```
 
 Without `--profile` the console uses the only profile, or asks which one when
@@ -411,19 +411,24 @@ there are several. It first wires agents installed since the last run (see
 the console and the agent must agree on it, since it selects the socket. A
 console on a project prints `serving agents in <root>`.
 
-`--show-results` prints in the console, in clear, the result of each masked
-query it runs, under `result in clear (shown here only; the agent got it
-masked)`; the agent still gets the masked cells (`<redacted:rN.R.C>`,
-`a***(17)`). The cells the agent got masked are yellow, followed by their
-reference (`‹r1.1.2›`) when they have one, so you can tie what you read to
-what the agent handles. `max_rows`, `max_cell_chars` and `max_output_bytes`
-apply as for the agent. Off by default, it is a console flag only: no client,
-config file or environment variable can turn it on. While it is on, the
-console warns at start (in red on a production profile, where it is
-accepted), shows `results  shown in clear in this console` in the Ready
-block and `result: shown here in clear` on every approval screen, and
-`locksql status` reports `show results on`. The audit log still holds no row
-data, and references and placeholders work as without it.
+`--auto` starts in auto mode and `--show-results` with the clear results
+on; both are switched while the console runs, with Shift+Tab and Ctrl-O
+(see [Keys and status line](#keys-and-status-line)). `--skip-permissions`
+is the older name of `--auto`.
+
+With the clear results on, the console prints, in clear, the result of each
+masked query it runs, as an aligned table under `result in clear (shown
+here only; the agent got it masked)`; the agent still gets the masked cells
+(`<redacted:rN.R.C>`, `a***(17)`). The cells the agent got masked are
+yellow, followed by their reference (`‹r1.1.2›`) when they have one, so you
+can tie what you read to what the agent handles. `max_rows`,
+`max_cell_chars` and `max_output_bytes` apply as for the agent. Off by
+default, it is console-only: no client, config file or environment variable
+can turn it on. While it is on, the console warns (in red on a production
+profile, where it is accepted), the status row reads `results clear`, every
+approval screen says `result: shown here in clear`, and `locksql status`
+reports `show results on`. The audit log still holds no row data, and
+references and placeholders work as without it.
 
 The console needs an interactive terminal. At start it:
 
@@ -475,11 +480,27 @@ The console needs an interactive terminal. At start it:
 7. Lists the databases it serves (the profile's `database` alone when it names
    one, else every database the account can see) and prints `Listening…`.
 
-Between requests you can type:
+### Keys and status line
+
+The console runs its own line editor (backspace, Ctrl-U, Ctrl-W; Ctrl-D on
+an empty line or Ctrl-C ends the session). A status row fixed at the
+bottom of the terminal shows the profile and tier, the approval mode, the
+results switch, `unmask allowed` when the console was started with
+`--allow-unmask`, the open plans, and what awaits `:review`. Two keys
+switch the console's behaviour while it runs; each change is announced,
+shown on the status row and audited (`mode`, `results` records):
+
+| Key | Typed | Effect |
+|---|---|---|
+| Shift+Tab | `:mode` | manual ⇄ auto approval mode (unavailable on a production profile) |
+| Ctrl-O | `:results` | results masked ⇄ shown here in clear |
+
+A key pressed while an approval waits takes effect from the next
+statement. Between requests you can also type:
 
 | Command | Effect |
 |---|---|
-| `:status` | profile, tier, limits, databases, session time left |
+| `:status` | profile, databases, mode, results, unmask, limits, session time left, open plans, pending policy change |
 | `:review` | show the pending policy change and the agent's change requests |
 | `:quit` | end the session |
 
@@ -535,8 +556,9 @@ tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
 ╰─ Approve? [y/N]
 ```
 
-- The screen names the requesting uid, pid and process (as the kernel reports
-  them), the agent's `intent` when it gave one (one line of at most 200 bytes,
+- The screen names the requesting uid and pid (as the kernel reports them)
+  and the process: its executable path when the console can read it, else
+  its self-reported name, labelled as such; then the agent's `intent` when it gave one (one line of at most 200 bytes,
   dimmed, untrusted text: the agent's claim, not a fact), the relations read, the PII columns touched and in which clause
   (highlighted in red in the SQL), each masked output and its mode, the
   k-anonymity counts that run first and the row cap.
@@ -632,7 +654,7 @@ locksql doctor   [--profile P]
   the human on the console before the agent is told: `run` shows the
   approval screen with the verdict and its reasons, then
   `verdict REFUSE: this statement cannot be approved` and
-  `Press Enter to refuse` (also under `--skip-permissions`), and only then
+  `Press Enter to refuse` (also in auto mode), and only then
   answers the agent a generic `refused by the weight check`.
 - `pii add` adds a mask rule at once, since it only tightens.
 - `request` queues a proposal that the human sees in `:review`. It never
@@ -751,7 +773,7 @@ The rules:
   without a prompt; the approval screen shows `${email} = value typed at 14:02`
   and `r` retypes it. A new name always prompts, and `query.plan` answers list
   the names already typed (`values`), so the agent can reuse one or pick another.
-- `--skip-permissions` skips the approval, never the value prompt. If you
+- Auto mode skips the approval, never the value prompt. If you
   cancel the prompt or let it time out, the query is denied and nothing runs.
   A value with a backslash or a NUL is refused; a reference to a cell holding
   one is refused as `reference rN.R.C cannot be substituted`, which says
@@ -855,7 +877,7 @@ finds the project's consoles.
 | `<user config dir>/locksql/pii.toml` | PII column rules outside a project |
 | `<user config dir>/locksql/config.toml` | personal profiles |
 | `<user state dir>/locksql/approved/*.json` | last approved policies |
-| `<user state dir>/locksql/audit.log` | JSONL audit log, mode 0600; the records of a client request name the requester (`peer_uid`, `peer_pid`, `peer_user`) |
+| `<user state dir>/locksql/audit.log` | JSONL audit log, mode 0600 (`O_APPEND`, no hash chain: `chattr +a` for more); the records of a client request name the requester (`peer_uid`, `peer_pid`, `peer_user`); an approval is written before the run, a `run` record after it |
 | `<runtime dir>/<project-hash>-<profile>.sock` | console socket (tests only) |
 | `/etc/locksql/system.toml` | separated mode setup (root-owned) |
 | `<socket_dir>/<project-hash>-<profile>.sock` | console socket (separated mode), mode 0660 |

@@ -156,20 +156,20 @@ func (a *answerIO) Ask(context.Context, string, time.Duration) (string, bool) {
 func TestChooseProfile(t *testing.T) {
 	e, _, _ := onboardEnv(t)
 	cfg := userConfig(t)
-	if n, err := chooseProfile(e, &answerIO{t: t}); err != nil || n != "" {
+	if n, err := chooseProfile(context.Background(), e, &answerIO{t: t}); err != nil || n != "" {
 		t.Fatalf("none: %q %v", n, err)
 	}
 	os.MkdirAll(filepath.Dir(cfg), 0o700)
 	os.WriteFile(cfg, []byte("[profiles.a]\nengine = \"sqlite\"\npath = \"/tmp/a.db\"\n"), 0o600)
-	if n, err := chooseProfile(e, &answerIO{t: t}); err != nil || n != "a" {
+	if n, err := chooseProfile(context.Background(), e, &answerIO{t: t}); err != nil || n != "a" {
 		t.Fatalf("single: %q %v", n, err)
 	}
 	os.WriteFile(cfg, []byte("[profiles.a]\nengine = \"sqlite\"\npath = \"/tmp/a.db\"\n[profiles.b]\nengine = \"sqlite\"\npath = \"/tmp/b.db\"\n"), 0o600)
 	io := &answerIO{t: t, answer: "2"}
-	if n, err := chooseProfile(e, io); err != nil || n != "b" || !io.asked {
+	if n, err := chooseProfile(context.Background(), e, io); err != nil || n != "b" || !io.asked {
 		t.Fatalf("several: %q %v", n, err)
 	}
-	if n, err := chooseProfile(e, &answerIO{t: t, answer: "a"}); err != nil || n != "a" {
+	if n, err := chooseProfile(context.Background(), e, &answerIO{t: t, answer: "a"}); err != nil || n != "a" {
 		t.Fatalf("by name: %q %v", n, err)
 	}
 }

@@ -52,12 +52,12 @@ root.
 
 | Threat | Mitigation |
 |---|---|
-| The agent runs a query the human did not approve | The console is the only connection holder. `query.run` needs a one-shot plan id (valid 10 minutes) and an explicit approval, or `--skip-permissions` outside production. |
+| The agent runs a query the human did not approve | The console is the only connection holder. `query.run` needs a one-shot plan id (valid 10 minutes) and an explicit approval, or auto mode outside production, switched from the console's keyboard only. |
 | The agent loosens its own policy | The socket protocol has no method that loosens policy. Config and PII file edits are detected by a policy fingerprint diff; a loosening is held until the human confirms it. The approved policy is stored outside the repository. |
-| Credential leak | Secrets exist only in console memory or the OS keychain (the console account's, in separated mode). They never go through argv, environment, files, logs, the socket or error messages (errors are sanitised). Config keys named like secrets and DSNs with passwords are refused. Core dumps are disabled (`RLIMIT_CORE=0`, and `PR_SET_DUMPABLE=0` on Linux). `credentials_ttl` bounds how long one secret stays in use, and `limits.idle_timeout` and `limits.max_session` end an idle or long session, with its connection and secret (raising either is a loosening). `doctor` flags a secret left in the agent's keychain. |
+| Credential leak | Secrets exist only in console memory or the OS keychain (the console account's, in separated mode). They never go through argv, environment, files, logs, the socket or error messages (errors are sanitised). Config keys named like secrets and DSNs with passwords are refused. Core dumps are disabled (`RLIMIT_CORE=0`, and `PR_SET_DUMPABLE=0` on Linux); when that fails, the console warns, and refuses to open a production profile. `credentials_ttl` bounds how long one secret stays in use, and `limits.idle_timeout` and `limits.max_session` end an idle or long session, with its connection and secret (raising either is a loosening). `doctor` flags a secret left in the agent's keychain. |
 | Statement smuggling | The classifier refuses several statements, comments, variables, bind parameters and unbalanced quotes, and classifies by keywords outside literals per dialect. Reads are limited to `SELECT`, `WITH ... SELECT` and `EXPLAIN SELECT` and parsed in full by a fail-closed parser: unknown syntax is refused. Multi-statements are off in every driver; PostgreSQL uses the extended protocol only. Tier `read` is also enforced by a read-only session and transaction on the server. |
 | Dangerous functions and statements | Reads may call only allowlisted functions (`internal/sqlast/funcs.go`); schema-qualified (possibly user-defined) functions and system schemas and relations are refused. At every tier: file and OS access, engine escape hatches (`ATTACH`, `load_extension`, `dblink`), SQLite raw storage tables (`sqlite_dbpage`, `dbstat`), sleeps, benchmarks, advisory locks, `FOR UPDATE`, session tampering (`SET ROLE`, `set_config`, guarded `SET` targets) and statements carrying credentials are refused. On PostgreSQL a read's transaction is rolled back, so a `SET` smuggled through a function it calls does not outlive the statement. |
-| Server overload | READ statements need `LIMIT n <= max_rows`; `EXPLAIN` estimates the rows examined and refuses heavy plans, and `explain_cost_refuse` caps the engine's total cost (not on SQLite); k-anonymity counts are weighed too; under a PII filter the verdict is decided at run time: a REFUSE verdict is shown to the human on the console before the agent is told, and the agent only learns that the weight check refused; a server-side timeout plus a client-side cancel; one request at a time. A recursive CTE gets a WARN on PostgreSQL and SQLite, whose planners mark it and can only guess how often it iterates. The parser bounds the bytes a statement can build from literals and size functions (65 536 per value, at most 64 column-width inputs, through every CTE and derived-table layer); `string_agg`-like aggregates over large stored columns remain bounded only by `statement_timeout`. |
+| Server overload | READ statements need `LIMIT n <= max_rows`; `EXPLAIN` estimates the rows examined and refuses heavy plans, and `explain_cost_refuse` caps the engine's total cost (not on SQLite); k-anonymity counts are weighed too; under a PII filter the verdict is decided at run time: a REFUSE verdict is shown to the human on the console before the agent is told, and the agent only learns that the weight check refused; a server-side timeout plus a client-side cancel (on MySQL the server-side `max_execution_time` covers SELECT only: a write or DDL is ended by the client-side `KILL QUERY` at the deadline); one request at a time. A recursive CTE gets a WARN on PostgreSQL and SQLite, whose planners mark it and can only guess how often it iterates. The parser bounds the bytes a statement can build from literals and size functions (65 536 per value, at most 64 column-width inputs, through every CTE and derived-table layer); `string_agg`-like aggregates over large stored columns remain bounded only by `statement_timeout`. |
 | PII exposure | Column rules proposed from the schema at every start; per-rule mask modes (`redact` by default); quasi-identifiers proposed apart and masked only on acceptance; value detectors with checksums; unmasking is off unless the console runs with `--allow-unmask`, then per query, shown in red and never auto-approved. A profile that names a `database` serves that database only, the one its scan covers, so another database the account can see is never read without rules. |
 | Alias or expression bypass | Every output column of a read is resolved to its base source columns through aliases, functions, subqueries, CTEs (recursive ones by fixpoint), set operations, joins and `*`, and masked on that source, not on its label. Expressions and functions over PII columns are refused; aggregates other than `COUNT`, `MIN` and `MAX` are redacted. The result's column count and labels must match the analysis or the result is dropped; the engine's origin metadata is a second check. |
 | Predicate oracles | A PII column may only be compared for equality with a literal (`=`, `IN (literals)`, `IS NULL`) in `WHERE`/`HAVING`, or joined with `=` (also `IN (subquery)`, `USING`, `NATURAL`) to another PII column: a join with an unmasked column would copy its values where no mask applies. These atoms must be positive and reached through `AND` only: a PII atom under `NOT`, `OR` or `XOR`, and `<>`, `!=`, `NOT IN`, `IS NOT NULL`, `IS DISTINCT FROM` on a PII column, would select the complement of what the k-anonymity check counts and are refused. A scalar subquery returning a PII value cannot be a filter operand. A `UNION`, `INTERSECT` or `EXCEPT` between a PII column and a non-PII arm (a literal, an expression, an unmasked column) is refused, because `INTERSECT`, `EXCEPT` and the duplicate removal of `UNION` are equality tests no k-anonymity check counts; `UNION ALL` compares nothing and stays allowed, but `DISTINCT`, an aggregate's `DISTINCT` or `GROUP BY` over a column it mixed is refused for the same reason. `LIKE`, ranges, functions over it, `ORDER BY`, window `PARTITION BY`/`ORDER BY`, `FILTER`, `DISTINCT ON` and constant comparisons in `JOIN ... ON` are refused, so a query cannot compare it character by character with generated values. |
@@ -69,7 +69,7 @@ root.
 | Prompt injection through data | Rows are framed as untrusted data in every output; the generated agent instructions say so; control and bidirectional characters are escaped in client output and on the console screen, so data cannot spoof the approval prompt. |
 | Type-ahead approval | Pending input is flushed before each prompt (`tcflush`). |
 | The agent mimics the human | In separated mode the console refuses to start as any account but `service_user`, when that account may also connect as a client, when started through `sudo`/`su` from another login session (`loginuid`), or when its terminal belongs to another uid. An X11 session, where any client can read and inject input, is refused on production profiles and with `x11 = "refuse"`, and warned about otherwise. The binary and `system.toml` are root-owned; `doctor` fails on password-less `sudo` for the agent's account. |
-| Approval spoofing through the socket | Approval comes only from the console terminal; no socket method approves, and no socket method loosens policy. The approval screen names the requesting uid, pid and process as the kernel reports them. |
+| Approval spoofing through the socket | Approval comes only from the console terminal; no socket method approves, and no socket method loosens policy. The approval screen names the requesting uid and pid as the kernel reports them, and the process by its executable path when the kernel lets the console read it (a process of its own account), else by its self-reported name, labelled as such. |
 | A client stuck or killed during an approval | The approval is abandoned or times out after 5 minutes; the socket keeps serving. |
 | A fake console | In separated mode clients check through peer credentials that the socket is served by `service_user`, and the socket directory is owned by it. |
 | Another local user | The socket directory is `service_user:client_group` mode 2710 on Linux (0710 on macOS), the socket 0660, and each peer is checked with `SO_PEERCRED` (Linux) or `LOCAL_PEERCRED` (macOS): the console's own uid, a member of `client_group` or an `allowed_uids` entry. |
@@ -96,35 +96,54 @@ unmask request is refused before parsing and audited; with it, each unmasked
 query is still approved by the human and never auto-approved, and its clear
 result is printed in the console, never in the audit log.
 
-## `--show-results`
+## Console switches: clear results and auto mode
 
-A console-only flag, off by default, that prints in the console the clear
-result of each masked query it runs. It changes nothing for the agent, which
-still gets the masked cells: the human is the trusted party and already sees
-the SQL and holds the credentials. No client, config file or environment
-variable can turn it on, and `locksql status` only reports it. It is accepted
-on production profiles with a red warning at start; every approval screen
-says the result will be shown in clear. The audit log still holds no row
-data.
+Two behaviours of the console switch while it runs, from its own keyboard
+only: Ctrl-O (or `:results`) prints the clear result of each masked query
+in the console, Shift+Tab (or `:mode`) turns auto mode on and off.
+`--show-results` and `--auto` only set the starting state. No client,
+config file or environment variable can set either: the keys are read from
+the console's terminal, which the separated setup keeps away from the
+agent, and no socket method or config field reaches them. Each switch is
+audited (`mode` and `results` records with the new state), announced on
+the console and shown on the status row fixed at the bottom of the
+terminal, so the state is visible at all times, not only at start.
 
-## `--skip-permissions`
+**Clear results** change nothing for the agent, which still gets the masked
+cells: the human is the trusted party and already sees the SQL and holds
+the credentials. `locksql status` only reports it. It is accepted on
+production profiles with a red warning; every approval screen says the
+result will be shown in clear. The audit log still holds no row data.
 
-Auto-approval is a console-only flag. It is ignored on production profiles,
-never covers unmasked queries, never overrides REFUSE, marks every console
-line with `AUTO-APPROVE` and audits each decision as `auto`.
+**Auto mode** is unavailable on production profiles (the key says so),
+never covers unmasked queries, never overrides REFUSE, ends each
+auto-approved frame with `auto-approved` and audits each decision as
+`auto`.
 
 ## Audit
 
 The console appends one JSONL record per event (login, policy change,
-refusal, approval, denial, timeout, auto-approval, abandoned approval,
-catalog read, logout) to `<user state dir>/locksql/audit.log`, mode 0600.
+refusal, approval, denial, timeout, auto-approval, abandoned approval, run,
+catalog read, mode and results switch, logout) to
+`<user state dir>/locksql/audit.log`, mode 0600.
 Records contain the SQL and metadata, never secrets and never row data. The
+approval (or auto-approval) of a statement is written before anything runs,
+and a `run` record follows with the outcome (`decision` `ok` or `failed`,
+rows, affected, duration, error): a console stopped mid-run still leaves
+the approved statement on record. The
 records of a client request (refusal, decision, catalog read) name the
 requester from the kernel's peer credentials: `peer_uid`, `peer_pid` and
 `peer_user` (the account name, when it resolves). The process name the
-approval screen shows is the agent's choice and is not recorded. `intent` is
+approval screen shows is the agent's choice (labelled `self-reported name`
+when the executable path cannot be read) and is not recorded. `intent` is
 the agent's one-line reason for a plan: untrusted agent text, stored raw
 like the SQL. `reason` is the reason the human typed with a denial.
+
+The log is protected from the agent by the uid separation (the console
+account's state directory is mode 0700), not from the console account or
+root: the file is opened `O_APPEND` with no hash chain, so it is
+append-only by convention, not tamper-evident. On Linux, `chattr +a` makes
+it append-only for the console account too.
 
 ## Out of scope and limitations
 
@@ -162,8 +181,13 @@ like the SQL. `reason` is the reason the human typed with a denial.
   terminating TLS gets the password. On plain TCP (`disable`, or `prefer`
   after a fallback) the guard refuses a full authentication, so a MySQL 8
   account logs in only while the server's authentication cache holds it.
-  PostgreSQL likewise sends the password to a server that asks for
-  cleartext authentication. `verify-ca` and
+  On PostgreSQL, a connection to a remote host under `disable`, `prefer` or
+  `require` without `tls_ca` answers no clear-text or MD5 password request
+  (libpq's `require_auth=!password,!md5`): a server, or an attacker on the
+  path, that asks for one gets a refusal, and the console names the remedy
+  (`tls = "verify-full"`, with `tls_ca` for a private CA, or a SCRAM-SHA-256
+  password for the account). A loopback host or a socket path is not
+  guarded. `verify-ca` and
   `verify-full` prevent the impersonation. A plain connection is reported on
   the console and in the audit log (`"decision":"notice"`) as `the connection
   is NOT encrypted (tls = ...)`; unverified TLS on a non-loopback host as
@@ -203,8 +227,8 @@ like the SQL. `reason` is the reason the human typed with a denial.
   functions; numeric arithmetic (`1e131071`, `^`) and formatting of stored
   data (`jsonb_pretty`) can still produce a value of hundreds of megabytes on
   the server, bounded by `statement_timeout`.
-- **Clear results on the human's screen.** With `--show-results` (and for an
-  unmasked run) the clear rows stay in the scrollback of the console's
+- **Clear results on the human's screen.** With the clear results on
+  (Ctrl-O, `--show-results`) and for an unmasked run, the clear rows stay in the scrollback of the console's
   terminal, and are visible to anyone who sees that screen (screen sharing,
   recording, a terminal that logs its output). That terminal is already the
   trusted party; locksql does not clear it.

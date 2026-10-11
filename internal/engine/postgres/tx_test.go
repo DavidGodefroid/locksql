@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgproto3"
@@ -19,6 +20,10 @@ import (
 type fakeServer struct {
 	mu   sync.Mutex
 	stmt []string
+	// clearText asks for the password in clear text first; passwordSeen
+	// records that the client sent it.
+	clearText    bool
+	passwordSeen atomic.Bool
 }
 
 func (f *fakeServer) record(q string) {
@@ -44,6 +49,20 @@ func (f *fakeServer) serve(c net.Conn) {
 	be := pgproto3.NewBackend(c, c)
 	if _, err := be.ReceiveStartupMessage(); err != nil {
 		return
+	}
+	if f.clearText {
+		be.Send(&pgproto3.AuthenticationCleartextPassword{})
+		if be.Flush() != nil {
+			return
+		}
+		msg, err := be.Receive()
+		if err != nil {
+			return
+		}
+		if _, ok := msg.(*pgproto3.PasswordMessage); !ok {
+			return
+		}
+		f.passwordSeen.Store(true)
 	}
 	be.Send(&pgproto3.AuthenticationOk{})
 	be.Send(&pgproto3.ParameterStatus{Name: "server_version", Value: "17.0"})

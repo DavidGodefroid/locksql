@@ -104,19 +104,19 @@ type RunResult struct {
 
 // StatusResult describes the console session.
 type StatusResult struct {
-	Profile         string        `json:"profile"`
-	Engine          string        `json:"engine"`
-	Host            string        `json:"host"`
-	HostConfirmed   bool          `json:"host_confirmed"`
-	Production      bool          `json:"production"`
-	SkipPermissions bool          `json:"skip_permissions"`
-	AllowUnmask     bool          `json:"allow_unmask"`
-	ShowResults     bool          `json:"show_results"`
-	Tier            string        `json:"tier"`
-	Databases       []string      `json:"databases"`
-	Limits          config.Limits `json:"limits"`
-	IdleTimeoutInS  int           `json:"idle_timeout_in_s"`
-	SessionEndsInS  int           `json:"session_ends_in_s"`
+	Profile        string        `json:"profile"`
+	Engine         string        `json:"engine"`
+	Host           string        `json:"host"`
+	HostConfirmed  bool          `json:"host_confirmed"`
+	Production     bool          `json:"production"`
+	AutoApprove    bool          `json:"auto_approve"`
+	AllowUnmask    bool          `json:"allow_unmask"`
+	ShowResults    bool          `json:"show_results"`
+	Tier           string        `json:"tier"`
+	Databases      []string      `json:"databases"`
+	Limits         config.Limits `json:"limits"`
+	IdleTimeoutInS int           `json:"idle_timeout_in_s"`
+	SessionEndsInS int           `json:"session_ends_in_s"`
 	// Health is what the console found at start-up, for locksql doctor.
 	Health *Health `json:"health,omitempty"`
 }

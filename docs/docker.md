@@ -73,7 +73,7 @@ docker run -it --rm --name locksql-console --user locksql \
   locksql console --project "$PWD"
 ```
 
-Add `--profile P`, `--show-results`, `--skip-permissions` or
+Add `--profile P`, `--show-results`, `--auto` or
 `--allow-unmask` after `console` as on a host. The `locksql-home` volume
 keeps the console account's state from one run to the next: the approved
 policy, the audit log and `~/.ssh/known_hosts` for an `ssh` profile. A key

@@ -6,26 +6,28 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/console"
 )
 
-// runConsole is `locksql console [--profile P] [--skip-permissions]
-// [--allow-unmask] [--show-results]`. It
-// runs in the human's terminal only. Without --profile it opens the only
-// profile, or asks which one among several.
+// runConsole is `locksql console [--profile P] [--auto] [--allow-unmask]
+// [--show-results]`. It runs in the human's terminal only. Without
+// --profile it opens the only profile, or asks which one among several.
 func runConsole(e env, args []string) int {
-	const usage = "usage: locksql console [--profile P] [--project DIR] [--skip-permissions] [--allow-unmask] [--show-results]"
+	const usage = "usage: locksql console [--profile P] [--project DIR] [--auto] [--allow-unmask] [--show-results]"
 	fs := flag.NewFlagSet("console", flag.ContinueOnError)
 	fs.SetOutput(e.stderr)
 	profile := fs.String("profile", "", "profile to open")
-	skip := fs.Bool("skip-permissions", false, "auto-approve statements allowed by the tier and the weight check (never on production, never unmask)")
+	auto := fs.Bool("auto", false, "start in auto mode: statements allowed by the tier and the weight check run without a prompt (never on production, never unmask); Shift+Tab switches the mode while the console runs")
+	skip := fs.Bool("skip-permissions", false, "same as --auto (older name)")
 	allowUnmask := fs.Bool("allow-unmask", false, "let clients ask for unmasked PII output; each such query is still approved here, never auto-approved (off by default: unmask requests are refused)")
 	showResults := fs.Bool("show-results", false, "print in this console, in clear, the result of each masked query it runs; the client still gets it masked")
 	project := fs.String("project", "", "project directory (default: the current directory); the console account opens the agent's project from its own session")
@@ -43,6 +45,15 @@ func runConsole(e env, args []string) int {
 	fmt.Fprint(e.stdout, e.paint.Banner(version))
 	fmt.Fprintln(e.stdout)
 	term := console.NewTerminal(os.Stdin, e.stdout)
+	if err := term.Interactive(); err != nil {
+		// Cooked mode then: no Shift+Tab, no status line, but a console.
+		fmt.Fprintln(e.stderr, "locksql console: warning:", err, "(the mode keys and the status line are off)")
+	}
+	defer term.Restore()
+	// Ctrl-C before the console runs ends the prompts, so that the
+	// deferred Restore runs: the terminal is never left in cbreak mode.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	name := *profile
 	if name == "" {
 		if code, failed := sysFail(e, " console"); failed {
@@ -64,7 +75,7 @@ func runConsole(e env, args []string) int {
 			pe.cwd = abs
 		}
 		var err error
-		if name, err = chooseProfile(pe, term); err != nil {
+		if name, err = chooseProfile(ctx, pe, term); err != nil {
 			return onboardFail(e, err)
 		}
 		if name == "" {
@@ -76,17 +87,20 @@ func runConsole(e env, args []string) int {
 			return exitUsage
 		}
 	}
-	return openConsole(e, name, consoleFlags{skip: *skip, allowUnmask: *allowUnmask, showResults: *showResults}, *project, term)
+	if ctx.Err() != nil {
+		return exitFail
+	}
+	return openConsole(ctx, e, name, consoleFlags{auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults}, *project, term)
 }
 
 // consoleFlags are the console-only switches: no client or config file can
 // set them.
 type consoleFlags struct {
-	skip, allowUnmask, showResults bool
+	auto, allowUnmask, showResults bool
 }
 
 // openConsole runs the console on profile until it ends.
-func openConsole(e env, profile string, f consoleFlags, project string, term *console.Terminal) int {
+func openConsole(ctx context.Context, e env, profile string, f consoleFlags, project string, term *console.Terminal) int {
 	cwd := project
 	if cwd != "" {
 		abs, err := filepath.Abs(cwd)
@@ -96,15 +110,15 @@ func openConsole(e env, profile string, f consoleFlags, project string, term *co
 		}
 		cwd = abs
 	}
-	err := console.Run(context.Background(), console.Options{
-		Profile:         profile,
-		SkipPermissions: f.skip,
-		AllowUnmask:     f.allowUnmask,
-		ShowResults:     f.showResults,
-		Cwd:             cwd,
-		IO:              term,
-		TTY:             os.Stdin,
-		Version:         version,
+	err := console.Run(ctx, console.Options{
+		Profile:     profile,
+		Auto:        f.auto,
+		AllowUnmask: f.allowUnmask,
+		ShowResults: f.showResults,
+		Cwd:         cwd,
+		IO:          term,
+		TTY:         os.Stdin,
+		Version:     version,
 	})
 	if err != nil {
 		fmt.Fprintln(e.stderr, "locksql console:", err)
@@ -121,7 +135,7 @@ var errAborted = errors.New("aborted")
 
 // chooseProfile returns the only profile, asks among several, or returns
 // "" when none is configured.
-func chooseProfile(e env, io console.IO) (string, error) {
+func chooseProfile(ctx context.Context, e env, io console.IO) (string, error) {
 	cfg, err := config.Load(e.cwd)
 	if err != nil {
 		return "", usageError{err.Error()}
@@ -137,7 +151,7 @@ func chooseProfile(e env, io console.IO) (string, error) {
 		io.Println(fmt.Sprintf("  %d) %s", i+1, n))
 	}
 	for {
-		l, ok := io.Ask(context.Background(), "Profile: ", 30*time.Minute)
+		l, ok := io.Ask(ctx, "Profile: ", 30*time.Minute)
 		if !ok {
 			return "", errAborted
 		}

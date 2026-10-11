@@ -1591,12 +1591,15 @@ func (p *parser) interval() (Expr, error) {
 	p.i++ // INTERVAL
 	if t, ok := p.tok(0); ok && t.Kind == sqlclass.TokString && p.d == sqlclass.Postgres {
 		p.i++
-		for p.word(0) {
-			if nt := p.toks[p.i]; intervalUnits[nt.Text] || nt.Text == "TO" {
-				p.i++
-				continue
+		// INTERVAL '1' DAY, INTERVAL '1-2' YEAR TO MONTH: the unit, and a
+		// TO unit range after it, belong to the literal.
+		if t, ok := p.tok(0); ok && t.Kind == sqlclass.TokWord && intervalUnits[t.Text] {
+			p.i++
+			if p.word(0, "TO") {
+				if t, ok := p.tok(1); ok && t.Kind == sqlclass.TokWord && intervalUnits[t.Text] {
+					p.i += 2
+				}
 			}
-			break
 		}
 		return &Literal{Kind: LitInterval, Text: p.src[p.toks[start].Pos:p.toks[p.i-1].End], Sp: p.span(start)}, nil
 	}

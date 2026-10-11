@@ -178,7 +178,7 @@ func TestTypedValueQuoting(t *testing.T) {
 }
 
 func TestSkipPermissionsStillAsksValues(t *testing.T) {
-	h := newHarness(t, uatProfile(), func(c *ServerConfig) { c.SkipPermissions = true })
+	h := newHarness(t, uatProfile(), func(c *ServerConfig) { c.Auto = true })
 	pr := h.plan(t, typedQ, false)
 	h.io.secrets = []string{"alice@example.com"}
 	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
@@ -313,8 +313,11 @@ func TestRunTimeAnalysisFailureAudited(t *testing.T) {
 	log := h.auditLog(t)
 	lines := strings.Split(strings.TrimSpace(log), "\n")
 	last := lines[len(lines)-1]
-	if !strings.Contains(last, `"approved"`) || !strings.Contains(last, `"error"`) || !strings.Contains(last, `"warnings"`) {
+	if !strings.Contains(last, `"event":"run"`) || !strings.Contains(last, `"decision":"failed"`) || !strings.Contains(last, `"error"`) || !strings.Contains(last, `"warnings"`) {
 		t.Errorf("no audit record of the failed run: %s", last)
+	}
+	if prev := lines[len(lines)-2]; !strings.Contains(prev, `"event":"approved"`) {
+		t.Errorf("no approval record before the run: %s", prev)
 	}
 	if strings.Contains(log, "alice@") {
 		t.Error("the value reached the audit log")

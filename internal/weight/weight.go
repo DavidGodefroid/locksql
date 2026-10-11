@@ -12,9 +12,9 @@
 //   - WARN when the estimate exceeds explain_rows_warn, on a full scan above
 //     it, on a sort or a temporary table above it, on a smaller cartesian
 //     join, on a recursive CTE (the engine marks it when its planner can only
-//     guess how often the recursion iterates: PostgreSQL, SQLite), and, on a
-//     production profile, on a full scan of a table whose size the engine
-//     does not know.
+//     guess how often the recursion iterates: PostgreSQL, SQLite), and on a
+//     full scan of a table whose size the engine does not know (no
+//     statistics: the gate has no information on it).
 package weight
 
 import (
@@ -102,8 +102,8 @@ type sized struct {
 
 // Assess applies the cost model to p. Thresholds of l that are not set
 // (zero or negative) take the defaults for the profile kind, so that a
-// missing limit never disables the check. production turns a full scan of
-// a table of unknown size into a WARN.
+// missing limit never disables the check. production selects the stricter
+// defaults.
 func Assess(p engine.Plan, l config.Limits, production bool) Verdict {
 	def := config.DefaultLimits(production)
 	warn, refuse := l.ExplainRowsWarn, l.ExplainRowsRefuse
@@ -161,10 +161,10 @@ func Assess(p engine.Plan, l config.Limits, production bool) Verdict {
 	if l.ExplainCostRefuse > 0 && p.Cost > l.ExplainCostRefuse {
 		flag(Refuse, fmt.Sprintf("estimated cost %s > explain_cost_refuse %s", costText(p.Cost), costText(l.ExplainCostRefuse)))
 	}
-	if production {
-		for _, name := range s.unknown {
-			flag(Warn, fmt.Sprintf("full scan of %s (unknown size: the engine has no row count for it)", name))
-		}
+	// A full scan of a table without statistics counts as one row above:
+	// the gate has no information, so the human sees it, in every profile.
+	for _, name := range s.unknown {
+		flag(Warn, fmt.Sprintf("full scan of %s (unknown size: the engine has no row count for it; run ANALYZE to get an estimate)", name))
 	}
 
 	parts := s.tables

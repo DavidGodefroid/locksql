@@ -1,5 +1,9 @@
-// Package audit writes the console's append-only JSONL audit trail. One
-// record per event; never secrets and never row data.
+// Package audit writes the console's JSONL audit trail: one record per
+// event, never secrets and never row data. The file is opened O_APPEND,
+// mode 0600 in a 0700 directory of the console account's state: the agent
+// account cannot read or alter it, while the console account and root
+// can. There is no hash chain; on Linux, chattr +a makes it append-only for
+// the console account too.
 package audit
 
 import (
@@ -22,9 +26,18 @@ const (
 	EventDenied    = "denied"    // the human denied
 	EventTimeout   = "timeout"   // approval timed out
 	EventAbandoned = "abandoned" // the client left while its approval was pending
-	EventAuto      = "auto"      // auto-approved under --skip-permissions
-	EventCatalog   = "catalog"   // catalog read
-	EventLogout    = "logout"
+	EventAuto      = "auto"      // auto-approved under auto mode
+	// EventRun is the outcome of an approved or auto-approved statement
+	// (rows, affected, duration; Decision ok or failed). It follows the
+	// approval record, which is written before anything runs.
+	EventRun     = "run"
+	EventCatalog = "catalog" // catalog read
+	// EventMode and EventResults are the console's switches, changed from
+	// its keyboard: Decision is the new state (manual or auto; shown or
+	// hidden).
+	EventMode    = "mode"
+	EventResults = "results"
+	EventLogout  = "logout"
 )
 
 // Record is one audit event. It has no field able to hold a password or row
