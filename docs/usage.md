@@ -604,6 +604,40 @@ The console watches the config and PII files while it runs.
 The approved policy is stored outside the repository, in
 `<user state dir>/locksql/approved/`.
 
+### Refusal statistics
+
+`locksql stats` counts the refusals in the audit log: by
+[refusal code](#refusal-codes), then by code and the token the check stopped
+at (`LIKE`, `FOR`, a function name, ...), most frequent first. It reads
+the local file and nothing else. Run it as the account that runs the console
+(in separated mode, in the `locksql` account's session), or point it at a
+copy of the log:
+
+```sh
+locksql stats [--log PATH] [--top N]        # text, for you
+locksql stats --export > refusals.json      # anonymised, to attach to an issue
+```
+
+- The text report names the tokens as the agent wrote them, identifiers
+  included: it stays on your machine.
+- `--export` prints JSON for a GitHub issue: the counts by code, by code and
+  construct, and the 100 most frequent statement shapes with their code and
+  engine. A shape is the refused statement with every literal, identifier and
+  comment replaced by a marker (`'?'` a string, `N` a number, `id` a name,
+  `"id"`, `` `id` `` and `[id]` a quoted name, `$N` a bind parameter,
+  `$$?$$` a dollar-quoted string, `--…` and `/*…*/` a comment); only SQL
+  keywords, the names of known functions and punctuation remain. The keyword
+  list leaves out words often used as names (`user`, `date`, `name`,
+  `status`, ...); a name that is still a keyword (a column named `view`)
+  shows as that keyword, and a name of a known function only when it is
+  called. A
+  construct token that is not a keyword, a known function or punctuation
+  becomes `id`. Refusal messages, hints, profiles, hosts and timestamps are
+  left out. Read the file before you attach it.
+- Records written before refusal codes existed count as `uncoded`.
+- Maintainers merge the exports into the ranked list of
+  [most refused constructs](refused-constructs.md).
+
 ## 4. What the agent does
 
 ### CLI

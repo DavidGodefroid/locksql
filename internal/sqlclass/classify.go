@@ -355,6 +355,10 @@ func isCall(toks []Token, k int) bool {
 	return k+1 < len(toks) && toks[k+1].Kind == TokPunct && toks[k+1].Text == "("
 }
 
+// ForbiddenFunction reports whether name (folded) is on the list of
+// functions refused at every tier, by exact name (not by prefix).
+func ForbiddenFunction(name string) bool { return forbiddenFuncs.has(name) }
+
 func isForbiddenFunc(name string) bool {
 	if forbiddenFuncs.has(name) {
 		return true

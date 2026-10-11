@@ -317,3 +317,14 @@ func systemRelation(d sqlclass.Dialect, parts []string) bool {
 	}
 	return false
 }
+
+// KnownFunction reports whether name (folded) is in the allowlist of any
+// dialect.
+func KnownFunction(name string) bool {
+	for _, d := range []sqlclass.Dialect{sqlclass.MySQL, sqlclass.Postgres, sqlclass.SQLite} {
+		if funcAllowed(d, name) {
+			return true
+		}
+	}
+	return false
+}
