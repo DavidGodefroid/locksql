@@ -119,3 +119,45 @@ func TestWritePlantsSubfieldRefused(t *testing.T) {
 		t.Errorf("NULL subfield refused: %v", err)
 	}
 }
+
+// A table alias column list renames columns by position: in a write that
+// returns nothing it must not move a rule column under another name either.
+func TestWriteAliasColumnListRefused(t *testing.T) {
+	r := Rules{Mask: []string{"*.users.email"}}
+	for _, c := range []dsql{
+		{sqlclass.Postgres, "UPDATE notes SET v = (SELECT x FROM users AS u(i, x) LIMIT 1) WHERE id = 1"},
+		{sqlclass.Postgres, "UPDATE notes n SET v = u.x FROM users u(i, x) WHERE u.i = n.id"},
+	} {
+		if err := PlanCheck(classify(t, c), r, c.d, true); err == nil {
+			t.Errorf("accepted: %s", c.sql)
+		}
+	}
+}
+
+// WriteValuesViolation keeps the copy and planted-value checks for a write
+// the console analyses in full, but leaves its RETURNING list and the
+// outer query of its data-modifying CTEs to that analysis.
+func TestWriteValuesViolation(t *testing.T) {
+	r := Rules{Mask: []string{"*.users.email"}}
+	for _, c := range []dsql{
+		{sqlclass.Postgres, "WITH u AS (UPDATE notes SET v = (SELECT email FROM users LIMIT 1) RETURNING id) SELECT id FROM u"},
+		{sqlclass.Postgres, "INSERT INTO users (id, email) VALUES (1, 'v@x.example') RETURNING id"},
+		{sqlclass.Postgres, "INSERT INTO notes (id, v) SELECT i, x FROM users u(i, x) RETURNING id"},
+		{sqlclass.Postgres, "WITH s AS (SELECT histogram_bounds FROM pg_stats) UPDATE notes SET v = NULL RETURNING id"},
+	} {
+		if err := WriteValuesViolation(classify(t, c), r, c.d); err == nil {
+			t.Errorf("accepted: %s", c.sql)
+		}
+	}
+	for _, c := range []dsql{
+		{sqlclass.Postgres, "UPDATE users SET note = 'x' WHERE id = 1 RETURNING email AS e"},
+		{sqlclass.Postgres, "WITH u AS (UPDATE users SET note = 'x' RETURNING email AS e) SELECT e AS z FROM u"},
+		{sqlclass.Postgres, "WITH u AS (UPDATE users SET note = 'x' RETURNING id) SELECT (SELECT email FROM users LIMIT 1) AS m FROM u"},
+		{sqlclass.Postgres, "UPDATE notes SET v = v WHERE id = 1 RETURNING (SELECT email FROM users LIMIT 1) AS e"},
+		{sqlclass.Postgres, "UPDATE users AS b SET note = b.note FROM notes s WHERE s.id = b.id RETURNING *"},
+	} {
+		if err := WriteValuesViolation(classify(t, c), r, c.d); err != nil {
+			t.Errorf("refused %s: %v", c.sql, err)
+		}
+	}
+}

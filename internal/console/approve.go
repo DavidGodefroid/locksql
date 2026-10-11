@@ -108,7 +108,7 @@ func (s *Server) screenBody(ctx context.Context, pl *plan, add func(string)) {
 	}
 }
 
-// readDetails explains a read plan to the human: what it reads, which PII
+// readDetails explains a read plan (or an analysed write) to the human: what it reads, which PII
 // columns it touches and where, how each output is masked, the k-anonymity
 // counts that run first and the token values substituted.
 func (s *Server) readDetails(pl *plan, add func(string)) {
@@ -117,7 +117,11 @@ func (s *Server) readDetails(pl *plan, add func(string)) {
 		add(bold + "EXPLAIN only: the statement does not run; the plan is returned" + reset)
 	}
 	if len(an.Relations) > 0 {
-		add("reads: " + safeText(strings.Join(an.Relations, ", "), false))
+		head := "reads: "
+		if pl.st.Class != sqlclass.Read {
+			head = "reads or writes: "
+		}
+		add(head + safeText(strings.Join(an.Relations, ", "), false))
 	}
 	if pl.st.Limit >= 0 {
 		add(fmt.Sprintf("returns at most %d rows", min(pl.st.Limit, s.profile.Limits.MaxRows)))

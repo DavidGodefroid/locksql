@@ -348,16 +348,19 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	if r != nil {
 		return *r
 	}
+	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String()}
 	if !p.Unmask && st.Class != sqlclass.Read {
 		// Before the run: a write's RETURNING list or a data-modifying
 		// CTE must not move PII under another label, since refusing its
 		// result afterwards would not undo the write.
-		if err := pii.PlanCheck(st, s.rules, s.dialect, sess.OriginColumns()); err != nil {
-			return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", err.Error())
+		reason, refused, err := s.writePlan(ctx, sess, pl)
+		if err != nil {
+			return s.failed(req.ID, "plan", err)
+		}
+		if refused {
+			return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", reason)
 		}
 	}
-
-	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String()}
 	if st.Class == sqlclass.Read {
 		// The read path: the statement is parsed in full and every column
 		// resolved before anything runs.

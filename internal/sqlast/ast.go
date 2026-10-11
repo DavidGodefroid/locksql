@@ -5,6 +5,10 @@
 // and joins), checks functions against an allowlist and decides how PII
 // columns may be used.
 //
+// ParseWrite reads, for the same analysis, the writes whose values come
+// back (RETURNING, a SELECT over data-modifying CTEs) or that store a
+// query's rows (INSERT ... SELECT).
+//
 // The grammar is a deliberately small subset of SQL. Anything outside it is
 // refused: a statement the parser cannot read with certainty never runs.
 package sqlast
@@ -14,12 +18,16 @@ import "github.com/DavidGodefroid/locksql/internal/sqlclass"
 // Span is a byte range [Pos, End) of the statement text.
 type Span struct{ Pos, End int }
 
-// Statement is one parsed read statement.
+// Statement is one parsed statement: a read (Query) or, from ParseWrite,
+// a write (Write).
 type Statement struct {
 	// Explain is set for EXPLAIN SELECT: the console runs the EXPLAIN
 	// itself, without ANALYZE.
 	Explain bool
 	Query   *Query
+	// Write is set instead of Query for an INSERT, REPLACE, UPDATE or
+	// DELETE.
+	Write *Write
 	// SQL is the statement text the spans refer to.
 	SQL     string
 	Dialect sqlclass.Dialect
@@ -49,12 +57,56 @@ type With struct {
 	Sp        Span
 }
 
-// CTE is one common table expression.
+// CTE is one common table expression: a query, or (PostgreSQL, from
+// ParseWrite) a data-modifying statement whose RETURNING list gives its
+// columns.
 type CTE struct {
 	Name    string
 	Columns []string
 	Query   *Query
+	Write   *Write
 	Sp      Span
+}
+
+// Write is a data-modifying statement: INSERT, REPLACE, UPDATE or DELETE.
+type Write struct {
+	With *With
+	Verb string // INSERT, REPLACE, UPDATE or DELETE
+	// Target is the relation written.
+	Target *TableName
+	// Columns is the column list of an INSERT, nil when absent.
+	Columns []string
+	// Rows are the VALUES rows of an INSERT; a nil item is DEFAULT.
+	Rows [][]Expr
+	// Source is the query an INSERT stores.
+	Source *Query
+	// Set is the SET list of an UPDATE or of a MySQL INSERT ... SET.
+	Set []*Assignment
+	// From is the FROM list of an UPDATE or the USING list of a DELETE.
+	From  []TableExpr
+	Where Expr
+	// OrderBy and Limit are the MySQL and SQLite ORDER BY and LIMIT of an
+	// UPDATE or a DELETE.
+	OrderBy []*OrderItem
+	Limit   *Limit
+	// Conflict is the conflict target of an ON CONFLICT clause (index
+	// expressions and their WHERE); Upsert and UpsertWhere are its DO
+	// UPDATE SET list and condition, or the ON DUPLICATE KEY UPDATE list.
+	Conflict      []Expr
+	ConflictWhere Expr
+	Upsert        []*Assignment
+	UpsertWhere   Expr
+	// Returning is the RETURNING list, nil when absent.
+	Returning []*SelectItem
+	Sp        Span
+}
+
+// Assignment is one "column = value" of a SET list. Value is nil for
+// DEFAULT. Qualifier is the MySQL "t." of a qualified column.
+type Assignment struct {
+	Qualifier []string
+	Column    string
+	Value     Expr
 }
 
 // SetOp is UNION, INTERSECT or EXCEPT.

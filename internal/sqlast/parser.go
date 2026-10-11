@@ -70,6 +70,9 @@ type parser struct {
 	toks  []sqlclass.Token
 	i     int
 	depth int
+	// topWith lets the next WITH hold data-modifying CTEs: the top-level
+	// WITH of a statement ParseWrite reads.
+	topWith bool
 }
 
 // Parse parses one read statement: SELECT, WITH ... SELECT or EXPLAIN
@@ -77,23 +80,11 @@ type parser struct {
 // supported grammar, is refused with a *sqlclass.Refusal. A trailing ';'
 // and surrounding blanks are dropped, as sqlclass.Classify does.
 func Parse(d sqlclass.Dialect, sql string) (*Statement, error) {
-	text := strings.TrimSpace(sql)
-	if strings.HasSuffix(text, ";") {
-		text = strings.TrimSpace(text[:len(text)-1])
-	}
-	if text == "" {
-		return nil, refuse("empty statement")
-	}
-	toks, err := sqlclass.Lex(d, text)
+	p, err := newParser(d, sql)
 	if err != nil {
 		return nil, err
 	}
-	for _, t := range toks {
-		if t.Kind == sqlclass.TokPunct && t.Text == ";" {
-			return nil, refuse("exactly one statement is allowed (no ';' chaining)")
-		}
-	}
-	p := &parser{d: d, src: text, toks: toks}
+	text := p.src
 	st := &Statement{SQL: text, Dialect: d}
 	if p.word(0, "EXPLAIN") {
 		p.i++
@@ -114,6 +105,28 @@ func Parse(d sqlclass.Dialect, sql string) (*Statement, error) {
 	}
 	st.Query = q
 	return st, nil
+}
+
+// newParser lexes one statement, without its trailing ';' and surrounding
+// blanks.
+func newParser(d sqlclass.Dialect, sql string) (*parser, error) {
+	text := strings.TrimSpace(sql)
+	if strings.HasSuffix(text, ";") {
+		text = strings.TrimSpace(text[:len(text)-1])
+	}
+	if text == "" {
+		return nil, refuse("empty statement")
+	}
+	toks, err := sqlclass.Lex(d, text)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range toks {
+		if t.Kind == sqlclass.TokPunct && t.Text == ";" {
+			return nil, refuse("exactly one statement is allowed (no ';' chaining)")
+		}
+	}
+	return &parser{d: d, src: text, toks: toks}, nil
 }
 
 // notAllowed refuses a statement that is not a read in the allowlist.
@@ -235,12 +248,19 @@ func (p *parser) query() (*Query, error) {
 	defer p.leave()
 	start := p.i
 	q := &Query{}
-	var err error
 	if p.word(0, "WITH") {
+		var err error
 		if q.With, err = p.with(); err != nil {
 			return nil, err
 		}
 	}
+	return p.queryRest(q, start)
+}
+
+// queryRest reads the body, ORDER BY and LIMIT of a query whose WITH (if
+// any) is read, from token start.
+func (p *parser) queryRest(q *Query, start int) (*Query, error) {
+	var err error
 	if q.Body, err = p.setExpr(); err != nil {
 		return nil, err
 	}
@@ -261,6 +281,8 @@ func (p *parser) query() (*Query, error) {
 }
 
 func (p *parser) with() (*With, error) {
+	writes := p.topWith
+	p.topWith = false
 	start := p.i
 	p.i++ // WITH
 	w := &With{}
@@ -291,17 +313,28 @@ func (p *parser) with() (*With, error) {
 		if err := p.expectPunct("("); err != nil {
 			return nil, err
 		}
-		if !p.word(0, "SELECT", "WITH") && !p.punct(0, "(") {
+		switch {
+		case writes && p.d == sqlclass.Postgres && p.word(0, "INSERT", "UPDATE", "DELETE"):
+			w, err := p.write()
+			if err != nil {
+				return nil, err
+			}
+			c.Write = w
+		case !p.word(0, "SELECT", "WITH") && !p.punct(0, "("):
+			if writes {
+				return nil, refuse("a CTE must be a SELECT, or on PostgreSQL an INSERT, UPDATE or DELETE")
+			}
 			return nil, refuse("a CTE must be a SELECT (data-modifying CTEs are not allowed)")
-		}
-		q, err := p.query()
-		if err != nil {
-			return nil, err
+		default:
+			q, err := p.query()
+			if err != nil {
+				return nil, err
+			}
+			c.Query = q
 		}
 		if err := p.expectPunct(")"); err != nil {
 			return nil, err
 		}
-		c.Query = q
 		c.Sp = p.span(cs)
 		w.CTEs = append(w.CTEs, c)
 		if !p.punct(0, ",") {

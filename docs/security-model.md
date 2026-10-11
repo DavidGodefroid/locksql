@@ -247,8 +247,31 @@ it append-only for the console account too.
 - **Write tiers.** Above tier `read`, the human's approval is the gate. The
   classifier assigns the class shown on the screen, but the server does not
   restrict what an approved write statement does within the account's
-  privileges. The column analysis covers reads; a write's `RETURNING` list
-  or a data-modifying CTE may not alias or transform a masked column.
+  privileges. While mask rules exist, a write whose rows come back (a
+  `RETURNING` list on PostgreSQL, MariaDB or SQLite, or a PostgreSQL `WITH`
+  whose data-modifying CTEs feed an outer `SELECT`) or that stores a query's
+  rows (`INSERT`/`REPLACE ... SELECT`, a query in a CTE or in `VALUES`) is
+  parsed and analysed like a read before it runs. Every `RETURNING` item and
+  every output of the outer `SELECT` is resolved to its base columns, through
+  aliases, stars, `FROM`/`USING` items, subqueries and the `RETURNING` list of
+  a CTE; a target column returned by an `INSERT` or an `UPDATE` carries both
+  its own provenance and that of the values the statement stores in it. The
+  rows are masked by that provenance, whatever label or origin the engine
+  reports, and carry no cell reference. Those parts follow the read rules:
+  an expression over a masked column, an `ORDER BY` of one, a set operation
+  that compares one, a function outside the allowlist, a whole-row
+  reference, an aggregate in `RETURNING` and anything the parser does not
+  read (`MERGE`, multi-table MySQL `UPDATE`/`DELETE`, `ONLY`, `WHERE CURRENT
+  OF`, PostgreSQL 18 `RETURNING old/new` or `RETURNING WITH`, a subquery
+  assigned to a column list, ...) are refused. A PII filter, grouping or
+  aggregate that needs a k-anonymity count is refused too: the count would
+  run the data-modifying CTEs a second time. The write's own clauses (its
+  `WHERE`, `FROM`/`USING` items, `ORDER BY`, conflict target and the query
+  an `INSERT` reads) are resolved and checked against the function
+  allowlist, but the PII filter rules do not apply there: they decide which
+  rows change, which the affected-row count reveals anyway, and the human
+  approves them. A write that returns no rows and stores no query's rows is
+  checked by column name only (see the copies and planted values below).
 - **Size bound.** The size bound counts bytes built from literals and string
   functions; numeric arithmetic (`1e131071`, `^`) and formatting of stored
   data (`jsonb_pretty`) can still produce a value of hundreds of megabytes on
@@ -299,7 +322,14 @@ it append-only for the console account too.
   stores into a rule column anything but `NULL` or `DEFAULT`. Columns match
   by name, so an updatable view that renames a rule column, a trigger, or a
   value written before the rule existed (or by another client) can still put
-  a value the agent knows behind a reference. DDL such as `CREATE TABLE ...
+  a value the agent knows behind a reference. For the writes the analysis
+  above reads, these checks also follow provenance: a value stored from a
+  query (`INSERT ... SELECT`, a subquery in `SET` or `VALUES`, an
+  `ON CONFLICT` update) that derives from a masked column through an alias,
+  a table alias column list, a CTE or a derived table is refused, and a
+  masked target never receives a query's values. A table alias column list
+  that renames columns by position (`FROM users u(i, x)`) is refused in any
+  write. DDL such as `CREATE TABLE ...
   AS SELECT`, `CREATE VIEW`, a column default or a column rename is not
   checked that way: at tier `ddl` and above the human's approval is the
   gate.
