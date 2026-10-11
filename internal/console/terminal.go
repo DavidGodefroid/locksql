@@ -60,6 +60,9 @@ func (t *Terminal) start() {
 // Println writes one line.
 func (t *Terminal) Println(s string) { fmt.Fprintln(t.out, s) }
 
+// Bell rings the terminal bell.
+func (t *Terminal) Bell() { fmt.Fprint(t.out, "\a") }
+
 // Lines delivers the lines typed while no prompt is active.
 func (t *Terminal) Lines() <-chan string {
 	t.start()

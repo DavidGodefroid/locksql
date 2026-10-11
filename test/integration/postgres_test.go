@@ -525,6 +525,15 @@ func testPostgresServer(t *testing.T, version string, srv Server) {
 		}
 	})
 
+	t.Run("describe stays in user schemas", func(t *testing.T) {
+		s := connectPG(t, srv, "postgres", config.TierRead, 5*time.Second)
+		for _, name := range []string{"pg_catalog.pg_authid", "pg_authid", "information_schema.tables"} {
+			if info, err := s.Describe(ctx, "app", name); err == nil || !strings.Contains(err.Error(), "not found") {
+				t.Errorf("describe %s: %+v, %v", name, info, err)
+			}
+		}
+	})
+
 	t.Run("explain", func(t *testing.T) {
 		s := connectPG(t, srv, "ro", config.TierRead, 5*time.Second)
 		p, err := s.Explain(ctx, "app", "SELECT * FROM big WHERE status = 'x' LIMIT 10")

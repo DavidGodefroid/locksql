@@ -173,14 +173,15 @@ func (s *session) Tables(ctx context.Context, db string) ([]string, error) {
 var errNoTable = errors.New("no such table")
 
 // findTable resolves a table name as Tables spells it: "schema.table", or
-// "table" looked up through the search path. Returns the table OID.
+// "table" looked up through the search path. Like Tables, it only sees the
+// user schemas: a system relation is not found. Returns the table OID.
 func findTable(ctx context.Context, c *pgx.Conn, name string) (oid uint32, info engine.TableInfo, err error) {
 	try := func(schema, table string) error {
 		var kind string
 		var tuples float64
 		err := c.QueryRow(ctx, `SELECT c.oid, n.nspname, c.relname, c.relkind::text, c.reltuples::float8
 			FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-			WHERE c.relname = $2::text AND `+relKinds+`
+			WHERE c.relname = $2::text AND `+relKinds+` AND `+userSchemas+`
 			  AND (($1::text = '' AND n.nspname = ANY (pg_catalog.current_schemas(false))) OR n.nspname = $1::text)
 			ORDER BY pg_catalog.array_position(pg_catalog.current_schemas(false), n.nspname) NULLS LAST
 			LIMIT 1`, schema, table).Scan(&oid, &info.DB, &info.Table, &kind, &tuples)

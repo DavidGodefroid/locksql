@@ -129,6 +129,9 @@ type PlanNode struct {
 	// NoJoinCond marks a table joined without a usable join condition, so
 	// that every outer row reads all of it.
 	NoJoinCond bool `json:"no_join_cond,omitempty"`
+	// Recursive marks the group of a recursive CTE: how many times it
+	// iterates is unknown to the planner, so its row estimate is a guess.
+	Recursive bool `json:"recursive,omitempty"`
 	// Detail is the engine's own label for the node, for display only.
 	Detail   string     `json:"detail,omitempty"`
 	Children []PlanNode `json:"children,omitempty"`

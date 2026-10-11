@@ -381,6 +381,29 @@ func TestPlanRefusedAndRunDenied(t *testing.T) {
 	cli(t, dir, "", "run", "--profile", "uat", pl.PlanID).want(t, exitFail, "denied")
 }
 
+// --intent reaches the approval screen; the plan's output is unchanged.
+func TestPlanIntentReachesTheScreen(t *testing.T) {
+	dir := project(t, uatConfig)
+	sio := startConsole(t, dir, "uat")
+	o := cli(t, dir, "", "plan", "--profile", "uat", "--json", "SELECT id, email FROM users WHERE id = 1 LIMIT 1", "--intent", "check user 1 exists")
+	o.want(t, exitOK)
+	if strings.Contains(o.stdout, "intent") {
+		t.Fatalf("plan output echoes the intent: %s", o.stdout)
+	}
+	var pl ipc.PlanResult
+	decodeJSON(t, o.stdout, &pl)
+	sio.answer("y")
+	cli(t, dir, "", "run", "--profile", "uat", pl.PlanID).want(t, exitOK)
+	sio.mu.Lock()
+	screen := strings.Join(sio.out, "\n")
+	sio.mu.Unlock()
+	if !strings.Contains(screen, "agent: check user 1 exists") {
+		t.Fatalf("approval screen lacks the intent:\n%s", screen)
+	}
+	cli(t, dir, "", "plan", "--profile", "uat", "--intent", strings.Repeat("x", 201), "SELECT id FROM users LIMIT 1").
+		want(t, exitFail, "intent must be one line of at most 200 bytes")
+}
+
 func TestRunWaitsForTheHuman(t *testing.T) {
 	dir := project(t, uatConfig)
 	sio := startConsole(t, dir, "uat")

@@ -40,3 +40,27 @@ func TestWriteReturningPIIRefusedBeforeRun(t *testing.T) {
 		t.Errorf("nested PII source not masked: %v", got)
 	}
 }
+
+// The RETURNING list of a write is masked in each column's mode, as the
+// approval screen promises: a redact rule gives plain <redacted>, not the
+// partial format. (The SQLite engine runs a write without reading its
+// RETURNING rows; MariaDB and PostgreSQL return them, as the fake does.)
+func TestWriteReturningHonoursMaskMode(t *testing.T) {
+	p := uatProfile()
+	p.Tier = config.TierWrite
+	h := newHarness(t, p)
+	h.sess.result = engine.Result{
+		Columns: []engine.ResultColumn{
+			{Label: "id", OriginDB: "app", OriginTable: "users", OriginColumn: "id"},
+			{Label: "email", OriginDB: "app", OriginTable: "users", OriginColumn: "email"},
+		},
+		Rows: [][]any{{int64(1), "alice@example.com"}},
+	}
+	pr := h.plan(t, "UPDATE users SET note = 'x' WHERE id = 1 RETURNING id, email", false)
+	h.io.answers = []string{"y"}
+	var rr ipc.RunResult
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	if len(rr.Rows) != 1 || len(rr.Rows[0]) != 2 || rr.Rows[0][1] != "<redacted>" {
+		t.Errorf("RETURNING rows = %v, want the email <redacted>", rr.Rows)
+	}
+}

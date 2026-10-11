@@ -205,6 +205,20 @@ func TestFirstStartShowsDiffAgainstUserApproval(t *testing.T) {
 	}
 }
 
+// The policy prompt at start-up takes "Y" as well as "y".
+func TestFirstStartAcceptsUpperY(t *testing.T) {
+	state := t.TempDir()
+	log, err := audit.Open(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := uatProfile()
+	st := &starter{io: &fakeIO{answers: []string{"Y"}}, log: log, profile: p}
+	if _, _, err := st.startPolicy(context.Background(), state, config.ApprovedKey(t.TempDir(), "uat"), config.NewPolicy(p, nil, nil)); err != nil {
+		t.Fatalf("Y refused: %v", err)
+	}
+}
+
 // A client that leaves while its request waits for the console (busy with
 // another client's approval) must not have that request served.
 func TestServeConnDropsRequestOfClientGoneBeforeHandoff(t *testing.T) {

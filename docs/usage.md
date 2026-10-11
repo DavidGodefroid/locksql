@@ -222,8 +222,9 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   - `password`: asks `SSH password for <user>@<host>:`.
 - `credentials` (`ask` or `keychain`, default the profile's own) governs the
   passphrase or SSH password like the database password. With `keychain` the
-  secret is the OS keychain item of account `<profile>@ssh:<ssh host>`,
-  separate from the database's. When the bastion refuses the keychain secret
+  secret is the OS keychain item of account `<profile>@ssh:<ssh host>:<ssh port>`,
+  separate from the database's (an item saved under `<profile>@ssh:<ssh host>`
+  is moved to that name the first time it is read, on port 22 only). When the bastion refuses the keychain secret
   (or it does not decrypt the key), the console asks once and offers
   `Replace the SSH secret stored in the OS keychain? [y/N]`; other failures
   (bastion unreachable, host key refused) are reported without asking.
@@ -282,11 +283,24 @@ account could read its terminal, type into it and read its keychain session.
 mode as a failure. On Linux and macOS, `locksql install` sets it up once:
 
 ```sh
-locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print]
+locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print] [--trust-binary]
 ```
 
 It prints the root script and, on Linux, runs it with `sudo` after you
-confirm (`--print` only prints; on macOS it always only prints). The script:
+confirm (`--print` only prints; on macOS it always only prints).
+
+- The binary it copies is the one running. Unless that binary is owned by
+  root and writable by neither group nor others, `install` refuses: run from
+  the agent's account, a binary the agent replaced (a `go install` into
+  `~/go/bin`) would become the root-owned one the console trusts. Install a
+  release into a root-owned directory (`scripts/install.sh` with the default
+  `/usr/local/bin`), or pass `--trust-binary` to copy it anyway; both the
+  refusal and `--trust-binary` print its sha256, to compare with the release,
+  and with `--trust-binary` the root script checks its copy against that
+  sha256 (`sha256sum -c` on Linux, `shasum -a 256 -c` on macOS) and stops
+  before any change when it differs.
+
+The script:
 
 | Creates | Detail |
 |---|---|
@@ -301,7 +315,7 @@ confirm (`--print` only prints; on macOS it always only prints). The script:
 | Key | Default | Notes |
 |---|---|---|
 | `service_user` | `locksql` | the account the console must run as |
-| `client_group` | `locksql-clients` | members may connect to the console sockets |
+| `client_group` | `locksql-clients` | members may connect to the console sockets (looked up at every connection: a removed member loses access at once) |
 | `socket_dir` | `/run/locksql` | absolute; owned by `service_user` and `client_group`, mode 0710 or 0750, plus setgid on Linux (2710 or 2750) |
 | `allowed_uids` | none | uids allowed besides the group's members |
 | `x11` | `warn` (`install` writes `refuse`) | what the console does in an X11 session |
@@ -425,9 +439,11 @@ The console needs an interactive terminal. At start it:
    and asks you to type the profile name.
 3. **Credentials.** It asks for the database user when the profile has none,
    then for the password (no echo). With `credentials = "keychain"` it reads
-   the OS keychain (service `locksql`, account `<profile>@<host>`); after the
-   first successful login it offers `Save in OS keychain? [y/N]`. If the
-   stored secret fails, it asks again and offers to replace it. Without a
+   the OS keychain (service `locksql`, account `<profile>@<host>:<port>`, or
+   `<profile>@<socket path>` for a Unix socket): an item is bound to the
+   host and port it was saved for; the pre-upgrade item is moved to the
+   default port or removed at the first start. After the first successful
+   login it offers `Save in OS keychain? [y/N]`. If the stored secret fails, it asks again and offers to replace it. Without a
    usable keychain (for example headless Linux without Secret Service) it
    behaves like `ask`. In separated mode this is the console account's
    keychain. With `credentials_ttl`, the connection is closed once it is that
@@ -456,7 +472,8 @@ The console needs an interactive terminal. At start it:
    (removing that allow later is a tightening). Any other answer, or none
    within the timeout, writes nothing, and the column is asked again at the
    next start. Proposed personal-data rules use mode `redact`.
-7. Lists the databases and prints `Listening…`.
+7. Lists the databases it serves (the profile's `database` alone when it names
+   one, else every database the account can see) and prints `Listening…`.
 
 Between requests you can type:
 
@@ -466,8 +483,12 @@ Between requests you can type:
 | `:review` | show the pending policy change and the agent's change requests |
 | `:quit` | end the session |
 
-The session ends on Ctrl-C, `:quit`, `locksql logout`, after 20 minutes
-without activity, or after 4 hours. Each end closes the connection, removes
+The session ends on Ctrl-C, `:quit`, `locksql logout`, after
+`limits.idle_timeout` without activity (default 20 minutes, production 10,
+or `max_session` when that is shorter), or after `limits.max_session`
+(default 4 hours, production 2). A change of
+either applied while the console runs counts from the session start and the
+last activity, at the next check. Each end closes the connection, removes
 the socket and is audited.
 
 ### TLS to the database
@@ -499,6 +520,7 @@ tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
 ```
 ╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
 │ requested by uid 1000 (alice) · pid 48211 (claude)
+│ agent: find in which countries the customer a@example.com ordered
 │
 │   SELECT country, COUNT(*) FROM customers WHERE email = 'a@example.com' GROUP BY country LIMIT 20
 │
@@ -514,14 +536,21 @@ tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
 ```
 
 - The screen names the requesting uid, pid and process (as the kernel reports
-  them), the relations read, the PII columns touched and in which clause
+  them), the agent's `intent` when it gave one (one line of at most 200 bytes,
+  dimmed, untrusted text: the agent's claim, not a fact), the relations read, the PII columns touched and in which clause
   (highlighted in red in the SQL), each masked output and its mode, the
   k-anonymity counts that run first and the row cap.
 - Statement classes other than READ, a WARN verdict, PII columns and
   `PII: UNMASKED` are printed in red.
-- On a production profile you type the profile name instead of `y`.
-- Anything else, or no answer within 5 minutes, denies the query. A client
-  that disconnects while waiting abandons the approval.
+- `y` or `Y` approves. On a production profile you type the profile name
+  instead, exactly.
+- `n <reason>` (or `no <reason>`) denies and tells the agent why: it gets
+  `denied by the human: <reason>; do not retry unless asked`, and the audit
+  record keeps the reason (`reason`, at most 200 bytes).
+- Anything else, or no answer within 5 minutes, denies the query without a
+  reason. A client that disconnects while waiting abandons the approval.
+- The console rings the terminal bell when a prompt waits for you: the
+  approval, a placeholder value, the production profile name and `:review`.
 - Pending keystrokes are discarded before each prompt.
 - Requests are served one at a time; other clients wait.
 - Only the console terminal approves; no socket method can.
@@ -536,8 +565,9 @@ The console watches the config and PII files while it runs.
   larger `k_anonymity`, a new mask rule or detector, a mode changed to
   `redact`) is applied at once.
 - A change that loosens it (higher tier, `production = true → false`, larger
-  limits, a smaller `k_anonymity`, a larger `reference_probe`, a higher or
-  removed `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
+  limits, a smaller `k_anonymity`, a larger `reference_probe`, a longer
+  `idle_timeout` or `max_session`, a higher or removed
+  `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
   host, port, engine, user or database, a weaker `tls` or any change of `tls_ca`,
   any change of the `ssh` table (except `ssh.credentials` set to `ask`),
   `ask → keychain`, a removed mask rule or detector, a mask mode
@@ -563,7 +593,7 @@ one profile and never handles a secret.
 locksql status   [--profile P]
 locksql tables   --profile P [--db D]
 locksql describe --profile P [--db D] TABLE
-locksql plan     --profile P [--db D] [--unmask] "SQL" | -   # "-" reads SQL from stdin
+locksql plan     --profile P [--db D] [--unmask] [--intent TEXT] "SQL" | -   # "-" reads SQL from stdin
 locksql run      --profile P PLAN_ID                          # waits for the human's approval
 locksql pii      list|add --profile P [DB.TABLE.COLUMN]
 locksql request  --profile P "tier=write" | "limits.max_rows=500" | "allow=app.t.c"
@@ -573,7 +603,8 @@ locksql doctor   [--profile P]
 
 - `--profile` may be left out when exactly one profile is configured. Without
   it and with several profiles, `status` reports every profile.
-- `--db` defaults to the profile's `database`.
+- `--db` defaults to the profile's `database`. A profile that names one
+  serves that database only: another `--db` is refused.
 - `--json` gives machine-readable output on every client command. A failure
   prints `{"error": {"kind": ..., "message": ...}}`.
 - Exit codes: 0 ok · 1 refused, denied or failed · 2 no console running (the
@@ -587,15 +618,22 @@ locksql doctor   [--profile P]
 - A failed statement gives a generic message
   (`statement refused by the database (the details are shown on the
   console)`), never the server's text; the details go to the console and,
-  redacted, to the audit log. No timings are returned, and `run` answers on
-  a 250 ms quantum, success or failure.
+  redacted, to the audit log. No timings are returned, and once the
+  statement is approved `run` answers on a 250 ms quantum, success or
+  failure; a refusal before approval is not quantized.
 - `tables` and `describe` are catalog reads: they run SQL built by the
   console, need no approval and are audited. `describe` also marks the
   masked columns.
 - `plan` validates the statement and runs `EXPLAIN` only. The plan id it
   returns is valid once, for 10 minutes. A REFUSE verdict gives no plan id.
   When the statement filters on a PII column, the row estimates are hidden
-  from the agent.
+  from the agent and the weight verdict is decided at run time, on the
+  console: `plan` answers `OK` with a plan id. A REFUSE verdict is shown to
+  the human on the console before the agent is told: `run` shows the
+  approval screen with the verdict and its reasons, then
+  `verdict REFUSE: this statement cannot be approved` and
+  `Press Enter to refuse` (also under `--skip-permissions`), and only then
+  answers the agent a generic `refused by the weight check`.
 - `pii add` adds a mask rule at once, since it only tightens.
 - `request` queues a proposal that the human sees in `:review`. It never
   changes the policy; the human edits the config, and the console then asks
@@ -613,12 +651,25 @@ locksql doctor   [--profile P]
 - The parser is fail-closed: syntax it does not know is refused. Functions
   must be in the allowlist (`internal/sqlast/funcs.go`: common string,
   numeric, date and JSON functions, aggregates and window functions;
-  schema-qualified functions are refused). System schemas and relations
-  (`information_schema`, `pg_catalog`, `mysql`, `performance_schema`, `sys`,
-  SQLite internals) are refused, and so are `pg_stat_statements` and
+  schema-qualified functions are refused). `REPEAT`, `LPAD`, `RPAD`, `SPACE`
+  and `ZEROBLOB` take a literal length of at most 65 536, and only literals
+  and columns as arguments, except the string `LPAD` and `RPAD` pad, which
+  may be any expression that calls none of these functions
+  (`lpad(id::text, 8, '0')`); `REPEAT` repeats a string literal. The
+  replacement of `REPLACE`, `REGEXP_REPLACE` and `TRANSLATE` is a string
+  literal of at most 1 024 bytes. The format string of `format` (PostgreSQL,
+  SQLite) and `printf` (SQLite) is a literal whose widths and precisions are
+  at most 65 536, never `*`. locksql bounds the size a statement can build:
+  literals and size functions may contribute at most 65 536 bytes to any
+  value, and a value may combine at most 64 column-width inputs; a
+  concatenating aggregate (`STRING_AGG`, `GROUP_CONCAT`, `ARRAY_AGG`, the
+  JSON aggregates) takes an argument of at most 1 024 bytes. The bound
+  follows a value through CTEs, derived tables and set operations, and a
+  recursive CTE whose values grow on every pass is refused. System schemas
+  and relations (`information_schema`, `pg_catalog`, `mysql`,
+  `performance_schema`, `sys`, SQLite internals) are refused, and so are `pg_stat_statements` and
   `pg_stat_activity` while mask rules exist (they hold the text of past
-  statements). Every table and column must resolve
-  against the catalog.
+  statements). Every table and column must resolve against the catalog.
 - Every output column is traced to its source columns, so an alias, a CTE or
   a subquery does not hide a PII column: `SELECT e FROM (SELECT email AS e
   FROM users) t LIMIT 5` is masked like `email`.
@@ -630,7 +681,8 @@ PII columns (columns under a mask rule) may be used as follows:
 | plain in the select list (masked, also through aliases, CTEs, unions, `*`) | any expression or function over them, anywhere (`LOWER(email)`, `email \|\| ''`) |
 | `COUNT(col)` (not masked); `MIN`/`MAX` (masked in the column's mode); other aggregates (redacted) | `LIKE`, ranges (`<`, `BETWEEN`) and other comparisons |
 | `JOIN ... ON a.col = b.col`, `col IN (SELECT ...)`, `USING`, `NATURAL` between two PII columns | a join or `IN (subquery)` with a column that has no mask rule (add a rule for it, or compare with literals); constant comparisons in `JOIN ... ON` (put them in `WHERE`) |
-| `WHERE col = 'literal'`, `col IN ('a', 'b')`, `col IS NULL`, combined with `AND` | `<>`, `!=`, `NOT IN`, `IS NOT NULL`, `IS DISTINCT FROM`; a PII condition under `NOT`, `OR` or `XOR`; a scalar subquery returning a PII value as an operand; constant filters on a column of a view |
+| `WHERE col = 'literal'`, `col IN ('a', 'b')`, `col IS NULL`, combined with `AND` | `<>`, `!=`, `NOT IN`, `IS NOT NULL`, `IS DISTINCT FROM`; a PII column compared with itself (`email = email`, or a self-join on it); a PII condition under `NOT`, `OR` or `XOR`; a scalar subquery returning a PII value as an operand; constant filters on a column of a view |
+| | `UNION`, `INTERSECT` or `EXCEPT` between a PII column and a literal (including `NULL`), an expression or an unmasked column (`UNION ALL` is allowed and gives plain `<redacted>`); `DISTINCT`, `COUNT(DISTINCT ...)` or `GROUP BY` over a column that mixes a PII column with such values |
 | `GROUP BY col` | `GROUP BY` an expression of it; `GROUP BY name` where `name` is both an input column and an alias for another value; PII filters in correlated subqueries, recursive CTEs or a `SELECT` without `FROM` |
 | | `ORDER BY`, window `PARTITION BY` and `ORDER BY`, `FILTER`, `DISTINCT ON` |
 
@@ -639,7 +691,10 @@ PII columns (columns under a mask rule) may be used as follows:
   (shown on the approval screen). Each constant filter on a PII column counts
   the subjects of that column in its own base table
   (`SELECT COUNT(*) FROM db.table WHERE db.table.col = 'literal'`), so a
-  join cannot multiply them; another count is built from the statement's own
+  join cannot multiply them. `IN (literals)` counts each value apart and
+  takes the smallest count (`SELECT MIN(locksql_n) FROM (... UNION ALL ...)`),
+  so a value absent from the table refuses the list; placeholder values in
+  the list are not counted. Another count is built from the statement's own
   `FROM`, `WHERE`, `GROUP BY` and `HAVING` text. Fewer than `k_anonymity`
   rows in any count, or in the smallest group, refuses the statement.
 - `EXPLAIN` of a statement that filters, groups or aggregates PII is refused.
@@ -751,7 +806,7 @@ finds the project's consoles.
 |---|---|
 | `locksql_status` | none |
 | `locksql_list_tables`, `locksql_describe` | none (catalog reads, audited) |
-| `locksql_plan` | none (validate and EXPLAIN only) |
+| `locksql_plan` | none (validate and EXPLAIN only; an optional `intent` line is shown on the approval screen) |
 | `locksql_run` | the human, in the console |
 | `locksql_pii_list`, `locksql_pii_add` | none (adding a mask rule only tightens) |
 | `locksql_request_change` | queued for the human; never applied by the tool |
@@ -777,8 +832,9 @@ finds the project's consoles.
 - Control and bidirectional characters are escaped. NULL prints as `NULL`.
 - Masked cells follow the rule's mode: `redact` (the default for a rule
   without `mode`) gives `<redacted:rN.R.C>` (result, row, column; plain
-  `<redacted>` when the console cannot hold the cell), `partial` keeps the
-  first character and the length (`a***(17)`), `email` keeps the first
+  `<redacted>` when the console cannot hold the cell), including the
+  `RETURNING` list of a write, which gets plain `<redacted>`; `partial` keeps
+  the first character and the length (`a***(17)`), `email` keeps the first
   character and the domain (`a***@example.com`). `partial`, `email` and
   detector-masked cells carry no reference, nor does any column but a plain
   one whose every source is under a mask rule (a `UNION` with a constant or
@@ -799,7 +855,7 @@ finds the project's consoles.
 | `<user config dir>/locksql/pii.toml` | PII column rules outside a project |
 | `<user config dir>/locksql/config.toml` | personal profiles |
 | `<user state dir>/locksql/approved/*.json` | last approved policies |
-| `<user state dir>/locksql/audit.log` | JSONL audit log, mode 0600 |
+| `<user state dir>/locksql/audit.log` | JSONL audit log, mode 0600; the records of a client request name the requester (`peer_uid`, `peer_pid`, `peer_user`) |
 | `<runtime dir>/<project-hash>-<profile>.sock` | console socket (tests only) |
 | `/etc/locksql/system.toml` | separated mode setup (root-owned) |
 | `<socket_dir>/<project-hash>-<profile>.sock` | console socket (separated mode), mode 0660 |

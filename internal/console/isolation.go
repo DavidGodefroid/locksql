@@ -10,8 +10,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 
+	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/sysconf"
@@ -155,26 +155,15 @@ func (iso *isolation) listen(path string) (net.Listener, error) {
 }
 
 // peerCheck decides which peers are served: the console's own account and,
-// in a separated setup, the client group. The answer per uid is cached for
-// the session.
+// in a separated setup, allowed_uids and the client group. The group is
+// looked up at every connection: a uid removed from it loses access at its
+// next connection, not at the next console start.
 func (iso *isolation) peerCheck() func(ipc.Cred) bool {
 	if iso.sys == nil {
 		return nil // the default: the console's own uid
 	}
-	var mu sync.Mutex
-	cache := map[int]bool{}
 	return func(c ipc.Cred) bool {
-		if c.UID == iso.self {
-			return true
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		ok, seen := cache[c.UID]
-		if !seen {
-			ok = iso.allowed(c.UID)
-			cache[c.UID] = ok
-		}
-		return ok
+		return c.UID == iso.self || iso.allowed(c.UID)
 	}
 }
 
@@ -183,6 +172,25 @@ type peerKey struct{}
 
 func withPeer(ctx context.Context, c ipc.Cred) context.Context {
 	return context.WithValue(ctx, peerKey{}, c)
+}
+
+// withPeerRecord stamps rec with the client behind the request in ctx: its
+// uid, pid and account name. The process name, chosen by the agent, stays on
+// the screen (peerText) and out of the audit log.
+func withPeerRecord(ctx context.Context, rec audit.Record) audit.Record {
+	c, ok := ctx.Value(peerKey{}).(ipc.Cred)
+	if !ok || c.UID < 0 {
+		return rec
+	}
+	uid := c.UID
+	rec.PeerUID = &uid
+	if c.PID > 0 {
+		rec.PeerPID = c.PID
+	}
+	if u, err := user.LookupId(strconv.Itoa(c.UID)); err == nil {
+		rec.PeerUser = u.Username
+	}
+	return rec
 }
 
 // peerText describes the client behind a request for the approval screen.

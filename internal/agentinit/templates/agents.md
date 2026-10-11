@@ -16,8 +16,11 @@ Workflow (MCP tools `locksql_*`, or the `locksql` CLI from any directory):
 4. `locksql_plan` with one narrow statement: indexed predicates, an explicit `LIMIT`, no comments, no
    variables. Use `unmask` only if the user asked to see personal data in clear; it is refused unless
    the human started the console with `--allow-unmask`.
+   Pass `intent`: one line saying why, in the user's terms (the human reads it on the approval
+   screen without the chat).
 5. Show the user the target, the SQL, the EXPLAIN summary and the verdict, then say you are waiting
-   for their approval in the console.
+   for their approval in the console. When the statement filters on a PII column the verdict is decided on the
+   console at run time and may still be refused there.
 6. `locksql_run` with the plan id, or `locksql run --profile P PLAN_ID` with a long command timeout
    (600000 ms): approval can take up to 5 minutes.
 7. Report the answer, quoting rows as returned; masked values stay masked.

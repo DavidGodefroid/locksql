@@ -27,7 +27,7 @@ func TestMatchesNameUnicode(t *testing.T) {
 	}
 	res := engine.Result{Columns: []engine.ResultColumn{{Label: "fİrstname"}}, Rows: [][]any{{"Alice"}}}
 	MaskResult(&res, r, nil, true)
-	if res.Rows[0][0] != "A***(5)" {
+	if res.Rows[0][0] != Redacted {
 		t.Errorf("not masked: %v", res.Rows[0][0])
 	}
 }

@@ -80,10 +80,14 @@ func (s *Server) frameEnd(text string) string {
 	return paint.Paint(s.frameColour(), "╰─ ") + text
 }
 
-// screenBody is the requester, the statement and the verdict.
+// screenBody is the requester, the agent's intent, the statement and the
+// verdict.
 func (s *Server) screenBody(ctx context.Context, pl *plan, add func(string)) {
 	if who := peerText(ctx); who != "" {
 		add(paint.Dim("requested by " + safeText(who, false)))
+	}
+	if pl.intent != "" {
+		add(paint.Dim("agent: " + safeText(pl.intent, false)))
 	}
 	add("")
 	for _, line := range strings.Split(s.highlight(pl), "\n") {
@@ -232,8 +236,8 @@ func (s *Server) Command(ctx context.Context, line string) {
 		l := st.Limits
 		s.println(fmt.Sprintf("limits: timeout %s · warn %d · refuse %d · max_rows %d · max_cell_chars %d · max_output_bytes %d",
 			l.StatementTimeout, l.ExplainRowsWarn, l.ExplainRowsRefuse, l.MaxRows, l.MaxCellChars, l.MaxOutputBytes))
-		s.println(fmt.Sprintf("session ends in %d min · %d plans open · pending policy change: %t",
-			st.SessionEndsInS/60, len(s.plans), s.pending != nil))
+		s.println(fmt.Sprintf("session ends in %d min (max_session %s) · idle_timeout %s · %d plans open · pending policy change: %t",
+			st.SessionEndsInS/60, l.MaxSession, l.IdleTimeout, len(s.plans), s.pending != nil))
 	case ":quit":
 		s.End("quit")
 	default:
@@ -266,9 +270,10 @@ func (s *Server) review(ctx context.Context) {
 	if s.cfg.SkipPermissions && s.profile.Production && !next.Profile.Production {
 		s.println(red + "--skip-permissions is set: once applied, statements run without a prompt" + reset)
 	}
+	bell(s.cfg.IO)
 	ans, ok := s.cfg.IO.Ask(ctx, "Apply these changes? [y/N] ", ApprovalTimeout)
 	s.pending = nil
-	if !ok || strings.TrimSpace(ans) != "y" {
+	if !ok || !strings.EqualFold(strings.TrimSpace(ans), "y") {
 		s.refused = config.Fingerprint(next)
 		s.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused"})
 		s.println("policy change refused: the last approved policy stays in force")
@@ -276,7 +281,7 @@ func (s *Server) review(ctx context.Context) {
 	}
 	s.refused = ""
 	if err := s.adopt(next, "applied"); err != nil {
-		s.println("policy change not applied: " + err.Error())
+		s.println("policy change not applied: " + safeText(err.Error(), false))
 		return
 	}
 	s.println("policy change applied")
@@ -291,7 +296,7 @@ func (s *Server) CheckPolicy() {
 	}
 	cur, err := s.cfg.LoadPolicy()
 	if err != nil {
-		msg := "config error: " + err.Error() + "; the last approved policy stays in force"
+		msg := "config error: " + safeText(err.Error(), false) + "; the last approved policy stays in force"
 		if msg != s.lastLoadErr {
 			s.lastLoadErr = msg
 			s.println(msg)
@@ -312,7 +317,7 @@ func (s *Server) CheckPolicy() {
 	if !loosens(changes) {
 		s.pending = nil
 		if err := s.adopt(cur, "tightened"); err != nil {
-			s.println("policy change not applied: " + err.Error())
+			s.println("policy change not applied: " + safeText(err.Error(), false))
 			return
 		}
 		s.println("policy tightened:")
@@ -420,6 +425,7 @@ func describePolicy(p config.Policy) []string {
 		fmt.Sprintf("  tier %s · production %t · credentials %s", pr.Tier, pr.Production, safeText(pr.Credentials, false)),
 		fmt.Sprintf("  limits: timeout %s · warn %d · refuse %d · max_rows %d · max_cell_chars %d · max_output_bytes %d",
 			l.StatementTimeout, l.ExplainRowsWarn, l.ExplainRowsRefuse, l.MaxRows, l.MaxCellChars, l.MaxOutputBytes),
+		fmt.Sprintf("  session: idle_timeout %s · max_session %s", l.IdleTimeout, l.MaxSession),
 		"  detectors: " + safeText(strings.Join(pr.Detectors, ", "), false),
 		fmt.Sprintf("  PII rules: %d mask, %d allow", len(p.PIIMask), len(p.PIIAllow)),
 	}

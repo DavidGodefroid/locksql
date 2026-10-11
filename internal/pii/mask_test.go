@@ -27,7 +27,7 @@ func TestMaskResultByOrigin(t *testing.T) {
 	}
 	MaskResult(&res, r, ds, true)
 	row := res.Rows[0]
-	if row[0] != "j***(17)" {
+	if row[0] != Redacted { // rules default to mode redact
 		t.Errorf("origin rule: %v", row[0])
 	}
 	if row[1] != "Template A" {
@@ -36,10 +36,10 @@ func TestMaskResultByOrigin(t *testing.T) {
 	if s := row[2].(string); strings.Contains(s, "jean@ex.be") || !strings.HasPrefix(s, "mail me at j***(") {
 		t.Errorf("detector: %v", s)
 	}
-	if row[3] != "a***(6)" {
+	if row[3] != Redacted {
 		t.Errorf("label fallback: %v", row[3])
 	}
-	if row[4] != "<masked bytes:3>" {
+	if row[4] != Redacted {
 		t.Errorf("bytes: %v", row[4])
 	}
 	if row[5] != int64(5) {
@@ -59,7 +59,7 @@ func TestMaskResultWithoutOriginUsesLabels(t *testing.T) {
 		Rows:    [][]any{{"x@y.zz", "1"}},
 	}
 	MaskResult(&res, r, nil, false) // origins ignored when the session does not report them
-	if res.Rows[0][0] != "x***(6)" || res.Rows[0][1] != "1" {
+	if res.Rows[0][0] != Redacted || res.Rows[0][1] != "1" {
 		t.Errorf("rows = %v", res.Rows)
 	}
 }
@@ -305,5 +305,34 @@ func TestAliasViolationValuesFunctionsTable(t *testing.T) {
 		if err = AliasViolation(st, r, c.d); (err != nil) != c.bad {
 			t.Errorf("%v: AliasViolation(%q) = %v, want violation %v", c.d, c.sql, err, c.bad)
 		}
+	}
+}
+
+func TestMaskResultHonoursModes(t *testing.T) {
+	r := Rules{Mask: []string{"app.users.secret", "app.users.name", "app.users.email", "app.users.both", "*.*.both"},
+		Modes: map[string]string{"app.users.name": ModePartial, "app.users.email": ModeEmail, "app.users.both": ModePartial, "*.*.both": ModeEmail}}
+	ds, _ := Detectors([]string{"email"})
+	col := func(c string) engine.ResultColumn {
+		return engine.ResultColumn{Label: c, OriginDB: "app", OriginTable: "users", OriginColumn: c}
+	}
+	res := engine.Result{
+		Columns: []engine.ResultColumn{col("secret"), col("name"), col("email"), col("both"), {Label: "name"}, col("note")},
+		Rows: [][]any{
+			{"hunter22", "Alice", "jean.dupont@ex.be", "x@y.zz", "Bob", "mail jean@ex.be"},
+			{[]byte("abc"), []byte("abc"), nil, nil, nil, nil},
+		},
+	}
+	MaskResult(&res, r, ds, true)
+	want := []any{"<redacted>", "A***(5)", "j***@ex.be", "<redacted>", "B***(3)"}
+	for i, w := range want {
+		if res.Rows[0][i] != w {
+			t.Errorf("column %d (%s) = %v, want %v", i, res.Columns[i].Label, res.Rows[0][i], w)
+		}
+	}
+	if s := res.Rows[0][5].(string); !strings.HasPrefix(s, "mail j***(") {
+		t.Errorf("detector cell keeps the partial format: %v", s)
+	}
+	if res.Rows[1][0] != "<redacted>" || res.Rows[1][1] != "<masked bytes:3>" {
+		t.Errorf("bytes = %v", res.Rows[1][:2])
 	}
 }
