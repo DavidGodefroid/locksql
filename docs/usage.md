@@ -485,15 +485,17 @@ The console needs an interactive terminal. At start it:
 The console runs its own line editor (backspace, Ctrl-U, Ctrl-W; Ctrl-D on
 an empty line or Ctrl-C ends the session). A status row fixed at the
 bottom of the terminal shows the profile and tier, the approval mode, the
-results switch, `unmask allowed` when the console was started with
-`--allow-unmask`, the open plans, and what awaits `:review`. Two keys
-switch the console's behaviour while it runs; each change is announced,
-shown on the status row and audited (`mode`, `results` records):
+results switch, `unmask allowed` when unmasked output is allowed, the open
+plans, and what awaits `:review`. Two keys and one command switch the
+console's behaviour while it runs, without a restart; each change is
+announced, shown on the status row and audited (`mode`, `results`,
+`unmask` records):
 
 | Key | Typed | Effect |
 |---|---|---|
 | Shift+Tab | `:mode` | manual ⇄ auto approval mode (unavailable on a production profile) |
 | Ctrl-O | `:results` | results masked ⇄ shown here in clear |
+| | `:unmask` | unmasked output off ⇄ allowed; allowing it asks `Allow unmasked output? [y/N]`, turning it off refuses the open unmask plans |
 
 A key pressed while an approval waits takes effect from the next
 statement. Between requests you can also type:
@@ -502,6 +504,7 @@ statement. Between requests you can also type:
 |---|---|
 | `:status` | profile, databases, mode, results, unmask, limits, session time left, open plans, pending policy change |
 | `:review` | show the pending policy change and the agent's change requests |
+| `:unmask` | allow (after `y`) or stop unmasked output; see above |
 | `:quit` | end the session |
 
 The session ends on Ctrl-C, `:quit`, `locksql logout`, after
@@ -721,9 +724,9 @@ PII columns (columns under a mask rule) may be used as follows:
   rows in any count, or in the smallest group, refuses the statement.
 - `EXPLAIN` of a statement that filters, groups or aggregates PII is refused.
 - Ask for unmasked values with `--unmask`. It is off by default: the console
-  refuses the request unless the human started it with
-  `locksql console --allow-unmask` (`locksql status` shows `unmask allowed`
-  or `off`). When allowed, the PII usage rules and the k-anonymity checks no
+  refuses the request unless the human allowed it there
+  (`locksql console --allow-unmask`, or `:unmask` while it runs;
+  `locksql status` shows `unmask allowed` or `off`). When allowed, the PII usage rules and the k-anonymity checks no
   longer apply, the approval screen shows `PII: UNMASKED` in red, and it is
   never auto-approved. Once it has run, the console prints the clear result
   under `PII: UNMASKED result`, so you see what the agent received; the audit

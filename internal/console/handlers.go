@@ -110,7 +110,7 @@ func (s *Server) status() ipc.StatusResult {
 		HostConfirmed:  true, // the host is part of the approved policy
 		Production:     s.profile.Production,
 		AutoApprove:    s.autoApprove(),
-		AllowUnmask:    s.cfg.AllowUnmask,
+		AllowUnmask:    s.allowUnmask,
 		ShowResults:    s.showResults,
 		Tier:           s.profile.Tier.String(),
 		Databases:      nonNil(s.cfg.Databases),
@@ -318,8 +318,8 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		return *r
 	}
 	auditSQL := capSQL(p.SQL)
-	if p.Unmask && !s.cfg.AllowUnmask {
-		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "", "", "unmasked output is off in this console: run the query masked, or ask the human to restart the console with --allow-unmask")
+	if p.Unmask && !s.allowUnmask {
+		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "", "", "unmasked output is off in this console: run the query masked, or ask the human to allow it in the console (:unmask, or --allow-unmask at start)")
 	}
 	inner, explain := splitExplain(s.dialect, p.SQL)
 	st, err := sqlclass.Classify(s.dialect, inner, s.profile.Limits.MaxRows)
@@ -473,6 +473,10 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	if int(pl.st.Class) > int(s.profile.Tier) {
 		return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, fmt.Sprintf(
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
+	}
+	// Unmasked output may have been turned off (:unmask) since query.plan.
+	if pl.unmask && !s.allowUnmask {
+		return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, "unmasked output was turned off in this console since the plan: run the query masked")
 	}
 	// The limits may have changed since query.plan (a tightening is applied
 	// at once): the verdict shown and enforced is the one under the policy

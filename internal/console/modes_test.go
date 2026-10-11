@@ -199,3 +199,87 @@ func TestLayoutTable(t *testing.T) {
 		}
 	}
 }
+
+// :unmask allows unmasked output while the console runs, after a typed y;
+// turning it off needs no confirmation and refuses the open unmask plans.
+// Each change is audited.
+func TestUnmaskCommandTogglesLive(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	ctx := context.Background()
+
+	// Anything but y leaves it off, unaudited.
+	h.io.answers = []string{"n"}
+	h.s.Command(ctx, ":unmask")
+	if h.s.allowUnmask {
+		t.Fatal("unmask allowed without a y")
+	}
+	if out := h.io.output(); !strings.Contains(out, "still off") {
+		t.Errorf("no refusal:\n%s", out)
+	}
+	if log := h.auditLog(t); strings.TrimSpace(log) != "" {
+		t.Fatalf("audited without a change:\n%s", log)
+	}
+
+	h.io.answers = []string{"y"}
+	h.s.Command(ctx, ":unmask")
+	if !h.s.allowUnmask || !strings.Contains(h.io.statusLine(), "unmask allowed") {
+		t.Fatalf("unmask not allowed; status %q", h.io.statusLine())
+	}
+	var st ipc.StatusResult
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if !st.AllowUnmask {
+		t.Error("status does not report unmask allowed")
+	}
+	pr := h.plan(t, selectUsers, true)
+	if !pr.Unmask {
+		t.Fatal("unmask plan refused once allowed")
+	}
+
+	// Off again: at once, no prompt, and the open unmask plan is refused.
+	prompts := h.io.promptCount()
+	h.s.Command(ctx, ":unmask")
+	if h.s.allowUnmask || strings.Contains(h.io.statusLine(), "unmask allowed") {
+		t.Fatalf("unmask still allowed; status %q", h.io.statusLine())
+	}
+	if h.io.promptCount() != prompts {
+		t.Error("turning unmask off prompted")
+	}
+	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	wantCode(t, resp, ipc.CodeRefused)
+	if h.sess.runCount() != 0 {
+		t.Fatal("unmask plan ran after :unmask off")
+	}
+	resp = h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Unmask: true})
+	wantCode(t, resp, ipc.CodeRefused)
+
+	want := []string{"unmask:allowed", "unmask:off", "refused:", "refused:"}
+	got := h.events(t)
+	if len(got) != len(want) {
+		t.Fatalf("audit events %v, want %v", got, want)
+	}
+	for i := range want {
+		if !strings.HasPrefix(got[i], want[i]) {
+			t.Errorf("audit events %v, want %v", got, want)
+			break
+		}
+	}
+}
+
+// No client method reaches a switch: the methods named after them do not
+// exist, and the status request changes nothing.
+func TestSwitchesNotReachableFromClients(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	for _, m := range []string{"mode", "results", "unmask", "console.mode", "console.unmask", "console.results", "key"} {
+		resp := h.call(t, m, map[string]any{"auto": true, "allow_unmask": true, "show_results": true})
+		if resp.Error == nil {
+			t.Errorf("method %q answered without an error", m)
+		}
+	}
+	h.ok(t, ipc.MethodStatus, nil, nil)
+	if h.s.autoApprove() || h.s.showResults || h.s.allowUnmask {
+		t.Fatal("a client request changed a switch")
+	}
+	if log := h.auditLog(t); strings.TrimSpace(log) != "" {
+		t.Errorf("audited:\n%s", log)
+	}
+}

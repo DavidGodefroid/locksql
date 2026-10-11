@@ -127,7 +127,8 @@ on a redacted cell's reference (`'${r1.2.3}'`). The value never reaches it.
 
 **👁️ Clear for you only**<br>
 Ctrl-O in the console prints the clear rows there while the agent gets
-them masked; `--allow-unmask` is the only way an agent can ask for raw PII.
+them masked; `--allow-unmask` (or `:unmask` in the console) is the only
+way an agent can ask for raw PII.
 
 </td>
 </tr>
@@ -473,28 +474,30 @@ On PostgreSQL the first segment is the schema (`public.users.email`).
 ## `--allow-unmask`
 
 An agent can ask for unmasked PII output (`locksql plan --unmask`, or
-`unmask` in the MCP `locksql_plan` tool) only when the human started the
-console with `locksql console --allow-unmask`. Without it, the console
-refuses every unmask request before anything runs and audits the refusal.
-Like auto mode, it is console-only: no client or config file can turn it
-on. With it, each unmasked query still needs the human's
+`unmask` in the MCP `locksql_plan` tool) only when the human allowed it in
+the console: `locksql console --allow-unmask` at start, or `:unmask` while
+it runs (confirmed with `y`; `:unmask` again turns it off). Without it, the
+console refuses every unmask request before anything runs and audits the
+refusal. Like auto mode, it is console-only: no client or config file can
+turn it on, and each change is audited (`unmask` record). With it, each unmasked query still needs the human's
 approval, shown as `PII: UNMASKED` in red, and is never auto-approved. The
 console then prints the clear result, so you see exactly what the agent
 received (the audit log still holds no row data).
 
 ## Console keys and status line
 
-The console runs its own line editor, so two keys switch its behaviour
-while it runs, and a status row fixed at the bottom of the terminal always
-shows the state: the profile and tier, the approval mode, whether results
+The console runs its own line editor, so two keys and one command switch
+its behaviour while it runs, without a restart, and a status row fixed at
+the bottom of the terminal always shows the state: the profile and tier, the approval mode, whether results
 are shown in clear, `unmask allowed`, the open plans and what awaits
-`:review`. Both switches are console-only (no client, config file or
+`:review`. The switches are console-only (no client, config file or
 environment variable can set them) and each change is audited.
 
 | Key | Typed | Effect |
 |---|---|---|
 | Shift+Tab | `:mode` | manual ⇄ auto approval mode |
 | Ctrl-O | `:results` | results masked ⇄ shown here in clear |
+| | `:unmask` | unmasked output off ⇄ allowed (allowing asks for `y`) |
 
 ## Clear results (Ctrl-O)
 
