@@ -1291,7 +1291,8 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 			return Prov{}, err
 		}
 	}
-	if f.Star {
+	// COUNT() without arguments is SQLite's COUNT(*).
+	if f.Star || countAggs[f.Name] && len(f.Args) == 0 {
 		return Prov{Kind: KindConst, w: width{bytes: numWidth}}, nil
 	}
 	var arg Prov
@@ -1332,7 +1333,8 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 	case countAggs[f.Name]:
 		return Prov{Sources: arg.Sources, Kind: KindCount, w: w}, nil
 	case identityAggs[f.Name] && len(f.Args) == 1:
-		if arg.Kind == KindConst {
+		// MIN or MAX of a constant or of a count is one of them.
+		if arg.Kind == KindConst || arg.Kind == KindCount {
 			return arg, nil
 		}
 		arg.Kind = max(arg.Kind, KindIdentity)
