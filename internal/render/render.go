@@ -113,11 +113,17 @@ func tsvTable(res engine.Result, rows [][]any, truncated bool, l config.Limits) 
 	t.Header = strings.Split(header, "\t")
 	size := len(header) + 1
 	cut := false
-	for _, row := range rows {
+	cutN := 0 // cells cut, in the rows shown
+	engineCut := res.CutSet()
+	for ri, row := range rows {
 		line := make([]string, len(row))
-		n := 0
+		n, rowCut := 0, 0
 		for i, v := range row {
-			line[i] = tsvCell(v, l.MaxCellChars)
+			var c bool
+			line[i], c = tsvCell(v, l.MaxCellChars)
+			if c || engineCut[[2]int{ri, i}] {
+				rowCut++
+			}
 			n += len(line[i])
 		}
 		if len(row) > 1 {
@@ -129,6 +135,10 @@ func tsvTable(res engine.Result, rows [][]any, truncated bool, l config.Limits) 
 		}
 		t.Rows = append(t.Rows, line)
 		size += n + 1
+		cutN += rowCut
+	}
+	if cutN > 0 {
+		t.Footer = append(t.Footer, cutCellsNote(cutN, l.MaxCellChars))
 	}
 	if cut {
 		t.Footer = append(t.Footer, fmt.Sprintf("[output cut at %d bytes: %d of %d rows shown]", l.MaxOutputBytes, len(t.Rows), len(rows)))
@@ -158,14 +168,26 @@ func cutBytes(s string, n int) string {
 	return s[:end] + "…"
 }
 
-func tsvCell(v any, maxChars int) string {
+// tsvCell is the TSV text of a value, and whether it was cut.
+func tsvCell(v any, maxChars int) (string, bool) {
 	switch x := v.(type) {
 	case nil:
-		return "NULL"
+		return "NULL", false
 	case string:
-		return capText(x, maxChars, false)
+		return capTextCut(x, maxChars, false)
 	}
-	return capText(text(v), maxChars, false)
+	return capTextCut(text(v), maxChars, false)
+}
+
+// cutCellsNote tells how many cells were cut: past maxChars characters by
+// the renderer, or past engine.MaxCellBytes bytes while they were read.
+func cutCellsNote(n, maxChars int) string {
+	cells := "cells"
+	if n == 1 {
+		cells = "cell"
+	}
+	return fmt.Sprintf("[%d %s cut: a value longer than %d characters (max_cell_chars) or %d bytes ends with …]",
+		n, cells, maxChars, engine.MaxCellBytes)
 }
 
 type jsonResult struct {
@@ -175,6 +197,9 @@ type jsonResult struct {
 	Affected  *int64            `json:"affected,omitempty"`
 	// OutputCutAt is set when rows were dropped to stay under the byte cap.
 	OutputCutAt int `json:"output_cut_at_bytes,omitempty"`
+	// CutCells counts the cells of the rows shown whose value was cut (it
+	// ends with "…"), by max_cell_chars or by the engine's cap.
+	CutCells int `json:"cut_cells,omitempty"`
 }
 
 func renderJSON(w io.Writer, res engine.Result, rows [][]any, truncated bool, l config.Limits) error {
@@ -189,7 +214,7 @@ func renderJSON(w io.Writer, res engine.Result, rows [][]any, truncated bool, l 
 	// Measure the envelope as it is when rows are cut, so that adding the
 	// cut fields never pushes the output past the cap.
 	worst := out
-	worst.Truncated, worst.OutputCutAt = true, l.MaxOutputBytes
+	worst.Truncated, worst.OutputCutAt, worst.CutCells = true, l.MaxOutputBytes, len(rows)*len(res.Columns)
 	base, err := encode(worst)
 	if err != nil {
 		return err
@@ -205,10 +230,16 @@ func renderJSON(w io.Writer, res engine.Result, rows [][]any, truncated bool, l 
 		rows = nil
 	}
 	size := len(base)
-	for _, row := range rows {
+	engineCut := res.CutSet()
+	for ri, row := range rows {
 		cells := make([]any, len(row))
+		rowCut := 0
 		for i, v := range row {
-			cells[i] = jsonCell(v, l.MaxCellChars)
+			var c bool
+			cells[i], c = jsonCell(v, l.MaxCellChars)
+			if c || engineCut[[2]int{ri, i}] {
+				rowCut++
+			}
 		}
 		raw, err := encode(cells)
 		if err != nil {
@@ -222,6 +253,7 @@ func renderJSON(w io.Writer, res engine.Result, rows [][]any, truncated bool, l 
 		}
 		out.Rows = append(out.Rows, raw)
 		size += len(raw) + 1
+		out.CutCells += rowCut
 	}
 	final, err := encode(out)
 	if err != nil {
@@ -264,24 +296,25 @@ func encode(v any) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func jsonCell(v any, maxChars int) any {
+// jsonCell is the JSON value of a cell, and whether it was cut.
+func jsonCell(v any, maxChars int) (any, bool) {
 	switch x := v.(type) {
 	case nil, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
-		return x
+		return x, false
 	case float64:
 		if math.IsNaN(x) || math.IsInf(x, 0) {
-			return text(x)
+			return text(x), false
 		}
-		return x
+		return x, false
 	case float32:
 		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
-			return text(x)
+			return text(x), false
 		}
-		return x
+		return x, false
 	case string:
-		return capText(x, maxChars, true)
+		return capTextCut(x, maxChars, true)
 	}
-	return capText(text(v), maxChars, true)
+	return capTextCut(text(v), maxChars, true)
 }
 
 // text is the display form of a non-NULL value.
@@ -326,6 +359,12 @@ func formatFloat(f float64, bits int) string {
 // mode tab, newline, carriage return and backslash are kept, since the JSON
 // encoding escapes them.
 func capText(s string, maxChars int, jsonMode bool) string {
+	out, _ := capTextCut(s, maxChars, jsonMode)
+	return out
+}
+
+// capTextCut is capText, and whether it cut s.
+func capTextCut(s string, maxChars int, jsonMode bool) (string, bool) {
 	var b strings.Builder
 	n := 0      // characters written
 	fitLen := 0 // byte length of b when it last held at most maxChars-1 characters
@@ -334,7 +373,7 @@ func capText(s string, maxChars int, jsonMode bool) string {
 		i += size
 		piece, chars := escape(r, size, jsonMode)
 		if n+chars > maxChars {
-			return b.String()[:fitLen] + "…"
+			return b.String()[:fitLen] + "…", true
 		}
 		b.WriteString(piece)
 		n += chars
@@ -342,7 +381,7 @@ func capText(s string, maxChars int, jsonMode bool) string {
 			fitLen = b.Len()
 		}
 	}
-	return b.String()
+	return b.String(), false
 }
 
 // escape returns the output for one decoded rune and its length in

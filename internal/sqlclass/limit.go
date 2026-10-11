@@ -3,6 +3,8 @@ package sqlclass
 import (
 	"fmt"
 	"strconv"
+
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 )
 
 // topLevelLimit returns the row count of the top-level LIMIT (or, in
@@ -16,10 +18,12 @@ func topLevelLimit(d Dialect, toks []Token) (int, error) {
 		}
 	}
 	if last < 0 {
+		// The position is the end of the statement, where the LIMIT goes.
+		end := toks[len(toks)-1].End
 		if d == Postgres {
-			return 0, refuse("a top-level LIMIT n or FETCH FIRST n ROWS ONLY is required (use LIMIT 1 for aggregates)")
+			return 0, refuse(refusal.NoLimit, "a top-level LIMIT n or FETCH FIRST n ROWS ONLY is required (use LIMIT 1 for aggregates)").At(end, "")
 		}
-		return 0, refuse("a top-level LIMIT n is required (use LIMIT 1 for aggregates)")
+		return 0, refuse(refusal.NoLimit, "a top-level LIMIT n is required (use LIMIT 1 for aggregates)").At(end, "")
 	}
 	if toks[last].Text == "FETCH" {
 		return fetchFirst(toks[last+1:])
@@ -34,9 +38,9 @@ func topLevelLimit(d Dialect, toks []Token) (int, error) {
 		return count(tail[2]) // LIMIT offset, count
 	}
 	if d == Postgres {
-		return 0, refuse("the top-level LIMIT must end the statement: LIMIT n | LIMIT n OFFSET m")
+		return 0, refuseAt(toks[last], refusal.NoLimit, "the top-level LIMIT must end the statement: LIMIT n | LIMIT n OFFSET m")
 	}
-	return 0, refuse("the top-level LIMIT must end the statement: LIMIT n | LIMIT m, n | LIMIT n OFFSET m")
+	return 0, refuseAt(toks[last], refusal.NoLimit, "the top-level LIMIT must end the statement: LIMIT n | LIMIT m, n | LIMIT n OFFSET m")
 }
 
 // fetchFirst parses the tail of FETCH: FIRST|NEXT [n] ROW|ROWS ONLY.
@@ -46,7 +50,7 @@ func fetchFirst(tail []Token) (int, error) {
 		words[k] = t.Text
 	}
 	if len(tail) >= 2 && words[len(words)-2] == "WITH" && words[len(words)-1] == "TIES" {
-		return 0, refuse("FETCH ... WITH TIES can return more rows than requested; use ONLY")
+		return 0, refuse(refusal.NoLimit, "FETCH ... WITH TIES can return more rows than requested; use ONLY")
 	}
 	n, rest := 1, tail
 	if len(rest) > 0 && (words[0] == "FIRST" || words[0] == "NEXT") {
@@ -63,7 +67,7 @@ func fetchFirst(tail []Token) (int, error) {
 			return n, nil
 		}
 	}
-	return 0, refuse("the top-level FETCH must end the statement: FETCH FIRST n ROWS ONLY")
+	return 0, refuse(refusal.NoLimit, "the top-level FETCH must end the statement: FETCH FIRST n ROWS ONLY")
 }
 
 func isCount(t Token) bool {
@@ -81,7 +85,7 @@ func isCount(t Token) bool {
 func count(t Token) (int, error) {
 	n, err := strconv.Atoi(t.Text)
 	if err != nil {
-		return 0, refuse(fmt.Sprintf("LIMIT value %.20s is out of range", t.Text))
+		return 0, refuse(refusal.LimitTooHigh, fmt.Sprintf("LIMIT value %.20s is out of range", t.Text))
 	}
 	return n, nil
 }

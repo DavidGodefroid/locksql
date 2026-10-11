@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>locksql FAQ — databases, agents, security limits</title>
-  <meta name="description" content="Answers on locksql: supported databases, agents and platforms, credentials, approval, masking limits, k-anonymity, TLS, audit log and licence.">
+  <meta name="description" content="Answers on locksql: supported databases, agents and platforms (Windows through WSL2), setup, credentials, approval, refusals, masking limits, k-anonymity, TLS, audit log and licence.">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
@@ -12,7 +12,7 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="locksql">
   <meta property="og:title" content="locksql FAQ — databases, agents, security limits">
-  <meta property="og:description" content="Answers on locksql: supported databases, agents and platforms, credentials, approval, masking limits, k-anonymity, TLS, audit log and licence.">
+  <meta property="og:description" content="Answers on locksql: supported databases, agents and platforms (Windows through WSL2), setup, credentials, approval, refusals, masking limits, k-anonymity, TLS, audit log and licence.">
   <meta property="og:url" content="https://locksql.com/faq/">
   <meta property="og:image" content="https://locksql.com/assets/og.png">
   <meta property="og:image:type" content="image/png">
@@ -22,7 +22,7 @@
   <meta property="og:locale" content="en_US">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="locksql FAQ — databases, agents, security limits">
-  <meta name="twitter:description" content="Answers on locksql: supported databases, agents and platforms, credentials, approval, masking limits, k-anonymity, TLS, audit log and licence.">
+  <meta name="twitter:description" content="Answers on locksql: supported databases, agents and platforms (Windows through WSL2), setup, credentials, approval, refusals, masking limits, k-anonymity, TLS, audit log and licence.">
   <meta name="twitter:image" content="https://locksql.com/assets/og.png">
   <meta name="twitter:image:alt" content="locksql — Your AI writes the query. You hold the key.">
   <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -57,8 +57,12 @@
   <p>MariaDB 10.1+, MySQL 8.0+, PostgreSQL 13+ and SQLite 3. All engines are pure Go. See <a href="../how-it-works/#engines">supported engines</a>.</p>
 </section>
 <section aria-labelledby="os">
-  <h2 id="os">Which operating systems?</h2>
-  <p>Linux and macOS only, on amd64 and arm64.</p>
+  <h2 id="os">Which operating systems? Does it run on Windows?</h2>
+  <p>Linux and macOS, on amd64 and arm64. Native Windows is not supported: the separation relies on Unix accounts, socket peer credentials and terminals. On Windows, run locksql inside WSL2, with the agent inside WSL too for the boundary to hold. <a href="../install/#windows">Windows: inside WSL2</a>.</p>
+</section>
+<section aria-labelledby="setup">
+  <h2 id="setup">How do I set it up?</h2>
+  <p>Install it, then run <code>locksql setup</code> in your project: it wires your agents, creates the <code>locksql</code> console account once you confirm, asks for a database profile (never a password) and prints the command that starts the console in that account’s session. <code>locksql doctor</code> checks the setup from either account, and <code>locksql doctor --fix</code> repairs what it safely can. <a href="../install/#setup">Setup steps</a>.</p>
 </section>
 <section aria-labelledby="agents">
   <h2 id="agents">Which AI agents does it work with?</h2>
@@ -82,7 +86,7 @@
 </section>
 <section aria-labelledby="writes">
   <h2 id="writes">Can locksql run writes or DDL?</h2>
-  <p>Tiers are <code>read &lt; write &lt; ddl &lt; admin</code>; the default is <code>read</code>, which is also enforced server side. Above tier <code>read</code> the human’s approval is the gate, and the server does not restrict what an approved write does within the account’s privileges.</p>
+  <p>Tiers are <code>read &lt; write &lt; ddl &lt; admin</code>; the default is <code>read</code>, which is also enforced server side. Above tier <code>read</code> the human’s approval is the gate, and the server does not restrict what an approved write does within the account’s privileges. While mask rules exist, a write whose rows come back (<code>RETURNING</code>, data-modifying CTEs) or that stores a query’s rows (<code>INSERT ... SELECT</code>) is analysed like a read, and the rows it returns are masked by where they come from. <a href="../security/#write-tiers">Write tiers</a>.</p>
 </section>
 <section aria-labelledby="pii">
   <h2 id="pii">How is personal data protected?</h2>
@@ -94,7 +98,7 @@
 </section>
 <section aria-labelledby="see-values">
   <h2 id="see-values">Can I see the real values myself?</h2>
-  <p>Yes: press Ctrl-O in the console (or start it with <code>--show-results</code>) and it prints each result in clear, in the console only; the agent still gets the masked cells. If the agent itself must see raw values, start the console with <code>--allow-unmask</code>: only then may it ask for an unmasked query, which you still approve one by one. <a href="../how-it-works/#show-results">More on these flags</a>.</p>
+  <p>Yes: press Ctrl-O in the console (or start it with <code>--show-results</code>) and it prints each result in clear, in the console only; the agent still gets the masked cells. If the agent itself must see raw values, start the console with <code>--allow-unmask</code>, or type <code>:unmask</code> in it while it runs (no restart): only then may it ask for an unmasked query, which you still approve one by one. <a href="../how-it-works/#show-results">More on these flags</a>.</p>
 </section>
 <section aria-labelledby="k-anonymity">
   <h2 id="k-anonymity">Does k-anonymity stop all inference?</h2>
@@ -102,7 +106,11 @@
 </section>
 <section aria-labelledby="tls">
   <h2 id="tls">Is the connection to the database encrypted?</h2>
-  <p>Yes, and verified by default: the profile’s <code>tls</code> setting follows libpq’s <code>sslmode</code> (<code>disable</code>, <code>prefer</code>, <code>require</code>, <code>verify-ca</code>, <code>verify-full</code>). A remote host defaults to <code>verify-full</code>; set <code>tls_ca</code> for a private CA. Below <code>verify-ca</code> an attacker on the path can obtain the password. For a server behind a bastion, add an <code>ssh</code> table to the profile: the console opens the tunnel itself, checks the bastion’s host key and listens on no local port. <a href="../security/#transport">Full details</a>.</p>
+  <p>Yes, and verified by default: the profile’s <code>tls</code> setting follows libpq’s <code>sslmode</code> (<code>disable</code>, <code>prefer</code>, <code>require</code>, <code>verify-ca</code>, <code>verify-full</code>). A remote host defaults to <code>verify-full</code>; set <code>tls_ca</code> for a private CA, <code>tls_server_name</code> when the certificate does not name <code>host</code>, and <code>tls_cert</code>/<code>tls_key</code> for a client certificate. Below <code>verify-ca</code> an attacker on the path can intercept the connection but is not handed the password: MariaDB/MySQL and PostgreSQL refuse to answer a request for it in clear on an unverified remote connection. <code>locksql doctor</code> checks the server’s certificate chain and expiry with a handshake that sends no secret. For a server behind a bastion, add an <code>ssh</code> table to the profile: the console opens the tunnel itself, checks the bastion’s host key and listens on no local port. <a href="../security/#transport">Full details</a>.</p>
+</section>
+<section aria-labelledby="refusals">
+  <h2 id="refusals">Why was my query refused, and what should the agent do?</h2>
+  <p>Every refusal carries a stable code (<code>E_NO_LIMIT</code>, <code>E_K_ANON</code>, <code>E_MASKED_FILTER</code>, …), the place in the statement where the check stopped, a hint and a retry rule: <code>rewrite</code> (fix it as the hint says, once), <code>ask_user</code> (only you can lift it) or <code>stop</code>. MCP clients get it as structured content. <code>locksql stats</code> counts your refusals by code; <code>--export</code> anonymises them for an issue. <a href="../how-it-works/#refusals">More on refusals</a> · <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#refusal-codes">all codes</a>.</p>
 </section>
 <section aria-labelledby="injection">
   <h2 id="injection">Can text stored in the database manipulate my agent?</h2>
@@ -130,7 +138,7 @@
 </section>
 <section aria-labelledby="stable">
   <h2 id="stable">Is locksql stable?</h2>
-  <p>It is a pre-release (<code>v0.4.x</code>).</p>
+  <p>It is a pre-release (<code>v0.4.x</code>): any release may still change the config files, the MCP tools or the CLI. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/1.0.md">The path to 1.0</a> lists what must be true first (among others an external review and frozen contracts). The SQL analyzer is fuzzed nightly and a canary suite checks for leaks on real engines: <a href="../security/#assurance">how it is tested</a>.</p>
 </section>
 <section aria-labelledby="report">
   <h2 id="report">How do I report a vulnerability?</h2>

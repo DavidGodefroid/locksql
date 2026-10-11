@@ -84,13 +84,16 @@ func MaskOutputs(res *engine.Result, outs []sqlast.Output, r Rules, ds []Detecto
 			}
 		}
 	}
+	cut := res.CutSet()
 	for ri, row := range res.Rows {
 		for i, v := range row {
 			if v == nil || i >= len(modes) {
 				continue
 			}
 			if modes[i] != "" {
-				if refs[i] && cell != nil {
+				// A cut cell holds the start of its value only: a reference
+				// would stand for a value that does not exist.
+				if refs[i] && cell != nil && !cut[[2]int{ri, i}] {
 					if name := cell(ri, i, v); name != "" {
 						row[i] = RedactedRef(name)
 						continue

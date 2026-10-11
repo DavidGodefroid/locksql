@@ -2,6 +2,8 @@ package sqlclass
 
 import (
 	"strings"
+
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 )
 
 // TokKind is the lexical kind of a token.
@@ -76,7 +78,7 @@ func fold(s string) string {
 func Lex(d Dialect, sql string) ([]Token, error) {
 	for i := 0; i < len(sql); i++ {
 		if c := sql[i]; (c < 0x20 && !isSpace(c)) || c == 0x7f {
-			return nil, refuse("control characters (other than tabs and line breaks) are not allowed")
+			return nil, refuse(refusal.ForbiddenToken, "control characters (other than tabs and line breaks) are not allowed").At(i, "")
 		}
 	}
 	l := lexer{d: d, s: sql}
@@ -129,15 +131,15 @@ func (l *lexer) run() ([]Token, error) {
 		case isSpace(c):
 			l.i++
 		case c == '\\':
-			return nil, refuse(errBackslash)
+			return nil, refuse(refusal.ForbiddenToken, errBackslash).At(l.i, "\\")
 		case c == '-' && l.peek(1) == '-', c == '/' && l.peek(1) == '*', c == '*' && l.peek(1) == '/':
-			return nil, refuse("comments are not allowed")
+			return nil, refuse(refusal.ForbiddenToken, "comments are not allowed").At(l.i, l.s[l.i:l.i+2])
 		case c == '#' && l.d != Postgres:
 			// '#' starts a comment in MySQL; SQLite has no use for it. In
 			// PostgreSQL it is the XOR operator.
-			return nil, refuse("comments are not allowed ('#')")
+			return nil, refuse(refusal.ForbiddenToken, "comments are not allowed ('#')").At(l.i, "#")
 		case c == ':' && l.peek(1) == '=':
-			return nil, refuse("assignments (:=) are not allowed")
+			return nil, refuse(refusal.ForbiddenToken, "assignments (:=) are not allowed").At(l.i, ":=")
 		case c == '@' && l.d == MySQL && l.accountAt():
 			// MySQL account names: 'user'@'host', `user`@`host`.
 			l.emit(TokPunct, "@", l.i, l.i+1)
@@ -146,22 +148,22 @@ func (l *lexer) run() ([]Token, error) {
 			// PostgreSQL has @-operators (@>, <@, @@, @ for abs); an '@'
 			// directly followed by a name is a variable everywhere else.
 			if l.d != Postgres || isIdentChar(l.peek(1)) || l.peek(1) == '"' {
-				return nil, refuse("user and system variables (@) are not allowed")
+				return nil, refuse(refusal.ForbiddenToken, "user and system variables (@) are not allowed").At(l.i, "@")
 			}
 			l.emit(TokPunct, "@", l.i, l.i+1)
 			l.i++
 		case c == '?' && l.d != Postgres:
 			// In PostgreSQL '?' is a jsonb operator.
-			return nil, refuse("bind parameters (?) are not allowed")
+			return nil, refuse(refusal.ForbiddenToken, "bind parameters (?) are not allowed").At(l.i, "?")
 		case c == ':' && l.d == SQLite && isIdentChar(l.peek(1)):
 			// SQLite reads ":name" and ":1" alike as a bind parameter.
-			return nil, refuse("bind parameters (:name) are not allowed")
+			return nil, refuse(refusal.ForbiddenToken, "bind parameters (:name) are not allowed").At(l.i, ":")
 		case c == '$' && l.d == Postgres:
 			if err := l.dollar(); err != nil {
 				return nil, err
 			}
 		case c == '$' && l.d == SQLite:
-			return nil, refuse("bind parameters ($name) are not allowed")
+			return nil, refuse(refusal.ForbiddenToken, "bind parameters ($name) are not allowed").At(l.i, "$")
 		case c == '\'':
 			if err := l.quoted('\'', '\'', TokString, false); err != nil {
 				return nil, err
@@ -206,7 +208,7 @@ func (l *lexer) run() ([]Token, error) {
 			// U&"..." and U&'...' carry Unicode escapes, and UESCAPE can
 			// pick any escape character: U&"pg_sl!0065ep" UESCAPE '!' names
 			// pg_sleep. Refused rather than decoded.
-			return nil, refuse("Unicode escapes (U&\"...\" or U&'...') are not allowed")
+			return nil, refuse(refusal.ForbiddenToken, "Unicode escapes (U&\"...\" or U&'...') are not allowed").At(l.i-1, "U&")
 		default:
 			switch c {
 			case '(':
@@ -214,7 +216,7 @@ func (l *lexer) run() ([]Token, error) {
 			case ')':
 				l.depth--
 				if l.depth < 0 {
-					return nil, refuse("unbalanced parentheses")
+					return nil, refuse(refusal.UnsupportedSyntax, "unbalanced parentheses").At(l.i, ")")
 				}
 			}
 			l.emit(TokPunct, string(c), l.i, l.i+1)
@@ -222,7 +224,7 @@ func (l *lexer) run() ([]Token, error) {
 		}
 	}
 	if l.depth != 0 {
-		return nil, refuse("unbalanced parentheses")
+		return nil, refuse(refusal.UnsupportedSyntax, "unbalanced parentheses")
 	}
 	return l.tokens, nil
 }
@@ -237,7 +239,7 @@ func (l *lexer) quoted(open, close byte, kind TokKind, backslashEscapes bool) er
 	j := l.i + 1
 	for {
 		if j >= len(l.s) {
-			return refuse("unterminated quoted literal or identifier")
+			return refuse(refusal.UnsupportedSyntax, "unterminated quoted literal or identifier").At(start, "")
 		}
 		c := l.s[j]
 		switch {
@@ -245,7 +247,7 @@ func (l *lexer) quoted(open, close byte, kind TokKind, backslashEscapes bool) er
 			j += 2
 			continue
 		case c == '\\' && open != '[':
-			return refuse(errBackslash)
+			return refuse(refusal.ForbiddenToken, errBackslash).At(j, "\\")
 		case c == close:
 			if open != '[' && j+1 < len(l.s) && l.s[j+1] == close {
 				j += 2
@@ -265,7 +267,7 @@ func (l *lexer) quoted(open, close byte, kind TokKind, backslashEscapes bool) er
 func (l *lexer) dollar() error {
 	j := l.i + 1
 	if j < len(l.s) && isDigit(l.s[j]) {
-		return refuse("bind parameters ($n) are not allowed")
+		return refuse(refusal.ForbiddenToken, "bind parameters ($n) are not allowed").At(l.i, "$")
 	}
 	if j < len(l.s) && (isASCIILetter(l.s[j]) || l.s[j] == '_') {
 		for j < len(l.s) && (isASCIILetter(l.s[j]) || isDigit(l.s[j]) || l.s[j] == '_') {
@@ -273,12 +275,12 @@ func (l *lexer) dollar() error {
 		}
 	}
 	if j >= len(l.s) || l.s[j] != '$' {
-		return refuse("unexpected '$' (only $tag$ quoting is allowed)")
+		return refuse(refusal.ForbiddenToken, "unexpected '$' (only $tag$ quoting is allowed)").At(l.i, "$")
 	}
 	delim := l.s[l.i : j+1]
 	end := strings.Index(l.s[j+1:], delim)
 	if end < 0 {
-		return refuse("unterminated dollar-quoted string")
+		return refuse(refusal.UnsupportedSyntax, "unterminated dollar-quoted string").At(l.i, "")
 	}
 	stop := j + 1 + end + len(delim)
 	l.emit(TokString, l.s[l.i:stop], l.i, stop)
@@ -338,7 +340,7 @@ func (l *lexer) number() error {
 			j++
 		}
 		if j > junk && j < len(l.s) && l.s[j] == '$' {
-			return refuse("a number directly followed by letters and '$' is ambiguous in PostgreSQL; add a space")
+			return refuse(refusal.UnsupportedSyntax, "a number directly followed by letters and '$' is ambiguous in PostgreSQL; add a space").At(l.i, "")
 		}
 	} else {
 		for j < len(l.s) && isIdentChar(l.s[j]) {

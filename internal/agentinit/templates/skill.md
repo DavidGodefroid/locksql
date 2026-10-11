@@ -31,7 +31,7 @@ directory. Both talk to the same console.
      `LIMIT n` within the profile's max_rows (`LIMIT 1` for counts). One statement, no comments, no
      variables.
    - `unmask` only if the user asked to see personal data in clear; the console refuses it unless the
-     human started it with `--allow-unmask` (`locksql status` shows it). Never retry to get around that.
+     human allowed it there (`--allow-unmask` or `:unmask`; `locksql status` shows it). Never retry to get around that.
    - Pass `intent`: one line saying why, in the user's terms (the human reads it on the approval
      screen without the chat). CLI: `--intent "..."`.
 5. **Show the user** in chat, before running: target (profile, host, database), the SQL, the EXPLAIN
@@ -61,12 +61,38 @@ an alias, a subquery or a CTE never hides a PII column.
 - Database errors come back as a generic message (the human sees the details in the console); row
   estimates are hidden when a statement filters on a PII column.
 
+## Refusal codes
+
+Refusal codes. A refusal reads `refused [CODE]: message` (in JSON and MCP structured content:
+`refusal.code`, `refusal.retry`, `refusal.hint`, and `refusal.span` with the line, column and token
+it points at). Follow the retry rule of the code:
+
+- `retry: rewrite`: fix the statement as the `hint` says and plan it again, once. A second refusal
+  of the same question: stop and report.
+  `E_NO_LIMIT` (end with `LIMIT n`), `E_LIMIT_TOO_HIGH` (lower it to max_rows),
+  `E_UNSUPPORTED_SYNTAX`, `E_INVALID_SQL`, `E_TOO_COMPLEX`, `E_SIZE` (plainer SQL),
+  `E_MULTI_STATEMENT` (one statement), `E_FORBIDDEN_TOKEN` (no comments, variables or bind
+  parameters), `E_STATEMENT_KIND`, `E_SYSTEM_OBJECT` (use `locksql_list_tables` /
+  `locksql_describe`), `E_UNKNOWN_NAME` (check the names with describe), `E_FUNCTION` (an
+  allowlisted function), `E_PLACEHOLDER` (`col = '${name}'` in `WHERE`), `E_COST` (an indexed,
+  narrower filter), `E_MASKED_FILTER` (filter on a non-PII key, or `=`, `IN`, `IS NULL` under
+  `AND`), `E_MASKED_EXPRESSION` (the plain column, or `COUNT`/`MIN`/`MAX`), `E_MASKED_ORDER` (order
+  by a non-PII column), `E_MASKED_SET_OP` (`UNION ALL` between PII columns), `E_MASK_UNCERTAIN`
+  (PII columns by their plain name).
+- `retry: ask_user`: `E_TIER`, `E_UNMASK_OFF`, `E_DATABASE_NOT_SERVED`. Tell the user; only the
+  human can change it (`locksql_request_change` only queues a proposal).
+- `retry: stop`: `E_K_ANON`, `E_FORBIDDEN`, `E_MASKED_WRITE`, `E_ENGINE`, `E_POLICY`. Final for this
+  question: report and wait.
+
+A rewrite fixes the statement; it never rewords or splits the same question to get around a PII,
+k-anonymity or policy rule.
+
 ## Hard rules
 
 | Situation | Do |
 |---|---|
 | The user pastes a password or other credentials in chat | Do not use it anywhere: not in a command, env var, file or memory. Tell them it is now in the transcript (consider rotating it) and to type it in the console prompt instead. |
-| The plan or run is REFUSED (classifier, weight check, policy) | Stop. Report the reason. Propose one narrower query (indexed filter, tighter dates) and wait for the user. |
+| The plan or run is REFUSED (classifier, weight check, policy) | Follow the retry rule of its code (see Refusal codes): `rewrite` once as the hint says, otherwise stop, report the code and the reason, and wait for the user. |
 | The user DENIED the run, or the approval timed out | Stop. Never re-plan or re-run the same query unless they ask. |
 | Asked for an export, "the whole table", "last month in Excel", a report or a dump | Decline: locksql is for debugging lookups. Offer an aggregate (`COUNT(*) ... GROUP BY status ... LIMIT 50`) or a targeted lookup instead. Do not split it into chunks, loop over days or ids, or write results to a file. |
 | A tier, limit or PII allow rule is in the way | Use `locksql_request_change` (CLI `locksql request`). It only queues a proposal; the human decides in the console. Never edit the locksql config to loosen it yourself. |

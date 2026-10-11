@@ -32,6 +32,17 @@ type env struct {
 	sys func() (*sysconf.Config, error)
 	// install runs `locksql install` with args; nil means runInstall.
 	install func(args []string) int
+	// installer runs the install step of `locksql setup`; nil means
+	// doInstall.
+	installer func(o installOpts) (code int, ran bool)
+	// root runs a shell script as root; nil means sudo sh -c.
+	root func(script string) error
+	// handoff is how `locksql console` reaches the console account from
+	// another one; nil means the real system.
+	handoff *handoffEnv
+	// doc is what locksql doctor reads from the system; nil means the
+	// real one.
+	doc *doctorEnv
 	// euid is the effective user id; nil means os.Geteuid.
 	euid func() int
 	// paint colours human-facing output on stdout; the zero value is plain.
@@ -307,6 +318,7 @@ func usageFail(e env, name, usage, msg string) int {
 // otherwise. With --json the error also goes to stdout as {"error": ...}.
 func fail(e env, name string, asJSON bool, err error) int {
 	fmt.Fprintf(e.stderr, "locksql %s: %s\n", name, client.ErrorText(err))
+	fmt.Fprint(e.stderr, client.RefusalDetail(err))
 	if asJSON {
 		_ = client.WriteJSON(e.stdout, map[string]client.ErrorInfo{"error": client.DescribeError(err)})
 	}

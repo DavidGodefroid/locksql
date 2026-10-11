@@ -63,31 +63,46 @@ func DockerAvailable() bool {
 func Start(t testing.TB, image string, containerPort int, env []string,
 	ready func(ctx context.Context, host string, port int) error, seed func(Server) error) Server {
 	t.Helper()
+	return StartVariant(t, "", image, containerPort, env, nil, nil, ready, seed)
+}
+
+// StartVariant is Start for a second container of image, told apart by
+// variant, started with runArgs before the image (volumes) and cmdArgs after
+// it (server options).
+func StartVariant(t testing.TB, variant, image string, containerPort int, env, runArgs, cmdArgs []string,
+	ready func(ctx context.Context, host string, port int) error, seed func(Server) error) Server {
+	t.Helper()
 	if !DockerAvailable() {
 		t.Skip("docker is not available")
 	}
+	key := image
+	if variant != "" {
+		key += "-" + variant
+	}
 	mu.Lock()
-	so, ok := servers[image]
+	so, ok := servers[key]
 	if !ok {
 		so = &serverOnce{}
-		servers[image] = so
+		servers[key] = so
 	}
 	mu.Unlock()
-	so.once.Do(func() { so.srv, so.err = start(image, containerPort, env, ready, seed) })
+	so.once.Do(func() { so.srv, so.err = start(key, image, containerPort, env, runArgs, cmdArgs, ready, seed) })
 	if so.err != nil {
-		t.Fatalf("start %s: %v", image, so.err)
+		t.Fatalf("start %s: %v", key, so.err)
 	}
 	return so.srv
 }
 
-func start(image string, containerPort int, env []string,
+func start(key, image string, containerPort int, env, runArgs, cmdArgs []string,
 	ready func(ctx context.Context, host string, port int) error, seed func(Server) error) (Server, error) {
-	name := "ls-it-" + strings.NewReplacer(":", "-", "/", "-", ".", "").Replace(image) + "-" + strconv.Itoa(os.Getpid())
+	name := "ls-it-" + strings.NewReplacer(":", "-", "/", "-", ".", "").Replace(key) + "-" + strconv.Itoa(os.Getpid())
 	args := []string{"run", "-d", "--rm", "--name", name, "-p", fmt.Sprintf("127.0.0.1::%d", containerPort)}
 	for _, e := range env {
 		args = append(args, "-e", e)
 	}
+	args = append(args, runArgs...)
 	args = append(args, image)
+	args = append(args, cmdArgs...)
 	if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
 		return Server{}, fmt.Errorf("docker run: %v: %s", err, out)
 	}

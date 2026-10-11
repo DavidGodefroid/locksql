@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -85,21 +86,48 @@ func TestValue(t *testing.T) {
 		{[]byte(""), pgtype.TextOID, ""},
 	}
 	for _, c := range cases {
-		got := value(c.raw, c.oid)
+		got, cut := value(c.raw, c.oid)
+		if cut {
+			t.Errorf("value(%q) cut", c.raw)
+		}
 		if fmt.Sprintf("%T %v", got, got) != fmt.Sprintf("%T %v", c.want, c.want) {
 			t.Errorf("value(%q, %d) = %T %v, want %T %v", c.raw, c.oid, got, got, c.want, c.want)
 		}
 	}
-	if f, ok := value([]byte("NaN"), pgtype.Float8OID).(float64); !ok || !math.IsNaN(f) {
+	if v, _ := value([]byte("NaN"), pgtype.Float8OID); !isNaN(v) {
 		t.Error("NaN not decoded")
 	}
 	// The driver reuses its buffer: values must not alias it.
 	buf := []byte(`\x41`)
-	b := value(buf, pgtype.ByteaOID).([]byte)
-	s := value([]byte("ab"), pgtype.TextOID).(string)
+	bv, _ := value(buf, pgtype.ByteaOID)
+	sv, _ := value([]byte("ab"), pgtype.TextOID)
 	buf[2] = '0'
-	if string(b) != "A" || s != "ab" {
+	if string(bv.([]byte)) != "A" || sv.(string) != "ab" {
 		t.Error("value aliases the driver buffer")
+	}
+}
+
+func isNaN(v any) bool {
+	f, ok := v.(float64)
+	return ok && math.IsNaN(f)
+}
+
+// TestValueCut checks the values longer than the cap, as the capReader
+// hands them over (MaxCellBytes+1 bytes): text cut with a mark, bytea
+// decoded from its cut hex, never longer than the cap.
+func TestValueCut(t *testing.T) {
+	long := bytes.Repeat([]byte("7"), engine.MaxCellBytes+1)
+	v, cut := value(long, pgtype.NumericOID)
+	if s, ok := v.(string); !cut || !ok || len(s) > engine.MaxCellBytes || !strings.HasSuffix(s, "…") {
+		t.Errorf("numeric: %T of %d bytes, cut %v", v, len(fmt.Sprint(v)), cut)
+	}
+	hexed := append([]byte(`\x`), bytes.Repeat([]byte("ab"), engine.MaxCellBytes)...)[:engine.MaxCellBytes+1]
+	v, cut = value(hexed, pgtype.ByteaOID)
+	if b, ok := v.([]byte); !cut || !ok || len(b) == 0 || len(b) > engine.MaxCellBytes/2 || b[0] != 0xab {
+		t.Errorf("bytea: %T, cut %v", v, cut)
+	}
+	if _, cut := value(long[:engine.MaxCellBytes], pgtype.TextOID); cut {
+		t.Error("a value of MaxCellBytes is reported cut")
 	}
 }
 

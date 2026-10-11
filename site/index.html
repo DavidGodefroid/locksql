@@ -60,7 +60,7 @@
     <a class="button" href="https://github.com/DavidGodefroid/locksql">View on GitHub</a>
   </div>
   <ul class="facts" aria-label="At a glance">
-    <li>Linux and macOS</li>
+    <li>Linux and macOS (Windows through WSL2)</li>
     <li>amd64 and arm64</li>
     <li>MariaDB, MySQL, PostgreSQL, SQLite</li>
     <li>Apache 2.0</li>
@@ -137,25 +137,27 @@
     <li><span class="icon" aria-hidden="true">⚖️</span><h3>Weight check</h3><p><code>LIMIT</code> is mandatory, <code>EXPLAIN</code> runs first, and plans that would scan too many rows are refused before they run.</p></li>
     <li><span class="icon" aria-hidden="true">🛡️</span><h3>OS separation</h3><p><code>locksql install</code> runs the console under its own account; the kernel checks every peer on the socket.</p></li>
     <li><span class="icon" aria-hidden="true">🔎</span><h3>Blind search</h3><p>The agent filters on <code>'${email}'</code> and you type the value in the console, or on a redacted cell’s reference (<code>'${r1.2.3}'</code>). The value never reaches it.</p></li>
-    <li><span class="icon" aria-hidden="true">👁️</span><h3>Clear for you only</h3><p>Ctrl-O in the console prints the clear rows there while the agent gets them masked; <code>--allow-unmask</code> is the only way an agent can ask for raw PII.</p></li>
-    <li><span class="icon" aria-hidden="true">🔐</span><h3>Remote, verified</h3><p>TLS verifies the server certificate by default, and an <code>ssh</code> table reaches a database behind a bastion: the console opens the tunnel itself, checks the host key and listens on no local port.</p></li>
+    <li><span class="icon" aria-hidden="true">👁️</span><h3>Clear for you only</h3><p>Ctrl-O in the console prints the clear rows there while the agent gets them masked; <code>--allow-unmask</code> (or <code>:unmask</code> in the console) is the only way an agent can ask for raw PII.</p></li>
+    <li><span class="icon" aria-hidden="true">🔐</span><h3>Remote, verified</h3><p>TLS verifies the server certificate by default, with an optional client certificate, and an <code>ssh</code> table reaches a database behind a bastion: the console opens the tunnel itself, checks the host key and listens on no local port.</p></li>
+    <li><span class="icon" aria-hidden="true">✍️</span><h3>Writes analysed too</h3><p>A write whose rows come back (<code>RETURNING</code>, data-modifying CTEs) or that stores a query’s rows (<code>INSERT ... SELECT</code>) is parsed like a read, and the rows it returns are masked by where they come from.</p></li>
+    <li><span class="icon" aria-hidden="true">🏷️</span><h3>Refusals the agent can act on</h3><p>Every refusal carries a stable code, the place in the statement where the check stopped, a hint and a retry rule: rewrite, ask the user, or stop.</p></li>
+    <li><span class="icon" aria-hidden="true">🧪</span><h3>Tested for leaks</h3><p>The SQL analyzer is fuzzed nightly, and a canary suite checks that seeded values never reach the agent unmasked on six MariaDB, MySQL and PostgreSQL versions and SQLite.</p></li>
   </ul>
 </section>
 
 <section aria-labelledby="quick-start">
   <h2 id="quick-start">Quick start</h2>
+  <p class="prose">A first approved query in three commands:</p>
   <pre tabindex="0" class="term"><code># 1. Install (see the Install page for packages, checksums and signatures)
 curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh
 
-# 2. Wire your agents and set up the console account
-locksql
+# 2. In your project: the console account, your agents, a database profile
+locksql setup
 
-# 3. In the locksql session (a separate login), start the console
-#    (keep this terminal open)
-locksql console --project DIR
-
-# 4. In your agent, anywhere: "how many orders were placed yesterday on dev?"
-#    Approve or deny each query in the console.</code></pre>
+# 3. In a session of the locksql account (switch user, or a text console
+#    with Ctrl-Alt-F3), start the console it printed and keep it open
+locksql console --project DIR</code></pre>
+  <p class="prose">Then ask your agent, anywhere in the project: “how many orders were placed yesterday?”. Each query waits for your <code>y</code> in the console. <code>locksql doctor --fix</code> checks the setup and repairs what it safely can.</p>
   <p><a href="install/">Full install options, checksums and signatures</a></p>
 </section>
 

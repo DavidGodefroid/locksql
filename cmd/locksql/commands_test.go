@@ -1,3 +1,5 @@
+//go:build unix
+
 package main
 
 import (
@@ -17,6 +19,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -358,20 +361,26 @@ func TestPlanRefusedAndRunDenied(t *testing.T) {
 	dir := project(t, uatConfig)
 	sio := startConsole(t, dir, "uat")
 	o := cli(t, dir, "", "plan", "--profile", "uat", "--db", "app", "DELETE FROM users")
-	o.want(t, exitFail, "refused")
+	o.want(t, exitFail, "refused [E_TIER]", "hint: ", "retry: ask_user")
+	cli(t, dir, "", "plan", "--profile", "uat", "--db", "app", "SELECT id\nFROM users").
+		want(t, exitFail, "refused [E_NO_LIMIT]", "at line 2, column 11", "retry: rewrite")
 
 	o = cli(t, dir, "", "plan", "--profile", "uat", "--db", "app", "--json", "DELETE FROM users")
 	o.want(t, exitFail)
 	var e struct {
 		Error struct {
-			Kind    string `json:"kind"`
-			Code    int    `json:"code"`
-			Message string `json:"message"`
+			Kind    string        `json:"kind"`
+			Code    int           `json:"code"`
+			Message string        `json:"message"`
+			Refusal *refusal.Info `json:"refusal"`
 		} `json:"error"`
 	}
 	decodeJSON(t, o.stdout, &e)
 	if e.Error.Kind != "refused" || e.Error.Code != ipc.CodeRefused || e.Error.Message == "" {
 		t.Fatalf("error = %+v", e)
+	}
+	if r := e.Error.Refusal; r == nil || r.Code != refusal.Tier || r.Retry != refusal.RetryAskUser || r.Hint == "" {
+		t.Fatalf("refusal = %+v", r)
 	}
 
 	o = cli(t, dir, "", "plan", "--profile", "uat", "--json", "SELECT id, email FROM users WHERE id = 1 LIMIT 1")

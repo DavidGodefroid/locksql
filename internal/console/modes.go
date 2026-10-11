@@ -1,6 +1,7 @@
 package console
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -10,11 +11,13 @@ import (
 
 // The console's live switches: the approval mode (manual, where every
 // statement is prompted, or auto, where statements allowed by the tier and
-// the weight check run without a prompt) and the clear results (the
-// result of each masked query printed here, in clear). Both change only
-// from the console's own keyboard, Shift+Tab and Ctrl-O (or :mode and
-// :results), never from a client or a config file, and each change is
-// audited. A production profile stays in manual mode.
+// the weight check run without a prompt), the clear results (the result of
+// each masked query printed here, in clear) and unmasked output (whether a
+// client may ask for it, each such query then approved here). They change
+// only from the console's own keyboard, Shift+Tab, Ctrl-O and :unmask (or
+// :mode and :results), never from a client or a config file, and each
+// change is audited. A production profile stays in manual mode. Allowing
+// unmasked output is a typed command confirmed with y, never a single key.
 
 // autoApprove reports whether auto mode is in effect: never on a
 // production profile.
@@ -77,6 +80,33 @@ func (s *Server) toggleResults() {
 	s.refreshStatus()
 }
 
+// toggleUnmask allows or stops unmasked output, and says so. Allowing it
+// widens what a client may ask for: the human confirms it. Turning it off
+// takes effect at once, open unmask plans included.
+func (s *Server) toggleUnmask(ctx context.Context) {
+	if s.allowUnmask {
+		s.allowUnmask = false
+		s.audit(audit.Record{Event: audit.EventUnmask, Decision: "off"})
+		s.println(paint.OK("unmask: off; clients get masked output only, and open unmask plans are refused"))
+		s.refreshStatus()
+		return
+	}
+	warn := "allow clients to ask for unmasked PII output? Each such query is still approved here, never auto-approved"
+	if s.profile.Production {
+		warn += " (PRODUCTION data)"
+	}
+	s.println(red + ui.MarkWarn + " " + warn + reset)
+	ans, ok := s.cfg.IO.Ask(ctx, "Allow unmasked output? [y/N] ", ApprovalTimeout)
+	if !ok || !strings.EqualFold(strings.TrimSpace(ans), "y") {
+		s.println("unmask: still off")
+		return
+	}
+	s.allowUnmask = true
+	s.audit(audit.Record{Event: audit.EventUnmask, Decision: "allowed"})
+	s.println(red + "unmask: allowed; clients may ask for unmasked output, approved here each time (:unmask: off)" + reset)
+	s.refreshStatus()
+}
+
 // statusLine is the text of the status row: the profile, the mode, the
 // results switch, what else widens the session and what awaits the human.
 func (s *Server) statusLine() string {
@@ -102,7 +132,7 @@ func (s *Server) statusLine() string {
 		results = paint.Yellow("clear")
 	}
 	parts = append(parts, "results "+results+" "+paint.Dim("^O"))
-	if s.cfg.AllowUnmask {
+	if s.allowUnmask {
 		parts = append(parts, paint.Red("unmask allowed"))
 	}
 	if n := len(s.plans); n > 0 {

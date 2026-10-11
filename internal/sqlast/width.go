@@ -3,6 +3,7 @@ package sqlast
 import (
 	"strings"
 
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -40,10 +41,10 @@ func (w width) max(v width) width {
 // check refuses a value that could exceed the size bound.
 func (w width) check() error {
 	if w.bytes > maxValueBytes {
-		return refusef("the statement could build a value larger than %d bytes", maxValueBytes)
+		return refusef(refusal.Size, "the statement could build a value larger than %d bytes", maxValueBytes)
 	}
 	if w.cols > maxValueCols {
-		return refusef("the statement could build a value wider than %d columns", maxValueCols)
+		return refusef(refusal.Size, "the statement could build a value wider than %d columns", maxValueCols)
 	}
 	return nil
 }
@@ -255,7 +256,7 @@ func (an *analyzer) aggWidth(f *FuncCall, ws []width) (width, error) {
 		}
 		for _, w := range ws {
 			if w.bytes > maxConcatArg || w.cols > 1 {
-				return width{}, refusef("%s: an argument that may exceed %d bytes is not allowed", strings.ToLower(f.Name), maxConcatArg)
+				return width{}, refusef(refusal.Size, "%s: an argument that may exceed %d bytes is not allowed", strings.ToLower(f.Name), maxConcatArg)
 			}
 		}
 		return width{cols: 1}, nil

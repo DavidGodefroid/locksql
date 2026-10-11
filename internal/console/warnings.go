@@ -17,8 +17,8 @@ import (
 // refuse; they go to the audit log with the decision. They name references
 // and columns, never a value.
 func (s *Server) warnings(ctx context.Context, sess engine.Session, pl *plan) []string {
-	if pl.an == nil || pl.unmask {
-		return nil
+	if pl.an == nil || pl.unmask || pl.st.Class != sqlclass.Read {
+		return nil // a write takes no placeholder
 	}
 	var out []string
 	if s.clearLiteral(pl.st.SQL) {

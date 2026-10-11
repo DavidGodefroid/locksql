@@ -1,11 +1,13 @@
 package sqlast
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
 	"strings"
 
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -215,6 +217,8 @@ type analyzer struct {
 	inRecCTE  int
 	relations map[string]bool
 	uses      map[Use]bool
+	// writes is set once a data-modifying statement is analysed.
+	writes bool
 }
 
 // Analyze resolves the provenance of every output column of st, checks the
@@ -228,9 +232,20 @@ func Analyze(st *Statement, env Env) (*Analysis, error) {
 		env.Value = func(ValueKind, string) (string, bool) { return "", false }
 	}
 	an := &analyzer{env: env, st: st, d: st.Dialect, a: &Analysis{}, relations: map[string]bool{}, uses: map[Use]bool{}}
-	cols, err := an.query(st.Query, nil)
+	var cols []column
+	var err error
+	if st.Write != nil {
+		cols, err = an.write(st.Write, nil)
+	} else {
+		cols, err = an.query(st.Query, nil)
+	}
 	if err != nil {
 		return nil, err
+	}
+	if an.writes && (an.a.PIIFilter || len(an.a.KChecks) > 0 || len(an.a.Values) > 0) {
+		// The count would run before the statement, with its WITH: the
+		// data-modifying CTEs would run twice.
+		return nil, refuse(refusal.MaskedFilter, "a statement that modifies data cannot filter, group or aggregate a PII column under the k-anonymity check (nor take placeholders): read the rows in a separate statement")
 	}
 	for _, c := range cols {
 		label := ""
@@ -241,7 +256,7 @@ func Analyze(st *Statement, env Env) (*Analysis, error) {
 	}
 	if st.Explain {
 		if env.Masking && (an.a.PIIFilter || len(an.a.KChecks) > 0) {
-			return nil, refuse("EXPLAIN of a statement that filters, groups or aggregates PII columns is not allowed: its row estimates would reveal what the k-anonymity check protects")
+			return nil, refuse(refusal.MaskedFilter, "EXPLAIN of a statement that filters, groups or aggregates PII columns is not allowed: its row estimates would reveal what the k-anonymity check protects")
 		}
 		an.a.Outputs = nil
 	}
@@ -337,7 +352,7 @@ func (an *analyzer) body(b Body, parent *scope) ([]column, *scope, error) {
 			return nil, nil, err
 		}
 		if len(l) != len(r) {
-			return nil, nil, refusef("the arms of %s have different numbers of columns", b.Op)
+			return nil, nil, refusef(refusal.InvalidSQL, "the arms of %s have different numbers of columns", b.Op)
 		}
 		out := make([]column, len(l))
 		for i := range l {
@@ -348,7 +363,7 @@ func (an *analyzer) body(b Body, parent *scope) ([]column, *scope, error) {
 		}
 		return out, nil, nil
 	}
-	return nil, nil, refuse("unsupported query body")
+	return nil, nil, refuse(refusal.UnsupportedSyntax, "unsupported query body")
 }
 
 // setOpCompare checks column i of a set operation. UNION (distinct),
@@ -373,7 +388,7 @@ func (an *analyzer) setOpCompare(b *SetOp, i int, l, r Prov) error {
 		}
 		return nil
 	}
-	return refusef("a set operation compares a PII column with a value the agent chose (column %d)", i+1)
+	return refusef(refusal.MaskedSetOp, "a set operation compares a PII column with a value the agent chose (column %d)", i+1)
 }
 
 // dedupe checks a value whose duplicates are removed (DISTINCT, an
@@ -385,7 +400,7 @@ func (an *analyzer) dedupe(p Prov, what string) error {
 	if !an.env.Masking || !p.Sensitive || an.allPII(p) {
 		return nil
 	}
-	return refusef("duplicate removal compares a PII column with a value the agent chose (%s)", what)
+	return refusef(refusal.MaskedSetOp, "duplicate removal compares a PII column with a value the agent chose (%s)", what)
 }
 
 // allPII reports a plain value whose every source is under a mask rule and
@@ -433,7 +448,7 @@ func sameColumn(a, b Prov) bool {
 
 // selfComparison refuses a PII column compared with itself.
 func selfComparison() error {
-	return refuse("a PII column compared with itself selects the rows the k-anonymity check does not count")
+	return refuse(refusal.MaskedFilter, "a PII column compared with itself selects the rows the k-anonymity check does not count")
 }
 
 // mergeSources appends to a the elements of b it lacks (sources, modes).
@@ -451,11 +466,24 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 	defs := &an.ctes[len(an.ctes)-1]
 	for _, d := range *defs {
 		if d.name == c.Name {
-			return refusef("CTE %s is defined twice", strings.ToLower(c.Name))
+			return refusef(refusal.InvalidSQL, "CTE %s is defined twice", strings.ToLower(c.Name))
 		}
 	}
-	def := &cteDef{name: c.Name, cte: c, recursive: recursive && an.selfReferencing(c)}
+	def := &cteDef{name: c.Name, cte: c, recursive: recursive && c.Query != nil && an.selfReferencing(c)}
 	*defs = append(*defs, def)
+	if c.Write != nil {
+		// A data-modifying CTE: its columns are its RETURNING list, none
+		// without one.
+		cols, err := an.write(c.Write, parent)
+		if err != nil {
+			return err
+		}
+		def.cols, err = renameCols(cols, c.Columns, "CTE "+strings.ToLower(c.Name))
+		if def.cols == nil {
+			def.cols = []column{}
+		}
+		return err
+	}
 	if !def.recursive {
 		cols, err := an.query(c.Query, parent)
 		if err != nil {
@@ -468,7 +496,7 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 	// provenance until it no longer changes.
 	so, ok := c.Query.Body.(*SetOp)
 	if !ok || c.Query.With != nil {
-		return refusef("recursive CTE %s must be <anchor> UNION [ALL] <recursive part>", strings.ToLower(c.Name))
+		return refusef(refusal.UnsupportedSyntax, "recursive CTE %s must be <anchor> UNION [ALL] <recursive part>", strings.ToLower(c.Name))
 	}
 	an.dry++
 	anchor, _, err := an.body(so.Left, parent)
@@ -507,12 +535,12 @@ func (an *analyzer) defineCTE(c *CTE, recursive bool, parent *scope) error {
 		cur = next
 	}
 	if !converged && growing {
-		return refusef("a recursive CTE builds growing values (CTE %s): each pass makes a column wider", strings.ToLower(c.Name))
+		return refusef(refusal.Size, "a recursive CTE builds growing values (CTE %s): each pass makes a column wider", strings.ToLower(c.Name))
 	}
 	if !converged {
 		// The last iteration may still miss a literal or a source a few
 		// hops away: refuse rather than mask on a partial provenance.
-		return refusef("recursive CTE %s is too deep to analyse: its columns pass values to each other through too many steps", strings.ToLower(c.Name))
+		return refusef(refusal.TooComplex, "recursive CTE %s is too deep to analyse: its columns pass values to each other through too many steps", strings.ToLower(c.Name))
 	}
 	def.selfCols = cur
 	if _, err := an.query(c.Query, parent); err != nil { // final pass, with findings
@@ -574,7 +602,7 @@ func renameCols(cols []column, names []string, what string) ([]column, error) {
 		return cols, nil
 	}
 	if len(names) != len(cols) {
-		return nil, refusef("%s names %d columns but returns %d", what, len(names), len(cols))
+		return nil, refusef(refusal.InvalidSQL, "%s names %d columns but returns %d", what, len(names), len(cols))
 	}
 	out := make([]column, len(cols))
 	for i := range cols {
@@ -644,7 +672,7 @@ func (an *analyzer) selectCore(s *Select, parent *scope) ([]column, *scope, erro
 		}
 		if p.Sensitive && an.env.Masking {
 			if p.Kind != KindIdentity {
-				return nil, nil, refuse("GROUP BY over an expression of a PII column is not allowed")
+				return nil, nil, refuse(refusal.MaskedExpression, "GROUP BY over an expression of a PII column is not allowed")
 			}
 			if err := an.dedupe(p, "GROUP BY"); err != nil {
 				return nil, nil, err
@@ -665,7 +693,7 @@ func (an *analyzer) selectCore(s *Select, parent *scope) ([]column, *scope, erro
 			return nil, nil, err
 		}
 		if p.Sensitive && an.env.Masking {
-			return nil, nil, refuse("DISTINCT ON a PII column is not allowed")
+			return nil, nil, refuse(refusal.MaskedOrder, "DISTINCT ON a PII column is not allowed")
 		}
 	}
 	if node.needK && an.env.Masking {
@@ -692,7 +720,7 @@ func defaultName(e Expr) string {
 func (an *analyzer) expandStar(it *SelectItem, sc *scope, star []column) ([]column, error) {
 	if it.Qualifier == nil {
 		if len(sc.rels) == 0 {
-			return nil, refuse("SELECT * needs a FROM clause")
+			return nil, refuse(refusal.InvalidSQL, "SELECT * needs a FROM clause")
 		}
 		for _, c := range star {
 			an.touch(c.prov, "select")
@@ -701,7 +729,7 @@ func (an *analyzer) expandStar(it *SelectItem, sc *scope, star []column) ([]colu
 	}
 	r := an.findRel(sc, it.Qualifier)
 	if r == nil {
-		return nil, refusef("unknown table %s in %s.*", strings.ToLower(strings.Join(it.Qualifier, ".")), strings.ToLower(strings.Join(it.Qualifier, ".")))
+		return nil, refusef(refusal.UnknownName, "unknown table %s in %s.*", strings.ToLower(strings.Join(it.Qualifier, ".")), strings.ToLower(strings.Join(it.Qualifier, ".")))
 	}
 	for _, c := range r.cols {
 		an.touch(c.prov, "select")
@@ -748,7 +776,7 @@ func (an *analyzer) tableExpr(te TableExpr, sc, parent *scope) ([]*relation, []c
 			return nil, nil, err
 		}
 		if t.Alias == "" && an.d != sqlclass.SQLite && an.d != sqlclass.Postgres {
-			return nil, nil, refuse("a derived table needs an alias")
+			return nil, nil, refuse(refusal.InvalidSQL, "a derived table needs an alias")
 		}
 		cols, err = renameCols(cols, t.ColAliases, "derived table "+strings.ToLower(t.Alias))
 		if err != nil {
@@ -784,7 +812,7 @@ func (an *analyzer) tableExpr(te TableExpr, sc, parent *scope) ([]*relation, []c
 		for _, u := range using {
 			lp, rp := findCol(ls, u), findCol(rs, u)
 			if lp == nil || rp == nil {
-				return nil, nil, refusef("USING column %s is not on both sides", strings.ToLower(u))
+				return nil, nil, refusef(refusal.InvalidSQL, "USING column %s is not on both sides", strings.ToLower(u))
 			}
 			if err := an.joinEquality(*lp, *rp); err != nil {
 				return nil, nil, err
@@ -798,7 +826,7 @@ func (an *analyzer) tableExpr(te TableExpr, sc, parent *scope) ([]*relation, []c
 		}
 		return rels, star, nil
 	}
-	return nil, nil, refuse("unsupported FROM item")
+	return nil, nil, refuse(refusal.UnsupportedSyntax, "unsupported FROM item")
 }
 
 func findCol(cols []column, name string) *column {
@@ -862,7 +890,8 @@ func (an *analyzer) joinStar(ls, rs []column, using []string) ([]column, error) 
 	return out, nil
 }
 
-func (an *analyzer) tableName(t *TableName) (*relation, error) {
+func (an *analyzer) tableName(t *TableName) (_ *relation, err error) {
+	defer func() { err = an.locateSpan(err, t.Sp, leadingName) }()
 	binding := t.Alias
 	if binding == "" {
 		binding = t.Parts[len(t.Parts)-1]
@@ -884,17 +913,17 @@ func (an *analyzer) tableName(t *TableName) (*relation, error) {
 		return &relation{name: binding}, nil
 	}
 	if systemRelation(an.d, t.Parts) {
-		return nil, refusef("%s holds server or catalog metadata; it cannot be queried (use the catalog commands)", strings.ToLower(strings.Join(t.Parts, ".")))
+		return nil, refusef(refusal.SystemObject, "%s holds server or catalog metadata; it cannot be queried (use the catalog commands)", strings.ToLower(strings.Join(t.Parts, ".")))
 	}
 	if an.env.Catalog == nil {
-		return nil, refusef("unknown table %s", strings.ToLower(strings.Join(t.Parts, ".")))
+		return nil, refusef(refusal.UnknownName, "unknown table %s", strings.ToLower(strings.Join(t.Parts, ".")))
 	}
 	tables, err := an.env.Catalog.Lookup(t.Parts)
 	if err != nil {
 		return nil, err
 	}
 	if len(tables) == 0 {
-		return nil, refusef("unknown table %s (locksql resolves every table before running a statement)", strings.ToLower(strings.Join(t.Parts, ".")))
+		return nil, refusef(refusal.UnknownName, "unknown table %s (locksql resolves every table before running a statement)", strings.ToLower(strings.Join(t.Parts, ".")))
 	}
 	// Several candidates (an unqualified name in several schemas): each
 	// column comes from any of them.
@@ -911,7 +940,7 @@ func (an *analyzer) tableName(t *TableName) (*relation, error) {
 			an.relations[tb.DB+"."+tb.Name] = true
 		}
 		if k > 0 && len(tb.Columns) != len(names) {
-			return nil, refusef("table %s is ambiguous (several schemas hold it); qualify it", strings.ToLower(strings.Join(t.Parts, ".")))
+			return nil, refusef(refusal.UnknownName, "table %s is ambiguous (several schemas hold it); qualify it", strings.ToLower(strings.Join(t.Parts, ".")))
 		}
 		for i, c := range tb.Columns {
 			f := fold(c)
@@ -919,7 +948,7 @@ func (an *analyzer) tableName(t *TableName) (*relation, error) {
 				names = append(names, f)
 				r.cols = append(r.cols, column{name: f, labeled: true})
 			} else if names[i] != f {
-				return nil, refusef("table %s is ambiguous (several schemas hold it); qualify it", strings.ToLower(strings.Join(t.Parts, ".")))
+				return nil, refusef(refusal.UnknownName, "table %s is ambiguous (several schemas hold it); qualify it", strings.ToLower(strings.Join(t.Parts, ".")))
 			}
 			src := Source{DB: tb.DB, Table: tb.Name, Column: c, View: tb.View}
 			if k == 0 {
@@ -1009,7 +1038,7 @@ func (an *analyzer) resolve(ref *ColumnRef, sc *scope, aliasOK bool) (Prov, erro
 			}
 		}
 		if len(qual) > 0 && known && len(hits) == 0 {
-			return Prov{}, refusef("unknown column %s", strings.ToLower(strings.Join(ref.Parts, ".")))
+			return Prov{}, refusef(refusal.UnknownName, "unknown column %s", strings.ToLower(strings.Join(ref.Parts, ".")))
 		}
 		if len(hits) > 0 {
 			if s != sc {
@@ -1022,7 +1051,7 @@ func (an *analyzer) resolve(ref *ColumnRef, sc *scope, aliasOK bool) (Prov, erro
 			return p, nil
 		}
 	}
-	return Prov{}, refusef("unknown column %s (locksql resolves every column before running a statement)", strings.ToLower(strings.Join(ref.Parts, ".")))
+	return Prov{}, refusef(refusal.UnknownName, "unknown column %s (locksql resolves every column before running a statement)", strings.ToLower(strings.Join(ref.Parts, ".")))
 }
 
 // markOuter records a reference from sc to the scope at level.
@@ -1054,7 +1083,8 @@ func (an *analyzer) touch(p Prov, clause string) {
 // reveal the column in a form no mask covers. Every value, and so every
 // select-list item, function argument and operand, is checked against the
 // size bound (see width).
-func (an *analyzer) value(e Expr, sc *scope, clause string) (Prov, error) {
+func (an *analyzer) value(e Expr, sc *scope, clause string) (_ Prov, err error) {
+	defer func() { err = an.locate(err, e) }()
 	p, err := an.valueOf(e, sc, clause)
 	if err != nil {
 		return Prov{}, err
@@ -1084,7 +1114,7 @@ func (an *analyzer) valueOf(e Expr, sc *scope, clause string) (Prov, error) {
 			return Prov{}, err
 		}
 		if len(cols) != 1 {
-			return Prov{}, refuse("a scalar subquery must return one column")
+			return Prov{}, refuse(refusal.InvalidSQL, "a scalar subquery must return one column")
 		}
 		return cols[0].prov, nil
 	case *FuncCall:
@@ -1155,7 +1185,7 @@ func (an *analyzer) valueOf(e Expr, sc *scope, clause string) (Prov, error) {
 	case *Tuple:
 		return an.combineWith(e.Items, sc, clause, "a row value", sumWidth)
 	}
-	return Prov{}, refuse("unsupported expression")
+	return Prov{}, refuse(refusal.UnsupportedSyntax, "unsupported expression")
 }
 
 // combine is the provenance of an operator or function over parts: KindExpr
@@ -1201,7 +1231,20 @@ func (an *analyzer) noPII(p Prov, what string) error {
 	if !p.Sensitive || !an.env.Masking {
 		return nil
 	}
-	return refusef("a PII column (%s) is used inside %s: only plain references, COUNT, MIN, MAX and aggregates may use PII columns, and filters may only compare them with constants for equality (or unmask the query)", piiNames(p), describeOp(what))
+	const msg = "a PII column (%s) is used inside %s: only plain references, COUNT, MIN, MAX and aggregates may use PII columns, and filters may only compare them with constants for equality (or unmask the query)"
+	if predicates[strings.ToUpper(what)] {
+		return refusef(refusal.MaskedFilter, msg, piiNames(p), describeOp(what))
+	}
+	return refusef(refusal.MaskedExpression, msg, piiNames(p), describeOp(what))
+}
+
+// predicates are the operators that test a value: a PII column under one
+// of them is a filter the rules refuse (E_MASKED_FILTER), not a value
+// computed from it.
+var predicates = map[string]bool{
+	"IN": true, "BETWEEN": true, "IS": true, "LIKE": true, "ILIKE": true, "GLOB": true, "REGEXP": true,
+	"RLIKE": true, "SIMILAR": true, "MATCH": true, "=": true, "<": true, ">": true, "<=": true, ">=": true,
+	"<>": true, "!=": true, "<=>": true, "~": true, "~*": true, "!~": true, "!~*": true,
 }
 
 func describeOp(what string) string {
@@ -1232,7 +1275,7 @@ func piiNames(p Prov) string {
 // call is the provenance of a function call.
 func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 	if !funcAllowed(an.d, f.Name) {
-		return Prov{}, refusef("function %s is not in the allowlist", strings.ToLower(f.Name))
+		return Prov{}, refusef(refusal.Function, "function %s is not in the allowlist", strings.ToLower(f.Name))
 	}
 	if err := an.checkSizeArgs(f); err != nil {
 		return Prov{}, err
@@ -1266,14 +1309,14 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 			}
 			return p, err
 		}
-		return Prov{}, refusef("%s is not a window function", strings.ToLower(f.Name))
+		return Prov{}, refusef(refusal.InvalidSQL, "%s is not a window function", strings.ToLower(f.Name))
 	}
 	if windowOnly[f.Name] {
-		return Prov{}, refusef("%s needs OVER (...)", strings.ToLower(f.Name))
+		return Prov{}, refusef(refusal.InvalidSQL, "%s needs OVER (...)", strings.ToLower(f.Name))
 	}
 	if !aggregates[f.Name] {
 		if f.Distinct || f.Filter != nil || f.OrderBy != nil {
-			return Prov{}, refusef("DISTINCT, FILTER and ORDER BY only apply to aggregates")
+			return Prov{}, refusef(refusal.InvalidSQL, "DISTINCT, FILTER and ORDER BY only apply to aggregates")
 		}
 		return an.combineWith(f.Args, sc, clause, "function "+strings.ToLower(f.Name), func(ws []width) width { return an.funcWidth(f, ws) })
 	}
@@ -1291,7 +1334,8 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 			return Prov{}, err
 		}
 	}
-	if f.Star {
+	// COUNT() without arguments is SQLite's COUNT(*).
+	if f.Star || countAggs[f.Name] && len(f.Args) == 0 {
 		return Prov{Kind: KindConst, w: width{bytes: numWidth}}, nil
 	}
 	var arg Prov
@@ -1317,7 +1361,7 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 		return Prov{}, err
 	}
 	if arg.Kind == KindExpr && arg.Sensitive && an.env.Masking {
-		return Prov{}, refusef("a PII column (%s) is used inside an expression given to %s", piiNames(arg), strings.ToLower(f.Name))
+		return Prov{}, refusef(refusal.MaskedExpression, "a PII column (%s) is used inside an expression given to %s", piiNames(arg), strings.ToLower(f.Name))
 	}
 	if f.Distinct {
 		if err := an.dedupe(arg, strings.ToLower(f.Name)+"(DISTINCT ...)"); err != nil {
@@ -1332,7 +1376,8 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 	case countAggs[f.Name]:
 		return Prov{Sources: arg.Sources, Kind: KindCount, w: w}, nil
 	case identityAggs[f.Name] && len(f.Args) == 1:
-		if arg.Kind == KindConst {
+		// MIN or MAX of a constant or of a count is one of them.
+		if arg.Kind == KindConst || arg.Kind == KindCount {
 			return arg, nil
 		}
 		arg.Kind = max(arg.Kind, KindIdentity)
@@ -1356,7 +1401,7 @@ func (an *analyzer) combineLoose(parts []Expr, sc *scope, clause string) (Prov, 
 			return Prov{}, nil, err
 		}
 		if p.Sensitive && p.Kind != KindIdentity && an.env.Masking {
-			return Prov{}, nil, refusef("a PII column (%s) is used inside an expression given to an aggregate", piiNames(p))
+			return Prov{}, nil, refusef(refusal.MaskedExpression, "a PII column (%s) is used inside an expression given to an aggregate", piiNames(p))
 		}
 		ws = append(ws, p.w)
 		k := max(out.Kind, p.Kind)
@@ -1369,24 +1414,26 @@ func (an *analyzer) combineLoose(parts []Expr, sc *scope, clause string) (Prov, 
 }
 
 // noPIIValue refuses a PII column anywhere in e.
-func (an *analyzer) noPIIValue(e Expr, sc *scope, where string) error {
+func (an *analyzer) noPIIValue(e Expr, sc *scope, where string) (err error) {
+	defer func() { err = an.locate(err, e) }()
 	p, err := an.value(e, sc, "order by")
 	if err != nil {
 		return err
 	}
 	if p.Sensitive && an.env.Masking {
-		return refusef("a PII column (%s) is not allowed in %s: it would reveal the order or the grouping of its values", piiNames(p), where)
+		return refusef(refusal.MaskedOrder, "a PII column (%s) is not allowed in %s: it would reveal the order or the grouping of its values", piiNames(p), where)
 	}
 	return nil
 }
 
 // groupKey resolves a GROUP BY key: a position, an output alias or an
 // expression over the input columns.
-func (an *analyzer) groupKey(g Expr, sc *scope, cols []column) (Prov, error) {
+func (an *analyzer) groupKey(g Expr, sc *scope, cols []column) (_ Prov, err error) {
+	defer func() { err = an.locate(err, g) }()
 	if l, ok := g.(*Literal); ok && l.Kind == LitNumber && allDigits(l.Text) {
 		n := atoiSafe(l.Text)
 		if n < 1 || n > len(cols) {
-			return Prov{}, refusef("GROUP BY position %s is out of range", l.Text)
+			return Prov{}, refusef(refusal.InvalidSQL, "GROUP BY position %s is out of range", l.Text)
 		}
 		an.touch(cols[n-1].prov, "group by")
 		return cols[n-1].prov, nil
@@ -1407,24 +1454,25 @@ func atoiSafe(s string) int {
 
 // orderItem checks one ORDER BY entry of a query. Ordering by a PII value
 // reveals the order of its values: it is refused.
-func (an *analyzer) orderItem(e Expr, cols []column, body *Select, sc *scope) error {
+func (an *analyzer) orderItem(e Expr, cols []column, body *Select, sc *scope) (err error) {
+	defer func() { err = an.locate(err, e) }()
 	var p Prov
 	switch {
 	case isPosition(e):
 		n := atoiSafe(e.(*Literal).Text)
 		if n < 1 || n > len(cols) {
-			return refuse("ORDER BY position is out of range")
+			return refuse(refusal.InvalidSQL, "ORDER BY position is out of range")
 		}
 		p = cols[n-1].prov
 	case sc == nil:
 		// A set operation: only output names.
 		ref, ok := e.(*ColumnRef)
 		if !ok || len(ref.Parts) != 1 {
-			return refuse("ORDER BY of a UNION, INTERSECT or EXCEPT takes output column names or positions")
+			return refuse(refusal.InvalidSQL, "ORDER BY of a UNION, INTERSECT or EXCEPT takes output column names or positions")
 		}
 		c := findCol(cols, ref.Parts[0])
 		if c == nil {
-			return refusef("unknown column %s", strings.ToLower(ref.Parts[0]))
+			return refusef(refusal.UnknownName, "unknown column %s", strings.ToLower(ref.Parts[0]))
 		}
 		p = c.prov
 	default:
@@ -1435,7 +1483,7 @@ func (an *analyzer) orderItem(e Expr, cols []column, body *Select, sc *scope) er
 		p = v
 	}
 	if p.Sensitive && an.env.Masking {
-		return refusef("ORDER BY a PII column (%s) is not allowed: it reveals the order of its values", piiNames(p))
+		return refusef(refusal.MaskedOrder, "ORDER BY a PII column (%s) is not allowed: it reveals the order of its values", piiNames(p))
 	}
 	return nil
 }
@@ -1454,7 +1502,8 @@ func isPosition(e Expr) bool {
 // keeps. An atom compares a PII column for equality with a literal (or a
 // list of literals, or IS NULL), which needs the k-anonymity checks, or
 // with another PII column (a join).
-func (an *analyzer) filter(e Expr, sc *scope, clause string, pos bool) error {
+func (an *analyzer) filter(e Expr, sc *scope, clause string, pos bool) (err error) {
+	defer func() { err = an.locate(err, e) }()
 	switch e := e.(type) {
 	case *Paren:
 		return an.filter(e.X, sc, clause, pos)
@@ -1485,7 +1534,7 @@ func (an *analyzer) filter(e Expr, sc *scope, clause string, pos bool) error {
 			}
 			if p.Sensitive && an.env.Masking {
 				if p.Kind != KindIdentity {
-					return refusef("a PII value (%s) may only be tested for NULL as a plain column", piiNames(p))
+					return refusef(refusal.MaskedFilter, "a PII value (%s) may only be tested for NULL as a plain column", piiNames(p))
 				}
 				if e.Not || !pos {
 					return negatedPII(p)
@@ -1533,7 +1582,7 @@ func (an *analyzer) filter(e Expr, sc *scope, clause string, pos bool) error {
 		return err
 	}
 	if p.Sensitive && an.env.Masking {
-		return refusef("a PII column (%s) may only be compared for equality with a constant or with another PII column in %s", piiNames(p), strings.ToUpper(clause))
+		return refusef(refusal.MaskedFilter, "a PII column (%s) may only be compared for equality with a constant or with another PII column in %s", piiNames(p), strings.ToUpper(clause))
 	}
 	return nil
 }
@@ -1541,14 +1590,14 @@ func (an *analyzer) filter(e Expr, sc *scope, clause string, pos bool) error {
 // negatedPII refuses a PII atom outside the positive AND chain of a filter,
 // or a negative comparison of a PII column.
 func negatedPII(p Prov) error {
-	return refusef("a PII column (%s) may only be filtered by positive conditions joined with AND: under NOT, OR or XOR, and with <>, !=, NOT IN, IS NOT NULL or IS DISTINCT FROM, it would select rows the k-anonymity check does not count", piiNames(p))
+	return refusef(refusal.MaskedFilter, "a PII column (%s) may only be filtered by positive conditions joined with AND: under NOT, OR or XOR, and with <>, !=, NOT IN, IS NOT NULL or IS DISTINCT FROM, it would select rows the k-anonymity check does not count", piiNames(p))
 }
 
 // scalarPII refuses a scalar subquery returning a PII value as a filter
 // operand: the k-anonymity check of the enclosing node would count rows
 // unrelated to the subject the subquery picks.
 func scalarPII(p Prov) error {
-	return refusef("a scalar subquery returning a PII column (%s) cannot be compared: filter on the column inside the subquery instead", piiNames(p))
+	return refusef(refusal.MaskedFilter, "a scalar subquery returning a PII column (%s) cannot be compared: filter on the column inside the subquery instead", piiNames(p))
 }
 
 // isSubquery reports a scalar subquery, possibly parenthesised.
@@ -1575,10 +1624,10 @@ func isSubquery(e Expr) bool {
 // whether the last one does.
 func (an *analyzer) constFilter(sc *scope, clause string, col Prov, preds ...string) error {
 	if clause == "join" {
-		return refuse("compare PII columns with constants in WHERE, not in a JOIN condition")
+		return refuse(refusal.MaskedFilter, "compare PII columns with constants in WHERE, not in a JOIN condition")
 	}
 	if len(preds) == 0 {
-		return refusef("a PII column (%s) has no value the k-anonymity check could count", piiNames(col))
+		return refusef(refusal.MaskedFilter, "a PII column (%s) has no value the k-anonymity check could count", piiNames(col))
 	}
 	var checks []string
 	for _, s := range col.Sources {
@@ -1586,7 +1635,7 @@ func (an *analyzer) constFilter(sc *scope, clause string, col Prov, preds ...str
 			continue
 		}
 		if s.View {
-			return refusef("a PII column (%s) of a view (or of a relation whose base columns are unknown) cannot be compared with constants: the k-anonymity check could not count its subjects; filter on the base table instead", piiNames(Prov{Sources: []Source{s}}))
+			return refusef(refusal.MaskedFilter, "a PII column (%s) of a view (or of a relation whose base columns are unknown) cannot be compared with constants: the k-anonymity check could not count its subjects; filter on the base table instead", piiNames(Prov{Sources: []Source{s}}))
 		}
 		table := an.quoteIdent(s.DB) + "." + an.quoteIdent(s.Table)
 		if s.DB == "" {
@@ -1608,7 +1657,7 @@ func (an *analyzer) constFilter(sc *scope, clause string, col Prov, preds ...str
 		checks = append(checks, "SELECT MIN(locksql_n) FROM ("+strings.Join(arms, " UNION ALL ")+") AS locksql_k")
 	}
 	if len(checks) == 0 {
-		return refusef("a PII column (%s) has no base column the k-anonymity check could count", piiNames(col))
+		return refusef(refusal.MaskedFilter, "a PII column (%s) has no base column the k-anonymity check could count", piiNames(col))
 	}
 	an.a.PIIFilter = an.a.PIIFilter || an.dry == 0
 	if sc.node != nil {
@@ -1668,7 +1717,7 @@ func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human boo
 			continue
 		}
 		if !valid {
-			return false, nil, refusef("malformed placeholder %q: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}'", body)
+			return false, nil, refusef(refusal.Placeholder, "malformed placeholder %q: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}'", body)
 		}
 		if an.dry == 0 {
 			an.a.Values = append(an.a.Values, ValueUse{Kind: kind, Name: name, Column: target, InList: inList, Span: l.Sp})
@@ -1676,7 +1725,7 @@ func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human boo
 		value, known := an.env.Value(kind, name)
 		if !known {
 			if kind == ValueRef {
-				return false, nil, refusef("unknown reference %s: it is not from this console session, or its result is too old", name)
+				return false, nil, refusef(refusal.Placeholder, "unknown reference %s: it is not from this console session, or its result is too old", name)
 			}
 			continue // the console asks the human before the run
 		}
@@ -1685,7 +1734,7 @@ func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human boo
 			if kind == ValueRef {
 				// The agent never saw this value: the refusal must not
 				// tell it what the value holds.
-				return false, nil, refusef("reference %s cannot be substituted", name)
+				return false, nil, refusef(refusal.Placeholder, "reference %s cannot be substituted", name)
 			}
 			return false, nil, err
 		}
@@ -1700,7 +1749,7 @@ func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human boo
 // k-anonymity check, but row estimates stay hidden from the agent.
 func (an *analyzer) humanFilter(clause string) error {
 	if clause == "join" {
-		return refuse("compare PII columns with placeholders in WHERE, not in a JOIN condition")
+		return refuse(refusal.Placeholder, "compare PII columns with placeholders in WHERE, not in a JOIN condition")
 	}
 	an.a.PIIFilter = an.a.PIIFilter || an.dry == 0
 	return nil
@@ -1749,16 +1798,16 @@ func (an *analyzer) keyFilterOf(col Prov, clause string, pos bool, consts ...Exp
 func (an *analyzer) strayPlaceholders() error {
 	lits, err := placeholderLits(an.d, an.st.SQL)
 	if err != nil {
-		return refuse("the statement could not be checked for placeholders")
+		return refuse(refusal.Placeholder, "the statement could not be checked for placeholders")
 	}
 	for _, l := range lits {
 		if !l.plain {
 			// E'...', $$...$$ and the like are never substituted: a
 			// placeholder written that way is malformed.
-			return refusef("malformed placeholder %s: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}' as a plain single-quoted string", l.text)
+			return refusef(refusal.Placeholder, "malformed placeholder %s: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}' as a plain single-quoted string", l.text)
 		}
 		if !slices.ContainsFunc(an.a.Values, func(v ValueUse) bool { return v.Span.Pos == l.pos }) {
-			return refuse("a placeholder may only be compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")
+			return refuse(refusal.Placeholder, "a placeholder may only be compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")
 		}
 	}
 	return nil
@@ -1816,6 +1865,68 @@ func (an *analyzer) quoteIdent(name string) string {
 	return q + strings.ReplaceAll(name, q, q+q) + q
 }
 
+// locate points a refusal that has no position yet at e: the innermost
+// node whose check failed. The token is e's operator or keyword, or the
+// column or function name as the agent wrote it; never a literal, and
+// never text with placeholder values substituted (an.st.SQL is the
+// agent's statement as sent).
+func (an *analyzer) locate(err error, e Expr) error {
+	if err == nil || e == nil {
+		return err
+	}
+	return an.locateSpan(err, e.Span(), func(src string) string { return nodeToken(e, src) })
+}
+
+// locateSpan is locate for the node at sp, named by token.
+func (an *analyzer) locateSpan(err error, sp Span, token func(src string) string) error {
+	var r *sqlclass.Refusal
+	if err == nil || !errors.As(err, &r) || r.Pos >= 0 || sp.End <= sp.Pos || sp.End > len(an.st.SQL) {
+		return err
+	}
+	r.At(sp.Pos, token(an.st.SQL[sp.Pos:sp.End]))
+	return err
+}
+
+// nodeToken names node e, whose source text is src.
+func nodeToken(e Expr, src string) string {
+	switch e := e.(type) {
+	case *Binary:
+		return e.Op
+	case *Unary:
+		return e.Op
+	case *Like:
+		return e.Op
+	case *Between:
+		return "BETWEEN"
+	case *In:
+		return "IN"
+	case *IsTest:
+		return "IS"
+	case *Case:
+		return "CASE"
+	case *Cast:
+		return "CAST"
+	case *Exists:
+		return "EXISTS"
+	case *Collate:
+		return "COLLATE"
+	case *FuncCall, *ColumnRef:
+		return leadingName(src)
+	}
+	return ""
+}
+
+// leadingName is the name src starts with as written, when it is a plain
+// word ("" for a quoted name).
+func leadingName(src string) string {
+	n := 0
+	for n < len(src) && (src[n] == '_' || src[n] >= 0x80 || src[n] >= 'a' && src[n] <= 'z' ||
+		src[n] >= 'A' && src[n] <= 'Z' || n > 0 && (src[n] >= '0' && src[n] <= '9' || src[n] == '$')) {
+		n++
+	}
+	return src[:n]
+}
+
 // frag is the text of sp with the token replacements applied.
 func (an *analyzer) frag(sp Span) string {
 	return applyReplacements(an.st.SQL, sp, an.a.Replacements)
@@ -1839,7 +1950,7 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 		return nil
 	}
 	if l.Sensitive && l.Kind != KindIdentity || r.Sensitive && r.Kind != KindIdentity {
-		return refusef("an aggregate or expression of a PII column (%s) cannot be compared", piiNames(mixProv(l, r)))
+		return refusef(refusal.MaskedFilter, "an aggregate or expression of a PII column (%s) cannot be compared", piiNames(mixProv(l, r)))
 	}
 	if l.Sensitive && isSubquery(le) {
 		return scalarPII(l)
@@ -1857,7 +1968,7 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 	switch other.Kind {
 	case KindConst:
 		if !isConstant(otherExpr) {
-			return refusef("a PII column (%s) may only be compared with a literal", piiNames(col))
+			return refusef(refusal.MaskedFilter, "a PII column (%s) may only be compared with a literal", piiNames(col))
 		}
 		human, _, err := an.valueLiterals(col, []Expr{otherExpr}, false)
 		if err != nil {
@@ -1880,19 +1991,19 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 		}
 		return nil
 	}
-	return refusef("a PII column (%s) may only be compared with a constant or another PII column", piiNames(col))
+	return refusef(refusal.MaskedFilter, "a PII column (%s) may only be compared with a constant or another PII column", piiNames(col))
 }
 
 // unmaskedPartner refuses a PII column joined with a column no mask rule
 // covers.
 func unmaskedPartner(col, other Prov) error {
-	return refusef("a PII column (%s) may only be joined with another PII column; %s has no mask rule: add a mask rule for %s or compare with a literal", piiNames(col), piiNames(other), piiNames(other))
+	return refusef(refusal.MaskedFilter, "a PII column (%s) may only be joined with another PII column; %s has no mask rule: add a mask rule for %s or compare with a literal", piiNames(col), piiNames(other), piiNames(other))
 }
 
 // litPartner refuses a PII column compared with a value that may be a
 // literal of the statement: no k-anonymity check could count its subjects.
 func litPartner(p Prov) error {
-	return refusef("a PII column (%s) is compared with values that may be literals of the statement (a UNION with a constant, for instance): compare the column with literals directly", piiNames(p))
+	return refusef(refusal.MaskedFilter, "a PII column (%s) is compared with values that may be literals of the statement (a UNION with a constant, for instance): compare the column with literals directly", piiNames(p))
 }
 
 func mixProv(a, b Prov) Prov {
@@ -1924,7 +2035,7 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 		}
 		if len(cols) != 1 {
 			if !(x.Kind == KindExpr && len(cols) > 1) {
-				return refuse("IN (subquery) must return one column")
+				return refuse(refusal.InvalidSQL, "IN (subquery) must return one column")
 			}
 		}
 		if !an.env.Masking {
@@ -1938,7 +2049,7 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 		case !x.Sensitive && !sub.Sensitive:
 			return nil
 		case x.Sensitive && x.Kind != KindIdentity, sub.Sensitive && sub.Kind != KindIdentity:
-			return refusef("an aggregate or expression of a PII column (%s) cannot be compared", piiNames(mixProv(x, sub)))
+			return refusef(refusal.MaskedFilter, "an aggregate or expression of a PII column (%s) cannot be compared", piiNames(mixProv(x, sub)))
 		case e.Not || !pos:
 			return negatedPII(mixProv(x, sub))
 		case x.Sensitive && isSubquery(e.X):
@@ -1946,7 +2057,7 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 		case sub.Kind == KindConst, sub.Lit, x.Lit:
 			// A subquery of constants (or a literal tested against a PII
 			// subquery): no check could count the subjects per value.
-			return refusef("a PII column (%s) may only be tested against literals written in the IN list, or against another PII column", piiNames(mixProv(x, sub)))
+			return refusef(refusal.MaskedFilter, "a PII column (%s) may only be tested against literals written in the IN list, or against another PII column", piiNames(mixProv(x, sub)))
 		case sub.Kind == KindIdentity && x.Kind == KindIdentity:
 			// A semi-join: both sides must be PII.
 			if !x.Sensitive {
@@ -1960,7 +2071,7 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 			}
 			return nil
 		}
-		return refusef("a PII column (%s) may only be compared with constants or another PII column", piiNames(mixProv(x, sub)))
+		return refusef(refusal.MaskedFilter, "a PII column (%s) may only be compared with constants or another PII column", piiNames(mixProv(x, sub)))
 	}
 	listProv := Prov{Kind: KindConst}
 	for _, it := range e.List {
@@ -1977,7 +2088,7 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 		return nil
 	}
 	if x.Sensitive && x.Kind != KindIdentity || listProv.Sensitive {
-		return refusef("a PII column (%s) in IN (...) must be a plain column tested against literals", piiNames(mixProv(x, listProv)))
+		return refusef(refusal.MaskedFilter, "a PII column (%s) in IN (...) must be a plain column tested against literals", piiNames(mixProv(x, listProv)))
 	}
 	if e.Not || !pos {
 		return negatedPII(x)
@@ -1987,7 +2098,7 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 	}
 	for _, it := range e.List {
 		if !isConstant(it) {
-			return refusef("a PII column (%s) may only be tested against a list of literals", piiNames(x))
+			return refusef(refusal.MaskedFilter, "a PII column (%s) may only be tested against a list of literals", piiNames(x))
 		}
 	}
 	human, agent, err := an.valueLiterals(x, e.List, true)
@@ -2045,7 +2156,7 @@ func StringValue(d sqlclass.Dialect, text string) (string, bool) {
 // settings.
 func quoteLiteral(d sqlclass.Dialect, v string) (string, error) {
 	if strings.ContainsAny(v, "\\\x00") {
-		return "", refuse("the value behind this token holds a backslash or a NUL; it cannot be substituted safely")
+		return "", refuse(refusal.Placeholder, "the value behind this token holds a backslash or a NUL; it cannot be substituted safely")
 	}
 	return "'" + strings.ReplaceAll(v, "'", "''") + "'", nil
 }
@@ -2058,7 +2169,7 @@ func (an *analyzer) joinEquality(l, r column) error {
 		return nil
 	}
 	if l.prov.Kind != KindIdentity || r.prov.Kind != KindIdentity {
-		return refusef("PII columns (%s) may only be joined as plain columns", piiNames(mixProv(l.prov, r.prov)))
+		return refusef(refusal.MaskedFilter, "PII columns (%s) may only be joined as plain columns", piiNames(mixProv(l.prov, r.prov)))
 	}
 	if !l.prov.Sensitive {
 		return unmaskedPartner(r.prov, l.prov)
@@ -2086,13 +2197,13 @@ func (an *analyzer) kCheck(s *Select, cols []column, sc *scope) error {
 		return nil
 	}
 	if sc.node.outer {
-		return refuse("a correlated subquery cannot filter, group or aggregate PII columns (the k-anonymity check could not run on its own)")
+		return refuse(refusal.MaskedFilter, "a correlated subquery cannot filter, group or aggregate PII columns (the k-anonymity check could not run on its own)")
 	}
 	if an.inRecCTE > 0 {
-		return refuse("a recursive CTE cannot filter, group or aggregate PII columns")
+		return refuse(refusal.MaskedFilter, "a recursive CTE cannot filter, group or aggregate PII columns")
 	}
 	if s.FromSp == (Span{}) {
-		return refuse("a SELECT without FROM cannot filter, group or aggregate PII columns (the k-anonymity check has no rows to count)")
+		return refuse(refusal.MaskedFilter, "a SELECT without FROM cannot filter, group or aggregate PII columns (the k-anonymity check has no rows to count)")
 	}
 	var b strings.Builder
 	if w := an.withPrefix(); w != "" {
@@ -2138,14 +2249,14 @@ func (an *analyzer) groupText(g Expr, s *Select, cols []column, sc *scope) (stri
 		k := 0
 		for _, it := range s.Items {
 			if it.Star {
-				return "", refuse("GROUP BY a position after a * is not supported with PII columns")
+				return "", refuse(refusal.UnsupportedSyntax, "GROUP BY a position after a * is not supported with PII columns")
 			}
 			if k == n {
 				return an.frag(it.Expr.Span()), nil
 			}
 			k++
 		}
-		return "", refuse("GROUP BY position is out of range")
+		return "", refuse(refusal.InvalidSQL, "GROUP BY position is out of range")
 	}
 	if isPosition(g) {
 		return item(atoiSafe(g.(*Literal).Text) - 1)
@@ -2168,7 +2279,7 @@ func (an *analyzer) groupText(g Expr, s *Select, cols []column, sc *scope) (stri
 			// Both: the select list maps one to one onto cols when no *
 			// precedes.
 			if star || !sameValue(cols[i].prov, in) {
-				return "", refusef("GROUP BY %s names both an input column and an output alias for another value; rename the alias", strings.ToLower(name))
+				return "", refusef(refusal.InvalidSQL, "GROUP BY %s names both an input column and an output alias for another value; rename the alias", strings.ToLower(name))
 			}
 		}
 	}

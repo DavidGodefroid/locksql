@@ -94,6 +94,9 @@ type Result struct {
 	Truncated bool `json:"truncated"`
 	// Affected is the number of rows changed by a write-class statement.
 	Affected int64 `json:"affected"`
+	// CutCells lists the cells, as [row, column] indexes of Rows, whose
+	// value was longer than MaxCellBytes and was cut while it was read.
+	CutCells [][2]int `json:"cut_cells,omitempty"`
 }
 
 // Access methods of a PlanNode.

@@ -14,6 +14,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,5 +158,145 @@ func TestTLSVerifyHint(t *testing.T) {
 	}
 	if got := TLSVerifyHint(errors.New("password authentication failed"), config.TLSVerifyFull); got != "" {
 		t.Errorf("hint of another error = %q", got)
+	}
+}
+
+// clientPair writes a client certificate signed by a new CA, and its key,
+// to PEM files; caPool holds the CA, for the server to check it.
+func clientPair(t *testing.T, keyMode os.FileMode) (certFile, keyFile string, caPool *x509.CertPool) {
+	t.Helper()
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTpl := &x509.Certificate{SerialNumber: big.NewInt(10), Subject: pkix.Name{CommonName: "client CA"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	caDER, _ := x509.CreateCertificate(rand.Reader, caTpl, caTpl, &caKey.PublicKey, caKey)
+	ca, _ := x509.ParseCertificate(caDER)
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tpl := &x509.Certificate{SerialNumber: big.NewInt(11), Subject: pkix.Name{CommonName: "app"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, ca, &key.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, _ := x509.MarshalECPrivateKey(key)
+	dir := t.TempDir()
+	certFile, keyFile = filepath.Join(dir, "client.pem"), filepath.Join(dir, "client.key")
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(keyFile, keyMode); err != nil {
+		t.Fatal(err)
+	}
+	caPool = x509.NewCertPool()
+	caPool.AddCert(ca)
+	return certFile, keyFile, caPool
+}
+
+// handshakeClientAuth is handshake against a server that requires a client
+// certificate signed by clients.
+func handshakeClientAuth(t *testing.T, cfg *tls.Config, cert tls.Certificate, clients *x509.CertPool) error {
+	t.Helper()
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert},
+		ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clients})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	srvErr := make(chan error, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			srvErr <- err
+			return
+		}
+		srvErr <- c.(*tls.Conn).Handshake()
+		c.Close()
+	}()
+	nc, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	cerr := tls.Client(nc, cfg).Handshake()
+	if serr := <-srvErr; serr != nil {
+		return serr
+	}
+	return cerr
+}
+
+func TestTLSConfigClientCertificate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no group or other mode bits on Windows: every file reads as 0666")
+	}
+	caFile, server := testCA(t, "db.example")
+	certFile, keyFile, clients := clientPair(t, 0o600)
+	for _, mode := range []string{config.TLSRequire, config.TLSVerifyCA, config.TLSVerifyFull} {
+		p := config.Profile{Engine: config.EnginePostgres, Host: "db.example", TLS: mode, TLSCA: caFile, TLSCert: certFile, TLSKey: keyFile}
+		cfg, err := TLSConfig(p)
+		if err != nil {
+			t.Fatalf("%s: %v", mode, err)
+		}
+		if err := handshakeClientAuth(t, cfg, server, clients); err != nil {
+			t.Errorf("%s: handshake with the client certificate: %v", mode, err)
+		}
+	}
+	// Without the certificate the server refuses.
+	cfg, err := TLSConfig(config.Profile{Engine: config.EnginePostgres, Host: "db.example", TLS: config.TLSVerifyFull, TLSCA: caFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handshakeClientAuth(t, cfg, server, clients); err == nil {
+		t.Error("handshake without a client certificate succeeded")
+	}
+}
+
+func TestTLSConfigClientKeyChecks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no group or other mode bits on Windows: every file reads as 0666")
+	}
+	caFile, _ := testCA(t, "db.example")
+	certFile, keyFile, _ := clientPair(t, 0o640)
+	p := config.Profile{Engine: config.EngineMySQL, Host: "db.example", TLS: config.TLSVerifyFull, TLSCA: caFile, TLSCert: certFile, TLSKey: keyFile}
+	if _, err := TLSConfig(p); err == nil || !strings.Contains(err.Error(), "readable by others") {
+		t.Errorf("group-readable tls_key: err = %v", err)
+	}
+	p.TLSKey = filepath.Join(t.TempDir(), "missing.key")
+	if _, err := TLSConfig(p); err == nil || !strings.Contains(err.Error(), "tls_key") {
+		t.Errorf("missing tls_key: err = %v", err)
+	}
+	_, otherKey, _ := clientPair(t, 0o600)
+	p.TLSKey = otherKey
+	if _, err := TLSConfig(p); err == nil || !strings.Contains(err.Error(), "tls_cert") {
+		t.Errorf("mismatched pair: err = %v", err)
+	}
+}
+
+func TestTLSConfigServerName(t *testing.T) {
+	caFile, good := testCA(t, "db.example")
+	p := config.Profile{Engine: config.EnginePostgres, Host: "10.1.2.3", TLS: config.TLSVerifyFull, TLSCA: caFile}
+	cfg, err := TLSConfig(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handshake(t, cfg, good) == nil {
+		t.Error("verify-full accepted a certificate that does not name host")
+	}
+	p.TLSServerName = "db.example"
+	if cfg, err = TLSConfig(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := handshake(t, cfg, good); err != nil {
+		t.Errorf("verify-full with tls_server_name: %v", err)
+	}
+	p.TLSServerName = "other.example"
+	if cfg, err = TLSConfig(p); err != nil {
+		t.Fatal(err)
+	}
+	if handshake(t, cfg, good) == nil {
+		t.Error("verify-full accepted a certificate that does not name tls_server_name")
 	}
 }

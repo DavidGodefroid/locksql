@@ -108,7 +108,7 @@ func (s *Server) screenBody(ctx context.Context, pl *plan, add func(string)) {
 	}
 }
 
-// readDetails explains a read plan to the human: what it reads, which PII
+// readDetails explains a read plan (or an analysed write) to the human: what it reads, which PII
 // columns it touches and where, how each output is masked, the k-anonymity
 // counts that run first and the token values substituted.
 func (s *Server) readDetails(pl *plan, add func(string)) {
@@ -117,7 +117,11 @@ func (s *Server) readDetails(pl *plan, add func(string)) {
 		add(bold + "EXPLAIN only: the statement does not run; the plan is returned" + reset)
 	}
 	if len(an.Relations) > 0 {
-		add("reads: " + safeText(strings.Join(an.Relations, ", "), false))
+		head := "reads: "
+		if pl.st.Class != sqlclass.Read {
+			head = "reads or writes: "
+		}
+		add(head + safeText(strings.Join(an.Relations, ", "), false))
 	}
 	if pl.st.Limit >= 0 {
 		add(fmt.Sprintf("returns at most %d rows", min(pl.st.Limit, s.profile.Limits.MaxRows)))
@@ -237,10 +241,12 @@ func (s *Server) Command(ctx context.Context, line string) {
 		s.toggleMode()
 	case ":results":
 		s.toggleResults()
+	case ":unmask":
+		s.toggleUnmask(ctx)
 	case ":quit":
 		s.End("quit")
 	default:
-		s.println("commands: :review (pending policy change and change requests) · :status · :mode (Shift+Tab) · :results (Ctrl-O) · :quit")
+		s.println("commands: :review (pending policy change and change requests) · :status · :mode (Shift+Tab) · :results (Ctrl-O) · :unmask · :quit")
 	}
 }
 
@@ -259,8 +265,8 @@ func (s *Server) statusLines() []string {
 	if s.showResults {
 		results = paint.Yellow("shown here in clear, PII included")
 	}
-	unmask := "refused (start the console with --allow-unmask to allow it)"
-	if s.cfg.AllowUnmask {
+	unmask := "refused (:unmask allows it)"
+	if s.allowUnmask {
 		unmask = paint.Red("allowed: clients may ask for unmasked output, approved here each time")
 	}
 	pending := "none"
@@ -272,7 +278,7 @@ func (s *Server) statusLines() []string {
 		{"databases", safeText(strings.Join(st.Databases, ", "), false)},
 		{"mode", mode + paint.Dim(" (Shift+Tab or :mode)")},
 		{"results", results + paint.Dim(" (Ctrl-O or :results)")},
-		{"unmask", unmask},
+		{"unmask", unmask + paint.Dim(" (:unmask)")},
 		{"limits", fmt.Sprintf("timeout %s · warn %d · refuse %d · max_rows %d · max_cell_chars %d · max_output_bytes %d",
 			l.StatementTimeout, l.ExplainRowsWarn, l.ExplainRowsRefuse, l.MaxRows, l.MaxCellChars, l.MaxOutputBytes)},
 		{"session", fmt.Sprintf("ends in %d min (max_session %s) · idle_timeout %s", st.SessionEndsInS/60, l.MaxSession, l.IdleTimeout)},
@@ -376,7 +382,7 @@ func loosens(changes []config.Change) bool {
 }
 
 // adopt records p as the approved policy and enforces it. A change of the
-// connection settings, the transport (tls, tls_ca, the ssh table) included,
+// connection settings, the transport (the tls settings, the ssh table) included,
 // ends the session: the open connection no longer matches the policy.
 func (s *Server) adopt(p config.Policy, decision string) error {
 	if s.cfg.StateDir != "" && s.cfg.ApprovedKey != "" {
@@ -404,7 +410,8 @@ func (s *Server) adopt(p config.Policy, decision string) error {
 	}
 	if old.Engine != n.Engine || old.Host != n.Host || old.Port != n.Port || old.Path != n.Path ||
 		old.User != n.User || old.Database != n.Database ||
-		old.TLS != n.TLS || old.TLSCA != n.TLSCA || !sameSSH(old.SSH, n.SSH) {
+		old.TLS != n.TLS || old.TLSCA != n.TLSCA || old.TLSCert != n.TLSCert || old.TLSKey != n.TLSKey ||
+		old.TLSServerName != n.TLSServerName || !sameSSH(old.SSH, n.SSH) {
 		s.println("connection settings changed: the session ends; start the console again")
 		s.End("connection settings changed")
 	}

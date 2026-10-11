@@ -1,20 +1,21 @@
 package sqlast
 
 import (
-	"fmt"
+	"errors"
 	"strconv"
 	"strings"
 
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
 // maxDepth bounds the nesting of queries and expressions.
 const maxDepth = 128
 
-func refuse(reason string) error { return &sqlclass.Refusal{Reason: reason} }
+func refuse(code refusal.Code, reason string) *sqlclass.Refusal { return refusal.New(code, reason) }
 
-func refusef(format string, args ...any) error {
-	return &sqlclass.Refusal{Reason: fmt.Sprintf(format, args...)}
+func refusef(code refusal.Code, format string, args ...any) *sqlclass.Refusal {
+	return refusal.Newf(code, format, args...)
 }
 
 type set map[string]bool
@@ -70,6 +71,9 @@ type parser struct {
 	toks  []sqlclass.Token
 	i     int
 	depth int
+	// topWith lets the next WITH hold data-modifying CTEs: the top-level
+	// WITH of a statement ParseWrite reads.
+	topWith bool
 }
 
 // Parse parses one read statement: SELECT, WITH ... SELECT or EXPLAIN
@@ -77,28 +81,39 @@ type parser struct {
 // supported grammar, is refused with a *sqlclass.Refusal. A trailing ';'
 // and surrounding blanks are dropped, as sqlclass.Classify does.
 func Parse(d sqlclass.Dialect, sql string) (*Statement, error) {
-	text := strings.TrimSpace(sql)
-	if strings.HasSuffix(text, ";") {
-		text = strings.TrimSpace(text[:len(text)-1])
-	}
-	if text == "" {
-		return nil, refuse("empty statement")
-	}
-	toks, err := sqlclass.Lex(d, text)
+	p, err := newParser(d, sql)
 	if err != nil {
 		return nil, err
 	}
-	for _, t := range toks {
-		if t.Kind == sqlclass.TokPunct && t.Text == ";" {
-			return nil, refuse("exactly one statement is allowed (no ';' chaining)")
-		}
+	st, err := p.statement()
+	if err != nil {
+		return nil, p.locate(err)
 	}
-	p := &parser{d: d, src: text, toks: toks}
-	st := &Statement{SQL: text, Dialect: d}
+	return st, nil
+}
+
+// locate points a refusal that has no position yet at the token where the
+// parser stopped, or at the end of the statement.
+func (p *parser) locate(err error) error {
+	var r *sqlclass.Refusal
+	if !errors.As(err, &r) || r.Pos >= 0 || len(p.toks) == 0 {
+		return err
+	}
+	if t, ok := p.tok(0); ok {
+		r.At(t.Pos, sqlclass.TokenText(t))
+	} else {
+		r.At(p.toks[len(p.toks)-1].End, "")
+	}
+	return err
+}
+
+// statement parses the whole read statement.
+func (p *parser) statement() (*Statement, error) {
+	st := &Statement{SQL: p.src, Dialect: p.d}
 	if p.word(0, "EXPLAIN") {
 		p.i++
 		if !p.word(0, "SELECT", "WITH") && !p.punct(0, "(") {
-			return nil, refuse("only EXPLAIN SELECT is allowed (no ANALYZE, options or other statements)")
+			return nil, refuse(refusal.StatementKind, "only EXPLAIN SELECT is allowed (no ANALYZE, options or other statements)")
 		}
 		st.Explain = true
 	}
@@ -116,13 +131,35 @@ func Parse(d sqlclass.Dialect, sql string) (*Statement, error) {
 	return st, nil
 }
 
+// newParser lexes one statement, without its trailing ';' and surrounding
+// blanks.
+func newParser(d sqlclass.Dialect, sql string) (*parser, error) {
+	text := strings.TrimSpace(sql)
+	if strings.HasSuffix(text, ";") {
+		text = strings.TrimSpace(text[:len(text)-1])
+	}
+	if text == "" {
+		return nil, refuse(refusal.UnsupportedSyntax, "empty statement")
+	}
+	toks, err := sqlclass.Lex(d, text)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range toks {
+		if t.Kind == sqlclass.TokPunct && t.Text == ";" {
+			return nil, refuse(refusal.MultiStatement, "exactly one statement is allowed (no ';' chaining)").At(t.Pos, t.Text)
+		}
+	}
+	return &parser{d: d, src: text, toks: toks}, nil
+}
+
 // notAllowed refuses a statement that is not a read in the allowlist.
 func (p *parser) notAllowed() error {
 	t := p.toks[0]
 	if t.Kind == sqlclass.TokWord {
-		return refusef("%.40s is not allowed: only SELECT, WITH ... SELECT and EXPLAIN SELECT are (use the catalog commands to list tables and describe them)", t.Text)
+		return refusef(refusal.StatementKind, "%.40s is not allowed: only SELECT, WITH ... SELECT and EXPLAIN SELECT are (use the catalog commands to list tables and describe them)", t.Text)
 	}
-	return refuse("only SELECT, WITH ... SELECT and EXPLAIN SELECT are allowed")
+	return refuse(refusal.StatementKind, "only SELECT, WITH ... SELECT and EXPLAIN SELECT are allowed")
 }
 
 func (p *parser) tok(k int) (sqlclass.Token, bool) {
@@ -154,13 +191,13 @@ func (p *parser) punct(k int, s string) bool {
 func (p *parser) unexpected() error {
 	t, ok := p.tok(0)
 	if !ok {
-		return refuse("the statement ends too early (unsupported or incomplete syntax)")
+		return refuse(refusal.UnsupportedSyntax, "the statement ends too early (unsupported or incomplete syntax)")
 	}
 	switch t.Kind {
 	case sqlclass.TokWord, sqlclass.TokPunct:
-		return refusef("unsupported syntax near %.40s: locksql only runs statements it can parse with certainty", t.Text)
+		return refusef(refusal.UnsupportedSyntax, "unsupported syntax near %.40s: locksql only runs statements it can parse with certainty", t.Text)
 	}
-	return refuse("unsupported syntax near a literal or quoted name: locksql only runs statements it can parse with certainty")
+	return refuse(refusal.UnsupportedSyntax, "unsupported syntax near a literal or quoted name: locksql only runs statements it can parse with certainty")
 }
 
 func (p *parser) expectWord(w string) error {
@@ -194,7 +231,7 @@ func (p *parser) span(start int) Span {
 func (p *parser) enter() error {
 	p.depth++
 	if p.depth > maxDepth {
-		return refuse("the statement nests too deeply")
+		return refuse(refusal.TooComplex, "the statement nests too deeply")
 	}
 	return nil
 }
@@ -235,12 +272,19 @@ func (p *parser) query() (*Query, error) {
 	defer p.leave()
 	start := p.i
 	q := &Query{}
-	var err error
 	if p.word(0, "WITH") {
+		var err error
 		if q.With, err = p.with(); err != nil {
 			return nil, err
 		}
 	}
+	return p.queryRest(q, start)
+}
+
+// queryRest reads the body, ORDER BY and LIMIT of a query whose WITH (if
+// any) is read, from token start.
+func (p *parser) queryRest(q *Query, start int) (*Query, error) {
+	var err error
 	if q.Body, err = p.setExpr(); err != nil {
 		return nil, err
 	}
@@ -261,6 +305,8 @@ func (p *parser) query() (*Query, error) {
 }
 
 func (p *parser) with() (*With, error) {
+	writes := p.topWith
+	p.topWith = false
 	start := p.i
 	p.i++ // WITH
 	w := &With{}
@@ -286,22 +332,33 @@ func (p *parser) with() (*With, error) {
 			return nil, err
 		}
 		if p.word(0, "MATERIALIZED") || p.word(0, "NOT") {
-			return nil, refuse("CTE materialization hints are not supported")
+			return nil, refuse(refusal.UnsupportedSyntax, "CTE materialization hints are not supported")
 		}
 		if err := p.expectPunct("("); err != nil {
 			return nil, err
 		}
-		if !p.word(0, "SELECT", "WITH") && !p.punct(0, "(") {
-			return nil, refuse("a CTE must be a SELECT (data-modifying CTEs are not allowed)")
-		}
-		q, err := p.query()
-		if err != nil {
-			return nil, err
+		switch {
+		case writes && p.d == sqlclass.Postgres && p.word(0, "INSERT", "UPDATE", "DELETE"):
+			w, err := p.write()
+			if err != nil {
+				return nil, err
+			}
+			c.Write = w
+		case !p.word(0, "SELECT", "WITH") && !p.punct(0, "("):
+			if writes {
+				return nil, refuse(refusal.StatementKind, "a CTE must be a SELECT, or on PostgreSQL an INSERT, UPDATE or DELETE")
+			}
+			return nil, refuse(refusal.StatementKind, "a CTE must be a SELECT (data-modifying CTEs are not allowed)")
+		default:
+			q, err := p.query()
+			if err != nil {
+				return nil, err
+			}
+			c.Query = q
 		}
 		if err := p.expectPunct(")"); err != nil {
 			return nil, err
 		}
-		c.Query = q
 		c.Sp = p.span(cs)
 		w.CTEs = append(w.CTEs, c)
 		if !p.punct(0, ",") {
@@ -310,7 +367,7 @@ func (p *parser) with() (*With, error) {
 		p.i++
 	}
 	if p.word(0, "SEARCH", "CYCLE") {
-		return nil, refuse("SEARCH and CYCLE clauses are not supported")
+		return nil, refuse(refusal.UnsupportedSyntax, "SEARCH and CYCLE clauses are not supported")
 	}
 	w.Sp = p.span(start)
 	return w, nil
@@ -361,7 +418,7 @@ func (p *parser) setExpr() (Body, error) {
 		left = &SetOp{Op: op, All: all, Left: left, Right: right, Sp: p.span(start)}
 	}
 	if p.word(0, "MINUS") {
-		return nil, refuse("MINUS is not supported; use EXCEPT")
+		return nil, refuse(refusal.UnsupportedSyntax, "MINUS is not supported; use EXCEPT")
 	}
 	return left, nil
 }
@@ -384,7 +441,7 @@ func (p *parser) term() (Body, error) {
 		}
 		return q, nil
 	case p.word(0, "VALUES", "TABLE"):
-		return nil, refusef("%s is not allowed: only SELECT is", p.toks[p.i].Text)
+		return nil, refusef(refusal.StatementKind, "%s is not allowed: only SELECT is", p.toks[p.i].Text)
 	}
 	return nil, p.unexpected()
 }
@@ -423,7 +480,7 @@ func (p *parser) selectCore() (*Select, error) {
 	}
 	if t, ok := p.tok(0); ok && t.Kind == sqlclass.TokWord && (strings.HasPrefix(t.Text, "SQL_") ||
 		t.Text == "HIGH_PRIORITY" || t.Text == "STRAIGHT_JOIN" || t.Text == "DISTINCTROW") {
-		return nil, refusef("the select modifier %.40s is not supported", t.Text)
+		return nil, refusef(refusal.UnsupportedSyntax, "the select modifier %.40s is not supported", t.Text)
 	}
 	for {
 		it, err := p.selectItem()
@@ -437,7 +494,7 @@ func (p *parser) selectCore() (*Select, error) {
 		p.i++
 	}
 	if p.word(0, "INTO") {
-		return nil, refuse("SELECT ... INTO is not allowed (it writes a table, a variable or a file)")
+		return nil, refuse(refusal.Forbidden, "SELECT ... INTO is not allowed (it writes a table, a variable or a file)")
 	}
 	if p.word(0, "FROM") {
 		p.i++
@@ -476,7 +533,7 @@ func (p *parser) selectCore() (*Select, error) {
 		}
 		s.GroupBy, s.GroupSp = list, p.span(gs)
 		if p.word(0, "WITH") && p.word(1, "ROLLUP") {
-			return nil, refuse("WITH ROLLUP is not supported")
+			return nil, refuse(refusal.UnsupportedSyntax, "WITH ROLLUP is not supported")
 		}
 	}
 	if p.word(0, "HAVING") {
@@ -489,10 +546,10 @@ func (p *parser) selectCore() (*Select, error) {
 		s.Having, s.HavingSp = e, p.span(hs)
 	}
 	if p.word(0, "WINDOW", "QUALIFY") {
-		return nil, refusef("%s clauses are not supported", p.toks[p.i].Text)
+		return nil, refusef(refusal.UnsupportedSyntax, "%s clauses are not supported", p.toks[p.i].Text)
 	}
 	if p.word(0, "FOR", "LOCK") {
-		return nil, refuse("locking reads (FOR UPDATE, FOR SHARE, LOCK IN SHARE MODE) are not allowed")
+		return nil, refuse(refusal.Forbidden, "locking reads (FOR UPDATE, FOR SHARE, LOCK IN SHARE MODE) are not allowed")
 	}
 	s.Sp = p.span(start)
 	return s, nil
@@ -556,7 +613,7 @@ func (p *parser) alias() (string, error) {
 	if p.word(0, "AS") {
 		p.i++
 		if p.mysqlDoubleQuoted(0) {
-			return "", refuse("double-quoted aliases are ambiguous in MySQL; use backquotes")
+			return "", refuse(refusal.UnsupportedSyntax, "double-quoted aliases are ambiguous in MySQL; use backquotes")
 		}
 		name, ok := p.ident(true)
 		if !ok {
@@ -579,7 +636,7 @@ func (p *parser) alias() (string, error) {
 		p.i++
 		return t.Name(), nil
 	case sqlclass.TokString:
-		return "", refuse("string literals as aliases are not supported; use AS with an identifier")
+		return "", refuse(refusal.UnsupportedSyntax, "string literals as aliases are not supported; use AS with an identifier")
 	}
 	return "", nil
 }
@@ -623,7 +680,7 @@ func (p *parser) tableRef() (TableExpr, error) {
 				return nil, p.unexpected()
 			}
 			if p.word(0, "STRAIGHT_JOIN") {
-				return nil, refuse("STRAIGHT_JOIN is not supported")
+				return nil, refuse(refusal.UnsupportedSyntax, "STRAIGHT_JOIN is not supported")
 			}
 			return left, nil
 		}
@@ -656,7 +713,7 @@ func (p *parser) tableRef() (TableExpr, error) {
 			j.Using = cols
 		default:
 			if !j.Natural && j.Kind != "CROSS" && !(j.Kind == "INNER" && p.d != sqlclass.Postgres) {
-				return nil, refusef("%s JOIN needs ON or USING", j.Kind)
+				return nil, refusef(refusal.InvalidSQL, "%s JOIN needs ON or USING", j.Kind)
 			}
 		}
 		j.Sp = p.span(start)
@@ -671,11 +728,11 @@ func (p *parser) tablePrimary() (TableExpr, error) {
 		lateral = true
 		p.i++
 		if !p.punct(0, "(") {
-			return nil, refuse("LATERAL table functions are not supported")
+			return nil, refuse(refusal.UnsupportedSyntax, "LATERAL table functions are not supported")
 		}
 	}
 	if p.word(0, "ONLY") {
-		return nil, refuse("ONLY is not supported")
+		return nil, refuse(refusal.UnsupportedSyntax, "ONLY is not supported")
 	}
 	if p.punct(0, "(") {
 		// A derived table or a parenthesised join. "((" may open either:
@@ -713,12 +770,12 @@ func (p *parser) tablePrimary() (TableExpr, error) {
 			return nil, err
 		}
 		if t, ok := p.tok(0); ok && (t.Kind == sqlclass.TokQuotedIdent || t.Kind == sqlclass.TokWord && !reserved[t.Text]) || p.word(0, "AS") {
-			return nil, refuse("an alias on a parenthesised join is not supported")
+			return nil, refuse(refusal.UnsupportedSyntax, "an alias on a parenthesised join is not supported")
 		}
 		return inner, nil
 	}
 	if p.mysqlDoubleQuoted(0) {
-		return nil, refuse("double-quoted names are ambiguous in MySQL; use backquotes")
+		return nil, refuse(refusal.UnsupportedSyntax, "double-quoted names are ambiguous in MySQL; use backquotes")
 	}
 	var parts []string
 	for {
@@ -736,14 +793,14 @@ func (p *parser) tablePrimary() (TableExpr, error) {
 		return nil, p.unexpected()
 	}
 	if p.punct(0, "(") {
-		return nil, refuse("table functions in FROM are not allowed")
+		return nil, refuse(refusal.UnsupportedSyntax, "table functions in FROM are not allowed")
 	}
 	tn := &TableName{Parts: parts}
 	if err := p.tableAlias(&tn.Alias, &tn.ColAliases); err != nil {
 		return nil, err
 	}
 	if p.word(0, "USE", "FORCE", "IGNORE", "TABLESAMPLE", "PARTITION", "INDEXED", "NOT") {
-		return nil, refusef("%s after a table name is not supported", p.toks[p.i].Text)
+		return nil, refusef(refusal.UnsupportedSyntax, "%s after a table name is not supported", p.toks[p.i].Text)
 	}
 	tn.Sp = p.span(start)
 	return tn, nil
@@ -771,13 +828,13 @@ func (p *parser) limit() (*Limit, error) {
 		t, ok := p.tok(0)
 		if !ok || t.Kind != sqlclass.TokNumber || !allDigits(t.Text) {
 			if p.word(0, "ALL") {
-				return 0, refuse("LIMIT ALL is not allowed")
+				return 0, refuse(refusal.NoLimit, "LIMIT ALL is not allowed")
 			}
-			return 0, refuse("LIMIT and OFFSET take integer literals only")
+			return 0, refuse(refusal.NoLimit, "LIMIT and OFFSET take integer literals only")
 		}
 		n, err := strconv.ParseInt(t.Text, 10, 64)
 		if err != nil {
-			return 0, refuse("LIMIT value is out of range")
+			return 0, refuse(refusal.LimitTooHigh, "LIMIT value is out of range")
 		}
 		p.i++
 		return n, nil
@@ -837,7 +894,7 @@ func (p *parser) limit() (*Limit, error) {
 				n = v
 			}
 			if !p.word(0, "ROW", "ROWS") || !p.word(1, "ONLY") {
-				return nil, refuse("FETCH must read FETCH FIRST n ROWS ONLY")
+				return nil, refuse(refusal.NoLimit, "FETCH must read FETCH FIRST n ROWS ONLY")
 			}
 			p.i += 2
 			if l == nil {
@@ -885,7 +942,7 @@ func (p *parser) orderList() ([]*OrderItem, error) {
 			p.i++
 		}
 		if p.word(0, "USING") {
-			return nil, refuse("ORDER BY ... USING is not supported")
+			return nil, refuse(refusal.UnsupportedSyntax, "ORDER BY ... USING is not supported")
 		}
 		out = append(out, o)
 		if !p.punct(0, ",") {
@@ -946,7 +1003,7 @@ func (p *parser) op() (string, int, error) {
 	}
 	known := func(s string) bool { return commonOps[s] || dialectOps[p.d][s] }
 	if p.d == sqlclass.MySQL && t.Text == "|" && len(run) > 1 && run[1].Text == "|" {
-		return "", 0, refuse("|| is OR or concatenation depending on MySQL's sql_mode; use OR or CONCAT()")
+		return "", 0, refuse(refusal.UnsupportedSyntax, "|| is OR or concatenation depending on MySQL's sql_mode; use OR or CONCAT()")
 	}
 	if p.d == sqlclass.Postgres {
 		text := ""
@@ -960,7 +1017,7 @@ func (p *parser) op() (string, int, error) {
 			}
 		}
 		if !known(text[:n]) {
-			return "", 0, refusef("unsupported operator %.10s", text[:n])
+			return "", 0, refusef(refusal.UnsupportedSyntax, "unsupported operator %.10s", text[:n])
 		}
 		return text[:n], n, nil
 	}
@@ -973,7 +1030,7 @@ func (p *parser) op() (string, int, error) {
 			return text, n, nil
 		}
 	}
-	return "", 0, refusef("unsupported operator %.10s", t.Text)
+	return "", 0, refusef(refusal.UnsupportedSyntax, "unsupported operator %.10s", t.Text)
 }
 
 // ---- Expressions ----
@@ -1030,7 +1087,7 @@ func (p *parser) andExpr() (Expr, error) {
 				return l, nil
 			}
 			if p.d != sqlclass.MySQL {
-				return nil, refuse("the && operator is not supported")
+				return nil, refuse(refusal.UnsupportedSyntax, "the && operator is not supported")
 			}
 			p.i += n
 		}
@@ -1054,7 +1111,7 @@ func (p *parser) notExpr() (Expr, error) {
 	}
 	if p.punct(0, "!") {
 		if op, _, _ := p.op(); op == "" || op == "!" {
-			return nil, refuse("the ! operator is not supported; use NOT")
+			return nil, refuse(refusal.UnsupportedSyntax, "the ! operator is not supported; use NOT")
 		}
 	}
 	return p.predicate()
@@ -1101,7 +1158,7 @@ func (p *parser) predicate() (Expr, error) {
 	case p.word(0, "BETWEEN"):
 		p.i++
 		if p.word(0, "SYMMETRIC", "ASYMMETRIC") {
-			return nil, refuse("BETWEEN SYMMETRIC is not supported")
+			return nil, refuse(refusal.UnsupportedSyntax, "BETWEEN SYMMETRIC is not supported")
 		}
 		lo, err := p.otherOp()
 		if err != nil {
@@ -1163,7 +1220,7 @@ func (p *parser) predicate() (Expr, error) {
 		it.Sp = p.span(start)
 		return it, nil
 	case p.word(0, "SIMILAR", "MATCH", "ESCAPE"):
-		return nil, refusef("%s is not supported", p.toks[p.i].Text)
+		return nil, refusef(refusal.UnsupportedSyntax, "%s is not supported", p.toks[p.i].Text)
 	}
 	op, n, err := p.op()
 	if err != nil {
@@ -1180,7 +1237,7 @@ func (p *parser) predicate() (Expr, error) {
 		quant := p.toks[p.i].Text
 		p.i++
 		if !p.punct(0, "(") || !p.word(1, "SELECT", "WITH") {
-			return nil, refuse("ANY/ALL take a subquery only")
+			return nil, refuse(refusal.UnsupportedSyntax, "ANY/ALL take a subquery only")
 		}
 		p.i++
 		q, err := p.query()
@@ -1339,7 +1396,7 @@ func (p *parser) postfix() (Expr, error) {
 			}
 			x = &Collate{X: x, Name: name, Sp: p.span(start)}
 		case p.punct(0, "["):
-			return nil, refuse("array subscripts are not supported")
+			return nil, refuse(refusal.UnsupportedSyntax, "array subscripts are not supported")
 		default:
 			return x, nil
 		}
@@ -1351,7 +1408,7 @@ func (p *parser) typeName() (string, error) {
 	start := p.i
 	t, ok := p.tok(0)
 	if !ok || t.Kind != sqlclass.TokWord {
-		return "", refuse("unsupported type name")
+		return "", refuse(refusal.UnsupportedSyntax, "unsupported type name")
 	}
 	p.i++
 	for {
@@ -1369,7 +1426,7 @@ func (p *parser) typeName() (string, error) {
 		for {
 			nt, ok := p.tok(0)
 			if !ok || nt.Kind != sqlclass.TokNumber || !allDigits(nt.Text) {
-				return "", refuse("unsupported type modifier")
+				return "", refuse(refusal.UnsupportedSyntax, "unsupported type modifier")
 			}
 			p.i++
 			if !p.punct(0, ",") {
@@ -1382,7 +1439,7 @@ func (p *parser) typeName() (string, error) {
 		}
 	}
 	if p.punct(0, "[") {
-		return "", refuse("array types are not supported")
+		return "", refuse(refusal.UnsupportedSyntax, "array types are not supported")
 	}
 	sp := p.span(start)
 	return strings.ToUpper(p.src[sp.Pos:sp.End]), nil
@@ -1397,17 +1454,17 @@ func (p *parser) primary() (Expr, error) {
 	switch t.Kind {
 	case sqlclass.TokNumber:
 		if !numberLike(t.Text) {
-			return nil, refuse("names starting with a digit are not supported; quote them")
+			return nil, refuse(refusal.UnsupportedSyntax, "names starting with a digit are not supported; quote them")
 		}
 		p.i++
 		return &Literal{Kind: LitNumber, Text: t.Text, Sp: p.span(start)}, nil
 	case sqlclass.TokString:
 		if p.mysqlDoubleQuoted(0) {
-			return nil, refuse("double-quoted text is a string or a name depending on MySQL's sql_mode; use single quotes for strings and backquotes for names")
+			return nil, refuse(refusal.UnsupportedSyntax, "double-quoted text is a string or a name depending on MySQL's sql_mode; use single quotes for strings and backquotes for names")
 		}
 		p.i++
 		if n, ok := p.tok(0); ok && n.Kind == sqlclass.TokString {
-			return nil, refuse("adjacent string literals are not supported; use one literal")
+			return nil, refuse(refusal.UnsupportedSyntax, "adjacent string literals are not supported; use one literal")
 		}
 		return &Literal{Kind: LitString, Text: t.Text, Sp: p.span(start)}, nil
 	case sqlclass.TokQuotedIdent:
@@ -1476,7 +1533,7 @@ func (p *parser) primary() (Expr, error) {
 			return nil, err
 		}
 		if p.word(0, "USING") {
-			return nil, refuse("CONVERT ... USING is not supported")
+			return nil, refuse(refusal.UnsupportedSyntax, "CONVERT ... USING is not supported")
 		}
 		if err := p.expectPunct(","); err != nil {
 			return nil, err
@@ -1526,7 +1583,7 @@ func (p *parser) primary() (Expr, error) {
 		return p.interval()
 	case typedLiteral[w] && hasNext && next.Kind == sqlclass.TokString:
 		if p.mysqlDoubleQuoted(1) {
-			return nil, refuse("double-quoted text is ambiguous in MySQL; use single quotes")
+			return nil, refuse(refusal.UnsupportedSyntax, "double-quoted text is ambiguous in MySQL; use single quotes")
 		}
 		p.i += 2
 		return &Literal{Kind: LitTyped, Text: p.src[t.Pos:next.End], Sp: p.span(start)}, nil
@@ -1534,12 +1591,12 @@ func (p *parser) primary() (Expr, error) {
 		if p.mysqlDoubleQuoted(1) {
 			// MySQL forms these literals with single quotes only: X"a" is
 			// the column x aliased a.
-			return nil, refuse("double-quoted text is ambiguous in MySQL; use single quotes")
+			return nil, refuse(refusal.UnsupportedSyntax, "double-quoted text is ambiguous in MySQL; use single quotes")
 		}
 		p.i += 2
 		return &Literal{Kind: LitTyped, Text: p.src[t.Pos:next.End], Sp: p.span(start)}, nil
 	case adjacentString:
-		return nil, refuse("string prefixes and character set introducers are not supported")
+		return nil, refuse(refusal.UnsupportedSyntax, "string prefixes and character set introducers are not supported")
 	case timeNiladic[w]:
 		p.i++
 		if p.punct(0, "(") {
@@ -1551,9 +1608,9 @@ func (p *parser) primary() (Expr, error) {
 		}
 		return &Literal{Kind: LitNiladic, Text: w, Sp: p.span(start)}, nil
 	case systemNiladic[w]:
-		return nil, refusef("%s reads session metadata; it is not allowed", w)
+		return nil, refusef(refusal.SystemObject, "%s reads session metadata; it is not allowed", w)
 	case w == "ROW" || w == "ARRAY":
-		return nil, refusef("%s constructors are not supported", w)
+		return nil, refusef(refusal.UnsupportedSyntax, "%s constructors are not supported", w)
 	case reserved[w] && p.punct(1, "("):
 		// MOD(a, b), LEFT(s, n), IF(c, a, b), ...: the function allowlist
 		// decides.
@@ -1604,7 +1661,7 @@ func (p *parser) interval() (Expr, error) {
 		return &Literal{Kind: LitInterval, Text: p.src[p.toks[start].Pos:p.toks[p.i-1].End], Sp: p.span(start)}, nil
 	}
 	if p.d != sqlclass.MySQL {
-		return nil, refuse("unsupported INTERVAL syntax")
+		return nil, refuse(refusal.UnsupportedSyntax, "unsupported INTERVAL syntax")
 	}
 	x, err := p.otherOp()
 	if err != nil {
@@ -1612,7 +1669,7 @@ func (p *parser) interval() (Expr, error) {
 	}
 	t, ok := p.tok(0)
 	if !ok || t.Kind != sqlclass.TokWord || !intervalUnits[t.Text] {
-		return nil, refuse("INTERVAL needs a unit (DAY, MONTH, ...)")
+		return nil, refuse(refusal.InvalidSQL, "INTERVAL needs a unit (DAY, MONTH, ...)")
 	}
 	p.i++
 	if l, ok := x.(*Literal); ok {
@@ -1671,7 +1728,7 @@ func (p *parser) nameExpr() (Expr, error) {
 	var parts []string
 	for {
 		if p.mysqlDoubleQuoted(0) {
-			return nil, refuse("double-quoted names are ambiguous in MySQL; use backquotes")
+			return nil, refuse(refusal.UnsupportedSyntax, "double-quoted names are ambiguous in MySQL; use backquotes")
 		}
 		name, ok := p.ident(len(parts) > 0)
 		if !ok {
@@ -1683,7 +1740,7 @@ func (p *parser) nameExpr() (Expr, error) {
 		}
 		p.i++
 		if p.punct(0, "*") {
-			return nil, refuse("a qualified star is only allowed as a select-list item")
+			return nil, refuse(refusal.InvalidSQL, "a qualified star is only allowed as a select-list item")
 		}
 	}
 	if len(parts) > 4 {
@@ -1823,10 +1880,10 @@ func (p *parser) call(start int, name string) (Expr, error) {
 		return nil, err
 	}
 	if p.word(0, "WITHIN") {
-		return nil, refuse("WITHIN GROUP is not supported")
+		return nil, refuse(refusal.UnsupportedSyntax, "WITHIN GROUP is not supported")
 	}
 	if p.word(0, "RESPECT", "IGNORE") {
-		return nil, refuse("RESPECT/IGNORE NULLS is not supported")
+		return nil, refuse(refusal.UnsupportedSyntax, "RESPECT/IGNORE NULLS is not supported")
 	}
 	if p.word(0, "FILTER") {
 		p.i++
@@ -1859,12 +1916,12 @@ func (p *parser) call(start int, name string) (Expr, error) {
 
 func (p *parser) window() (*Window, error) {
 	if !p.punct(0, "(") {
-		return nil, refuse("named windows are not supported; spell the window out in OVER (...)")
+		return nil, refuse(refusal.UnsupportedSyntax, "named windows are not supported; spell the window out in OVER (...)")
 	}
 	p.i++
 	w := &Window{}
 	if t, ok := p.tok(0); ok && (t.Kind == sqlclass.TokQuotedIdent || t.Kind == sqlclass.TokWord && !reserved[t.Text] && !frameWords[t.Text]) {
-		return nil, refuse("named windows are not supported")
+		return nil, refuse(refusal.UnsupportedSyntax, "named windows are not supported")
 	}
 	if p.word(0, "PARTITION") {
 		p.i++
@@ -1898,7 +1955,7 @@ func (p *parser) window() (*Window, error) {
 			case t.Kind == sqlclass.TokWord && frameWords[t.Text]:
 			case t.Kind == sqlclass.TokNumber && allDigits(t.Text):
 			default:
-				return nil, refuse("window frames take integer offsets only")
+				return nil, refuse(refusal.UnsupportedSyntax, "window frames take integer offsets only")
 			}
 			p.i++
 		}

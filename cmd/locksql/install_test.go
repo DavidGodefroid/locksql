@@ -1,3 +1,5 @@
+//go:build unix
+
 package main
 
 import (
@@ -123,5 +125,47 @@ func TestInstallSourceRefusal(t *testing.T) {
 	}
 	if _, err := installSourceRefusal(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Error("a missing source binary is not an error")
+	}
+}
+
+// A release already at /usr/local/bin (scripts/install.sh) is not copied
+// onto itself: install(1) refuses that, and the script would stop there.
+func TestInstallScriptSkipsCopyOntoItself(t *testing.T) {
+	for _, script := range []string{
+		linuxInstallScript(installedBinary, "agent", "locksql", "locksql-clients", ""),
+		darwinInstallScript(installedBinary, "agent", "locksql", "locksql-clients", ""),
+	} {
+		if strings.Contains(script, "install -m 0755") {
+			t.Errorf("copies the binary onto itself:\n%s", script)
+		}
+	}
+	for _, script := range []string{
+		linuxInstallScript("/opt/locksql", "agent", "locksql", "locksql-clients", ""),
+		linuxInstallScript(installedBinary, "agent", "locksql", "locksql-clients", strings.Repeat("a", 64)),
+	} {
+		if !strings.Contains(script, "install -m 0755 -o root -g root ") {
+			t.Errorf("binary not installed:\n%s", script)
+		}
+	}
+}
+
+// --yes runs the root script without a terminal; without it, install
+// needs one to confirm.
+func TestInstallYes(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("install only prints its commands on macOS")
+	}
+	var out, errb strings.Builder
+	var scripts []string
+	e := env{stdin: strings.NewReader(""), stdout: &out, stderr: &errb, cwd: t.TempDir(),
+		root: func(s string) error { scripts = append(scripts, s); return nil }}
+	if code := runEnv(e, []string{"install", "--client", "agent", "--trust-binary"}); code != exitUsage || len(scripts) != 0 {
+		t.Fatalf("no terminal: code %d, scripts %d\n%s%s", code, len(scripts), out.String(), errb.String())
+	}
+	if code := runEnv(e, []string{"install", "--client", "agent", "--trust-binary", "--yes"}); code != exitOK || len(scripts) != 1 {
+		t.Fatalf("--yes: code %d, scripts %d\n%s%s", code, len(scripts), out.String(), errb.String())
+	}
+	if !strings.Contains(scripts[0], "usermod -aG locksql-clients agent") || !strings.Contains(out.String(), "Done. Next:") {
+		t.Errorf("script:\n%s\nout:\n%s", scripts[0], out.String())
 	}
 }

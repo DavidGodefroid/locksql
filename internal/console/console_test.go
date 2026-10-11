@@ -11,6 +11,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -46,6 +48,8 @@ type fakeSession struct {
 	indexes []engine.IndexDesc
 	cols    []engine.ColumnInfo // appended to the catalog Columns answers
 	colsErr error               // answers the catalog Columns calls
+	// explainErr answers the EXPLAIN calls.
+	explainErr error
 }
 
 func (f *fakeSession) ServerVersion() string { return "11.4.0-MariaDB" }
@@ -85,6 +89,9 @@ func (f *fakeSession) Explain(_ context.Context, _ string, sql string) (engine.P
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.explains = append(f.explains, sql)
+	if f.explainErr != nil {
+		return engine.Plan{}, f.explainErr
+	}
 	if f.kplan != nil && strings.Contains(sql, "COUNT(*)") {
 		return *f.kplan, nil
 	}
@@ -354,6 +361,30 @@ func wantCode(t *testing.T, resp ipc.Response, code int) {
 	if resp.Error.Code != code {
 		t.Fatalf("want error %d, got %d %q", code, resp.Error.Code, resp.Error.Message)
 	}
+	wantRefusalData(t, resp)
+}
+
+// wantRefusalData checks the structured form of a refusal: every refusal
+// names a known code other than the fail-closed one, its retry rule and a
+// hint; any other error carries none.
+func wantRefusalData(t *testing.T, resp ipc.Response) {
+	t.Helper()
+	d := resp.Error.Data
+	if resp.Error.Code != ipc.CodeRefused {
+		if d != nil {
+			t.Fatalf("error %d carries refusal data %+v", resp.Error.Code, d)
+		}
+		return
+	}
+	if d == nil {
+		t.Fatalf("refusal without a code: %q", resp.Error.Message)
+	}
+	if !d.Code.Known() || d.Code == refusal.Policy {
+		t.Fatalf("refusal %q has code %q", resp.Error.Message, d.Code)
+	}
+	if d.Retry != d.Code.Retry() || d.Hint == "" {
+		t.Fatalf("refusal %q: %+v", resp.Error.Message, d)
+	}
 }
 
 func (h *harness) auditLog(t *testing.T) string {
@@ -426,6 +457,9 @@ func (h *harness) auditRecords(t *testing.T) []map[string]any {
 // account, from the kernel's peer credentials, but not its process name,
 // which the agent chooses.
 func TestAuditNamesTheRequester(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no uid on Windows: the peer of a record is a Unix socket credential")
+	}
 	h := newHarness(t, uatProfile())
 	uid := os.Getuid()
 	ctx := withPeer(context.Background(), ipc.Cred{UID: uid, GID: os.Getgid(), PID: 4242})
@@ -1048,6 +1082,9 @@ func TestRunErrorIsSanitisedAndConnLostMapped(t *testing.T) {
 // that disconnects while its run waits for approval cancels the prompt, and
 // the next client is served.
 func TestClientGoneDuringApproval(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs the peer credentials of a Unix socket")
+	}
 	h := newHarness(t, uatProfile())
 	dir, err := os.MkdirTemp("", "lsc")
 	if err != nil {
@@ -1548,5 +1585,27 @@ func TestTerminalBell(t *testing.T) {
 	NewTerminal(nil, &out).Bell()
 	if out.String() != "\a" {
 		t.Fatalf("bell wrote %q", out.String())
+	}
+}
+
+// TestRunReportsCutCells checks that the agent is told a value was cut by
+// the engine's cap, and that the cut email gets no reference.
+func TestRunReportsCutCells(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	res := userResult()
+	res.Rows[0][1] = "alice@exa…"
+	res.Rows[0][2] = strings.Repeat("7", 100) + "…"
+	res.MarkCut(0, 1)
+	res.MarkCut(0, 2)
+	h.sess.result = res
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	var rr ipc.RunResult
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	if rr.CutCells != 2 || !strings.Contains(rr.Text, "[2 cells cut") {
+		t.Errorf("cut_cells = %d, text %q", rr.CutCells, rr.Text)
+	}
+	if got := fmt.Sprint(rr.Rows[0][1]); got != pii.Redacted {
+		t.Errorf("cut email = %q, want plain %s", got, pii.Redacted)
 	}
 }

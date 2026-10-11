@@ -7,7 +7,60 @@ configuration reference.
 
 ## 1. Set up
 
-### One command
+### `locksql setup`
+
+From your account (the one your agents run as), in the project:
+
+```sh
+locksql setup [--project DIR] [--client USER] [--trust-binary] [--yes]
+              [--profile NAME --engine E (--path FILE | --host H [--port N]
+               [--user U] [--database D] [--credentials ask|keychain])]
+```
+
+It runs four steps and ends with the one command that starts the console:
+
+1. **Agents.** Wires every installed agent for your account, as bare
+   `locksql` does ([Agent wiring](#agent-wiring)).
+2. **Console account.** Without a separated setup, runs `locksql install`
+   ([section 2](#2-separate-the-console-from-the-agent)): it shows the root
+   script and runs it with `sudo` once you confirm, then offers
+   `sudo passwd locksql` so that you can log in as the console account. On
+   macOS the script is only printed: run it as an administrator, then run
+   setup again.
+3. **Database profile.** When the project has no profile (or a profile is
+   given by flags), asks for its name (default `dev`), engine (`sqlite`,
+   `postgres`, `mariadb`, `mysql`), then the SQLite file relative to the
+   project, or host, port, user (empty: asked at console start), database
+   (empty: chosen per query) and whether the console account's keychain
+   keeps the password (`credentials = "keychain"`). It never asks for a
+   password. The profile is appended to `<project>/.locksql/config.toml`
+   (created when absent; the commented example of `locksql init` is kept),
+   and only once the result loads. A remote host gets the default
+   `tls = "verify-full"`.
+4. **Project access.** Runs the project checks of `locksql doctor` and
+   their repairs (see [`--fix`](#locksql-doctor---fix)): the console
+   account must enter every directory down to the project, own
+   `.locksql/` and read the configs.
+
+The project is the directory holding `.locksql/config.toml`, else the git
+root, else the current directory, or `--project`. Run again, setup changes
+nothing that is already in place: no second install, the profiles are kept,
+only missing access is repaired.
+
+Without a terminal (CI, scripts), setup needs `--yes`, which runs the root
+steps without asking (`sudo` may still ask for a password), and the profile
+as flags when the project has none:
+
+```sh
+locksql setup --yes --engine sqlite --path demo.db
+locksql setup --yes --profile uat --engine postgres --host db.internal --user reporting
+```
+
+After the first setup, log out and in again (your account joined
+`locksql-clients`), then start the console as setup printed it,
+in a session of the console account ([section 3](#3-start-the-console)).
+
+### Bare `locksql`
 
 ```sh
 locksql
@@ -280,14 +333,17 @@ The console runs only in an account of its own: an agent in the console's
 account could read its terminal, type into it and read its keychain session.
 `locksql console` refuses to start without the setup below (it names
 `locksql doctor` and `sudo locksql install`), and `doctor` reports same-user
-mode as a failure. On Linux and macOS, `locksql install` sets it up once:
+mode as a failure. On Linux and macOS (and inside WSL2 on Windows, see
+[Windows (WSL2)](#windows-wsl2)), `locksql install` sets it up once:
 
 ```sh
-locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print] [--trust-binary]
+locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print] [--trust-binary] [--yes]
 ```
 
 It prints the root script and, on Linux, runs it with `sudo` after you
-confirm (`--print` only prints; on macOS it always only prints).
+confirm (`--yes` runs it without asking, and without a terminal; `--print`
+only prints; on macOS it always only prints). A binary already installed as
+`/usr/local/bin/locksql` is left in place.
 
 - The binary it copies is the one running. Unless that binary is owned by
   root and writable by neither group nor others, `install` refuses: run from
@@ -341,6 +397,10 @@ sudo chmod 0755 <project>/.locksql
 chmod 0644 <project>/.locksql/config.toml   # pii.toml is written 0644
 ```
 
+`locksql setup` and `locksql doctor --fix` make these changes, and give the
+console account an ACL entry on the directories it cannot enter on the
+way to the project (a home directory of mode 0750, for example).
+
 The agent's account can still edit a file it owns in place, but it can no
 longer create or replace files in `.locksql/` (a `git checkout` that changes
 them needs the console account). An edit of these files from the agent's side
@@ -357,9 +417,16 @@ In separated mode the console refuses to start when:
 
 - it does not run as `service_user`;
 - `service_user` is itself in `client_group` or `allowed_uids`;
-- it was started through `sudo` or `su` from another account's login session
-  (Linux `loginuid`);
-- its terminal belongs to another uid.
+- it was started through `sudo` or `su` from the login session (Linux
+  `loginuid`) of an account that may reach the console (`client_group` or
+  `allowed_uids`), or of a uid that names no account;
+- its terminal belongs to such an account or uid.
+
+The login session and the terminal of an account outside the client group
+(an administrator's, when the agents run under an account of their own) are
+accepted: the agent's account can read neither. The console then prints
+`started from the login session of uid N, an account outside the client
+group`.
 
 It serves a peer only when the kernel reports (`SO_PEERCRED` on Linux,
 `LOCAL_PEERCRED` on macOS) the console's own uid, a member of
@@ -374,7 +441,7 @@ others: the console refuses to start in one on a production profile or with
 ### `locksql doctor`
 
 ```sh
-locksql doctor [--profile P]
+locksql doctor [--profile P] [--fix [--yes]]
 ```
 
 Run it from both accounts. Each check prints ✓ (ok), ▲ (warning) or ✗
@@ -383,7 +450,7 @@ each; the exit code is 1 when any check fails.
 
 | Check | Fails or warns when |
 |---|---|
-| operating system | never (informational: locksql builds for Linux and macOS only) |
+| operating system | never (informational: locksql runs on Linux and macOS; on Windows, inside WSL2) |
 | graphical session | X11 |
 | separation | same-user mode (fails; the console refuses to start); doctor then also warns on `dev.tty.legacy_tiocsti = 1` (terminal injection) and `kernel.yama.ptrace_scope = 0` (ptrace) |
 | system setup, console account | `system.toml` invalid or not root-owned; the console account missing or in the client group |
@@ -393,11 +460,163 @@ each; the exit code is 1 when any check fails.
 | binary | the running binary can be changed by a non-root account (fails in separated mode) |
 | secret store | separated mode with a secret for the profile left in the agent's keychain; keychain unavailable |
 | tls, ssh, ssh key (per profile) | a remote database that verifies nothing (through a bastion: the bastion-to-database leg); an `ssh.key` that is missing or readable by group or others (not checked from the agent's account in a separated setup) |
+| tls_ca, tls_cert, tls_key (per profile) | a file that is missing or holds no PEM certificate, a certificate expired or expiring within 30 days, a key readable by group or others (files the agent's account cannot read are not checked) |
+| server certificate (per profile without `ssh`) | a TLS handshake that sends no user name and no secret: the server offers no TLS under `require` or stronger, its chain does not verify against `tls_ca` (or the system roots), it does not name `host` (or `tls_server_name`) under `verify-full`, it is expired or expires within 30 days; under `prefer` or `require` it says whether `verify-full` would pass |
+| agent wiring | an installed agent is not wired for this account (warns; not checked as root or as the console account) |
+| project access, project .locksql, project config.toml / pii.toml | separated mode, from an account other than the console's, inside a project: the console account cannot enter a directory down to the project (mode bits and POSIX ACLs), does not own `.locksql/` or it is writable by group or others, or cannot read a config |
 | console (per profile) | not running; then, from its `health`: not separated, an X11 display, database privileges beyond the tier, EXPLAIN failing |
+
+#### `locksql doctor --fix`
+
+`--fix` runs the checks, then makes the repairs they offer, reports each
+one (`repaired: ...` or `not repaired: ...`) and runs the checks again. The
+repairs are small and idempotent; a second run finds nothing to do:
+
+| Check | Repair | Runs as |
+|---|---|---|
+| agent wiring | wires the agents, as bare `locksql` | you |
+| client access | `usermod -aG locksql-clients YOU` (macOS: `dseditgroup`); log out and in again | root |
+| console account isolated | removes the console account from the client group | root |
+| socket directory | recreates it with owner `service_user:client_group`, mode 2710 (macOS 0710), and on Linux rewrites `/etc/tmpfiles.d/locksql.conf` | root |
+| project access | `setfacl -m u:locksql:x DIR` (`rx` on the project itself): an ACL entry for the console account only, never a wider mode; Linux, when `setfacl` exists | you for your directories, else root |
+| project .locksql | `chown locksql .locksql && chmod 0755 .locksql` | root |
+| project config.toml, pii.toml | `chmod 0644` | you when you own it, else root |
+
+The root repairs run as one script, shown before `sudo` runs it, after
+`Run them now with sudo? [y/N]` (or at once with `--yes`; without a
+terminal `--fix` needs `--yes`). Everything else is left to the steps
+shown: a `system.toml` or a binary that root does not own is never
+re-owned (it could hold another account's changes: run `sudo locksql
+install` again), a secret in the agent's keychain is not deleted, and
+`sudo` rules are not touched.
+
+### Windows (WSL2)
+
+locksql does not run natively on Windows: the separation relies on Unix
+accounts, socket peer credentials and terminals. The Windows build exists
+so that CI runs the unit tests there; it refuses every command but
+`version` and `help` and points here. A native server (a named pipe ACL'd
+to a dedicated local account, `GetNamedPipeClientProcessId` for the peer
+check, Windows Credential Manager for secrets) is not implemented.
+
+Run locksql inside a WSL2 distribution instead. WSL2 is a Linux system:
+install the Linux release there (`scripts/install.sh`, into
+`/usr/local/bin`), and everything in this guide applies inside it. What
+differs is where the agent runs, and that decides what the separation is
+worth.
+
+| Layout | Agent | Console | Boundary |
+|---|---|---|---|
+| A (recommended) | inside WSL, as your WSL account | inside WSL, as `locksql` | the Linux kernel, as on a Linux host, once WSL interop is off |
+| B | on Windows (Claude Code, Cursor, Codex for Windows) | inside WSL, as `locksql` | none against the agent: like [Docker mode](docker.md#what-docker-does-and-does-not-separate) |
+
+The MCP client always reaches the console through its socket in
+`/run/locksql`, inside the distribution: no Windows process can open it.
+In layout B the agent's MCP server is therefore a Linux process too,
+started through `wsl.exe`.
+
+**Set up the distribution** (both layouts), in a WSL shell of your account:
+
+1. Turn on systemd, so that `/run/locksql`, which lives on a tmpfs, is
+   created again at every start of the distribution (from
+   `/etc/tmpfiles.d/locksql.conf`). In `/etc/wsl.conf`:
+
+   ```ini
+   [boot]
+   systemd = true
+   ```
+
+   Without systemd, run `sudo locksql install` again after each restart
+   of the distribution.
+2. Install the release and run `sudo locksql install` (section 2 above):
+   your WSL account becomes the client, `locksql` the console account.
+3. Keep the project in the distribution's own file system (`/home/...`),
+   not under `/mnt/c`: the Windows drives are mounted with fixed owners and
+   modes, so the console account cannot be given `.locksql/` as described
+   above. Windows tools reach the project at `\\wsl$\<distro>\home\...`.
+4. Apply the changes with `wsl.exe --shutdown` from Windows, then open the
+   distribution again.
+
+**Start the console** in a session of the console account of its own.
+Open it from Windows (a Windows Terminal tab, for instance), not with
+`su` or `sudo -u` from your WSL shell, which the console refuses
+(`loginuid`):
+
+```powershell
+wsl.exe -d <distro> -u locksql --cd /home/you/project
+```
+
+then, in that shell, `locksql console --project /home/you/project`.
+`locksql doctor` from both accounts checks the setup; under WSL its
+`separate session` check may warn that `locksql` has no login session,
+because WSL opens no desktop session for it. The console's own checks
+(account, `loginuid`, terminal owner) still run.
+
+**Layout A: the agent inside WSL.** Run Claude Code, Codex or Gemini CLI
+in the distribution, as your WSL account, and wire them with `locksql`
+there (section 1). An editor on Windows that runs its MCP servers inside
+WSL (a WSL remote window) counts as layout A when the server's command
+runs in the distribution. Then turn interop off, so that a Linux process
+cannot start Windows programs. With it on, the agent can run
+`wsl.exe -u root` (or `-u locksql`) and become root or the console account
+without a password, which the threat model excludes. In `/etc/wsl.conf`:
+
+```ini
+[interop]
+enabled = false
+appendWindowsPath = false
+```
+
+and `wsl.exe --shutdown`. Check that your editor's WSL integration still
+works without interop; if it needs interop, you are in layout B's trust
+level. Your WSL account must not have password-less `sudo` (`doctor`
+checks it).
+
+**Layout B: the agent on Windows.** The agent starts the MCP server in the
+distribution through `wsl.exe`, as your default WSL account (the client
+account), in the project directory; `wsl.exe` passes stdin and stdout
+through. Claude Code, for every project:
+
+```powershell
+claude mcp add --scope user locksql -- wsl.exe -d <distro> --cd /home/you/project -e /usr/local/bin/locksql mcp
+```
+
+or in `.mcp.json` (Codex, Gemini CLI and Cursor take the same `command`
+and `args`, as in [Agent wiring](#agent-wiring)):
+
+```json
+{
+  "mcpServers": {
+    "locksql": {
+      "type": "stdio",
+      "command": "wsl.exe",
+      "args": ["-d", "<distro>", "--cd", "/home/you/project", "-e", "/usr/local/bin/locksql", "mcp"]
+    }
+  }
+}
+```
+
+`--cd` must name the project the console serves: the socket name is
+derived from the project path. The client commands run the same way
+(`wsl.exe -d <distro> --cd /home/you/project -e /usr/local/bin/locksql status`).
+`locksql init`, run inside WSL, writes `locksql mcp` for the agents it
+finds there, not for the Windows ones: add the entry above by hand.
+
+In layout B the separation holds against the agent only as long as it runs
+no shell commands of its own: any process of your Windows account can run
+`wsl.exe -u root` or `wsl.exe -u locksql` without a password, attach to the
+console's session or read its memory. As with Docker, the credentials stay
+out of the agent's process and the approval stays in your terminal, but an
+agent determined to go around the console can. Use layout A for the
+boundary.
+
+This guide has not yet been verified end to end on Windows 11; report what
+differs in an issue.
 
 ## 3. Start the console
 
-In a terminal you keep in view, in the `locksql` session:
+In a terminal you keep in view, in the `locksql` session (switch user on
+the desktop, or log in on a text console with Ctrl-Alt-F3):
 
 ```sh
 locksql console [--profile dev] [--project DIR] [--auto] [--allow-unmask] [--show-results]
@@ -406,6 +625,24 @@ locksql console [--profile dev] [--project DIR] [--auto] [--allow-unmask] [--sho
 Without `--profile` the console uses the only profile, or asks which one when
 there are several. It first wires agents installed since the last run (see
 [Agent wiring](#agent-wiring)).
+
+Run from another account of a separated setup, `locksql console` does
+not start in that terminal:
+
+- from an account that may reach the console (the agent's: the client
+  group or `allowed_uids`), it prints why and the command to run in the
+  `locksql` session (`locksql console --project <project root>` with your
+  flags), and exits with 1. The agents run in that account and can read its
+  terminals: what you type there, the database password included, would
+  reach them;
+- from another account (an administrator's, when the agents run under an
+  account of their own), it opens the console as `locksql` through the
+  first helper available: `sudo -u locksql -H`, `machinectl shell
+  locksql@` (Linux with systemd) or `su -l locksql`. The helper asks for its
+  own authentication; locksql passes it only the console's flags and the
+  project, never a secret, and the binary run is a root-owned one
+  (`/usr/local/bin/locksql` when the running one is not). The console then
+  applies its own isolation checks (section 2).
 
 `--project` names the project directory (default: the current directory);
 the console and the agent must agree on it, since it selects the socket. A
@@ -485,15 +722,17 @@ The console needs an interactive terminal. At start it:
 The console runs its own line editor (backspace, Ctrl-U, Ctrl-W; Ctrl-D on
 an empty line or Ctrl-C ends the session). A status row fixed at the
 bottom of the terminal shows the profile and tier, the approval mode, the
-results switch, `unmask allowed` when the console was started with
-`--allow-unmask`, the open plans, and what awaits `:review`. Two keys
-switch the console's behaviour while it runs; each change is announced,
-shown on the status row and audited (`mode`, `results` records):
+results switch, `unmask allowed` when unmasked output is allowed, the open
+plans, and what awaits `:review`. Two keys and one command switch the
+console's behaviour while it runs, without a restart; each change is
+announced, shown on the status row and audited (`mode`, `results`,
+`unmask` records):
 
 | Key | Typed | Effect |
 |---|---|---|
 | Shift+Tab | `:mode` | manual ⇄ auto approval mode (unavailable on a production profile) |
 | Ctrl-O | `:results` | results masked ⇄ shown here in clear |
+| | `:unmask` | unmasked output off ⇄ allowed; allowing it asks `Allow unmasked output? [y/N]`, turning it off refuses the open unmask plans |
 
 A key pressed while an approval waits takes effect from the next
 statement. Between requests you can also type:
@@ -502,6 +741,7 @@ statement. Between requests you can also type:
 |---|---|
 | `:status` | profile, databases, mode, results, unmask, limits, session time left, open plans, pending policy change |
 | `:review` | show the pending policy change and the agent's change requests |
+| `:unmask` | allow (after `y`) or stop unmasked output; see above |
 | `:quit` | end the session |
 
 The session ends on Ctrl-C, `:quit`, `locksql logout`, after
@@ -514,7 +754,8 @@ the socket and is audited.
 
 ### TLS to the database
 
-`tls` and `tls_ca` set the transport security of a network profile:
+`tls` and `tls_ca` set the transport security of a network profile;
+`tls_cert`, `tls_key` and `tls_server_name` are optional:
 
 ```toml
 [profiles.prod]
@@ -522,6 +763,9 @@ engine = "postgres"
 host   = "db.example.com"
 tls    = "verify-full"          # disable | prefer | require | verify-ca | verify-full
 tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
+tls_cert = "/home/locksql/.config/locksql/app.crt"  # optional client certificate (PEM)
+tls_key  = "/home/locksql/.config/locksql/app.key"  # its private key (PEM, unencrypted, mode 0600)
+tls_server_name = "db.internal"  # optional: the name verify-full checks instead of host
 ```
 
 - Default: `verify-full` for a remote host, `prefer` for a Unix socket or a
@@ -530,10 +774,27 @@ tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
 - `tls_ca` is refused with `disable` and `prefer`. With `require`, as in libpq,
   it verifies the chain against `tls_ca` (as `verify-ca`), not the host name.
 - `production = true` refuses `disable` and `prefer` on a remote host.
+- `tls_cert` and `tls_key` go together and need `require` or stronger. The
+  certificate is presented when the server asks for one (PostgreSQL
+  `clientcert`/`cert` in `pg_hba.conf`, MySQL `REQUIRE X509`). The key file
+  is read by the console account and refused when group or others can read
+  it; keep both files in that account's home.
+- `tls_server_name` needs `verify-full`: use it when `host` is an IP address
+  or an alias that the certificate does not name.
+- On MariaDB and MySQL, a remote host under `prefer` or `require` (without
+  `tls_ca`) answers no request for the password in clear
+  (`mysql_clear_password`, `sha256_password`, a `caching_sha2_password` full
+  authentication): connect with `verify-ca` or `verify-full`, or use an
+  account with `mysql_native_password` or `ed25519`. PostgreSQL refuses
+  `password` and `md5` the same way.
 - Through an `ssh` bastion, `tls` protects the leg from the bastion to the
   database, and its default follows `host` as seen from the bastion (see
   [Reaching a remote server through SSH](#reaching-a-remote-server-through-ssh)).
-- `locksql doctor` warns when a remote profile verifies nothing. See
+- `locksql doctor` warns when a remote profile verifies nothing, checks
+  that `tls_ca`, `tls_cert` and `tls_key` are readable PEM files (from the
+  console account), reports certificates that expire within 30 days, and
+  verifies the server's certificate chain with a TLS handshake that sends
+  no secret (a profile without `ssh`). See
   [Transport security](security-model.md#out-of-scope-and-limitations) for the modes.
 
 ### Approving a query
@@ -591,6 +852,7 @@ The console watches the config and PII files while it runs.
   `idle_timeout` or `max_session`, a higher or removed
   `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
   host, port, engine, user or database, a weaker `tls` or any change of `tls_ca`,
+  `tls_cert`, `tls_key` or `tls_server_name`,
   any change of the `ssh` table (except `ssh.credentials` set to `ask`),
   `ask → keychain`, a removed mask rule or detector, a mask mode
   changed to anything but `redact`, a new allow rule) waits for you. Plans are
@@ -598,11 +860,46 @@ The console watches the config and PII files while it runs.
   `Apply these changes? [y/N]`.
 - If you refuse, the last approved policy stays in force.
 - If an applied change alters the connection target (engine, host, port,
-  path, user or database) or its transport (`tls`, `tls_ca` or the `ssh`
-  table), the session ends: restart the console.
+  path, user or database) or its transport (`tls`, `tls_ca`, `tls_cert`,
+  `tls_key`, `tls_server_name` or the `ssh` table), the session ends:
+  restart the console.
 
 The approved policy is stored outside the repository, in
 `<user state dir>/locksql/approved/`.
+
+### Refusal statistics
+
+`locksql stats` counts the refusals in the audit log: by
+[refusal code](#refusal-codes), then by code and the token the check stopped
+at (`LIKE`, `FOR`, a function name, ...), most frequent first. It reads
+the local file and nothing else. Run it as the account that runs the console
+(in separated mode, in the `locksql` account's session), or point it at a
+copy of the log:
+
+```sh
+locksql stats [--log PATH] [--top N]        # text, for you
+locksql stats --export > refusals.json      # anonymised, to attach to an issue
+```
+
+- The text report names the tokens as the agent wrote them, identifiers
+  included: it stays on your machine.
+- `--export` prints JSON for a GitHub issue: the counts by code, by code and
+  construct, and the 100 most frequent statement shapes with their code and
+  engine. A shape is the refused statement with every literal, identifier and
+  comment replaced by a marker (`'?'` a string, `N` a number, `id` a name,
+  `"id"`, `` `id` `` and `[id]` a quoted name, `$N` a bind parameter,
+  `$$?$$` a dollar-quoted string, `--…` and `/*…*/` a comment); only SQL
+  keywords, the names of known functions and punctuation remain. The keyword
+  list leaves out words often used as names (`user`, `date`, `name`,
+  `status`, ...); a name that is still a keyword (a column named `view`)
+  shows as that keyword, and a name of a known function only when it is
+  called. A
+  construct token that is not a keyword, a known function or punctuation
+  becomes `id`. Refusal messages, hints, profiles, hosts and timestamps are
+  left out. Read the file before you attach it.
+- Records written before refusal codes existed count as `uncoded`.
+- Maintainers merge the exports into the ranked list of
+  [most refused constructs](refused-constructs.md).
 
 ## 4. What the agent does
 
@@ -628,7 +925,10 @@ locksql doctor   [--profile P]
 - `--db` defaults to the profile's `database`. A profile that names one
   serves that database only: another `--db` is refused.
 - `--json` gives machine-readable output on every client command. A failure
-  prints `{"error": {"kind": ..., "message": ...}}`.
+  prints `{"error": {"kind": ..., "message": ...}}`; a refusal adds
+  `"refusal": {"code", "retry", "hint", "span"}` (see
+  [Refusal codes](#refusal-codes)). Without `--json`, a refusal prints
+  `refused [CODE]: message`, then the place, the hint and the retry rule.
 - Exit codes: 0 ok · 1 refused, denied or failed · 2 no console running (the
   error names the `locksql console --profile P` command to start) · 3 usage or
   configuration error.
@@ -721,15 +1021,22 @@ PII columns (columns under a mask rule) may be used as follows:
   rows in any count, or in the smallest group, refuses the statement.
 - `EXPLAIN` of a statement that filters, groups or aggregates PII is refused.
 - Ask for unmasked values with `--unmask`. It is off by default: the console
-  refuses the request unless the human started it with
-  `locksql console --allow-unmask` (`locksql status` shows `unmask allowed`
-  or `off`). When allowed, the PII usage rules and the k-anonymity checks no
+  refuses the request unless the human allowed it there
+  (`locksql console --allow-unmask`, or `:unmask` while it runs;
+  `locksql status` shows `unmask allowed` or `off`). When allowed, the PII usage rules and the k-anonymity checks no
   longer apply, the approval screen shows `PII: UNMASKED` in red, and it is
   never auto-approved. Once it has run, the console prints the clear result
   under `PII: UNMASKED result`, so you see what the agent received; the audit
   log still holds no row data.
-- At tiers above `read`, a write's `RETURNING` list (or a data-modifying CTE)
-  must not alias or transform a masked column.
+- At tiers above `read`, while mask rules exist, a write whose rows come
+  back (`RETURNING`, or a `SELECT` over PostgreSQL data-modifying CTEs) or
+  that stores a query's rows (`INSERT ... SELECT`) is parsed and analysed
+  like a read before it runs. Its returned columns are masked by where they
+  come from, so renaming a masked column is fine; an expression over one, a
+  function outside the allowlist, a PII filter, grouping or aggregate in the
+  outer `SELECT`, and syntax the parser does not read (`MERGE`, multi-table
+  MySQL writes, ...) are refused. Filters in the write's own `WHERE` are
+  yours to approve: the read rules do not apply there.
 - While mask rules exist, a write may store into a column under a mask rule
   (matched by name) only `NULL` or `DEFAULT`: a literal, an expression or
   another column is refused (`a masked column cannot receive values the agent
@@ -818,6 +1125,68 @@ the audit record. They never refuse and never carry a value:
 - the agent filtered on cells of one result in more than `limits.reference_probe`
   distinct ways (default 5; an `IN` list counts once).
 
+### Refusal codes
+
+Every refusal carries a stable code next to its message, so that the agent
+knows whether to rewrite the statement, ask the user or stop, without guessing
+from the prose. The client answer (`--json`, MCP structured content, the
+JSON-RPC error's `data`) holds:
+
+| Field | Content |
+|---|---|
+| `code` | one of the codes below; never renamed |
+| `retry` | `rewrite`, `ask_user` or `stop`: what the agent may do next |
+| `hint` | how to rewrite the statement, when a rewrite exists |
+| `span` | `{"line", "col", "token"}`: where the check stopped, in the statement as sent (line and column from 1, the column in characters), when known |
+
+The `token` is a keyword, an operator, a punctuation sign or a name as the
+agent wrote it, never a literal. The hint and the message are written by
+locksql: neither quotes the database's text nor a value the agent could not
+see (a typed value, a referenced cell). A refusal decided on the console under
+a PII filter (the weight check) carries only its code and the code's hint.
+The audit record of a refusal holds the `code` and the `span`.
+
+The retry rules:
+
+- `rewrite`: the statement can be fixed. Rewrite it as the hint says and plan
+  it again, once; the console checks the new statement in full. A rewrite that
+  only rewords the same question to get around a PII, k-anonymity or policy
+  rule is a violation of the agent rules, not a fix.
+- `ask_user`: only the human can lift it (tier, unmask, database, limits).
+  Tell the user; `request` / `locksql_request_change` only queues a proposal.
+- `stop`: final for this question. Tell the user; do not retry, reword or
+  split it.
+
+| Code | Refused | Retry | Typical rewrite |
+|---|---|---|---|
+| `E_UNSUPPORTED_SYNTAX` | a construct the parser cannot read with certainty (an operator, a clause, a MySQL double-quoted string, unbalanced parentheses) | rewrite | plainer SQL: standard operators, `CONCAT()` instead of `\|\|` in MySQL, a CTE or subquery instead of the construct |
+| `E_MULTI_STATEMENT` | several statements (`;` chaining) | rewrite | one statement per plan |
+| `E_FORBIDDEN_TOKEN` | a comment, a variable (`@x`, `:=`), a bind parameter (`?`, `$1`, `:name`), a backslash, a Unicode escape, a control character | rewrite | remove it; write values as literals, or as `'${name}'` placeholders against a PII column |
+| `E_STATEMENT_KIND` | a statement this path does not run: `SHOW`, `DESCRIBE`, `PRAGMA`, `EXPLAIN` of a write, a data-modifying CTE, an unknown leading word | rewrite | `SELECT`, `WITH ... SELECT` or `EXPLAIN SELECT`; `tables` / `describe` for metadata |
+| `E_INVALID_SQL` | a statement the engine would reject too: arms with different column counts, a derived table without alias, a position out of range, a window function without `OVER` | rewrite | fix it as the message says |
+| `E_UNKNOWN_NAME` | an unknown table, column or database, or a table several schemas hold | rewrite | check the names with `tables` / `describe`; qualify the table |
+| `E_TOO_COMPLEX` | nesting too deep, or a recursive CTE too deep to analyse | rewrite | fewer nesting levels and CTE steps |
+| `E_SIZE` | a statement that could build an oversized value (`REPEAT`, `LPAD`, wide concatenation, a growing recursive CTE) | rewrite | select the columns as they are |
+| `E_FORBIDDEN` | a construct refused at every tier: file access, `SLEEP`/`BENCHMARK`, locks and locking reads, transaction and session control, `SELECT ... INTO`, sequences, credentials, server control | stop | none: do not reach the same effect another way |
+| `E_FUNCTION` | a function outside the allowlist (`internal/sqlast/funcs.go`) | rewrite | an allowlisted function, or the plain column |
+| `E_SYSTEM_OBJECT` | a system schema or relation, the statement history views, session metadata (`CURRENT_USER`, ...) | rewrite | `tables` / `describe` |
+| `E_NO_LIMIT` | no top-level `LIMIT`, or one that does not end the statement | rewrite | end with `LIMIT n` (`LIMIT 1` for an aggregate); the span points at the end of the statement |
+| `E_LIMIT_TOO_HIGH` | `LIMIT` above `limits.max_rows` | rewrite | `LIMIT max_rows` or less (the hint names it) |
+| `E_TIER` | a statement class above the profile tier | ask_user | none |
+| `E_DATABASE_NOT_SERVED` | a database outside the profile's `database` | ask_user | a database `status` lists |
+| `E_UNMASK_OFF` | `--unmask` while unmasked output is off in the console (`:unmask` or `--allow-unmask` turns it on), or turned off since the plan | ask_user | run it masked |
+| `E_COST` | the weight check: rows examined, full scans, cartesian joins, `explain_cost_refuse` | rewrite | a selective filter on an indexed column, a narrower range, fewer joins |
+| `E_K_ANON` | fewer than `k_anonymity` rows behind a PII filter, group or aggregate | stop | none: do not narrow, split or shift the filter |
+| `E_ENGINE` | the database could not plan the statement or run a k-anonymity count; the details stay on the console | stop | none: the human sees the database's message |
+| `E_PLACEHOLDER` | a placeholder or cell reference used outside `pii_col = '${...}'` in `WHERE`/`HAVING`, malformed, unknown, unusable, or in a write | rewrite | `col = '${name}'` or `col IN ('${a}', '${b}')` in the `WHERE` of a read |
+| `E_MASKED_FILTER` | a PII column filtered or joined other than by equality: `LIKE`, ranges, negations, `OR`, a comparison with a non-PII column, a filter in a `JOIN` condition, `EXPLAIN` of a PII filter | rewrite | filter on a non-PII key, or `=`, `IN` (literals or placeholders), `IS NULL` under `AND` |
+| `E_MASKED_EXPRESSION` | a function or expression over a PII column | rewrite | the plain column (masked), or `COUNT`/`MIN`/`MAX` |
+| `E_MASKED_ORDER` | a PII column in `ORDER BY`, `DISTINCT ON`, a window's `PARTITION BY`/`ORDER BY` | rewrite | order or partition by a non-PII column |
+| `E_MASKED_SET_OP` | `UNION`, `INTERSECT`, `EXCEPT` or duplicate removal mixing a PII column with other values | rewrite | `UNION ALL` between PII columns, without `DISTINCT` |
+| `E_MASK_UNCERTAIN` | a result whose masking cannot be proven: an alias, a whole-row reference or a label the engine cannot trace, a result whose columns differ from the analysis | rewrite | PII columns by their plain name |
+| `E_MASKED_WRITE` | a write that copies a PII column or stores a value the agent chose into one | stop | none (a masked column may only be set to `NULL` or `DEFAULT`) |
+| `E_POLICY` | a refusal no check named (fail-closed; should not happen) | stop | none: report it as a bug |
+
 ### MCP server
 
 `locksql mcp [--profile P]` serves the same operations to an agent as MCP tools
@@ -845,12 +1214,23 @@ finds the project's consoles.
   the structured content, so that JSON clients do not round them.
 - When no console runs, every tool answers with the exact
   `locksql console --profile P` command the human must start.
+- A refusal is a tool error whose text reads `refused [CODE]: message`, then
+  the place, the hint and the retry rule; `locksql_plan` and `locksql_run`
+  also return it as structured content, `{"refusal": {"code", "retry",
+  "hint", "span"}}` (see [Refusal codes](#refusal-codes)).
 
 ## 5. Output
 
 - TSV by default, JSON with `--json` or through MCP.
 - Caps: `max_rows` rows, `max_cell_chars` per cell (cut with `…`) and
   `max_output_bytes` in total (cut with a marker).
+- Each engine keeps at most 64 KiB of a cell while it reads the result, so
+  a huge value (a numeric power, `jsonb_pretty`, a large blob) never costs
+  the console more; the cut text ends with `…` and drops a value split by
+  the cut. The number of cells cut, by either cap, is reported: `cut_cells`
+  in JSON and in the MCP structured content, and a
+  `[N cells cut: ...]` line in TSV. A cell cut by the engine carries no
+  reference (`<redacted>`), since it holds only the start of its value.
 - Control and bidirectional characters are escaped. NULL prints as `NULL`.
 - Masked cells follow the rule's mode: `redact` (the default for a rule
   without `mode`) gives `<redacted:rN.R.C>` (result, row, column; plain

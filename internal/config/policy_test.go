@@ -97,6 +97,9 @@ func TestDiffEveryRule(t *testing.T) {
 		{"user", "user", func(p *Policy) { p.Profile.User = "admin" }, true},
 		{"tls down", "tls", func(p *Policy) { p.Profile.TLS = TLSRequire }, true},
 		{"tls ca changed", "tls_ca", func(p *Policy) { p.Profile.TLSCA = "/other.pem" }, true},
+		{"tls cert changed", "tls_cert", func(p *Policy) { p.Profile.TLSCert = "/other.pem" }, true},
+		{"tls key changed", "tls_key", func(p *Policy) { p.Profile.TLSKey = "/other.key" }, true},
+		{"tls server name set", "tls_server_name", func(p *Policy) { p.Profile.TLSServerName = "other.example" }, true},
 		{"ssh added", "ssh", func(p *Policy) {
 			p.Profile.SSH = &SSHProfile{Host: "b", Port: 22, User: "u", Auth: SSHAuthAgent, Credentials: CredentialsAsk}
 		}, true},
@@ -178,6 +181,9 @@ func TestNewPolicySortsAndDedupes(t *testing.T) {
 }
 
 func TestApprovedRoundTrip(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file modes: Windows reports none")
+	}
 	state := t.TempDir()
 	key := ApprovedKey("/proj", "uat")
 	if _, err := LoadApproved(state, key); !errors.Is(err, fs.ErrNotExist) {

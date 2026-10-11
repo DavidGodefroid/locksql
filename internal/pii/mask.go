@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/DavidGodefroid/locksql/internal/engine"
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -131,29 +132,16 @@ func detect(v any, ds []Detector) any {
 // is cut there, and ends with "…", before detection: nothing past the
 // scanned part can reach the output. The renderer cuts cells much earlier
 // (max_cell_chars), so the cut is normally invisible; it bounds the time a
-// huge value can cost.
+// huge value can cost. The engines already cut a cell at
+// engine.MaxCellBytes, which is no more.
 const DetectLimit = 64 << 10
-
-// cutTail is how far back a cut retreats over value-like characters, so that
-// a value split by the cut (a partial number or address) is dropped whole.
-const cutTail = 64
 
 func cutForDetection(s string) string {
 	if len(s) <= DetectLimit {
 		return s
 	}
-	end := DetectLimit
-	for end > 0 && !utf8.RuneStart(s[end]) {
-		end--
-	}
-	for back := 0; back < cutTail && end > 0 && strings.IndexByte(valueChars, s[end-1]) >= 0; back++ {
-		end--
-	}
-	return s[:end] + "…"
+	return engine.CutAt(s, DetectLimit)
 }
-
-// valueChars may belong to a detected value.
-const valueChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz@._%+-/() "
 
 // AliasViolation is the fallback for result columns without an origin: it
 // refuses a READ select in which a rule-matched column (matched by name, see
@@ -177,8 +165,10 @@ const valueChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 // it may return rows: a RETURNING list counts as a select list, and a
 // statement led by SELECT, WITH, VALUES or TABLE that the classifier made
 // WRITE (a data-modifying CTE) is checked whole. A write without RETURNING
-// is only checked by writtenValues. Other statements (SHOW, DESCRIBE,
-// PRAGMA, DDL) pass.
+// is only checked by writtenValues and columnLists. Other statements
+// (SHOW, DESCRIBE, PRAGMA, DDL) pass. The console runs the write analysis
+// of package sqlast instead of the select-list checks when
+// sqlast.NeedsWriteAnalysis says so (see WriteValuesViolation).
 //
 // On PostgreSQL, "rel.f" may be the call f(rel) on the whole row of rel
 // when rel has no column f (attribute notation: b.row_to_json, t.name,
@@ -212,16 +202,66 @@ func ResultAliasViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect, co
 	}
 	if st.Class != sqlclass.Read && !mayReturnRows(toks) {
 		// Nothing comes back, but a copy of a rule column would come
-		// back unmasked from the next read of the column written.
+		// back unmasked from the next read of the column written, also
+		// when a column list renames it by position.
 		a := newAliasCheck(toks, r, d)
 		a.write = true
 		a.prepare()
-		return a.writtenValues()
+		if err := a.writtenValues(); err != nil {
+			return err
+		}
+		return a.columnLists()
 	}
 	a := newAliasCheck(toks, r, d)
 	a.cols = cols
 	a.write = st.Class != sqlclass.Read
 	return a.run()
+}
+
+// WriteValuesViolation is the check by column name of a write that the
+// console also analyses in full (sqlast.NeedsWriteAnalysis): it refuses
+// statistics and statement-text relations (StatsViolation), copies and
+// planted values (writtenValues) and column lists that rename columns by
+// position (columnLists). Its RETURNING list and the outer SELECT of its
+// data-modifying CTEs are left to the analysis, which resolves and masks
+// them like a read's outputs.
+func WriteValuesViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
+	if err := StatsViolation(st, r, d); err != nil || len(r.Mask) == 0 {
+		return err
+	}
+	toks, err := sqlclass.Lex(d, st.SQL)
+	if err != nil {
+		return err
+	}
+	a := newAliasCheck(toks, r, d)
+	a.write, a.resolved = true, true
+	a.stop = outerQuery(toks)
+	a.prepare()
+	if err := a.writtenValues(); err != nil {
+		return err
+	}
+	return a.columnLists()
+}
+
+// outerQuery returns the index of the SELECT, VALUES or TABLE that starts
+// the main query of a statement led by WITH, 0 when there is none: the
+// tokens before it are the CTEs.
+func outerQuery(toks []sqlclass.Token) int {
+	if len(toks) == 0 || toks[0].Kind != sqlclass.TokWord || toks[0].Text != "WITH" {
+		return 0
+	}
+	for k, t := range toks {
+		if t.Kind != sqlclass.TokWord || t.Depth != 0 {
+			continue
+		}
+		switch t.Text {
+		case "SELECT", "VALUES", "TABLE":
+			return k
+		case "INSERT", "REPLACE", "UPDATE", "DELETE", "MERGE":
+			return 0
+		}
+	}
+	return 0
 }
 
 // mayReturnRows reports whether a statement other than a plain READ select
@@ -314,7 +354,7 @@ func StatsViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
 	a := &aliasCheck{toks: toks, d: d}
 	for i := range toks {
 		if n := a.name(i); statsRelations[n] {
-			return &sqlclass.Refusal{Reason: fmt.Sprintf("%s holds sample values of table columns, PII columns included, that could not be masked; it cannot be read while PII mask rules exist", strings.ToLower(n))}
+			return refusal.Newf(refusal.SystemObject, "%s holds sample values of table columns, PII columns included, that could not be masked; it cannot be read while PII mask rules exist", strings.ToLower(n)).At(toks[i].Pos, sqlclass.TokenText(toks[i]))
 		}
 		if a.name(i) == "" || a.isPunct(i-1, ".") {
 			continue
@@ -325,7 +365,7 @@ func StatsViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
 			rel += "." + a.name(j+2)
 		}
 		if StatementTextRelation(d, rel) {
-			return &sqlclass.Refusal{Reason: fmt.Sprintf("%s holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist", strings.ToLower(rel))}
+			return refusal.Newf(refusal.SystemObject, "%s holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist", strings.ToLower(rel)).At(toks[i].Pos, sqlclass.TokenText(toks[i]))
 		}
 	}
 	return nil
@@ -346,6 +386,13 @@ type aliasCheck struct {
 	// when unknown.
 	output int
 	write  bool // the statement is not a plain read
+	// resolved is set for a write the analysis of package sqlast also
+	// checks (WriteValuesViolation): it resolves every column, so a
+	// PostgreSQL whole-row reference or attribute notation cannot pass
+	// it, and it checks the RETURNING list and, from stop on, the outer
+	// query of a WITH, which store nothing.
+	resolved bool
+	stop     int
 }
 
 func newAliasCheck(toks []sqlclass.Token, r Rules, d sqlclass.Dialect) *aliasCheck {
@@ -425,10 +472,18 @@ func (a *aliasCheck) matched(i int) bool {
 
 func fold(s string) string { return strings.ToUpper(strings.ToLower(s)) }
 
-func refusal(format string, args ...any) error {
-	return &sqlclass.Refusal{Reason: fmt.Sprintf(format, args...) +
-		"; this engine cannot tell where such a column comes from, so it could not be masked." +
-		" Select PII columns by their plain name (SELECT email FROM ...), without alias or expression"}
+func aliasRefusal(format string, args ...any) *sqlclass.Refusal {
+	return refusal.New(refusal.MaskUncertain, fmt.Sprintf(format, args...)+
+		"; this engine cannot tell where such a column comes from, so it could not be masked."+
+		" Select PII columns by their plain name (SELECT email FROM ...), without alias or expression")
+}
+
+// at points r at token i and returns it.
+func (a *aliasCheck) at(r *sqlclass.Refusal, i int) *sqlclass.Refusal {
+	if i >= 0 && i < len(a.toks) {
+		r.At(a.toks[i].Pos, sqlclass.TokenText(a.toks[i]))
+	}
+	return r
 }
 
 // clauseWords switch the clause of the current parenthesis level.
@@ -498,7 +553,7 @@ func (a *aliasCheck) run() error {
 			if later, _ := a.laterArm(i); later {
 				// TABLE t is SELECT * FROM t: every column of t under the
 				// first arm's labels.
-				return refusal("a later UNION/INTERSECT/EXCEPT arm is TABLE %s, which puts all its columns, PII included, under the first arm's labels", strings.ToLower(a.name(i+1)))
+				return a.at(aliasRefusal("a later UNION/INTERSECT/EXCEPT arm is TABLE %s, which puts all its columns, PII included, under the first arm's labels", strings.ToLower(a.name(i+1))), i)
 			}
 		}
 		if a.isWord(i, "RETURNING") {
@@ -642,7 +697,7 @@ func (a *aliasCheck) item(sel, s, e int, prev []selectItem, later bool, head []s
 		// A star in a later arm puts its sources' columns, PII included,
 		// under the head's labels, which no rule may match.
 		if e-s == 1 && a.armBearing(sel) || e-s > 1 && a.rows[a.name(e-3)] {
-			return selectItem{}, refusal("a later UNION/INTERSECT/EXCEPT arm selects * from a table that may hold PII columns, under the first arm's labels")
+			return selectItem{}, aliasRefusal("a later UNION/INTERSECT/EXCEPT arm selects * from a table that may hold PII columns, under the first arm's labels")
 		}
 		return selectItem{star: true}, nil
 	}
@@ -675,16 +730,16 @@ func (a *aliasCheck) item(sel, s, e int, prev []selectItem, later bool, head []s
 			if pos < len(head) && head[pos].label == ref && !hasStar(head[:pos+1]) && !hasStar(prev) {
 				return selectItem{label: label}, nil
 			}
-			return selectItem{}, refusal("PII column %s appears in a later UNION/INTERSECT/EXCEPT arm under another column's label", strings.ToLower(ref))
+			return selectItem{}, aliasRefusal("PII column %s appears in a later UNION/INTERSECT/EXCEPT arm under another column's label", strings.ToLower(ref))
 		}
 		if alias != "" && alias != ref {
-			return selectItem{}, refusal("PII column %s is renamed to %s", strings.ToLower(ref), strings.ToLower(alias))
+			return selectItem{}, aliasRefusal("PII column %s is renamed to %s", strings.ToLower(ref), strings.ToLower(alias))
 		}
 		return selectItem{label: label}, nil
 	}
 	for j := s; j < e; j++ {
 		if a.matched(j) && !a.insideCount(j) {
-			return selectItem{}, refusal("PII column %s is used inside an expression", strings.ToLower(a.name(j)))
+			return selectItem{}, a.at(aliasRefusal("PII column %s is used inside an expression", strings.ToLower(a.name(j))), j)
 		}
 	}
 	if err := a.nestedRows(s, e, "an expression"); err != nil {
@@ -714,7 +769,7 @@ func (a *aliasCheck) nestedRows(s, e int, where string) error {
 			continue
 		}
 		if a.isWord(k, "TABLE") && a.name(k+1) != "" {
-			return refusal("TABLE %s is used in %s, which puts its columns, PII included, under another label", strings.ToLower(a.name(k+1)), where)
+			return a.at(aliasRefusal("TABLE %s is used in %s, which puts its columns, PII included, under another label", strings.ToLower(a.name(k+1)), where), k)
 		}
 		if !a.isStar(k) {
 			continue
@@ -728,7 +783,7 @@ func (a *aliasCheck) nestedRows(s, e int, where string) error {
 			bearing = true
 		}
 		if bearing {
-			return refusal("a subquery selects * in %s, which puts its columns, PII included, under another label", where)
+			return aliasRefusal("a subquery selects * in %s, which puts its columns, PII included, under another label", where)
 		}
 	}
 	return nil
@@ -797,18 +852,18 @@ func (a *aliasCheck) columnLists() error {
 					bearing := false
 					for k := b + 1; k < a.match[b]; k++ {
 						if a.matched(k) {
-							return refusal("PII column %s is renamed by the column list of %s", strings.ToLower(a.name(k)), strings.ToLower(a.name(p)))
+							return a.at(aliasRefusal("PII column %s is renamed by the column list of %s", strings.ToLower(a.name(k)), strings.ToLower(a.name(p))), k)
 						}
 						if a.rows[a.name(k)] {
 							bearing = true
 						}
 						if a.isWord(k, "TABLE") && a.name(k+1) != "" {
-							return refusal("the column list of %s renames the columns of TABLE %s", strings.ToLower(a.name(p)), strings.ToLower(a.name(k+1)))
+							return aliasRefusal("the column list of %s renames the columns of TABLE %s", strings.ToLower(a.name(p)), strings.ToLower(a.name(k+1)))
 						}
 					}
 					for k := b + 1; k < a.match[b]; k++ {
 						if a.isStar(k) && (a.isPunct(k-1, ".") && a.rows[a.name(k-2)] || !a.isPunct(k-1, ".") && bearing) {
-							return refusal("the column list of %s renames the columns of a * that may hold PII columns", strings.ToLower(a.name(p)))
+							return aliasRefusal("the column list of %s renames the columns of a * that may hold PII columns", strings.ToLower(a.name(p)))
 						}
 					}
 				}
@@ -821,7 +876,7 @@ func (a *aliasCheck) columnLists() error {
 		prev := p - 1
 		if a.isWord(prev, "AS") || a.isPunct(prev, ")") ||
 			(a.name(prev) != "" && !(a.toks[prev].Kind == sqlclass.TokWord && notAlias[a.toks[prev].Text])) {
-			return refusal("the column list of %s renames table columns by position", strings.ToLower(a.name(p)))
+			return aliasRefusal("the column list of %s renames table columns by position", strings.ToLower(a.name(p)))
 		}
 	}
 	return nil
@@ -906,9 +961,9 @@ func (a *aliasCheck) wholeRow(s, e int) error {
 		} else if a.isPunct(j-1, ".") || a.isPunct(j+1, ".") || a.isPunct(j+1, "(") {
 			continue // a column, a qualifier or a function name
 		}
-		return &sqlclass.Refusal{Reason: fmt.Sprintf("the whole row of %s is used as a value; this engine gives such a column no origin, so its PII columns could not be masked."+
+		return a.at(refusal.Newf(refusal.MaskUncertain, "the whole row of %s is used as a value; this engine gives such a column no origin, so its PII columns could not be masked."+
 			" List the columns instead (SELECT %s.id, %s.email ...); a column named like its table must be qualified (t.col)",
-			strings.ToLower(n), strings.ToLower(n), strings.ToLower(n))}
+			strings.ToLower(n), strings.ToLower(n), strings.ToLower(n)), j)
 	}
 	return nil
 }
@@ -1113,7 +1168,7 @@ func (a *aliasCheck) spanLeak(s, e int, clause []string, where string) error {
 	}
 	for k := s; k < e; k++ {
 		if a.matched(k) && !a.insideCount(k) {
-			return refusal("PII column %s is used in %s", strings.ToLower(a.name(k)), where)
+			return a.at(aliasRefusal("PII column %s is used in %s", strings.ToLower(a.name(k)), where), k)
 		}
 		if err := a.attrCall(k, where); err != nil {
 			return err
@@ -1124,7 +1179,7 @@ func (a *aliasCheck) spanLeak(s, e int, clause []string, where string) error {
 			a.isPunct(k-1, ".") || a.isPunct(k+1, ".") || a.isPunct(k+1, "(") {
 			continue
 		}
-		return refusal("the whole row of %s is used in %s", strings.ToLower(n), where)
+		return aliasRefusal("the whole row of %s is used in %s", strings.ToLower(n), where)
 	}
 	return nil
 }
@@ -1228,9 +1283,9 @@ func (a *aliasCheck) attrCall(k int, where string) error {
 		return nil
 	}
 	ln, lx := strings.ToLower(n), strings.ToLower(x)
-	return &sqlclass.Refusal{Reason: fmt.Sprintf("%s.%s is used in %s without a proven origin; PostgreSQL reads it as %s(%s), a function called on the whole row, when %s has no column %s, and the PII columns of that row could not be masked."+
+	return a.at(refusal.Newf(refusal.MaskUncertain, "%s.%s is used in %s without a proven origin; PostgreSQL reads it as %s(%s), a function called on the whole row, when %s has no column %s, and the PII columns of that row could not be masked."+
 		" Use the unqualified column name (SELECT %s FROM ...), or select it as a plain item so that its origin can be checked",
-		ln, lx, where, lx, ln, ln, lx, lx)}
+		ln, lx, where, lx, ln, ln, lx, lx), k)
 }
 
 // writeClauses switch the clause of a level in writtenValues.
@@ -1288,7 +1343,11 @@ func (a *aliasCheck) writtenValues() error {
 		return levels[d]
 	}
 	const where = "the values a write stores"
-	for k := 0; k < len(a.toks); k++ {
+	end := len(a.toks)
+	if a.stop > 0 {
+		end = a.stop
+	}
+	for k := 0; k < end; k++ {
 		t := a.toks[k]
 		if a.isPunct(k, "(") {
 			outer := get(t.Depth - 1)
@@ -1312,7 +1371,7 @@ func (a *aliasCheck) writtenValues() error {
 					return err
 				}
 			}
-			levels[t.Depth] = &level{filter: outer.filter || writeFilters[outer.clause]}
+			levels[t.Depth] = &level{filter: outer.filter || writeFilters[outer.clause] || a.resolved && outer.clause == "RETURNING"}
 			continue
 		}
 		if t.Kind == sqlclass.TokWord && writeClauses[t.Text] {
@@ -1338,10 +1397,10 @@ func (a *aliasCheck) writtenValues() error {
 			continue
 		}
 		if a.matched(k) && !a.insideCount(k) {
-			return &sqlclass.Refusal{Reason: fmt.Sprintf("this write stores values of PII column %s, which could come back unmasked under the name of the column written (through RETURNING or a later read);"+
-				" do not copy PII columns, or run the write as an unmasked query", strings.ToLower(a.name(k)))}
+			return a.at(refusal.Newf(refusal.MaskedWrite, "this write stores values of PII column %s, which could come back unmasked under the name of the column written (through RETURNING or a later read);"+
+				" do not copy PII columns, or run the write as an unmasked query", strings.ToLower(a.name(k))), k)
 		}
-		if a.d != sqlclass.Postgres {
+		if a.d != sqlclass.Postgres || a.resolved {
 			continue
 		}
 		if a.isPunct(k+1, ".") && a.setTarget(k+2) {
@@ -1352,7 +1411,9 @@ func (a *aliasCheck) writtenValues() error {
 		}
 		if n := a.name(k); n != "" && a.rows[n] && !a.insideCount(k) &&
 			!a.isPunct(k-1, ".") && !a.isPunct(k+1, ".") && !a.isPunct(k+1, "(") {
-			return refusal("the whole row of %s is used in %s", strings.ToLower(n), where)
+			r := a.at(aliasRefusal("the whole row of %s is used in %s", strings.ToLower(n), where), k)
+			r.Code = refusal.MaskedWrite
+			return r
 		}
 	}
 	return a.plantedInserts()
@@ -1362,14 +1423,14 @@ func (a *aliasCheck) writtenValues() error {
 // rule, a value the agent chose. Rules match the column by name only, as
 // for the copies writtenValues refuses: the table written may be a view
 // over a rule table.
-func plantedValue(col string) error {
+func plantedValue(col string) *sqlclass.Refusal {
 	what := "a column under a PII mask rule"
 	if col != "" {
 		what = "PII column " + strings.ToLower(col)
 	}
-	return &sqlclass.Refusal{Reason: fmt.Sprintf("this write stores into %s a value the agent chose (a literal, an expression or another column);"+
+	return refusal.Newf(refusal.MaskedWrite, "this write stores into %s a value the agent chose (a literal, an expression or another column);"+
 		" while PII mask rules exist, a masked column cannot receive values the agent chose, since a later read would mask the value and hand it back as a cell reference to a value the agent already knows."+
-		" Set it to NULL or DEFAULT only, or run the write as an unmasked query", what)}
+		" Set it to NULL or DEFAULT only, or run the write as an unmasked query", what)
 }
 
 // nullOrDefault reports whether [s, e) is the single word NULL or DEFAULT.
@@ -1403,7 +1464,7 @@ func (a *aliasCheck) plantedSet(k int) error {
 	if a.nullOrDefault(k+2, k+3) && a.plantedEnd(k+3) {
 		return nil
 	}
-	return plantedValue(col)
+	return a.at(plantedValue(col), k)
 }
 
 // plantedTuple checks SET (a, b) = (x, y) at the target list opened at k:

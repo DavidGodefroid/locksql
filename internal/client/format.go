@@ -17,6 +17,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 )
 
 // This file renders console answers for the CLI. Text output is meant for
@@ -246,6 +247,9 @@ type ErrorInfo struct {
 	Message string `json:"message"`
 	// Start is the command that starts the console (kind no_console).
 	Start string `json:"start,omitempty"`
+	// Refusal is the structured form of a refusal (kind refused): its
+	// code, retry rule, hint and the place of the statement it points at.
+	Refusal *refusal.Info `json:"refusal,omitempty"`
 }
 
 // DescribeError classifies err for output: kind is one of no_console,
@@ -271,7 +275,7 @@ func DescribeError(err error) ErrorInfo {
 		if !ok {
 			kind = "error"
 		}
-		return ErrorInfo{Kind: kind, Code: re.Code, Message: re.Message}
+		return ErrorInfo{Kind: kind, Code: re.Code, Message: re.Message, Refusal: re.Data}
 	}
 	switch {
 	case errors.Is(err, ErrConsoleClosed):
@@ -291,10 +295,50 @@ func ErrorText(err error) string {
 		return e.Message
 	}
 	label := strings.ReplaceAll(e.Kind, "_", " ")
+	if e.Refusal != nil {
+		return label + " [" + clean(string(e.Refusal.Code)) + "]: " + e.Message
+	}
 	if strings.HasPrefix(strings.ToLower(e.Message), label) {
 		return e.Message
 	}
 	return label + ": " + e.Message
+}
+
+// retryText says what each retry rule lets the agent do.
+var retryText = map[refusal.Retry]string{
+	refusal.RetryRewrite: "rewrite: fix the statement as the hint says and plan it again, once; the console checks it in full. Never reword it to get around a PII or k-anonymity rule",
+	refusal.RetryAskUser: "ask_user: only the human can change this; tell the user (a change request only queues a proposal) and do not retry",
+	refusal.RetryStop:    "stop: final for this question; tell the user, and do not retry, reword or split it",
+}
+
+// RetryText is the instruction for retry rule r.
+func RetryText(r refusal.Retry) string {
+	if t, ok := retryText[r]; ok {
+		return t
+	}
+	return retryText[refusal.RetryStop]
+}
+
+// RefusalDetail is the structured part of a refusal as text lines: where
+// it points, the hint and the retry rule; "" for any other error.
+func RefusalDetail(err error) string {
+	r := DescribeError(err).Refusal
+	if r == nil {
+		return ""
+	}
+	var b strings.Builder
+	if sp := r.Span; sp != nil {
+		fmt.Fprintf(&b, "at line %d, column %d", sp.Line, sp.Col)
+		if sp.Token != "" {
+			fmt.Fprintf(&b, " (%s)", clean(sp.Token))
+		}
+		b.WriteString("\n")
+	}
+	if r.Hint != "" {
+		fmt.Fprintf(&b, "hint: %s\n", clean(r.Hint))
+	}
+	fmt.Fprintf(&b, "retry: %s\n", RetryText(r.Retry))
+	return b.String()
 }
 
 // clean escapes control and format characters so that a crafted name or
@@ -336,7 +380,7 @@ func allowedOff(b bool) string {
 	if b {
 		return "allowed (each query approved in the console)"
 	}
-	return "off (console started without --allow-unmask)"
+	return "off (allowed only by the human in the console: --allow-unmask or :unmask)"
 }
 
 func onOff(b bool) string {

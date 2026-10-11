@@ -1,3 +1,5 @@
+//go:build unix
+
 package config
 
 import (
@@ -363,6 +365,16 @@ func TestTLSDefaultsAndValidation(t *testing.T) {
 		{"sqlite tls", `engine="sqlite"` + "\npath=\"x.db\"\ntls=\"require\"", "", "not used by sqlite"},
 		{"production prefer remote", `engine="postgres"` + "\nhost=\"db\"\nproduction=true\ntls=\"prefer\"", "", "production profile"},
 		{"production prefer loopback", `engine="postgres"` + "\nhost=\"localhost\"\nproduction=true\ntls=\"prefer\"", TLSPrefer, ""},
+		{"client cert", `engine="postgres"` + "\nhost=\"db\"\ntls_cert=\"/c.pem\"\ntls_key=\"/k.pem\"", TLSVerifyFull, ""},
+		{"cert without key", `engine="postgres"` + "\nhost=\"db\"\ntls_cert=\"/c.pem\"", "", "tls_cert and tls_key go together"},
+		{"key without cert", `engine="postgres"` + "\nhost=\"db\"\ntls_key=\"/k.pem\"", "", "tls_cert and tls_key go together"},
+		{"cert with prefer", `engine="mysql"` + "\nhost=\"db\"\ntls=\"prefer\"\ntls_cert=\"/c.pem\"\ntls_key=\"/k.pem\"", "", "tls_cert needs tls = \"require\""},
+		{"cert on loopback default", `engine="mysql"` + "\nhost=\"127.0.0.1\"\ntls_cert=\"/c.pem\"\ntls_key=\"/k.pem\"", "", "tls_cert needs tls = \"require\""},
+		{"server name", `engine="mysql"` + "\nhost=\"10.0.0.5\"\ntls_server_name=\"db.example\"", TLSVerifyFull, ""},
+		{"server name with verify-ca", `engine="mysql"` + "\nhost=\"db\"\ntls=\"verify-ca\"\ntls_server_name=\"db.example\"", "", "tls_server_name needs tls = \"verify-full\""},
+		{"server name bad", `engine="mysql"` + "\nhost=\"db\"\ntls_server_name=\"db example\"", "", "tls_server_name"},
+		{"sqlite cert", `engine="sqlite"` + "\npath=\"x.db\"\ntls_cert=\"/c.pem\"\ntls_key=\"/k.pem\"", "", "not used by sqlite"},
+		{"sqlite server name", `engine="sqlite"` + "\npath=\"x.db\"\ntls_server_name=\"x\"", "", "not used by sqlite"},
 	}
 	for _, c := range cases {
 		name := "p"

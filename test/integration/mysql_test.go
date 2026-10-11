@@ -363,6 +363,16 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		assertNoLeak(t, s, sqlclass.MySQL, pii.Rules{Mask: []string{"app.big.email"}}, writeLeakQueries(sqlclass.MySQL))
 	})
 
+	t.Run("rows returned by a write are masked by provenance", func(t *testing.T) {
+		s := connectMySQL(t, m, srv, "rw", config.TierWrite, 5*time.Second)
+		rules := pii.Rules{Mask: []string{"app.big.email"}}
+		seedReturned(t, s)
+		if m.flavor == engine.FlavorMariaDB { // MySQL has no RETURNING
+			assertWriteRowsMasked(t, s, rules, writeMaskedQueries(sqlclass.MySQL))
+		}
+		assertPlanRefused(t, s, rules, writeRefusedQueries(sqlclass.MySQL))
+	})
+
 	t.Run("placeholder and reference round trip", func(t *testing.T) {
 		id := insertObrien(t, connectMySQL(t, m, srv, "rw", config.TierWrite, 5*time.Second), "big")
 		s := connectMySQL(t, m, srv, "ro", config.TierRead, 5*time.Second)
