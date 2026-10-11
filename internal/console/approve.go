@@ -67,6 +67,21 @@ func (s *Server) screen(ctx context.Context, pl *plan) {
 	}
 }
 
+// kRisk explains a k-anonymity warning to the human.
+const kRisk = "With a statement like this, the agent could single out one person or infer a masked value (whether an email is present, one person's amount) by cross-checking."
+
+// showKWarnings adds the k-anonymity warnings of a plan to its approval
+// frame, just above the prompt.
+func (s *Server) showKWarnings(kw []string) {
+	bar := paint.Paint(s.frameColour(), "│ ")
+	for _, w := range kw {
+		s.println(bar + red + "▲ " + safeText(w, false) + reset)
+	}
+	if len(kw) > 0 {
+		s.println(bar + "  " + paint.Dim(kRisk))
+	}
+}
+
 // frameColour is the colour of the approval frame.
 func (s *Server) frameColour() string {
 	if s.profile.Production {
@@ -110,7 +125,7 @@ func (s *Server) screenBody(ctx context.Context, pl *plan, add func(string)) {
 
 // readDetails explains a read plan (or an analysed write) to the human: what it reads, which PII
 // columns it touches and where, how each output is masked, the k-anonymity
-// counts that run first and the token values substituted.
+// counts that run before the approval and the token values substituted.
 func (s *Server) readDetails(pl *plan, add func(string)) {
 	an := pl.an
 	if pl.isExplain {
@@ -166,7 +181,7 @@ func (s *Server) readDetails(pl *plan, add func(string)) {
 		}
 		if k := s.profile.Limits.KAnonymity; k > 1 {
 			for _, c := range an.KChecks {
-				add(fmt.Sprintf("k-anonymity check (k=%d) runs first: %s", k, safeText(c.SQL, false)))
+				add(fmt.Sprintf("k-anonymity count (k=%d): %s", k, safeText(c.SQL, false)))
 			}
 		}
 		if an.PIIFilter {

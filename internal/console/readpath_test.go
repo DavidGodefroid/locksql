@@ -24,7 +24,31 @@ func countResult(n any) *engine.Result {
 	return &engine.Result{Columns: []engine.ResultColumn{{Label: "count"}}, Rows: [][]any{{n}}}
 }
 
-func TestKAnonymityRefusesSmallSets(t *testing.T) {
+// kRun plans q and runs it with the given approval answers. It returns the
+// response, the screen and the number of statements run when the first
+// prompt was shown.
+func kRun(t *testing.T, h *harness, q string, answers ...string) (resp ipc.Response, screen string, runsAtPrompt int) {
+	t.Helper()
+	pr := h.plan(t, q, false)
+	runsAtPrompt = -1
+	h.io.answers = answers
+	h.io.onAsk = func() {
+		if runsAtPrompt < 0 {
+			runsAtPrompt = len(h.sess.runs)
+		}
+	}
+	before := len(h.io.out)
+	resp = h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	h.io.onAsk = nil
+	h.io.mu.Lock()
+	screen = ansi.ReplaceAllString(strings.Join(h.io.out[before:], "\n"), "")
+	h.io.mu.Unlock()
+	return resp, screen, runsAtPrompt
+}
+
+// A count under k does not refuse: it runs before the prompt and warns the
+// human in the approval frame, who decides as usual.
+func TestKAnonymityWarnsBeforeApproval(t *testing.T) {
 	h := newHarness(t, uatProfile())
 	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{int64(1)}}}
 	const q = "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1"
@@ -34,41 +58,181 @@ func TestKAnonymityRefusesSmallSets(t *testing.T) {
 	if strings.Contains(pr.Summary, "est.") || pr.Reasons != nil {
 		t.Errorf("row estimates reach the agent: %+v", pr)
 	}
-	h.io.answers = []string{"y"}
-	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
-	wantCode(t, resp, ipc.CodeRefused)
-	if !strings.Contains(resp.Error.Message, "fewer than 5 rows") {
-		t.Errorf("refusal: %q", resp.Error.Message)
+	under, screen, atPrompt := kRun(t, h, q, "y")
+	if under.Error != nil {
+		t.Fatalf("a count under k refused the statement: %q", under.Error.Message)
 	}
-	for _, r := range h.sess.runs {
-		if !strings.HasPrefix(r, "SELECT COUNT(*)") {
-			t.Errorf("statement ran despite the k-anonymity refusal: %q", r)
-		}
-	}
-	// The subjects of the PII column are counted in its own table first.
+	// The subjects of the PII column are counted in its own table, before
+	// the prompt.
 	if want := "SELECT COUNT(*) FROM `app`.`users` WHERE `app`.`users`.`email` = 'alice@example.com'"; len(h.sess.runs) == 0 || h.sess.runs[0] != want {
 		t.Errorf("k-checks run %q, want first %q", h.sess.runs, want)
 	}
-
-	h.sess.count = countResult(int64(7))
-	pr = h.plan(t, q, false)
-	h.io.answers = []string{"y"}
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	if atPrompt < 1 || !strings.HasPrefix(h.sess.runs[atPrompt-1], "SELECT COUNT(*)") {
+		t.Errorf("%d statements ran before the prompt (%q): the counts must", atPrompt, h.sess.runs)
+	}
 	if last := h.sess.runs[len(h.sess.runs)-1]; last != q {
 		t.Errorf("last run %q, want the statement", last)
 	}
+	alert := "│ ▲ k-anonymity: the PII filter matches fewer than k=5 rows (2)"
+	if !strings.Contains(screen, alert) || !strings.Contains(screen, "single out one person") {
+		t.Errorf("approval frame lacks the warning:\n%s", screen)
+	}
+	recs := h.auditRecords(t)
+	if w := fmt.Sprint(recs[len(recs)-1]["warnings"]); !strings.Contains(w, "k-anonymity: the PII filter matches fewer than k=5 rows (2)") {
+		t.Errorf("run record warnings %s", w)
+	}
 
-	// A group too small refuses a grouped statement; a NULL (no group)
-	// passes.
+	// Above k: no warning, and the agent's answer is the same.
+	h.sess.count = countResult(int64(7))
+	over, screen, _ := kRun(t, h, q, "y")
+	if strings.Contains(screen, "▲") || strings.Contains(screen, "k-anonymity:") {
+		t.Errorf("a count above k warns:\n%s", screen)
+	}
+	if string(under.Result) != string(over.Result) {
+		t.Errorf("the agent's answer depends on the count:\nunder k %s\nabove k %s", under.Result, over.Result)
+	}
+	recs = h.auditRecords(t)
+	if w := fmt.Sprint(recs[len(recs)-1]["warnings"]); strings.Contains(w, "k-anonymity") {
+		t.Errorf("a count above k is audited with a warning: %s", w)
+	}
+
+	// A denial after the warning is an ordinary denial.
+	h.sess.count = countResult(int64(2))
+	resp, _, _ := kRun(t, h, q, "n too narrow")
+	wantCode(t, resp, ipc.CodeDenied)
+	if !strings.Contains(resp.Error.Message, "denied by the human: too narrow") || strings.Contains(resp.Error.Message, "k-anonymity") {
+		t.Errorf("denial: %q", resp.Error.Message)
+	}
+	recs = h.auditRecords(t)
+	if last := recs[len(recs)-1]; last["event"] != "denied" || !strings.Contains(fmt.Sprint(last["warnings"]), "k-anonymity") {
+		t.Errorf("denial record %v", last)
+	}
+
+	// A group too small warns about the group; a NULL (no group) does not.
 	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}, {Label: "count"}}, Rows: [][]any{}}
 	h.sess.count = countResult(int64(1))
-	pr = h.plan(t, "SELECT email, count(*) FROM users GROUP BY email LIMIT 5", false)
-	h.io.answers = []string{"y"}
-	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeRefused)
+	resp, screen, _ = kRun(t, h, "SELECT email, count(*) FROM users GROUP BY email LIMIT 5", "y")
+	if resp.Error != nil || !strings.Contains(screen, "▲ k-anonymity: a group covers fewer than k=5 rows (1)") {
+		t.Errorf("small group: %+v\n%s", resp.Error, screen)
+	}
 	h.sess.count = countResult(nil)
-	pr = h.plan(t, "SELECT email, count(*) FROM users GROUP BY email LIMIT 5", false)
+	resp, screen, _ = kRun(t, h, "SELECT email, count(*) FROM users GROUP BY email LIMIT 5", "y")
+	if resp.Error != nil || strings.Contains(screen, "▲") {
+		t.Errorf("no group: %+v\n%s", resp.Error, screen)
+	}
+}
+
+// In auto mode a count under k runs the statement: the warning is printed
+// in the frame and kept in the audit, and the agent's answer is the same as
+// above k.
+func TestKAnonymityWarningInAutoMode(t *testing.T) {
+	h := newHarness(t, uatProfile(), skip)
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{int64(1)}}}
+	const q = "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1"
+
+	h.sess.count = countResult(int64(2))
+	under, screen, _ := kRun(t, h, q)
+	if under.Error != nil {
+		t.Fatalf("auto mode refused a count under k: %q", under.Error.Message)
+	}
+	if h.io.promptCount() != 0 {
+		t.Fatal("auto mode prompted")
+	}
+	if last := h.sess.runs[len(h.sess.runs)-1]; last != q {
+		t.Errorf("last run %q, want the statement", last)
+	}
+	if !strings.Contains(screen, "▲ k-anonymity: the PII filter matches fewer than k=5 rows (2)") || !strings.Contains(screen, "auto-approved") {
+		t.Errorf("console lacks the warning:\n%s", screen)
+	}
+	recs := h.auditRecords(t)
+	for _, r := range recs[len(recs)-2:] {
+		if !strings.Contains(fmt.Sprint(r["warnings"]), "k-anonymity: the PII filter matches fewer than k=5 rows (2)") {
+			t.Errorf("record without the warning: %v", r)
+		}
+	}
+	if recs[len(recs)-2]["decision"] != "auto" {
+		t.Errorf("record %v", recs[len(recs)-2])
+	}
+
+	h.sess.count = countResult(int64(9))
+	over, screen, _ := kRun(t, h, q)
+	if strings.Contains(screen, "▲") {
+		t.Errorf("a count above k warns:\n%s", screen)
+	}
+	if string(under.Result) != string(over.Result) || over.Error != nil {
+		t.Errorf("the agent's answer depends on the count:\nunder k %s\nabove k %s %+v", under.Result, over.Result, over.Error)
+	}
+}
+
+// A count that cannot run warns too; the statement is the human's to run.
+func TestKAnonymityCountFailureWarns(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{int64(1)}}}
+	h.sess.count = &engine.Result{Columns: []engine.ResultColumn{{Label: "count"}}, Rows: [][]any{{"many"}}}
+	resp, screen, _ := kRun(t, h, "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1", "y")
+	if resp.Error != nil {
+		t.Fatalf("refused: %q", resp.Error.Message)
+	}
+	if !strings.Contains(screen, "▲ k-anonymity: a count returned no number") {
+		t.Errorf("no warning:\n%s", screen)
+	}
+}
+
+// The demo statement of a customer's spend, on a real SQLite database
+// with k = 5 and four orders per customer: each group is under k, so the
+// approval frame warns, and the human's y runs it.
+func TestKAnonymityDemoStatementRunsOnApproval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shop.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmts := []string{
+		`CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT, email TEXT, country_code TEXT)`,
+		`CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, total_cents INTEGER)`,
+	}
+	for c := 1; c <= 6; c++ {
+		stmts = append(stmts, fmt.Sprintf(`INSERT INTO customers (id, name, email, country_code) VALUES (%d, 'n%d', 'c%d@example.com', 'BE')`, c, c, c))
+		for o := 0; o < 4; o++ {
+			stmts = append(stmts, fmt.Sprintf(`INSERT INTO orders (customer_id, total_cents) VALUES (%d, %d)`, c, 100*c+o))
+		}
+	}
+	for _, q := range stmts {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	p := config.Profile{
+		Name: "lite", Engine: config.EngineSQLite, Path: path, Tier: config.TierRead,
+		Detectors: []string{"email"}, Limits: config.DefaultLimits(false),
+	}
+	p.Limits.KAnonymity = 5
+	sess, err := sqlite.Engine{}.Connect(context.Background(), p, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sess.Close() })
+	h := newHarness(t, p, func(c *ServerConfig) {
+		c.Policy = config.NewPolicy(p, []string{"main.customers.name", "main.customers.email"}, nil)
+		c.Session, c.Databases = sess, []string{"main"}
+	})
+	const q = `SELECT c.id, c.name, c.email, SUM(o.total_cents) AS spend
+FROM customers c JOIN orders o ON o.customer_id = c.id
+WHERE c.country_code = 'BE'
+GROUP BY c.id, c.name, c.email ORDER BY spend DESC LIMIT 3`
+	var pr ipc.PlanResult
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "main", SQL: q}, &pr)
 	h.io.answers = []string{"y"}
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	var rr ipc.RunResult
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	if len(rr.Rows) != 3 {
+		t.Errorf("rows %v", rr.Rows)
+	}
+	out := ansi.ReplaceAllString(h.io.output(), "")
+	if !strings.Contains(out, "▲ k-anonymity: a group covers fewer than k=5 rows (4)") {
+		t.Errorf("approval frame lacks the warning:\n%s", out)
+	}
 }
 
 // An IN list is an OR over its values: with k = 2, two values that exist
@@ -110,17 +274,23 @@ func TestKAnonymityINCountsEachValue(t *testing.T) {
 		h.io.answers = []string{"y"}
 		return h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
 	}
-	resp := run("SELECT id FROM users WHERE email IN ('a@example.com', 'b@example.com', 'absent@example.com') LIMIT 5")
-	wantCode(t, resp, ipc.CodeRefused)
-	if !strings.Contains(resp.Error.Message, "fewer than 2 rows") {
-		t.Errorf("refusal: %q", resp.Error.Message)
+	if resp := run("SELECT id FROM users WHERE email IN ('a@example.com', 'b@example.com', 'absent@example.com') LIMIT 5"); resp.Error != nil {
+		t.Fatalf("refused: %q", resp.Error.Message)
 	}
-	if out := h.io.output(); !strings.Contains(out, "SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM") {
+	out := ansi.ReplaceAllString(h.io.output(), "")
+	if !strings.Contains(out, "SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM") {
 		t.Errorf("approval screen does not show the per-value count:\n%s", out)
 	}
-	// The values that exist pass.
+	if !strings.Contains(out, "▲ k-anonymity: the PII filter matches fewer than k=2 rows (0)") {
+		t.Errorf("the absent value does not warn:\n%s", out)
+	}
+	// The values that exist pass without a warning.
+	n := strings.Count(out, "▲")
 	if resp := run("SELECT id FROM users WHERE email IN ('a@example.com', 'b@example.com') LIMIT 5"); resp.Error != nil {
 		t.Errorf("existing values refused: %d %q", resp.Error.Code, resp.Error.Message)
+	}
+	if strings.Count(ansi.ReplaceAllString(h.io.output(), ""), "▲") != n {
+		t.Errorf("existing values warn:\n%s", h.io.output())
 	}
 }
 

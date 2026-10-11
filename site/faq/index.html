@@ -102,7 +102,7 @@
 </section>
 <section aria-labelledby="k-anonymity">
   <h2 id="k-anonymity">Does k-anonymity stop all inference?</h2>
-  <p>No. It is a query-set-size control: it refuses a single query whose PII filter covers fewer than <code>k</code> rows; it does not stop differencing attacks that combine several approved queries. <a href="../security/#k-anonymity">See the example</a>.</p>
+  <p>No. It is a decision aid: a query whose PII filter, group or aggregate covers fewer than <code>k</code> rows warns you on the approval screen, and you decide (in auto mode it runs). Even heeded, it does not stop differencing attacks that combine several approved queries. <a href="../security/#k-anonymity">See the example</a>.</p>
 </section>
 <section aria-labelledby="tls">
   <h2 id="tls">Is the connection to the database encrypted?</h2>
@@ -110,7 +110,7 @@
 </section>
 <section aria-labelledby="refusals">
   <h2 id="refusals">Why was my query refused, and what should the agent do?</h2>
-  <p>Every refusal carries a stable code (<code>E_NO_LIMIT</code>, <code>E_K_ANON</code>, <code>E_MASKED_FILTER</code>, …), the place in the statement where the check stopped, a hint and a retry rule: <code>rewrite</code> (fix it as the hint says, once), <code>ask_user</code> (only you can lift it) or <code>stop</code>. MCP clients get it as structured content. <code>locksql stats</code> counts your refusals by code; <code>--export</code> anonymises them for an issue. <a href="../how-it-works/#refusals">More on refusals</a> · <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#refusal-codes">all codes</a>.</p>
+  <p>Every refusal carries a stable code (<code>E_NO_LIMIT</code>, <code>E_COST</code>, <code>E_MASKED_FILTER</code>, …), the place in the statement where the check stopped, a hint and a retry rule: <code>rewrite</code> (fix it as the hint says, once), <code>ask_user</code> (only you can lift it) or <code>stop</code>. MCP clients get it as structured content. <code>locksql stats</code> counts your refusals by code; <code>--export</code> anonymises them for an issue. <a href="../how-it-works/#refusals">More on refusals</a> · <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#refusal-codes">all codes</a>.</p>
 </section>
 <section aria-labelledby="injection">
   <h2 id="injection">Can text stored in the database manipulate my agent?</h2>

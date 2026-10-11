@@ -1,6 +1,7 @@
 package console
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -141,16 +142,20 @@ func TestClearLiteralQuoting(t *testing.T) {
 	}
 }
 
-// A refusal after the approval still carries the warnings in the audit.
-func TestWarnAuditedOnKAnonymityRefusal(t *testing.T) {
+// A refusal after the approval still carries the warnings in the audit,
+// the k-anonymity warning included.
+func TestWarnAuditedOnRefusalAfterApproval(t *testing.T) {
 	h := newHarness(t, uatProfile())
-	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{int64(1)}}}
 	h.sess.count = countResult(int64(2))
-	pr := h.plan(t, "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1", false)
+	pr := h.plan(t, "SELECT id, email FROM users WHERE email = 'alice@example.com' LIMIT 1", false)
 	h.io.answers = []string{"y"}
+	// The engine labels the email column otherwise: the result cannot be
+	// masked with certainty.
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{int64(1)}}}
 	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeRefused)
-	log := h.auditLog(t)
-	if !strings.Contains(log, `"refused"`) || !strings.Contains(log, `"warnings"`) {
-		t.Errorf("refusal audited without the warnings:\n%s", log)
+	recs := h.auditRecords(t)
+	last := recs[len(recs)-1]
+	if last["event"] != "refused" || !strings.Contains(fmt.Sprint(last["warnings"]), "k-anonymity") {
+		t.Errorf("refusal audited without the warnings: %v", last)
 	}
 }

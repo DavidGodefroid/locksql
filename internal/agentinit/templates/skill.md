@@ -56,8 +56,9 @@ an alias, a subquery or a CTE never hides a PII column.
   `=`, `IN (...)` or `IS NULL` against literals, combined with `AND`. Anything else is refused: no
   function or expression over them, no `LIKE`, ranges, `<>`, `NOT IN`, `IS NOT NULL`, no PII condition
   under `NOT`/`OR`, no `ORDER BY` or window clauses on them.
-- A filter, `GROUP BY` or aggregate on a PII column must cover at least k rows (k-anonymity, k in
-  `status` limits). A refusal for k rows is final: do not narrow or split the query around it.
+- Keep a filter, `GROUP BY` or aggregate on a PII column broad: when it covers fewer than k rows
+  (k-anonymity, k in `status` limits), the human is warned before approving and may deny the run.
+  Never narrow or split a question to single out one person.
 - Database errors come back as a generic message (the human sees the details in the console); row
   estimates are hidden when a statement filters on a PII column.
 
@@ -81,11 +82,11 @@ it points at). Follow the retry rule of the code:
   (PII columns by their plain name).
 - `retry: ask_user`: `E_TIER`, `E_UNMASK_OFF`, `E_DATABASE_NOT_SERVED`. Tell the user; only the
   human can change it (`locksql_request_change` only queues a proposal).
-- `retry: stop`: `E_K_ANON`, `E_FORBIDDEN`, `E_MASKED_WRITE`, `E_ENGINE`, `E_POLICY`. Final for this
+- `retry: stop`: `E_FORBIDDEN`, `E_MASKED_WRITE`, `E_ENGINE`, `E_POLICY`. Final for this
   question: report and wait.
 
-A rewrite fixes the statement; it never rewords or splits the same question to get around a PII,
-k-anonymity or policy rule.
+A rewrite fixes the statement; it never rewords or splits the same question to get around a PII
+or policy rule.
 
 ## Hard rules
 

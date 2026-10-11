@@ -43,15 +43,20 @@ const (
 	DatabaseNotServed Code = "E_DATABASE_NOT_SERVED"
 	UnmaskOff         Code = "E_UNMASK_OFF"
 	Cost              Code = "E_COST"
-	KAnon             Code = "E_K_ANON"
-	Engine            Code = "E_ENGINE"
-	Placeholder       Code = "E_PLACEHOLDER"
-	MaskedFilter      Code = "E_MASKED_FILTER"
-	MaskedExpression  Code = "E_MASKED_EXPRESSION"
-	MaskedOrder       Code = "E_MASKED_ORDER"
-	MaskedSetOp       Code = "E_MASKED_SET_OP"
-	MaskUncertain     Code = "E_MASK_UNCERTAIN"
-	MaskedWrite       Code = "E_MASKED_WRITE"
+	// KAnon is no longer emitted (v0.5.2): a k-anonymity count under k
+	// is a warning on the approval screen. The code stays known so that
+	// past audit records keep it, and is never reused.
+	//
+	// Deprecated: no refusal carries it.
+	KAnon            Code = "E_K_ANON"
+	Engine           Code = "E_ENGINE"
+	Placeholder      Code = "E_PLACEHOLDER"
+	MaskedFilter     Code = "E_MASKED_FILTER"
+	MaskedExpression Code = "E_MASKED_EXPRESSION"
+	MaskedOrder      Code = "E_MASKED_ORDER"
+	MaskedSetOp      Code = "E_MASKED_SET_OP"
+	MaskUncertain    Code = "E_MASK_UNCERTAIN"
+	MaskedWrite      Code = "E_MASKED_WRITE"
 	// Policy is the fail-closed code of a refusal no check named: it
 	// should never be seen, and is a bug to report.
 	Policy Code = "E_POLICY"
@@ -77,6 +82,10 @@ type entry struct {
 	title string
 	hint  string
 }
+
+// retired codes are no longer emitted: they stay known for past audit
+// records, and Codes leaves them out.
+var retired = map[Code]bool{KAnon: true}
 
 var table = map[Code]entry{
 	UnsupportedSyntax: {RetryRewrite, "a construct locksql cannot parse with certainty",
@@ -113,8 +122,8 @@ var table = map[Code]entry{
 		"run the query masked, or ask the user to allow unmasked output in the console (:unmask, or --allow-unmask at start)"},
 	Cost: {RetryRewrite, "the weight check refused the plan",
 		"make it cheaper: filter on an indexed column, narrow the range, join less; or ask the user to raise limits.explain_rows_refuse"},
-	KAnon: {RetryStop, "fewer than k rows match a PII filter, group or aggregate (k-anonymity)",
-		"do not narrow, split or shift the filter around it; tell the user"},
+	KAnon: {RetryStop, "no longer emitted since v0.5.2 (was: fewer than k rows behind a PII filter, group or aggregate)",
+		"none: k-anonymity counts are a warning for the human now; tell the user"},
 	Engine: {RetryStop, "the database could not plan or run a check; the details stay on the console",
 		"tell the user: the human sees the database's message in the console"},
 	Placeholder: {RetryRewrite, "a misused placeholder or cell reference",
@@ -135,11 +144,14 @@ var table = map[Code]entry{
 		"tell the user"},
 }
 
-// Codes lists every code, sorted.
+// Codes lists every code a refusal may carry, sorted; retired codes are
+// left out.
 func Codes() []Code {
 	out := make([]Code, 0, len(table))
 	for c := range table {
-		out = append(out, c)
+		if !retired[c] {
+			out = append(out, c)
+		}
 	}
 	slices.Sort(out)
 	return out

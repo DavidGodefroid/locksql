@@ -33,8 +33,8 @@ What a statement may do (the console parses it and resolves every column to its 
   column, filter with `=`, `IN (...)` or `IS NULL` against literals, combined with `AND`. No
   functions, `LIKE`, ranges, negations (`<>`, `NOT IN`, `IS NOT NULL`, `NOT`/`OR`) or `ORDER BY` on
   them.
-  Filters, groups and aggregates on them must cover at least k rows (k-anonymity): a refusal for k
-  rows is final, do not work around it.
+  Keep filters, groups and aggregates on them broad: when one covers fewer than k rows
+  (k-anonymity), the human is warned before approving and may deny the run.
 - Database errors come back generic; the human sees the details in the console.
 
 Refusal codes. A refusal reads `refused [CODE]: message` (in JSON and MCP structured content:
@@ -55,11 +55,11 @@ it points at). Follow the retry rule of the code:
   (PII columns by their plain name).
 - `retry: ask_user`: `E_TIER`, `E_UNMASK_OFF`, `E_DATABASE_NOT_SERVED`. Tell the user; only the
   human can change it (`locksql_request_change` only queues a proposal).
-- `retry: stop`: `E_K_ANON`, `E_FORBIDDEN`, `E_MASKED_WRITE`, `E_ENGINE`, `E_POLICY`. Final for this
+- `retry: stop`: `E_FORBIDDEN`, `E_MASKED_WRITE`, `E_ENGINE`, `E_POLICY`. Final for this
   question: report and wait.
 
-A rewrite fixes the statement; it never rewords or splits the same question to get around a PII,
-k-anonymity or policy rule.
+A rewrite fixes the statement; it never rewords or splits the same question to get around a PII
+or policy rule.
 
 Rules:
 

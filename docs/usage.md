@@ -816,10 +816,13 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
 │ reads: app.customers
 │ returns at most 20 rows
 │ PII columns touched: customers.email (where)
-│ k-anonymity check (k=5) runs first: SELECT COUNT(*) FROM `app`.`customers` WHERE `app`.`customers`.`email` = 'a@example.com'
-│ k-anonymity check (k=5) runs first: SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM customers WHERE email = 'a@example.com' GROUP BY country) AS locksql_k
+│ k-anonymity count (k=5): SELECT COUNT(*) FROM `app`.`customers` WHERE `app`.`customers`.`email` = 'a@example.com'
+│ k-anonymity count (k=5): SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM customers WHERE email = 'a@example.com' GROUP BY country) AS locksql_k
 │ row estimates are hidden from the agent: the statement filters on a PII column
 │ PII: masked (4 column rules; detectors: email, phone, iban, card)
+│ ▲ k-anonymity: the PII filter matches fewer than k=5 rows (1)
+│ ▲ k-anonymity: a group covers fewer than k=5 rows (1)
+│   With a statement like this, the agent could single out one person or infer a masked value (whether an email is present, one person's amount) by cross-checking.
 ╰─ Approve? [y/N]
 ```
 
@@ -828,7 +831,7 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
   its self-reported name, labelled as such; then the agent's `intent` when it gave one (one line of at most 200 bytes,
   dimmed, untrusted text: the agent's claim, not a fact), the relations read, the PII columns touched and in which clause
   (highlighted in red in the SQL), each masked output and its mode, the
-  k-anonymity counts that run first and the row cap.
+  k-anonymity counts and the row cap.
 - Statement classes other than READ, a WARN verdict, PII columns and
   `PII: UNMASKED` are printed in red.
 - `y` or `Y` approves. On a production profile you type the profile name
@@ -843,8 +846,16 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
 - Pending keystrokes are discarded before each prompt.
 - Requests are served one at a time; other clients wait.
 - Only the console terminal approves; no socket method can.
-- After approval, the k-anonymity counts run first. If one covers fewer than
-  `k_anonymity` rows, the statement is refused without running.
+- The k-anonymity counts run before the prompt (after the placeholder values,
+  which they may need). Each count under `k_anonymity` adds a `▲ k-anonymity`
+  line just above it: the statement could single out one person or reveal a
+  masked value by cross-checking. Nothing is refused for it: you decide, `y`
+  runs it, `n` denies it as usual. A count that cannot run warns the same
+  way. In auto mode the statement runs; the warning is printed in its frame
+  and kept in the audit record's `warnings`.
+- The agent learns nothing of the counts: no refusal code, the same answer
+  and, in auto mode, the response time levelled from the counts on, whether
+  a count is under k or not.
 
 ### Policy changes
 
@@ -1015,16 +1026,18 @@ PII columns (columns under a mask rule) may be used as follows:
 | | `ORDER BY`, window `PARTITION BY` and `ORDER BY`, `FILTER`, `DISTINCT ON` |
 
 - A filter, grouping or aggregate on a PII column triggers k-anonymity
-  checks: before the statement runs, the console runs `COUNT` queries
+  checks: before the approval prompt, the console runs `COUNT` queries
   (shown on the approval screen). Each constant filter on a PII column counts
   the subjects of that column in its own base table
   (`SELECT COUNT(*) FROM db.table WHERE db.table.col = 'literal'`), so a
   join cannot multiply them. `IN (literals)` counts each value apart and
   takes the smallest count (`SELECT MIN(locksql_n) FROM (... UNION ALL ...)`),
-  so a value absent from the table refuses the list; placeholder values in
+  so a value absent from the table warns about the list; placeholder values in
   the list are not counted. Another count is built from the statement's own
   `FROM`, `WHERE`, `GROUP BY` and `HAVING` text. Fewer than `k_anonymity`
-  rows in any count, or in the smallest group, refuses the statement.
+  rows in any count, or in the smallest group, puts a warning on the approval
+  screen and in the audit record (see [Approving a query](#approving-a-query));
+  it no longer refuses the statement (before v0.5.2 it did, with `E_K_ANON`).
 - `EXPLAIN` of a statement that filters, groups or aggregates PII is refused.
 - Ask for unmasked values with `--unmask`. It is off by default: the console
   refuses the request unless the human allowed it there
@@ -1182,8 +1195,7 @@ The retry rules:
 | `E_DATABASE_NOT_SERVED` | a database outside the profile's `database` | ask_user | a database `status` lists |
 | `E_UNMASK_OFF` | `--unmask` while unmasked output is off in the console (`:unmask` or `--allow-unmask` turns it on), or turned off since the plan | ask_user | run it masked |
 | `E_COST` | the weight check: rows examined, full scans, cartesian joins, `explain_cost_refuse` | rewrite | a selective filter on an indexed column, a narrower range, fewer joins |
-| `E_K_ANON` | fewer than `k_anonymity` rows behind a PII filter, group or aggregate | stop | none: do not narrow, split or shift the filter |
-| `E_ENGINE` | the database could not plan the statement or run a k-anonymity count; the details stay on the console | stop | none: the human sees the database's message |
+| `E_ENGINE` | the database could not plan the statement or its k-anonymity counts; the details stay on the console | stop | none: the human sees the database's message |
 | `E_PLACEHOLDER` | a placeholder or cell reference used outside `pii_col = '${...}'` in `WHERE`/`HAVING`, malformed, unknown, unusable, or in a write | rewrite | `col = '${name}'` or `col IN ('${a}', '${b}')` in the `WHERE` of a read |
 | `E_MASKED_FILTER` | a PII column filtered or joined other than by equality: `LIKE`, ranges, negations, `OR`, a comparison with a non-PII column, a filter in a `JOIN` condition, `EXPLAIN` of a PII filter | rewrite | filter on a non-PII key, or `=`, `IN` (literals or placeholders), `IS NULL` under `AND` |
 | `E_MASKED_EXPRESSION` | a function or expression over a PII column | rewrite | the plain column (masked), or `COUNT`/`MIN`/`MAX` |
@@ -1192,6 +1204,11 @@ The retry rules:
 | `E_MASK_UNCERTAIN` | a result whose masking cannot be proven: an alias, a whole-row reference or a label the engine cannot trace, a result whose columns differ from the analysis | rewrite | PII columns by their plain name |
 | `E_MASKED_WRITE` | a write that copies a PII column or stores a value the agent chose into one | stop | none (a masked column may only be set to `NULL` or `DEFAULT`) |
 | `E_POLICY` | a refusal no check named (fail-closed; should not happen) | stop | none: report it as a bug |
+
+`E_K_ANON` (fewer than `k_anonymity` rows behind a PII filter, group or
+aggregate) is no longer emitted since v0.5.2: a count under k is a warning on
+the approval screen (see [Approving a query](#approving-a-query)). The code stays reserved, and
+`locksql stats` still counts it in audit logs written before.
 
 ### MCP server
 

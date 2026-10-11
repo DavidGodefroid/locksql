@@ -18,7 +18,7 @@ issues, and worked top-down.
    little). The `Reports` column counts the issues it came from, so that one
    heavy user does not outrank many.
 3. Rows are ranked by `Reports`, then `Refusals`. Constructs refused on
-   purpose (the security model's PII rules, `E_FORBIDDEN`, `E_K_ANON`,
+   purpose (the security model's PII rules, `E_FORBIDDEN`,
    `E_TIER`) are listed under *Refused by design* with the rewrite users
    should be taught instead, and never "fixed".
 4. A construct is worked from the top. Supporting it ships with:

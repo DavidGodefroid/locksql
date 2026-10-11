@@ -44,6 +44,9 @@ func codeNames(t *testing.T) map[string]bool {
 			}
 		}
 	}
+	// A retired code is declared but never emitted: a site passing it
+	// fails below.
+	delete(names, "KAnon")
 	if len(names) != len(Codes()) {
 		t.Fatalf("refusal.go declares %d codes, Codes lists %d", len(names), len(Codes()))
 	}

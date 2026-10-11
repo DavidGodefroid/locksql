@@ -3,7 +3,9 @@ package console
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -332,45 +334,69 @@ func estimatesHidden(pl *plan) bool {
 // details stay on the console.
 const hiddenWeightRefusal = "refused by the weight check (the details are shown on the console)"
 
-// kCheck runs the k-anonymity row counts of an approved plan. It returns
-// the refusal, if any.
-func (s *Server) kCheck(ctx context.Context, sess engine.Session, pl *plan) (*refusal.Error, error) {
+// kCount runs the k-anonymity row counts of a plan before its approval
+// and returns a warning for each count under k. A count never refuses: it
+// helps the human decide, and the agent learns nothing of it. A plan with
+// placeholder values is counted with them substituted. The error is the
+// connection's.
+func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]string, error) {
 	k := s.profile.Limits.KAnonymity
 	if pl.an == nil || pl.unmask || k <= 1 {
 		return nil, nil
 	}
-	for _, c := range pl.an.KChecks {
+	counted := pl
+	if len(pl.an.Values) > 0 {
+		// Analysed again once approved: a refusal or a failure here is
+		// that analysis's to report.
+		cp := *pl
+		if r, err := s.analyzeRead(ctx, sess, &cp, pl.st.SQL); err != nil || r != nil {
+			return nil, nil
+		}
+		counted = &cp
+	}
+	if t := s.profile.Limits.StatementTimeout; t > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, t+runGrace)
+		defer cancel()
+	}
+	var out []string
+	add := func(w string) {
+		if !slices.Contains(out, w) {
+			out = append(out, w)
+		}
+	}
+	for _, c := range counted.an.KChecks {
 		st := sqlclass.Statement{Class: sqlclass.Read, Kind: "select", SQL: c.SQL, Limit: 1}
 		res, err := sess.Run(ctx, pl.db, st, 1)
 		if err != nil {
 			if errors.Is(err, engine.ErrConnLost) || ctx.Err() != nil {
 				return nil, err
 			}
-			s.println("k-anonymity check failed: " + safeText(s.errText(err, c.SQL, false, pl), false))
-			return refusal.New(refusal.Engine, "the k-anonymity check could not run: "+genericFailure), nil
+			s.println("k-anonymity check failed: " + safeText(s.errText(err, c.SQL, false, counted), false))
+			add("k-anonymity: a count could not run, so the rows this statement covers are unknown")
+			continue
 		}
-		if len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
-			if c.Grouped {
-				continue
-			}
-			return refusal.Newf(refusal.KAnon, "fewer than %d rows match the PII filter (k-anonymity)", k), nil
+		var v any = int64(0) // no row: nothing matches
+		if len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
+			v = res.Rows[0][0]
 		}
-		v := res.Rows[0][0]
-		if v == nil && c.Grouped {
+		if c.Grouped && (v == nil || len(res.Rows) == 0) {
 			continue // no group: nothing to show
 		}
 		n, ok := toInt(v)
 		if !ok {
-			return refusal.New(refusal.Engine, "the k-anonymity check returned no count"), nil
+			add("k-anonymity: a count returned no number, so the rows this statement covers are unknown")
+			continue
 		}
 		if n < int64(k) {
+			what := "the PII filter matches"
 			if c.Grouped {
-				return refusal.Newf(refusal.KAnon, "a group would cover fewer than %d rows (k-anonymity)", k), nil
+				what = "a group covers"
 			}
-			return refusal.Newf(refusal.KAnon, "fewer than %d rows match the PII filter (k-anonymity)", k), nil
+			add(fmt.Sprintf("k-anonymity: %s fewer than k=%d rows (%d)", what, k, n))
 		}
 	}
-	return nil, nil
+	return out, nil
 }
 
 func toInt(v any) (int64, bool) {

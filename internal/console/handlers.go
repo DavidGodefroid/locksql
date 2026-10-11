@@ -551,11 +551,38 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	if r := s.askValues(ctx, req.ID, pl, rec, missing); r != nil {
 		return *r
 	}
+	// The k-anonymity counts run before the approval, in auto mode too: a
+	// count under k is a warning for the human, never a refusal, so the
+	// agent's answer is the same whatever the counts say.
+	base := pl.warnings
+	kAlert := func() *ipc.Response {
+		kw, err := s.kCount(ctx, sess, pl)
+		if err != nil {
+			s.auditRunFailed(rec, s.auditErrText(err, pl))
+			r := s.failedPlan(req.ID, "k-anonymity check", err, pl)
+			return &r
+		}
+		pl.warnings = append(slices.Clone(base), kw...)
+		rec.Warnings = pl.warnings
+		s.showKWarnings(kw)
+		return nil
+	}
+	var start time.Time
 	if s.autoApprove() && !pl.unmask {
+		// No human waits in between: the response time is levelled from
+		// the counts on, as it is from the statement on.
+		start = time.Now()
+		if r := kAlert(); r != nil {
+			s.level(ctx, start)
+			return *r
+		}
 		rec.Event, rec.Decision = audit.EventAuto, "auto"
 		s.println(s.frameEnd(paint.Yellow("auto-approved") + paint.Dim(" (auto mode)")))
 	} else {
 		for {
+			if r := kAlert(); r != nil {
+				return *r
+			}
 			r, retype := s.approve(ctx, req.ID, pl, rec)
 			if r != nil {
 				return *r
@@ -585,8 +612,8 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	}
 	if pl.an != nil && len(pl.an.Values) > 0 {
 		// The values are known now: analyse again, so that the statement
-		// and its k-anonymity checks carry them. pl.st.SQL is the statement
-		// as the agent wrote it, placeholders included: the audit keeps it.
+		// carries them. pl.st.SQL is the statement as the agent wrote it,
+		// placeholders included: the audit keeps it.
 		if r, err := s.analyzeRead(ctx, sess, pl, pl.st.SQL); err != nil || r != nil {
 			if err != nil {
 				// Approved already: the failure is audited like a run's.
@@ -606,17 +633,11 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		rctx, cancel = context.WithTimeout(ctx, t+runGrace)
 		defer cancel()
 	}
-	start := time.Now()
+	if start.IsZero() {
+		start = time.Now()
+	}
 	// Success or failure, the answer leaves on the next quantum.
 	defer s.level(ctx, start)
-	if r, err := s.kCheck(rctx, sess, pl); err != nil || r != nil {
-		if err != nil {
-			s.auditRunFailed(rec, s.auditErrText(err, pl))
-			return s.failedPlan(req.ID, "k-anonymity check", err, pl)
-		}
-		r.Reason += " (approved, but not run)"
-		return s.refuseWarned(ctx, req.ID, pl, class, r)
-	}
 	var res engine.Result
 	var err error
 	switch {
