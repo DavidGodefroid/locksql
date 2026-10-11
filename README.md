@@ -251,7 +251,7 @@ Full walkthrough: [docs/usage.md](docs/usage.md).
 | Engine | Versions | Read-only session (tier `read`) | Server-side timeout | Plan source |
 |---|---|---|---|---|
 | `mariadb` | 10.1+ (tested 10.11, 11.4) | `SET SESSION TRANSACTION READ ONLY` + `START TRANSACTION READ ONLY` | `max_statement_time` + `KILL QUERY` | `EXPLAIN FORMAT=JSON` |
-| `mysql` | 8.0+ (tested 8.0, 8.4) | same as MariaDB | `max_execution_time` + `KILL QUERY` | `EXPLAIN FORMAT=JSON` |
+| `mysql` | 8.0+ (tested 8.0, 8.4) | same as MariaDB | `max_execution_time` (SELECT only; writes rely on `KILL QUERY`) + `KILL QUERY` | `EXPLAIN FORMAT=JSON` |
 | `postgres` | 13+ (tested 13, 17) | `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY` + `BEGIN READ ONLY` … `ROLLBACK` | `statement_timeout` + cancel request | `EXPLAIN (FORMAT JSON, VERBOSE)` |
 | `sqlite` | 3 (pure Go, in-process) | `mode=ro` + `query_only` | interrupt on deadline | `EXPLAIN QUERY PLAN` + `sqlite_stat1` (run `ANALYZE` once, or every full scan is a WARN of unknown size) |
 
@@ -532,11 +532,14 @@ iteration, and it is deliberately narrow:
   protects plain TCP connections only, and go-mysql answers
   `mysql_clear_password`, `sha256_password` and a `caching_sha2_password`
   full authentication (the MySQL 8 default) in clear over any TLS, so an
-  attacker terminating TLS gets the MySQL/MariaDB password; PostgreSQL sends
-  it in clear to a server that asks for cleartext authentication. On plain
+  attacker terminating TLS gets the MySQL/MariaDB password. On plain
   TCP (`disable`, or `prefer` after a fallback) the guard refuses a full
   authentication, so a MySQL 8 account logs in only while the server's
-  authentication cache holds it. `verify-ca`
+  authentication cache holds it. On PostgreSQL, a remote host under
+  `disable`, `prefer` or `require` without `tls_ca` answers no clear-text or
+  MD5 password request (libpq's `require_auth=!password,!md5`): the
+  connection is refused with the remedy, `tls = "verify-full"` or a
+  SCRAM-SHA-256 password for the account. `verify-ca`
   and `verify-full` prevent the impersonation. Through an `ssh` bastion the
   SSH leg is encrypted and verified, but the bastion-to-database leg is
   protected only by `tls`, unless the database runs on the bastion. See

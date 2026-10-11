@@ -157,6 +157,13 @@ func connConfig(p config.Profile, secret []byte) (*pgx.ConnConfig, error) {
 		// prefer: retry in plain when the server refuses TLS.
 		cfg.Fallbacks = []*pgconn.FallbackConfig{{Host: cfg.Host, Port: cfg.Port}}
 	}
+	if passwordGuarded(p) {
+		// A server, or an attacker on the path, that asks for the password
+		// in clear text or MD5-hashed would get it: on a connection whose
+		// certificate is not verified, only methods that keep it secret
+		// (SCRAM, GSS, SSPI, none) are answered. libpq's require_auth.
+		cfg.RequireAuth = requireAuth
+	}
 	cfg.ConnectTimeout = connectTimeout
 	cfg.RuntimeParams = map[string]string{"application_name": "locksql", "client_encoding": "UTF8"}
 	cfg.ValidateConnect = nil
@@ -225,8 +232,36 @@ func connectError(err error, pw, mode string) error {
 	var pe *pgconn.PgError
 	if errors.As(err, &pe) {
 		msg = fmt.Sprintf("%s %s: %s", pe.Severity, pe.Code, pe.Message)
+	} else if strings.Contains(msg, "require_auth") {
+		return fmt.Errorf("postgres: connect: %s", passwordRefusal(mode))
 	}
 	return fmt.Errorf("postgres: connect: %s%s", redact(msg, pw), engine.TLSVerifyHint(err, mode))
+}
+
+// requireAuth is the authentication policy of a guarded connection: every
+// method but the two that hand the server the password (password: in clear;
+// md5: a hash it can replay).
+const requireAuth = "!password,!md5"
+
+// passwordGuarded reports a profile whose connection answers no clear-text
+// or MD5 password request: a TCP host that is not loopback, under a tls
+// mode that does not verify the server's certificate chain. A Unix socket
+// or a loopback host does not cross the network; a verified chain
+// authenticates the server.
+func passwordGuarded(p config.Profile) bool {
+	if strings.HasPrefix(p.Host, "/") || config.IsLoopback(p.Host) {
+		return false
+	}
+	return !config.TLSVerifiesChain(p.TLS, p.TLSCA)
+}
+
+// passwordRefusal explains a connection refused by the password guard, and
+// the ways out.
+func passwordRefusal(mode string) string {
+	if mode == "" {
+		mode = config.TLSPrefer
+	}
+	return "the server asks for the password in clear text or MD5-hashed (pg_hba method password or md5) on a connection whose certificate is not verified (tls = \"" + mode + "\"); refused, since an attacker on the path could ask the same: set tls = \"verify-full\" (with tls_ca for a private CA), or give the account a SCRAM-SHA-256 password (password_encryption = scram-sha-256 and a scram-sha-256 pg_hba line)"
 }
 
 // pgMessage is the server's error without its DETAIL (which can quote row
