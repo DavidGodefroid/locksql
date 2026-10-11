@@ -1550,3 +1550,25 @@ func TestTerminalBell(t *testing.T) {
 		t.Fatalf("bell wrote %q", out.String())
 	}
 }
+
+// TestRunReportsCutCells checks that the agent is told a value was cut by
+// the engine's cap, and that the cut email gets no reference.
+func TestRunReportsCutCells(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	res := userResult()
+	res.Rows[0][1] = "alice@exa…"
+	res.Rows[0][2] = strings.Repeat("7", 100) + "…"
+	res.MarkCut(0, 1)
+	res.MarkCut(0, 2)
+	h.sess.result = res
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	var rr ipc.RunResult
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	if rr.CutCells != 2 || !strings.Contains(rr.Text, "[2 cells cut") {
+		t.Errorf("cut_cells = %d, text %q", rr.CutCells, rr.Text)
+	}
+	if got := fmt.Sprint(rr.Rows[0][1]); got != pii.Redacted {
+		t.Errorf("cut email = %q, want plain %s", got, pii.Redacted)
+	}
+}

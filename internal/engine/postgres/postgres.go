@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"strconv"
@@ -39,6 +40,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgconn/ctxwatch"
+	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
@@ -165,6 +167,10 @@ func connConfig(p config.Profile, secret []byte) (*pgx.ConnConfig, error) {
 		cfg.RequireAuth = requireAuth
 	}
 	cfg.ConnectTimeout = connectTimeout
+	// Every DataRow column is cut while it is read (capReader).
+	cfg.BuildFrontend = func(r io.Reader, w io.Writer) *pgproto3.Frontend {
+		return pgproto3.NewFrontend(newCapReader(r), w)
+	}
 	cfg.RuntimeParams = map[string]string{"application_name": "locksql", "client_encoding": "UTF8"}
 	cfg.ValidateConnect = nil
 	cfg.AfterConnect = nil
@@ -588,7 +594,11 @@ func (s *session) stream(ctx context.Context, dc *dbConn, q string, maxRows int)
 			if i < len(oids) {
 				oid = oids[i]
 			}
-			row[i] = value(v, oid)
+			var cut bool
+			row[i], cut = value(v, oid)
+			if cut {
+				out.MarkCut(len(out.Rows), i)
+			}
 		}
 		out.Rows = append(out.Rows, row)
 	}
@@ -603,11 +613,33 @@ func (s *session) stream(ctx context.Context, dc *dbConn, q string, maxRows int)
 // value converts a text-format value: nil, int64 for integer types,
 // float64 for float types (NaN and infinities included), bool, []byte for
 // bytea, and the server's text for everything else (numeric, dates, json,
-// arrays, ...).
-func value(v []byte, oid uint32) any {
+// arrays, ...). A value longer than engine.MaxCellBytes, which capReader
+// hands over cut to one byte more, is cut to the cap (text with
+// engine.CutMark, bytea decoded from its cut hex) and reported cut.
+func value(v []byte, oid uint32) (any, bool) {
 	if v == nil {
-		return nil
+		return nil, false
 	}
+	if len(v) > engine.MaxCellBytes {
+		if oid == pgtype.ByteaOID && len(v) >= 2 && v[0] == '\\' && v[1] == 'x' {
+			hx := v[2:engine.MaxCellBytes]
+			hx = hx[:len(hx)&^1]
+			b := make([]byte, hex.DecodedLen(len(hx)))
+			if _, err := hex.Decode(b, hx); err == nil {
+				return b, true
+			}
+		}
+		if !utf8.Valid(v[:engine.MaxCellBytes-utf8.UTFMax]) {
+			b, _ := engine.CapBytes(v)
+			return b, true
+		}
+		s, _ := engine.CapText(v)
+		return s, true
+	}
+	return valueOf(v, oid), false
+}
+
+func valueOf(v []byte, oid uint32) any {
 	switch oid {
 	case pgtype.Int2OID, pgtype.Int4OID, pgtype.Int8OID, pgtype.OIDOID:
 		if n, err := strconv.ParseInt(string(v), 10, 64); err == nil {

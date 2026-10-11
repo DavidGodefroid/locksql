@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -463,5 +464,26 @@ func TestConnectEscapesPath(t *testing.T) {
 func TestBuildDSNRefusesURIParameters(t *testing.T) {
 	if _, _, err := buildDSN("file:app.db?mode=rw", config.TierRead); err == nil {
 		t.Fatal("file: URI parameters accepted")
+	}
+}
+
+// TestRunCutsHugeCells checks that a huge text or blob is cut to the
+// engine's cap and reported in CutCells.
+func TestRunCutsHugeCells(t *testing.T) {
+	s := connect(t, setupDB(t), config.TierRead)
+	q := "SELECT 1 AS a, printf('%.*c', 10000000, '7') AS b, zeroblob(10000000) AS c, 'x' AS d LIMIT 1"
+	res, err := s.Run(context.Background(), "", classify(t, q), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := res.Rows[0]
+	if txt, ok := row[1].(string); !ok || len(txt) > engine.MaxCellBytes || !strings.HasSuffix(txt, "…") {
+		t.Errorf("text cell: %T of %d bytes", row[1], len(fmt.Sprint(row[1])))
+	}
+	if b, ok := row[2].([]byte); !ok || len(b) != engine.MaxCellBytes {
+		t.Errorf("blob cell: %T", row[2])
+	}
+	if !res.IsCut(0, 1) || !res.IsCut(0, 2) || res.IsCut(0, 0) || res.IsCut(0, 3) || len(res.CutCells) != 2 {
+		t.Errorf("CutCells = %v", res.CutCells)
 	}
 }

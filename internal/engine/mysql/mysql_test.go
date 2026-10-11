@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -84,16 +85,35 @@ func TestValue(t *testing.T) {
 		{gomysql.NewFieldValue(gomysql.FieldValueTypeString, 0, buf), nil, "string abc"},
 	}
 	for i, c := range cases {
-		got := value(c.v, c.f)
+		got, cut := value(c.v, c.f)
+		if cut {
+			t.Errorf("case %d: cut", i)
+		}
 		if s := fmt.Sprintf("%T %v", got, got); s != c.want {
 			t.Errorf("case %d: %s, want %s", i, s, c.want)
 		}
 	}
 	// The driver reuses its buffers: a []byte value must be a copy.
-	b := value(gomysql.NewFieldValue(gomysql.FieldValueTypeString, 0, buf), blob).([]byte)
+	bv, _ := value(gomysql.NewFieldValue(gomysql.FieldValueTypeString, 0, buf), blob)
 	buf[0] = 'X'
-	if string(b) != "abc" {
+	if string(bv.([]byte)) != "abc" {
 		t.Error("value aliases the driver buffer")
+	}
+}
+
+// TestValueCut checks that a value longer than the cap is cut before it is
+// copied out of the driver's packet.
+func TestValueCut(t *testing.T) {
+	text := &gomysql.Field{Type: gomysql.MYSQL_TYPE_VAR_STRING, Charset: 45}
+	blob := &gomysql.Field{Type: gomysql.MYSQL_TYPE_LONG_BLOB, Charset: binaryCharset}
+	huge := bytes.Repeat([]byte("1234567890"), 1<<20)
+	v, cut := value(gomysql.NewFieldValue(gomysql.FieldValueTypeString, 0, huge), text)
+	if s, ok := v.(string); !cut || !ok || len(s) > engine.MaxCellBytes || !strings.HasSuffix(s, "…") {
+		t.Errorf("text: %T, cut %v", v, cut)
+	}
+	v, cut = value(gomysql.NewFieldValue(gomysql.FieldValueTypeString, 0, huge), blob)
+	if b, ok := v.([]byte); !cut || !ok || len(b) != engine.MaxCellBytes {
+		t.Errorf("blob: %T, cut %v", v, cut)
 	}
 }
 

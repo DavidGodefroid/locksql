@@ -97,6 +97,9 @@ type RunResult struct {
 	Rows      [][]any  `json:"rows"`
 	Truncated bool     `json:"truncated"`
 	Affected  int64    `json:"affected,omitempty"`
+	// CutCells counts the cells whose value was cut (it ends with "…"):
+	// longer than max_cell_chars, or than the engine's per-cell cap.
+	CutCells int `json:"cut_cells,omitempty"`
 	// DurationMS is no longer filled: timings stay on the console.
 	DurationMS int64  `json:"duration_ms,omitempty"`
 	Text       string `json:"text,omitempty"`

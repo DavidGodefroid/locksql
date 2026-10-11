@@ -876,6 +876,13 @@ finds the project's consoles.
 - TSV by default, JSON with `--json` or through MCP.
 - Caps: `max_rows` rows, `max_cell_chars` per cell (cut with `…`) and
   `max_output_bytes` in total (cut with a marker).
+- Each engine keeps at most 64 KiB of a cell while it reads the result, so
+  a huge value (a numeric power, `jsonb_pretty`, a large blob) never costs
+  the console more; the cut text ends with `…` and drops a value split by
+  the cut. The number of cells cut, by either cap, is reported: `cut_cells`
+  in JSON and in the MCP structured content, and a
+  `[N cells cut: ...]` line in TSV. A cell cut by the engine carries no
+  reference (`<redacted>`), since it holds only the start of its value.
 - Control and bidirectional characters are escaped. NULL prints as `NULL`.
 - Masked cells follow the rule's mode: `redact` (the default for a rule
   without `mode`) gives `<redacted:rN.R.C>` (result, row, column; plain

@@ -663,7 +663,11 @@ func (s *session) stream(q string, maxRows int) (engine.Result, error) {
 			if i < len(r.Fields) {
 				f = r.Fields[i]
 			}
-			vals[i] = value(row[i], f)
+			var cut bool
+			vals[i], cut = value(row[i], f)
+			if cut {
+				out.MarkCut(len(out.Rows), i)
+			}
 		}
 		out.Rows = append(out.Rows, vals)
 		return nil
@@ -698,30 +702,29 @@ func column(f *gomysql.Field) engine.ResultColumn {
 
 // value converts a driver value: nil, int64 (uint64 above MaxInt64),
 // float64, []byte for binary strings, string otherwise (including DECIMAL,
-// dates and JSON, as the server spells them).
-func value(v gomysql.FieldValue, f *gomysql.Field) any {
+// dates and JSON, as the server spells them). A string longer than
+// engine.MaxCellBytes is cut before it is copied out of the driver's
+// packet, and reported cut.
+func value(v gomysql.FieldValue, f *gomysql.Field) (any, bool) {
 	switch v.Type {
 	case gomysql.FieldValueTypeNull:
-		return nil
+		return nil, false
 	case gomysql.FieldValueTypeUnsigned:
 		if u := v.AsUint64(); u <= math.MaxInt64 {
-			return int64(u)
+			return int64(u), false
 		} else {
-			return u
+			return u, false
 		}
 	case gomysql.FieldValueTypeSigned:
-		return v.AsInt64()
+		return v.AsInt64(), false
 	case gomysql.FieldValueTypeFloat:
-		return v.AsFloat64()
+		return v.AsFloat64(), false
 	}
-	b := bytes.Clone(v.AsString())
-	if b == nil {
-		b = []byte{}
-	}
+	raw := v.AsString()
 	if f != nil && isBinary(f) {
-		return b
+		return engine.CapBytes(raw)
 	}
-	return string(b)
+	return engine.CapText(raw)
 }
 
 const binaryCharset = 63
@@ -973,7 +976,8 @@ func (s *session) baseColumns(db, name string) (map[string]bool, error) {
 	defer r.Close()
 	out := map[string]bool{}
 	for _, row := range r.Values {
-		out[strings.ToLower(str(value(row[0], r.Fields[0])))] = true
+		v, _ := value(row[0], r.Fields[0])
+		out[strings.ToLower(str(v))] = true
 	}
 	return out, nil
 }
