@@ -100,15 +100,24 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte, dial
 		return nil, fmt.Errorf("mysql: %w", err)
 	}
 	socket := strings.HasPrefix(p.Host, "/")
-	conn, err := dial(ctx, addr, p.User, pw, p.Database, 0, tlsCfg, dialFn)
+	// Below verify-ca, a remote server is not authenticated: the password
+	// must not be answered in clear, even inside TLS.
+	unverified := ""
+	if tlsCfg != nil && !config.TLSVerifiesChain(p.TLS, p.TLSCA) && !config.IsLoopback(p.Host) {
+		unverified = p.TLS
+		if unverified == "" {
+			unverified = config.TLSPrefer
+		}
+	}
+	conn, err := dial(ctx, addr, p.User, pw, p.Database, 0, tlsCfg, unverified, dialFn)
 	if err != nil && tlsCfg != nil && config.TLSRank(p.TLS) <= config.TLSRank(config.TLSPrefer) && noServerTLS(err) {
-		tlsCfg = nil // prefer: the server offers no TLS, fall back to plain
-		conn, err = dial(ctx, addr, p.User, pw, p.Database, 0, nil, dialFn)
+		tlsCfg, unverified = nil, "" // prefer: the server offers no TLS, fall back to plain
+		conn, err = dial(ctx, addr, p.User, pw, p.Database, 0, nil, "", dialFn)
 	}
 	if err != nil {
 		return nil, connectError(err, pw, p.TLS)
 	}
-	ctl, err := dial(ctx, addr, p.User, pw, "", killTimeout, tlsCfg, dialFn)
+	ctl, err := dial(ctx, addr, p.User, pw, "", killTimeout, tlsCfg, unverified, dialFn)
 	if err != nil {
 		conn.Close()
 		return nil, connectError(err, pw, p.TLS)
@@ -134,7 +143,11 @@ func (s *session) Notices() []string { return s.transport.Notices() }
 // later read and write too. dialFn, when not nil, opens the network
 // connection instead of a direct dial. A nil tlsCfg dials plain, and a plain TCP
 // connection is guarded against a server asking for the password.
-func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duration, tlsCfg *tls.Config, dialFn engine.DialFunc) (*client.Conn, error) {
+// unverified, when not "", is the tls mode of a connection whose server is
+// not authenticated: the TLS upgrade is then made below the driver
+// (startTLS), which sees a plain connection, and the guard reads the
+// handshake in clear, as on plain TCP.
+func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duration, tlsCfg *tls.Config, unverified string, dialFn engine.DialFunc) (*client.Conn, error) {
 	deadline := time.Now().Add(connectTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
@@ -155,6 +168,11 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 			nc.Close()
 			return nil, err
 		}
+		if tlsCfg != nil && unverified != "" {
+			guard = &clearTextGuard{Conn: newStartTLS(nc, tlsCfg.Clone()), mode: unverified}
+			guard.armed.Store(true)
+			return guard, nil
+		}
 		if tlsCfg == nil && network != "unix" {
 			guard = &clearTextGuard{Conn: nc}
 			guard.armed.Store(true)
@@ -169,7 +187,7 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 			return nil
 		})
 	}
-	if tlsCfg != nil {
+	if tlsCfg != nil && unverified == "" {
 		opts = append(opts, func(c *client.Conn) error {
 			c.SetTLSConfig(tlsCfg.Clone())
 			return nil
@@ -182,7 +200,7 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 			if c != nil {
 				c.Close()
 			}
-			return nil, guardError(guard.why, dialFn != nil)
+			return nil, guardError(guard.why, guard.mode, dialFn != nil)
 		}
 	}
 	if err != nil {
@@ -195,21 +213,28 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 	return c, nil
 }
 
-// errClearText refuses a server that asks for the password in clear text
-// on an unencrypted TCP connection. guardError adds the remedy.
-var errClearText = errors.New("the server asks for the password in clear text (mysql_clear_password) on an unencrypted connection; refused")
+// errClearText refuses a server that asks for the password in clear text.
+// guardError says on which connection, and the remedy.
+var errClearText = errors.New("the server asks for the password in clear text (mysql_clear_password)")
 
 // errPublicKey refuses a server that asks for the password encrypted with
-// an RSA key it sends itself, on an unencrypted TCP connection. guardError
-// adds the remedy.
-var errPublicKey = errors.New("the server asks for the password encrypted with a public key it sends itself (caching_sha2_password full authentication or sha256_password) on an unencrypted connection; refused, since an attacker who removed TLS could send its own key")
+// an RSA key it sends itself, or, inside TLS, in clear. guardError says on
+// which connection, and the remedy.
+var errPublicKey = errors.New("the server asks for the password through a full authentication (caching_sha2_password full authentication or sha256_password)")
 
-// guardError adds the remedy to a refusal of the clear-text guard. A session
-// dialled through an SSH tunnel is not advised to use one.
-func guardError(why error, tunneled bool) error {
+// guardError adds the connection and the remedy to a refusal of the
+// clear-text guard. mode is "" on plain TCP, else the tls mode of a
+// connection whose certificate is not verified. A session dialled through
+// an SSH tunnel is not advised to use one.
+func guardError(why error, mode string, tunneled bool) error {
 	if !errors.Is(why, errClearText) && !errors.Is(why, errPublicKey) {
 		return why
 	}
+	if mode != "" {
+		return fmt.Errorf("%w on a connection whose certificate is not verified (tls = %q); refused, since an attacker on the path could ask the same: "+
+			"set tls = \"verify-full\" (with tls_ca for a private CA), or use an account with mysql_native_password or ed25519", why, mode)
+	}
+	why = fmt.Errorf("%w on an unencrypted connection; refused, since an attacker who removed TLS could ask the same", why)
 	if tunneled {
 		return fmt.Errorf("%w: use a server with TLS, or run the ssh tunnel to the database's own host", why)
 	}
@@ -226,8 +251,10 @@ const maxPacket = 0xffffff
 // clearTextMarker is the name of the plugin that sends the password as is.
 var clearTextMarker = []byte(gomysql.AUTH_CLEAR_PASSWORD)
 
-// clearTextGuard wraps an unencrypted TCP connection during the handshake.
-// An active attacker who strips TLS can ask go-mysql for the password in
+// clearTextGuard wraps an unencrypted TCP connection during the handshake,
+// or the clear side of a TLS connection whose certificate is not verified
+// (startTLS). An active attacker who strips TLS, or terminates it with a
+// certificate of its own, can ask go-mysql for the password in
 // three ways: an auth switch to mysql_clear_password (the raw password), and
 // an auth switch to sha256_password or a caching_sha2_password full
 // authentication (the password encrypted with an RSA key the "server"
@@ -240,6 +267,7 @@ var clearTextMarker = []byte(gomysql.AUTH_CLEAR_PASSWORD)
 // next one, is refused outright.
 type clearTextGuard struct {
 	net.Conn
+	mode    string // the tls mode under an unverified TLS, "" on plain TCP
 	armed   atomic.Bool
 	refused atomic.Bool
 	tail    []byte

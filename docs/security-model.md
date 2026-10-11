@@ -174,13 +174,21 @@ it append-only for the console account too.
   confirmation.
 
   Below `verify-ca` an active attacker on the path can intercept or downgrade
-  the connection, and obtain the password. The MariaDB/MySQL clear-text guard
-  protects plain TCP connections only: over TLS, go-mysql answers
-  `mysql_clear_password`, `sha256_password` and a `caching_sha2_password`
-  full authentication (the MySQL 8 default) in clear, so an attacker
-  terminating TLS gets the password. On plain TCP (`disable`, or `prefer`
-  after a fallback) the guard refuses a full authentication, so a MySQL 8
-  account logs in only while the server's authentication cache holds it.
+  the connection, read and change the traffic, and relay a login, but is
+  not handed the password. On MariaDB/MySQL, a connection whose server is
+  not authenticated (plain TCP, and TLS to a remote host under `prefer` or
+  `require` without `tls_ca`) answers no request for the password in clear:
+  an auth switch to `mysql_clear_password` or `sha256_password`, or a
+  `caching_sha2_password` full authentication (the MySQL 8 default), is
+  refused before the driver can answer. Under unverified TLS, locksql makes
+  the TLS upgrade below the driver and reads the authentication in clear to
+  do so. A MySQL 8 account therefore logs in over such a connection only
+  while the server's authentication cache holds it, and the refusal names
+  the remedy (`tls = "verify-full"`, with `tls_ca` for a private CA, or an
+  account with `mysql_native_password` or `ed25519`). Under `verify-ca` and
+  `verify-full` a full authentication sends the password inside the
+  verified TLS connection, as the MySQL clients do. A loopback host or a
+  socket path under TLS is not guarded.
   On PostgreSQL, a connection to a remote host under `disable`, `prefer` or
   `require` without `tls_ca` answers no clear-text or MD5 password request
   (libpq's `require_auth=!password,!md5`): a server, or an attacker on the

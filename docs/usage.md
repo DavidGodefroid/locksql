@@ -541,6 +541,12 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
   it; keep both files in that account's home.
 - `tls_server_name` needs `verify-full`: use it when `host` is an IP address
   or an alias that the certificate does not name.
+- On MariaDB and MySQL, a remote host under `prefer` or `require` (without
+  `tls_ca`) answers no request for the password in clear
+  (`mysql_clear_password`, `sha256_password`, a `caching_sha2_password` full
+  authentication): connect with `verify-ca` or `verify-full`, or use an
+  account with `mysql_native_password` or `ed25519`. PostgreSQL refuses
+  `password` and `md5` the same way.
 - Through an `ssh` bastion, `tls` protects the leg from the bastion to the
   database, and its default follows `host` as seen from the bastion (see
   [Reaching a remote server through SSH](#reaching-a-remote-server-through-ssh)).
