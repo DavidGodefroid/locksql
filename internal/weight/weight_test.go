@@ -131,18 +131,19 @@ func TestFixtureLevels(t *testing.T) {
 
 func TestUnknownSize(t *testing.T) {
 	p, _ := loadPlan(t, filepath.Join("..", "..", "testdata", "explain", "sqlite", "unknown_size.json"))
-	if v := Assess(p, limits, false); v.Level != OK {
-		t.Errorf("non-production: level = %v (%q), want OK", v.Level, v.Reasons)
-	}
-	v := Assess(p, limits, true)
-	if v.Level != Warn {
-		t.Fatalf("production: level = %v, want WARN", v.Level)
-	}
-	if len(v.Reasons) != 1 || !strings.Contains(v.Reasons[0], "nostat") || !strings.Contains(v.Reasons[0], "unknown size") {
-		t.Errorf("reasons = %q", v.Reasons)
-	}
-	if !strings.Contains(v.Summary, "nostat full ~?") {
-		t.Errorf("summary = %q", v.Summary)
+	// The gate has no information on an unanalysed table: WARN in every
+	// profile, with the way to get an estimate.
+	for _, production := range []bool{false, true} {
+		v := Assess(p, limits, production)
+		if v.Level != Warn {
+			t.Fatalf("production=%v: level = %v (%q), want WARN", production, v.Level, v.Reasons)
+		}
+		if len(v.Reasons) != 1 || !strings.Contains(v.Reasons[0], "nostat") || !strings.Contains(v.Reasons[0], "unknown size") || !strings.Contains(v.Reasons[0], "ANALYZE") {
+			t.Errorf("production=%v: reasons = %q", production, v.Reasons)
+		}
+		if !strings.Contains(v.Summary, "nostat full ~?") {
+			t.Errorf("production=%v: summary = %q", production, v.Summary)
+		}
 	}
 }
 
