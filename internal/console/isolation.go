@@ -42,6 +42,11 @@ type isolationEnv struct {
 	clientGID     func(sys *sysconf.Config) (int, error)
 	// accountExists reports whether uid names an account.
 	accountExists func(uid int) bool
+	// relay reports a session opened through a relay (sysconf.SessionRelay).
+	relay func() string
+	// machinectlUIDs lists the callers of running `machinectl shell`
+	// processes (sysconf.MachinectlShellUIDs).
+	machinectlUIDs func() ([]int, bool)
 }
 
 func realIsolationEnv(tty *os.File) isolationEnv {
@@ -69,6 +74,8 @@ func realIsolationEnv(tty *os.File) isolationEnv {
 			_, err := user.LookupId(strconv.Itoa(uid))
 			return err == nil
 		},
+		relay:          sysconf.SessionRelay,
+		machinectlUIDs: sysconf.MachinectlShellUIDs,
 	}
 }
 
@@ -144,6 +151,9 @@ func checkIsolation(io IO, env isolationEnv, p config.Profile) (*isolation, erro
 		return nil, fmt.Errorf("console: the terminal belongs to uid %d, which may reach the console: its owner can read it and type into it; open a terminal in %q's own session",
 			owner, sys.ServiceUser)
 	}
+	if err := checkRelay(io, env, sys, agentSide); err != nil {
+		return nil, err
+	}
 	gid, err := env.clientGID(sys)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v (run locksql install)", ErrConfig, err)
@@ -152,6 +162,32 @@ func checkIsolation(io IO, env isolationEnv, p config.Profile) (*isolation, erro
 	iso.allowed = func(uid int) bool { return env.clientAllowed(sys, uid) }
 	io.Println(fmt.Sprintf("separated mode: console account %s, clients of group %s, display %s", name, sys.ClientGroup, iso.display.Kind))
 	return iso, nil
+}
+
+// checkRelay refuses a session of the console account that relays the
+// terminal of an account on the agent's side. loginuid and the terminal
+// owner name the console account there, so checkIsolation alone accepts
+// it. A machinectl shell is accepted only when every running `machinectl
+// shell` belongs to an account out of the agent's reach; an SSH login from
+// this machine is refused, since its client cannot be identified.
+func checkRelay(io IO, env isolationEnv, sys *sysconf.Config, agentSide func(uid int) bool) error {
+	switch env.relay() {
+	case sysconf.RelayMachinectl:
+		uids, ok := env.machinectlUIDs()
+		if !ok || len(uids) == 0 {
+			return fmt.Errorf("console: refused: this session is a machinectl shell and the console cannot tell which account opened it; log in as %q in a session of its own", sys.ServiceUser)
+		}
+		for _, uid := range uids {
+			if agentSide(uid) {
+				return fmt.Errorf("console: refused: this machinectl shell may relay the terminal of uid %d, which may reach the console: that account could read it and type into it; log in as %q in a session of its own",
+					uid, sys.ServiceUser)
+			}
+		}
+		io.Println("started from a machinectl shell of an account outside the client group")
+	case sysconf.RelaySSHLoopback:
+		return fmt.Errorf("console: refused: this session is an ssh from this machine, which relays the terminal of an account the console cannot identify; log in as %q in a session of its own (or ssh from another machine)", sys.ServiceUser)
+	}
+	return nil
 }
 
 // socketPath is the socket of a project and profile.
