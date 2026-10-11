@@ -198,3 +198,32 @@ func TestRefusalOverAReferenceHoldsNoValue(t *testing.T) {
 		t.Errorf("the typed value reaches the audit log:\n%s", log)
 	}
 }
+
+// A statement refused for carrying credentials leaves no secret in the
+// audit log: its literals are redacted from the record.
+func TestCredentialRefusalKeepsTheSecretOutOfTheAudit(t *testing.T) {
+	for _, q := range []string{
+		"SET PASSWORD = 'hunter2-secret'",
+		"SET PASSWORD FOR bob = PASSWORD('hunter2-secret')",
+		"CREATE USER bob IDENTIFIED BY 'hunter2-secret'",
+		"ALTER USER bob IDENTIFIED WITH mysql_native_password AS 'hunter2-secret'",
+		"GRANT ALL ON *.* TO bob IDENTIFIED BY 'hunter2-secret'",
+	} {
+		h := newHarness(t, uatProfile())
+		resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
+		wantCode(t, resp, ipc.CodeRefused)
+		if resp.Error.Data.Code != refusal.Forbidden {
+			t.Errorf("%s: code %s (%q)", q, resp.Error.Data.Code, resp.Error.Message)
+		}
+		log := h.auditLog(t)
+		if strings.Contains(log, "hunter2") {
+			t.Errorf("%s: the audit log holds the secret:\n%s", q, log)
+		}
+		if !strings.Contains(log, `"event":"refused"`) || !strings.Contains(log, "<redacted>") {
+			t.Errorf("%s: refusal not audited with a redacted statement:\n%s", q, log)
+		}
+		if strings.Contains(h.io.output(), "hunter2") {
+			t.Errorf("%s: the console shows the secret", q)
+		}
+	}
+}

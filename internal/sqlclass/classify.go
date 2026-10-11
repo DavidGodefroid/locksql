@@ -355,6 +355,28 @@ func isCall(toks []Token, k int) bool {
 	return k+1 < len(toks) && toks[k+1].Kind == TokPunct && toks[k+1].Text == "("
 }
 
+// RedactLiterals returns sql with every string, number and quoted
+// identifier replaced by '<redacted>', for the record of a statement that
+// may carry a secret. Text that does not lex is replaced whole.
+func RedactLiterals(d Dialect, sql string) string {
+	text := strings.TrimSpace(sql)
+	toks, err := Lex(d, text)
+	if err != nil {
+		return "<redacted: the statement carries credentials>"
+	}
+	var b strings.Builder
+	last := 0
+	for _, t := range toks {
+		if t.Kind == TokString || t.Kind == TokNumber || t.Kind == TokQuotedIdent {
+			b.WriteString(text[last:t.Pos])
+			b.WriteString("'<redacted>'")
+			last = t.End
+		}
+	}
+	b.WriteString(text[last:])
+	return b.String()
+}
+
 // ForbiddenFunction reports whether name (folded) is on the list of
 // functions refused at every tier, by exact name (not by prefix).
 func ForbiddenFunction(name string) bool { return forbiddenFuncs.has(name) }
@@ -591,7 +613,9 @@ func checkPrivileged(d Dialect, toks []Token) error {
 	}
 	for _, t := range toks {
 		if credentialStmt && t.Kind == TokWord && credentialWords.has(t.Text) {
-			return refuseAt(t, refusal.Forbidden, "statements that carry credentials (PASSWORD, IDENTIFIED) are not allowed: the audit log would record the secret")
+			r := refuseAt(t, refusal.Forbidden, "statements that carry credentials (PASSWORD, IDENTIFIED) are not allowed: the audit log would record the secret")
+			r.Secret = true
+			return r
 		}
 	}
 	switch first {

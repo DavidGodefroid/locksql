@@ -289,6 +289,10 @@ func (s *Server) refuseWarned(ctx context.Context, id int64, pl *plan, class str
 // known, the place in src it points at.
 func (s *Server) refuseRec(id int64, rec audit.Record, src string, r *refusal.Error) ipc.Response {
 	info := r.Info(src, 0)
+	if r.Secret {
+		// The statement may carry a password: the record keeps its shape.
+		rec.SQL = sqlclass.RedactLiterals(s.dialect, rec.SQL)
+	}
 	rec.Error, rec.Code, rec.Span = r.Reason, string(info.Code), info.Span
 	s.audit(rec)
 	s.println(paint.Fail("refused [" + string(info.Code) + "]: " + safeText(r.Reason, false)))

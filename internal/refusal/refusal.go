@@ -194,6 +194,9 @@ type Error struct {
 	// punctuation sign found there, "" for a literal or a quoted name.
 	Pos   int
 	Token string
+	// Secret marks a statement that may carry a secret (a password): its
+	// literals must not be recorded.
+	Secret bool
 }
 
 func (e *Error) Error() string { return e.Reason }
