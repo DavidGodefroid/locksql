@@ -40,10 +40,11 @@ type helpRow struct{ name, args, desc string }
 var helpSections = []helpSection{
 	{title: "Human commands", rows: []helpRow{
 		{"locksql", "", "wire agents and lead to the separated setup (or start the console)"},
+		{"setup", "[--project DIR] [--yes] [--engine E ...]", "install, wire agents and add a database profile,\nthen print the command that starts the console"},
 		{"console", "[--profile P] [--project DIR] [--skip-permissions]", "run the approval console"},
 		{"forget", "--profile P", "remove the keychain secret"},
-		{"install", "[--client USER] [--print] [--trust-binary]", "separate the console from the agent (sudo)\n(--trust-binary: copy a binary root does not own)"},
-		{"doctor", "[--profile P]", "check that this machine is safe-ready"},
+		{"install", "[--client USER] [--print] [--trust-binary] [--yes]", "separate the console from the agent (sudo)\n(--trust-binary: copy a binary root does not own)"},
+		{"doctor", "[--profile P] [--fix [--yes]]", "check that this machine is safe-ready\n(--fix: repair permissions, socket dir, wiring)"},
 		{"init", "[claude|codex|cursor|gemini ...]", "write agent integration files into the project\n(default: the agents found on this machine)"},
 	}},
 	{title: "Client commands", rows: []helpRow{
@@ -158,6 +159,8 @@ func runEnv(e env, args []string) int {
 		return runInit(e, args[1:])
 	case "install":
 		return runInstall(e, args[1:])
+	case "setup":
+		return runSetup(e, args[1:])
 	case "doctor":
 		return runDoctor(e, args[1:])
 	case "pii":
