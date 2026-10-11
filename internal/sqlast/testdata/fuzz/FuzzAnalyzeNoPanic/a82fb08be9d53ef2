@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT MIN(loCksql_n)FROM(SELECT COT()loCksql_n UNION SELECT COUNT())")
