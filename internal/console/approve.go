@@ -376,7 +376,7 @@ func loosens(changes []config.Change) bool {
 }
 
 // adopt records p as the approved policy and enforces it. A change of the
-// connection settings, the transport (tls, tls_ca, the ssh table) included,
+// connection settings, the transport (the tls settings, the ssh table) included,
 // ends the session: the open connection no longer matches the policy.
 func (s *Server) adopt(p config.Policy, decision string) error {
 	if s.cfg.StateDir != "" && s.cfg.ApprovedKey != "" {
@@ -404,7 +404,8 @@ func (s *Server) adopt(p config.Policy, decision string) error {
 	}
 	if old.Engine != n.Engine || old.Host != n.Host || old.Port != n.Port || old.Path != n.Path ||
 		old.User != n.User || old.Database != n.Database ||
-		old.TLS != n.TLS || old.TLSCA != n.TLSCA || !sameSSH(old.SSH, n.SSH) {
+		old.TLS != n.TLS || old.TLSCA != n.TLSCA || old.TLSCert != n.TLSCert || old.TLSKey != n.TLSKey ||
+		old.TLSServerName != n.TLSServerName || !sameSSH(old.SSH, n.SSH) {
 		s.println("connection settings changed: the session ends; start the console again")
 		s.End("connection settings changed")
 	}

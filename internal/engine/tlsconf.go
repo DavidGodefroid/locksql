@@ -16,8 +16,9 @@ import (
 // require encrypt without verifying, except require with tls_ca, which is
 // verify-ca as in libpq; verify-ca checks the chain against
 // tls_ca (or the system roots); verify-full checks the chain and that the
-// certificate names host. "" is prefer, the mode of policies approved before
-// the setting existed.
+// certificate names host (or tls_server_name). "" is prefer, the mode of
+// policies approved before the setting existed. tls_cert and tls_key, when
+// set, are the client certificate presented to a server that asks for one.
 func TLSConfig(p config.Profile) (*tls.Config, error) {
 	mode := p.TLS
 	if mode == "" {
@@ -27,6 +28,13 @@ func TLSConfig(p config.Profile) (*tls.Config, error) {
 		return nil, nil
 	}
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if p.TLSCert != "" || p.TLSKey != "" {
+		cert, err := ClientCertificate(p.TLSCert, p.TLSKey)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Certificates = []tls.Certificate{cert}
+	}
 	if mode == config.TLSRequire && p.TLSCA != "" {
 		mode = config.TLSVerifyCA // as libpq: require with a root CA verifies the chain
 	}
@@ -45,6 +53,9 @@ func TLSConfig(p config.Profile) (*tls.Config, error) {
 	cfg.RootCAs = roots
 	if mode == config.TLSVerifyFull {
 		cfg.ServerName = p.Host
+		if p.TLSServerName != "" {
+			cfg.ServerName = p.TLSServerName
+		}
 		return cfg, nil
 	}
 	// verify-ca: the chain, not the name. crypto/tls has no such mode, so
@@ -62,6 +73,37 @@ func TLSConfig(p config.Profile) (*tls.Config, error) {
 		return err
 	}
 	return cfg, nil
+}
+
+// ClientCertificate loads the client certificate of tls_cert and its key
+// from tls_key. The key must be readable by its owner only, as an ssh key.
+// Errors name the files, never their content.
+func ClientCertificate(certFile, keyFile string) (tls.Certificate, error) {
+	if certFile == "" || keyFile == "" {
+		return tls.Certificate{}, errors.New("tls_cert and tls_key go together: set both, or neither")
+	}
+	st, err := os.Stat(keyFile)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("tls_key: %w", err)
+	}
+	if st.Mode().Perm()&0o077 != 0 {
+		return tls.Certificate{}, fmt.Errorf("tls_key: %s is readable by others (mode %04o); chmod 600 it", keyFile, st.Mode().Perm())
+	}
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("tls_cert: %w", err)
+	}
+	keyPEM, err := os.ReadFile(keyFile)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("tls_key: %w", err)
+	}
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	clear(keyPEM)
+	if err != nil {
+		// crypto/tls says which half it could not use, never the key.
+		return tls.Certificate{}, fmt.Errorf("tls_cert %s and tls_key %s: %w", certFile, keyFile, err)
+	}
+	return cert, nil
 }
 
 // rootPool is the PEM bundle at path, or the system roots when path is "".

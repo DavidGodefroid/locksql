@@ -514,7 +514,8 @@ the socket and is audited.
 
 ### TLS to the database
 
-`tls` and `tls_ca` set the transport security of a network profile:
+`tls` and `tls_ca` set the transport security of a network profile;
+`tls_cert`, `tls_key` and `tls_server_name` are optional:
 
 ```toml
 [profiles.prod]
@@ -522,6 +523,9 @@ engine = "postgres"
 host   = "db.example.com"
 tls    = "verify-full"          # disable | prefer | require | verify-ca | verify-full
 tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
+tls_cert = "/home/locksql/.config/locksql/app.crt"  # optional client certificate (PEM)
+tls_key  = "/home/locksql/.config/locksql/app.key"  # its private key (PEM, unencrypted, mode 0600)
+tls_server_name = "db.internal"  # optional: the name verify-full checks instead of host
 ```
 
 - Default: `verify-full` for a remote host, `prefer` for a Unix socket or a
@@ -530,6 +534,13 @@ tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
 - `tls_ca` is refused with `disable` and `prefer`. With `require`, as in libpq,
   it verifies the chain against `tls_ca` (as `verify-ca`), not the host name.
 - `production = true` refuses `disable` and `prefer` on a remote host.
+- `tls_cert` and `tls_key` go together and need `require` or stronger. The
+  certificate is presented when the server asks for one (PostgreSQL
+  `clientcert`/`cert` in `pg_hba.conf`, MySQL `REQUIRE X509`). The key file
+  is read by the console account and refused when group or others can read
+  it; keep both files in that account's home.
+- `tls_server_name` needs `verify-full`: use it when `host` is an IP address
+  or an alias that the certificate does not name.
 - Through an `ssh` bastion, `tls` protects the leg from the bastion to the
   database, and its default follows `host` as seen from the bastion (see
   [Reaching a remote server through SSH](#reaching-a-remote-server-through-ssh)).
@@ -591,6 +602,7 @@ The console watches the config and PII files while it runs.
   `idle_timeout` or `max_session`, a higher or removed
   `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
   host, port, engine, user or database, a weaker `tls` or any change of `tls_ca`,
+  `tls_cert`, `tls_key` or `tls_server_name`,
   any change of the `ssh` table (except `ssh.credentials` set to `ask`),
   `ask → keychain`, a removed mask rule or detector, a mask mode
   changed to anything but `redact`, a new allow rule) waits for you. Plans are
@@ -598,8 +610,9 @@ The console watches the config and PII files while it runs.
   `Apply these changes? [y/N]`.
 - If you refuse, the last approved policy stays in force.
 - If an applied change alters the connection target (engine, host, port,
-  path, user or database) or its transport (`tls`, `tls_ca` or the `ssh`
-  table), the session ends: restart the console.
+  path, user or database) or its transport (`tls`, `tls_ca`, `tls_cert`,
+  `tls_key`, `tls_server_name` or the `ssh` table), the session ends:
+  restart the console.
 
 The approved policy is stored outside the repository, in
 `<user state dir>/locksql/approved/`.
