@@ -46,6 +46,7 @@ var helpSections = []helpSection{
 		{"install", "[--client USER] [--print] [--trust-binary] [--yes]", "separate the console from the agent (sudo)\n(--trust-binary: copy a binary root does not own)"},
 		{"doctor", "[--profile P] [--fix [--yes]]", "check that this machine is safe-ready\n(--fix: repair permissions, socket dir, wiring)"},
 		{"init", "[claude|codex|cursor|gemini ...]", "write agent integration files into the project\n(default: the agents found on this machine)"},
+		{"stats", "[--log PATH] [--top N] [--export]", "count the refusals of the local audit log\n(--export: anonymised report, SQL shapes only)"},
 	}},
 	{title: "Client commands", rows: []helpRow{
 		{"status", "[--profile P]", ""},
@@ -171,6 +172,8 @@ func runEnv(e env, args []string) int {
 		return runSetup(e, args[1:])
 	case "doctor":
 		return runDoctor(e, args[1:])
+	case "stats":
+		return runStats(e, args[1:])
 	case "pii":
 		return runPII(e, args[1:])
 	case "tables", "describe", "plan", "run", "request", "logout":

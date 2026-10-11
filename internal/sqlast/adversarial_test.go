@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -18,6 +19,8 @@ func wantRefused(t *testing.T, d sqlclass.Dialect, sql string) {
 	var r *sqlclass.Refusal
 	if !errors.As(err, &r) {
 		t.Errorf("%s %q: got %v, want a refusal", d, sql, err)
+	} else if !r.Code.Known() || r.Code == refusal.Policy {
+		t.Errorf("%s %q: refusal without a code: %v", d, sql, err)
 	}
 }
 

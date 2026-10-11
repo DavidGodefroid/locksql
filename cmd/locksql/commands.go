@@ -318,6 +318,7 @@ func usageFail(e env, name, usage, msg string) int {
 // otherwise. With --json the error also goes to stdout as {"error": ...}.
 func fail(e env, name string, asJSON bool, err error) int {
 	fmt.Fprintf(e.stderr, "locksql %s: %s\n", name, client.ErrorText(err))
+	fmt.Fprint(e.stderr, client.RefusalDetail(err))
 	if asJSON {
 		_ = client.WriteJSON(e.stdout, map[string]client.ErrorInfo{"error": client.DescribeError(err)})
 	}

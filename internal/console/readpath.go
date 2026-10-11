@@ -3,7 +3,6 @@ package console
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/pii"
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlast"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 	"github.com/DavidGodefroid/locksql/internal/weight"
@@ -180,80 +180,84 @@ func (s *Server) astEnv(ctx context.Context, sess engine.Session, db string, unm
 	}
 }
 
-// splitExplain removes a leading EXPLAIN keyword.
-func splitExplain(d sqlclass.Dialect, sql string) (string, bool) {
+// splitExplain removes a leading EXPLAIN keyword. off is the offset of the
+// statement returned in sql without its leading blanks.
+func splitExplain(d sqlclass.Dialect, sql string) (inner string, explain bool, off int) {
 	toks, err := sqlclass.Lex(d, strings.TrimSpace(sql))
 	if err != nil || len(toks) < 2 || toks[0].Kind != sqlclass.TokWord || toks[0].Text != "EXPLAIN" {
-		return sql, false
+		return sql, false, 0
 	}
 	text := strings.TrimSpace(sql)
-	return text[toks[1].Pos:], true
+	return text[toks[1].Pos:], true, toks[1].Pos
 }
 
 // readPlan parses and analyses a read statement, then weighs it and its
-// k-anonymity checks with EXPLAIN. The plan keeps the analysis for the run.
-func (s *Server) readPlan(ctx context.Context, sess engine.Session, pl *plan, sql string) (string, bool, error) {
-	if reason, refused, err := s.analyzeRead(ctx, sess, pl, sql); err != nil || refused {
-		return reason, refused, err
+// k-anonymity checks with EXPLAIN. The plan keeps the analysis for the
+// run. It returns the refusal, if any; an error is the engine's.
+func (s *Server) readPlan(ctx context.Context, sess engine.Session, pl *plan, sql string) (*refusal.Error, error) {
+	if r, err := s.analyzeRead(ctx, sess, pl, sql); err != nil || r != nil {
+		return r, err
 	}
 	an := pl.an
 	ep, err := sess.Explain(ctx, pl.db, pl.runSQL)
 	if err != nil {
 		if errors.Is(err, engine.ErrConnLost) {
-			return "", false, err
+			return nil, err
 		}
 		s.println("EXPLAIN failed: " + safeText(s.errText(err, pl.runSQL, false, pl), false))
-		return "EXPLAIN failed: " + genericFailure, true, nil
+		return refusal.New(refusal.Engine, "EXPLAIN failed: "+genericFailure), nil
 	}
 	pl.explain = &ep
 	for _, k := range an.KChecks {
 		kp, err := sess.Explain(ctx, pl.db, k.SQL)
 		if err != nil {
 			if errors.Is(err, engine.ErrConnLost) {
-				return "", false, err
+				return nil, err
 			}
 			s.println("EXPLAIN of the k-anonymity check failed: " + safeText(s.errText(err, k.SQL, false, pl), false))
-			return "the k-anonymity check of this statement cannot be planned: " + genericFailure, true, nil
+			return refusal.New(refusal.Engine, "the k-anonymity check of this statement cannot be planned: "+genericFailure), nil
 		}
 		pl.kExplains = append(pl.kExplains, kp)
 	}
-	if reason, refused := s.assessK(pl); refused && !estimatesHidden(pl) {
-		return reason, true, nil
+	if r := s.assessK(pl); r != nil && !estimatesHidden(pl) {
+		return r, nil
 	}
-	return "", false, nil
+	return nil, nil
 }
 
 // assessK weighs the k-anonymity counts of a plan under the limits in
-// force. It reports the refusal reason of the first one refused.
-func (s *Server) assessK(pl *plan) (string, bool) {
+// force. It returns the refusal of the first one refused.
+func (s *Server) assessK(pl *plan) *refusal.Error {
 	for _, kp := range pl.kExplains {
 		if v := weight.Assess(kp, s.profile.Limits, s.profile.Production); v.Level == weight.Refuse {
-			return "weight check of the k-anonymity count: " + strings.Join(v.Reasons, "; "), true
+			return refusal.New(refusal.Cost, "weight check of the k-anonymity count: "+strings.Join(v.Reasons, "; "))
 		}
 	}
-	return "", false
+	return nil
 }
 
 // analyzeRead parses and analyses a read statement and sets the plan's
 // analysis and the statement that runs (placeholder values substituted).
-func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan, sql string) (string, bool, error) {
+// sql starts where the agent's statement does, pl.base bytes into pl.src.
+// It returns the refusal, if any; an error is the engine's.
+func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan, sql string) (*refusal.Error, error) {
 	parsed, err := sqlast.Parse(s.dialect, sql)
 	if err != nil {
-		return err.Error(), true, nil
+		return shifted(err, pl.base), nil
 	}
 	an, err := sqlast.Analyze(parsed, s.astEnv(ctx, sess, pl.db, pl.unmask))
 	if err != nil {
 		var r *sqlclass.Refusal
 		if errors.As(err, &r) {
-			return err.Error(), true, nil
+			return shifted(err, pl.base), nil
 		}
-		return "", false, err
+		return nil, err
 	}
 	pl.an = an
 	if len(s.rules.Mask) > 0 {
 		for _, rel := range an.Relations {
 			if pii.StatementTextRelation(s.dialect, rel) {
-				return rel[strings.LastIndexByte(rel, '.')+1:] + " holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist", true, nil
+				return refusal.New(refusal.SystemObject, rel[strings.LastIndexByte(rel, '.')+1:]+" holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist"), nil
 			}
 		}
 	}
@@ -263,7 +267,7 @@ func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan,
 		body = parsed.SQL[parsed.Query.Sp.Pos:parsed.Query.Sp.End]
 	}
 	pl.runSQL = an.RunSQL(body)
-	return "", false, nil
+	return nil, nil
 }
 
 // writePlan checks a write before it runs. While mask rules exist, a
@@ -273,36 +277,36 @@ func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan,
 // resolved to their base columns and masked by provenance when it runs,
 // and anything the analysis cannot resolve is refused. Other writes pass
 // the checks by column name (pii.PlanCheck).
-func (s *Server) writePlan(ctx context.Context, sess engine.Session, pl *plan) (string, bool, error) {
+func (s *Server) writePlan(ctx context.Context, sess engine.Session, pl *plan) (*refusal.Error, error) {
 	st := pl.st
 	if len(s.rules.Mask) == 0 || !sqlast.NeedsWriteAnalysis(s.dialect, st.SQL) {
 		if err := pii.PlanCheck(st, s.rules, s.dialect, sess.OriginColumns()); err != nil {
-			return err.Error(), true, nil
+			return shifted(err, pl.base), nil
 		}
-		return "", false, nil
+		return nil, nil
 	}
 	if err := pii.WriteValuesViolation(st, s.rules, s.dialect); err != nil {
-		return err.Error(), true, nil
+		return shifted(err, pl.base), nil
 	}
 	parsed, err := sqlast.ParseWrite(s.dialect, st.SQL)
 	if err != nil {
-		return err.Error(), true, nil
+		return shifted(err, pl.base), nil
 	}
 	an, err := sqlast.Analyze(parsed, s.astEnv(ctx, sess, pl.db, false))
 	if err != nil {
 		var r *sqlclass.Refusal
 		if errors.As(err, &r) {
-			return err.Error(), true, nil
+			return shifted(err, pl.base), nil
 		}
-		return "", false, err
+		return nil, err
 	}
 	for _, rel := range an.Relations {
 		if pii.StatementTextRelation(s.dialect, rel) {
-			return rel[strings.LastIndexByte(rel, '.')+1:] + " holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist", true, nil
+			return refusal.New(refusal.SystemObject, rel[strings.LastIndexByte(rel, '.')+1:]+" holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist"), nil
 		}
 	}
 	pl.an, pl.runSQL = an, st.SQL
-	return "", false, nil
+	return nil, nil
 }
 
 // clientSummary is the plan summary a client may see: row estimates and
@@ -329,27 +333,27 @@ func estimatesHidden(pl *plan) bool {
 const hiddenWeightRefusal = "refused by the weight check (the details are shown on the console)"
 
 // kCheck runs the k-anonymity row counts of an approved plan. It returns
-// the refusal reason, if any.
-func (s *Server) kCheck(ctx context.Context, sess engine.Session, pl *plan) (string, error) {
+// the refusal, if any.
+func (s *Server) kCheck(ctx context.Context, sess engine.Session, pl *plan) (*refusal.Error, error) {
 	k := s.profile.Limits.KAnonymity
 	if pl.an == nil || pl.unmask || k <= 1 {
-		return "", nil
+		return nil, nil
 	}
 	for _, c := range pl.an.KChecks {
 		st := sqlclass.Statement{Class: sqlclass.Read, Kind: "select", SQL: c.SQL, Limit: 1}
 		res, err := sess.Run(ctx, pl.db, st, 1)
 		if err != nil {
 			if errors.Is(err, engine.ErrConnLost) || ctx.Err() != nil {
-				return "", err
+				return nil, err
 			}
 			s.println("k-anonymity check failed: " + safeText(s.errText(err, c.SQL, false, pl), false))
-			return "the k-anonymity check could not run: " + genericFailure, nil
+			return refusal.New(refusal.Engine, "the k-anonymity check could not run: "+genericFailure), nil
 		}
 		if len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
 			if c.Grouped {
 				continue
 			}
-			return fmt.Sprintf("fewer than %d rows match the PII filter (k-anonymity)", k), nil
+			return refusal.Newf(refusal.KAnon, "fewer than %d rows match the PII filter (k-anonymity)", k), nil
 		}
 		v := res.Rows[0][0]
 		if v == nil && c.Grouped {
@@ -357,16 +361,16 @@ func (s *Server) kCheck(ctx context.Context, sess engine.Session, pl *plan) (str
 		}
 		n, ok := toInt(v)
 		if !ok {
-			return "the k-anonymity check returned no count", nil
+			return refusal.New(refusal.Engine, "the k-anonymity check returned no count"), nil
 		}
 		if n < int64(k) {
 			if c.Grouped {
-				return fmt.Sprintf("a group would cover fewer than %d rows (k-anonymity)", k), nil
+				return refusal.Newf(refusal.KAnon, "a group would cover fewer than %d rows (k-anonymity)", k), nil
 			}
-			return fmt.Sprintf("fewer than %d rows match the PII filter (k-anonymity)", k), nil
+			return refusal.Newf(refusal.KAnon, "fewer than %d rows match the PII filter (k-anonymity)", k), nil
 		}
 	}
-	return "", nil
+	return nil, nil
 }
 
 func toInt(v any) (int64, bool) {

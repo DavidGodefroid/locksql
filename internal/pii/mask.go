@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/DavidGodefroid/locksql/internal/engine"
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -353,7 +354,7 @@ func StatsViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
 	a := &aliasCheck{toks: toks, d: d}
 	for i := range toks {
 		if n := a.name(i); statsRelations[n] {
-			return &sqlclass.Refusal{Reason: fmt.Sprintf("%s holds sample values of table columns, PII columns included, that could not be masked; it cannot be read while PII mask rules exist", strings.ToLower(n))}
+			return refusal.Newf(refusal.SystemObject, "%s holds sample values of table columns, PII columns included, that could not be masked; it cannot be read while PII mask rules exist", strings.ToLower(n)).At(toks[i].Pos, sqlclass.TokenText(toks[i]))
 		}
 		if a.name(i) == "" || a.isPunct(i-1, ".") {
 			continue
@@ -364,7 +365,7 @@ func StatsViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
 			rel += "." + a.name(j+2)
 		}
 		if StatementTextRelation(d, rel) {
-			return &sqlclass.Refusal{Reason: fmt.Sprintf("%s holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist", strings.ToLower(rel))}
+			return refusal.Newf(refusal.SystemObject, "%s holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist", strings.ToLower(rel)).At(toks[i].Pos, sqlclass.TokenText(toks[i]))
 		}
 	}
 	return nil
@@ -471,10 +472,18 @@ func (a *aliasCheck) matched(i int) bool {
 
 func fold(s string) string { return strings.ToUpper(strings.ToLower(s)) }
 
-func refusal(format string, args ...any) error {
-	return &sqlclass.Refusal{Reason: fmt.Sprintf(format, args...) +
-		"; this engine cannot tell where such a column comes from, so it could not be masked." +
-		" Select PII columns by their plain name (SELECT email FROM ...), without alias or expression"}
+func aliasRefusal(format string, args ...any) *sqlclass.Refusal {
+	return refusal.New(refusal.MaskUncertain, fmt.Sprintf(format, args...)+
+		"; this engine cannot tell where such a column comes from, so it could not be masked."+
+		" Select PII columns by their plain name (SELECT email FROM ...), without alias or expression")
+}
+
+// at points r at token i and returns it.
+func (a *aliasCheck) at(r *sqlclass.Refusal, i int) *sqlclass.Refusal {
+	if i >= 0 && i < len(a.toks) {
+		r.At(a.toks[i].Pos, sqlclass.TokenText(a.toks[i]))
+	}
+	return r
 }
 
 // clauseWords switch the clause of the current parenthesis level.
@@ -544,7 +553,7 @@ func (a *aliasCheck) run() error {
 			if later, _ := a.laterArm(i); later {
 				// TABLE t is SELECT * FROM t: every column of t under the
 				// first arm's labels.
-				return refusal("a later UNION/INTERSECT/EXCEPT arm is TABLE %s, which puts all its columns, PII included, under the first arm's labels", strings.ToLower(a.name(i+1)))
+				return a.at(aliasRefusal("a later UNION/INTERSECT/EXCEPT arm is TABLE %s, which puts all its columns, PII included, under the first arm's labels", strings.ToLower(a.name(i+1))), i)
 			}
 		}
 		if a.isWord(i, "RETURNING") {
@@ -688,7 +697,7 @@ func (a *aliasCheck) item(sel, s, e int, prev []selectItem, later bool, head []s
 		// A star in a later arm puts its sources' columns, PII included,
 		// under the head's labels, which no rule may match.
 		if e-s == 1 && a.armBearing(sel) || e-s > 1 && a.rows[a.name(e-3)] {
-			return selectItem{}, refusal("a later UNION/INTERSECT/EXCEPT arm selects * from a table that may hold PII columns, under the first arm's labels")
+			return selectItem{}, aliasRefusal("a later UNION/INTERSECT/EXCEPT arm selects * from a table that may hold PII columns, under the first arm's labels")
 		}
 		return selectItem{star: true}, nil
 	}
@@ -721,16 +730,16 @@ func (a *aliasCheck) item(sel, s, e int, prev []selectItem, later bool, head []s
 			if pos < len(head) && head[pos].label == ref && !hasStar(head[:pos+1]) && !hasStar(prev) {
 				return selectItem{label: label}, nil
 			}
-			return selectItem{}, refusal("PII column %s appears in a later UNION/INTERSECT/EXCEPT arm under another column's label", strings.ToLower(ref))
+			return selectItem{}, aliasRefusal("PII column %s appears in a later UNION/INTERSECT/EXCEPT arm under another column's label", strings.ToLower(ref))
 		}
 		if alias != "" && alias != ref {
-			return selectItem{}, refusal("PII column %s is renamed to %s", strings.ToLower(ref), strings.ToLower(alias))
+			return selectItem{}, aliasRefusal("PII column %s is renamed to %s", strings.ToLower(ref), strings.ToLower(alias))
 		}
 		return selectItem{label: label}, nil
 	}
 	for j := s; j < e; j++ {
 		if a.matched(j) && !a.insideCount(j) {
-			return selectItem{}, refusal("PII column %s is used inside an expression", strings.ToLower(a.name(j)))
+			return selectItem{}, a.at(aliasRefusal("PII column %s is used inside an expression", strings.ToLower(a.name(j))), j)
 		}
 	}
 	if err := a.nestedRows(s, e, "an expression"); err != nil {
@@ -760,7 +769,7 @@ func (a *aliasCheck) nestedRows(s, e int, where string) error {
 			continue
 		}
 		if a.isWord(k, "TABLE") && a.name(k+1) != "" {
-			return refusal("TABLE %s is used in %s, which puts its columns, PII included, under another label", strings.ToLower(a.name(k+1)), where)
+			return a.at(aliasRefusal("TABLE %s is used in %s, which puts its columns, PII included, under another label", strings.ToLower(a.name(k+1)), where), k)
 		}
 		if !a.isStar(k) {
 			continue
@@ -774,7 +783,7 @@ func (a *aliasCheck) nestedRows(s, e int, where string) error {
 			bearing = true
 		}
 		if bearing {
-			return refusal("a subquery selects * in %s, which puts its columns, PII included, under another label", where)
+			return aliasRefusal("a subquery selects * in %s, which puts its columns, PII included, under another label", where)
 		}
 	}
 	return nil
@@ -843,18 +852,18 @@ func (a *aliasCheck) columnLists() error {
 					bearing := false
 					for k := b + 1; k < a.match[b]; k++ {
 						if a.matched(k) {
-							return refusal("PII column %s is renamed by the column list of %s", strings.ToLower(a.name(k)), strings.ToLower(a.name(p)))
+							return a.at(aliasRefusal("PII column %s is renamed by the column list of %s", strings.ToLower(a.name(k)), strings.ToLower(a.name(p))), k)
 						}
 						if a.rows[a.name(k)] {
 							bearing = true
 						}
 						if a.isWord(k, "TABLE") && a.name(k+1) != "" {
-							return refusal("the column list of %s renames the columns of TABLE %s", strings.ToLower(a.name(p)), strings.ToLower(a.name(k+1)))
+							return aliasRefusal("the column list of %s renames the columns of TABLE %s", strings.ToLower(a.name(p)), strings.ToLower(a.name(k+1)))
 						}
 					}
 					for k := b + 1; k < a.match[b]; k++ {
 						if a.isStar(k) && (a.isPunct(k-1, ".") && a.rows[a.name(k-2)] || !a.isPunct(k-1, ".") && bearing) {
-							return refusal("the column list of %s renames the columns of a * that may hold PII columns", strings.ToLower(a.name(p)))
+							return aliasRefusal("the column list of %s renames the columns of a * that may hold PII columns", strings.ToLower(a.name(p)))
 						}
 					}
 				}
@@ -867,7 +876,7 @@ func (a *aliasCheck) columnLists() error {
 		prev := p - 1
 		if a.isWord(prev, "AS") || a.isPunct(prev, ")") ||
 			(a.name(prev) != "" && !(a.toks[prev].Kind == sqlclass.TokWord && notAlias[a.toks[prev].Text])) {
-			return refusal("the column list of %s renames table columns by position", strings.ToLower(a.name(p)))
+			return aliasRefusal("the column list of %s renames table columns by position", strings.ToLower(a.name(p)))
 		}
 	}
 	return nil
@@ -952,9 +961,9 @@ func (a *aliasCheck) wholeRow(s, e int) error {
 		} else if a.isPunct(j-1, ".") || a.isPunct(j+1, ".") || a.isPunct(j+1, "(") {
 			continue // a column, a qualifier or a function name
 		}
-		return &sqlclass.Refusal{Reason: fmt.Sprintf("the whole row of %s is used as a value; this engine gives such a column no origin, so its PII columns could not be masked."+
+		return a.at(refusal.Newf(refusal.MaskUncertain, "the whole row of %s is used as a value; this engine gives such a column no origin, so its PII columns could not be masked."+
 			" List the columns instead (SELECT %s.id, %s.email ...); a column named like its table must be qualified (t.col)",
-			strings.ToLower(n), strings.ToLower(n), strings.ToLower(n))}
+			strings.ToLower(n), strings.ToLower(n), strings.ToLower(n)), j)
 	}
 	return nil
 }
@@ -1159,7 +1168,7 @@ func (a *aliasCheck) spanLeak(s, e int, clause []string, where string) error {
 	}
 	for k := s; k < e; k++ {
 		if a.matched(k) && !a.insideCount(k) {
-			return refusal("PII column %s is used in %s", strings.ToLower(a.name(k)), where)
+			return a.at(aliasRefusal("PII column %s is used in %s", strings.ToLower(a.name(k)), where), k)
 		}
 		if err := a.attrCall(k, where); err != nil {
 			return err
@@ -1170,7 +1179,7 @@ func (a *aliasCheck) spanLeak(s, e int, clause []string, where string) error {
 			a.isPunct(k-1, ".") || a.isPunct(k+1, ".") || a.isPunct(k+1, "(") {
 			continue
 		}
-		return refusal("the whole row of %s is used in %s", strings.ToLower(n), where)
+		return aliasRefusal("the whole row of %s is used in %s", strings.ToLower(n), where)
 	}
 	return nil
 }
@@ -1274,9 +1283,9 @@ func (a *aliasCheck) attrCall(k int, where string) error {
 		return nil
 	}
 	ln, lx := strings.ToLower(n), strings.ToLower(x)
-	return &sqlclass.Refusal{Reason: fmt.Sprintf("%s.%s is used in %s without a proven origin; PostgreSQL reads it as %s(%s), a function called on the whole row, when %s has no column %s, and the PII columns of that row could not be masked."+
+	return a.at(refusal.Newf(refusal.MaskUncertain, "%s.%s is used in %s without a proven origin; PostgreSQL reads it as %s(%s), a function called on the whole row, when %s has no column %s, and the PII columns of that row could not be masked."+
 		" Use the unqualified column name (SELECT %s FROM ...), or select it as a plain item so that its origin can be checked",
-		ln, lx, where, lx, ln, ln, lx, lx)}
+		ln, lx, where, lx, ln, ln, lx, lx), k)
 }
 
 // writeClauses switch the clause of a level in writtenValues.
@@ -1388,8 +1397,8 @@ func (a *aliasCheck) writtenValues() error {
 			continue
 		}
 		if a.matched(k) && !a.insideCount(k) {
-			return &sqlclass.Refusal{Reason: fmt.Sprintf("this write stores values of PII column %s, which could come back unmasked under the name of the column written (through RETURNING or a later read);"+
-				" do not copy PII columns, or run the write as an unmasked query", strings.ToLower(a.name(k)))}
+			return a.at(refusal.Newf(refusal.MaskedWrite, "this write stores values of PII column %s, which could come back unmasked under the name of the column written (through RETURNING or a later read);"+
+				" do not copy PII columns, or run the write as an unmasked query", strings.ToLower(a.name(k))), k)
 		}
 		if a.d != sqlclass.Postgres || a.resolved {
 			continue
@@ -1402,7 +1411,9 @@ func (a *aliasCheck) writtenValues() error {
 		}
 		if n := a.name(k); n != "" && a.rows[n] && !a.insideCount(k) &&
 			!a.isPunct(k-1, ".") && !a.isPunct(k+1, ".") && !a.isPunct(k+1, "(") {
-			return refusal("the whole row of %s is used in %s", strings.ToLower(n), where)
+			r := a.at(aliasRefusal("the whole row of %s is used in %s", strings.ToLower(n), where), k)
+			r.Code = refusal.MaskedWrite
+			return r
 		}
 	}
 	return a.plantedInserts()
@@ -1412,14 +1423,14 @@ func (a *aliasCheck) writtenValues() error {
 // rule, a value the agent chose. Rules match the column by name only, as
 // for the copies writtenValues refuses: the table written may be a view
 // over a rule table.
-func plantedValue(col string) error {
+func plantedValue(col string) *sqlclass.Refusal {
 	what := "a column under a PII mask rule"
 	if col != "" {
 		what = "PII column " + strings.ToLower(col)
 	}
-	return &sqlclass.Refusal{Reason: fmt.Sprintf("this write stores into %s a value the agent chose (a literal, an expression or another column);"+
+	return refusal.Newf(refusal.MaskedWrite, "this write stores into %s a value the agent chose (a literal, an expression or another column);"+
 		" while PII mask rules exist, a masked column cannot receive values the agent chose, since a later read would mask the value and hand it back as a cell reference to a value the agent already knows."+
-		" Set it to NULL or DEFAULT only, or run the write as an unmasked query", what)}
+		" Set it to NULL or DEFAULT only, or run the write as an unmasked query", what)
 }
 
 // nullOrDefault reports whether [s, e) is the single word NULL or DEFAULT.
@@ -1453,7 +1464,7 @@ func (a *aliasCheck) plantedSet(k int) error {
 	if a.nullOrDefault(k+2, k+3) && a.plantedEnd(k+3) {
 		return nil
 	}
-	return plantedValue(col)
+	return a.at(plantedValue(col), k)
 }
 
 // plantedTuple checks SET (a, b) = (x, y) at the target list opened at k:

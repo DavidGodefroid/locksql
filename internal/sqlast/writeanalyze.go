@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -42,7 +43,7 @@ func (an *analyzer) write(w *Write, parent *scope) ([]column, error) {
 		}
 	}
 	if len(w.Target.Parts) == 1 && an.findCTE(w.Target.Parts[0]) != nil {
-		return nil, refusef("%s names a CTE: a write must name a table", strings.ToLower(w.Target.Parts[0]))
+		return nil, refusef(refusal.InvalidSQL, "%s names a CTE: a write must name a table", strings.ToLower(w.Target.Parts[0]))
 	}
 	target, err := an.tableName(w.Target)
 	if err != nil {
@@ -129,7 +130,7 @@ func (an *analyzer) write(w *Write, parent *scope) ([]column, error) {
 		cols = append(cols, column{name: name, prov: p, labeled: labeled})
 	}
 	if rsc.node.aggregate {
-		return nil, refuse("aggregate functions are not allowed in RETURNING")
+		return nil, refuse(refusal.InvalidSQL, "aggregate functions are not allowed in RETURNING")
 	}
 	return cols, nil
 }
@@ -157,7 +158,7 @@ func (an *analyzer) inserted(w *Write, target *relation, sc, parent *scope, writ
 		for _, n := range w.Columns {
 			c := findCol(target.cols, n)
 			if c == nil {
-				return refusef("unknown column %s", strings.ToLower(n))
+				return refusef(refusal.UnknownName, "unknown column %s", strings.ToLower(n))
 			}
 			cols = append(cols, c)
 		}
@@ -166,7 +167,7 @@ func (an *analyzer) inserted(w *Write, target *relation, sc, parent *scope, writ
 	vsc := &scope{parent: parent, level: sc.level, node: sc.node}
 	for _, row := range w.Rows {
 		if len(row) != len(cols) {
-			return refusef("a VALUES row has %d values for %d columns", len(row), len(cols))
+			return refusef(refusal.InvalidSQL, "a VALUES row has %d values for %d columns", len(row), len(cols))
 		}
 		for i, e := range row {
 			if e == nil {
@@ -176,7 +177,7 @@ func (an *analyzer) inserted(w *Write, target *relation, sc, parent *scope, writ
 			if err != nil {
 				return err
 			}
-			if err := an.store(cols[i], p, isNull(e), written); err != nil {
+			if err := an.locate(an.store(cols[i], p, isNull(e), written), e); err != nil {
 				return err
 			}
 		}
@@ -187,7 +188,7 @@ func (an *analyzer) inserted(w *Write, target *relation, sc, parent *scope, writ
 			return err
 		}
 		if len(src) != len(cols) {
-			return refusef("the query stores %d columns into %d", len(src), len(cols))
+			return refusef(refusal.InvalidSQL, "the query stores %d columns into %d", len(src), len(cols))
 		}
 		for i, c := range src {
 			if err := an.store(cols[i], c.prov, nullColumn(w.Source, i), written); err != nil {
@@ -239,11 +240,11 @@ func (an *analyzer) upsert(w *Write, target *relation, sc *scope, written map[st
 // assign analyses one SET assignment of the target.
 func (an *analyzer) assign(a *Assignment, sc *scope, target *relation, written map[string]Prov) error {
 	if len(a.Qualifier) > 0 && an.findRel(sc, a.Qualifier) != target {
-		return refusef("SET target %s is not a column of the table written", strings.ToLower(strings.Join(append(slices.Clone(a.Qualifier), a.Column), ".")))
+		return refusef(refusal.UnknownName, "SET target %s is not a column of the table written", strings.ToLower(strings.Join(append(slices.Clone(a.Qualifier), a.Column), ".")))
 	}
 	col := findCol(target.cols, a.Column)
 	if col == nil {
-		return refusef("unknown column %s", strings.ToLower(a.Column))
+		return refusef(refusal.UnknownName, "unknown column %s", strings.ToLower(a.Column))
 	}
 	if a.Value == nil {
 		return nil // DEFAULT
@@ -252,7 +253,7 @@ func (an *analyzer) assign(a *Assignment, sc *scope, target *relation, written m
 	if err != nil {
 		return err
 	}
-	return an.store(col, p, isNull(a.Value), written)
+	return an.locate(an.store(col, p, isNull(a.Value), written), a.Value)
 }
 
 // store checks a value p written into the target column col: it must not
@@ -263,10 +264,10 @@ func (an *analyzer) assign(a *Assignment, sc *scope, target *relation, written m
 // cell reference to a value the agent knows).
 func (an *analyzer) store(col *column, p Prov, null bool, written map[string]Prov) error {
 	if p.Sensitive {
-		return refusef("this write stores values of PII column %s, which could come back unmasked under the name of the column written (through RETURNING or a later read); do not copy PII columns, or run the write as an unmasked query", piiNames(p))
+		return refusef(refusal.MaskedWrite, "this write stores values of PII column %s, which could come back unmasked under the name of the column written (through RETURNING or a later read); do not copy PII columns, or run the write as an unmasked query", piiNames(p))
 	}
 	if !null && an.underRule(col.prov) {
-		return refusef("this write stores into PII column %s a value the agent chose (a literal, an expression or another column); while PII mask rules exist, a masked column cannot receive values the agent chose, since a later read would mask the value and hand it back as a cell reference to a value the agent already knows. Set it to NULL or DEFAULT only, or run the write as an unmasked query", strings.ToLower(col.name))
+		return refusef(refusal.MaskedWrite, "this write stores into PII column %s a value the agent chose (a literal, an expression or another column); while PII mask rules exist, a masked column cannot receive values the agent chose, since a later read would mask the value and hand it back as a cell reference to a value the agent already knows. Set it to NULL or DEFAULT only, or run the write as an unmasked query", strings.ToLower(col.name))
 	}
 	if old, ok := written[col.name]; ok {
 		p = union(old, p)

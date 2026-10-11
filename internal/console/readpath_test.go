@@ -544,7 +544,12 @@ func TestWeightVerdictUnderPIIFilterDecidedAtRun(t *testing.T) {
 			if h.sess.runCount() != 0 {
 				t.Fatal("a REFUSE verdict ran")
 			}
-			for _, s := range []string{string(resp.Result), run.Error.Message} {
+			// The plan id is random hex and may hold "000": only the
+			// fields that could carry an estimate are checked.
+			noID := pr
+			noID.PlanID = ""
+			shown, _ := json.Marshal(noID)
+			for _, s := range []string{string(shown), run.Error.Message} {
 				if strings.Contains(s, "000") || strings.Contains(s, "est.") {
 					t.Errorf("an estimate reaches the client: %s", s)
 				}

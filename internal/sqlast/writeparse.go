@@ -3,6 +3,7 @@ package sqlast
 import (
 	"strings"
 
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -30,8 +31,19 @@ func ParseWrite(d sqlclass.Dialect, sql string) (*Statement, error) {
 	if err != nil {
 		return nil, err
 	}
+	st, err := p.writeStatement()
+	if err != nil {
+		return nil, p.locate(err)
+	}
+	return st, nil
+}
+
+// writeStatement parses the whole write statement.
+func (p *parser) writeStatement() (*Statement, error) {
+	d := p.d
 	st := &Statement{SQL: p.src, Dialect: d}
 	var with *With
+	var err error
 	if p.word(0, "WITH") {
 		p.topWith = true
 		if with, err = p.with(); err != nil {
@@ -53,9 +65,9 @@ func ParseWrite(d sqlclass.Dialect, sql string) (*Statement, error) {
 		}
 		st.Query = q
 	case p.word(0, "MERGE"):
-		return nil, refuse("MERGE is not supported when its rows come back or it stores a query's rows; use INSERT, UPDATE or DELETE, or run it as an unmasked query")
+		return nil, refuse(refusal.UnsupportedSyntax, "MERGE is not supported when its rows come back or it stores a query's rows; use INSERT, UPDATE or DELETE, or run it as an unmasked query")
 	default:
-		return nil, refuse("only INSERT, REPLACE, UPDATE, DELETE and a SELECT over data-modifying CTEs are analysed as writes")
+		return nil, refuse(refusal.StatementKind, "only INSERT, REPLACE, UPDATE, DELETE and a SELECT over data-modifying CTEs are analysed as writes")
 	}
 	if p.i < len(p.toks) {
 		return nil, p.unexpected()
@@ -142,7 +154,7 @@ func (p *parser) write() (*Write, error) {
 	if p.word(0, "RETURNING") {
 		p.i++
 		if p.word(0, "WITH") && p.punct(1, "(") {
-			return nil, refuse("RETURNING WITH (OLD/NEW AS ...) is not supported")
+			return nil, refuse(refusal.UnsupportedSyntax, "RETURNING WITH (OLD/NEW AS ...) is not supported")
 		}
 		for {
 			it, err := p.selectItem()
@@ -156,7 +168,7 @@ func (p *parser) write() (*Write, error) {
 			p.i++
 		}
 		if p.word(0, "INTO") {
-			return nil, refuse("RETURNING ... INTO is not allowed")
+			return nil, refuse(refusal.Forbidden, "RETURNING ... INTO is not allowed")
 		}
 	}
 	w.Sp = p.span(start)
@@ -187,10 +199,10 @@ func (p *parser) sqliteOr() error {
 func (p *parser) target() (*TableName, error) {
 	start := p.i
 	if p.word(0, "ONLY") {
-		return nil, refuse("ONLY is not supported")
+		return nil, refuse(refusal.UnsupportedSyntax, "ONLY is not supported")
 	}
 	if p.mysqlDoubleQuoted(0) {
-		return nil, refuse("double-quoted names are ambiguous in MySQL; use backquotes")
+		return nil, refuse(refusal.UnsupportedSyntax, "double-quoted names are ambiguous in MySQL; use backquotes")
 	}
 	var parts []string
 	for {
@@ -309,7 +321,7 @@ func (p *parser) insert(w *Write) error {
 		}
 		w.Source = q
 	case p.word(0, "TABLE"):
-		return refuse("TABLE is not allowed: only SELECT is")
+		return refuse(refusal.StatementKind, "TABLE is not allowed: only SELECT is")
 	default:
 		return p.unexpected()
 	}
@@ -340,7 +352,7 @@ func (p *parser) valueRow() ([]Expr, error) {
 func (p *parser) valueOrDefault() (Expr, error) {
 	if p.word(0, "DEFAULT") {
 		if p.punct(1, "(") || p.punct(1, ".") {
-			return nil, refuse("DEFAULT(...) is not supported")
+			return nil, refuse(refusal.UnsupportedSyntax, "DEFAULT(...) is not supported")
 		}
 		p.i++
 		return nil, nil
@@ -368,14 +380,14 @@ func (p *parser) assignments() ([]*Assignment, error) {
 				p.i++
 			}
 			if p.punct(0, "(") && p.word(1, "SELECT", "WITH") {
-				return nil, refuse("a subquery assigned to a column list is not supported; assign each column")
+				return nil, refuse(refusal.UnsupportedSyntax, "a subquery assigned to a column list is not supported; assign each column")
 			}
 			vals, err := p.valueRow()
 			if err != nil {
 				return nil, err
 			}
 			if len(vals) != len(cols) {
-				return nil, refusef("a SET list assigns %d values to %d columns", len(vals), len(cols))
+				return nil, refusef(refusal.InvalidSQL, "a SET list assigns %d values to %d columns", len(vals), len(cols))
 			}
 			for i, c := range cols {
 				out = append(out, &Assignment{Column: c, Value: vals[i]})
@@ -394,7 +406,7 @@ func (p *parser) assignments() ([]*Assignment, error) {
 				p.i++
 			}
 			if len(parts) > 1 && p.d != sqlclass.MySQL {
-				return nil, refuse("a subfield or a qualified column as a SET target is not supported")
+				return nil, refuse(refusal.UnsupportedSyntax, "a subfield or a qualified column as a SET target is not supported")
 			}
 			if len(parts) > 3 {
 				return nil, p.unexpected()
@@ -489,7 +501,7 @@ func (p *parser) onConflict(w *Write) error {
 		}
 	}
 	if p.word(0, "ON") {
-		return refuse("only one ON CONFLICT clause is supported")
+		return refuse(refusal.UnsupportedSyntax, "only one ON CONFLICT clause is supported")
 	}
 	return nil
 }
@@ -513,7 +525,7 @@ func (p *parser) update(w *Write) error {
 	}
 	if !p.word(0, "SET") {
 		if p.punct(0, ",") || p.word(0, "JOIN", "INNER", "LEFT", "RIGHT", "CROSS", "STRAIGHT_JOIN", "NATURAL") {
-			return refuse("a multi-table UPDATE is not supported here; update one table")
+			return refuse(refusal.UnsupportedSyntax, "a multi-table UPDATE is not supported here; update one table")
 		}
 		return p.unexpected()
 	}
@@ -538,7 +550,7 @@ func (p *parser) delete(w *Write) error {
 		p.skipWords("LOW_PRIORITY", "QUICK", "IGNORE")
 	}
 	if !p.word(0, "FROM") {
-		return refuse("only DELETE FROM a single table is supported here")
+		return refuse(refusal.UnsupportedSyntax, "only DELETE FROM a single table is supported here")
 	}
 	p.i++
 	t, err := p.target()
@@ -551,7 +563,7 @@ func (p *parser) delete(w *Write) error {
 	}
 	if p.word(0, "USING") {
 		if p.d != sqlclass.Postgres {
-			return refuse("a multi-table DELETE is not supported here; delete from one table")
+			return refuse(refusal.UnsupportedSyntax, "a multi-table DELETE is not supported here; delete from one table")
 		}
 		p.i++
 		if w.From, err = p.fromList(); err != nil {
@@ -586,7 +598,7 @@ func (p *parser) writeWhere(w *Write) error {
 	}
 	p.i++
 	if p.word(0, "CURRENT") && p.word(1, "OF") {
-		return refuse("WHERE CURRENT OF is not supported")
+		return refuse(refusal.UnsupportedSyntax, "WHERE CURRENT OF is not supported")
 	}
 	e, err := p.expr()
 	if err != nil {

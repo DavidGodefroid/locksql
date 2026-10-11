@@ -181,6 +181,10 @@ type plan struct {
 	an        *sqlast.Analysis
 	runSQL    string
 	isExplain bool
+	// src is the statement as the agent sent it, and base the offset in
+	// it of the statement the checks read: refusals point into src.
+	src  string
+	base int
 }
 
 // Server serves client requests one at a time against one session. It is

@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 )
 
 // Events, spec §15.
@@ -44,25 +46,29 @@ const (
 // Record is one audit event. It has no field able to hold a password or row
 // data: Error must already be sanitised by the caller.
 type Record struct {
-	Event      string   `json:"event"`
-	Profile    string   `json:"profile,omitempty"`
-	Engine     string   `json:"engine,omitempty"`
-	Host       string   `json:"host,omitempty"`
-	DB         string   `json:"db,omitempty"`
-	DBUser     string   `json:"db_user,omitempty"`
-	SSHHost    string   `json:"ssh_host,omitempty"`
-	SSHHostKey string   `json:"ssh_host_key,omitempty"`
-	Class      string   `json:"class,omitempty"`
-	SQL        string   `json:"sql,omitempty"`
-	Verdict    string   `json:"verdict,omitempty"`
-	Decision   string   `json:"decision,omitempty"`
-	Error      string   `json:"error,omitempty"`
-	Rows       int64    `json:"rows,omitempty"`
-	Affected   int64    `json:"affected,omitempty"`
-	DurationMS int64    `json:"duration_ms,omitempty"`
-	Truncated  bool     `json:"truncated,omitempty"`
-	Unmasked   bool     `json:"unmasked,omitempty"`
-	Warnings   []string `json:"warnings,omitempty"`
+	Event      string `json:"event"`
+	Profile    string `json:"profile,omitempty"`
+	Engine     string `json:"engine,omitempty"`
+	Host       string `json:"host,omitempty"`
+	DB         string `json:"db,omitempty"`
+	DBUser     string `json:"db_user,omitempty"`
+	SSHHost    string `json:"ssh_host,omitempty"`
+	SSHHostKey string `json:"ssh_host_key,omitempty"`
+	Class      string `json:"class,omitempty"`
+	SQL        string `json:"sql,omitempty"`
+	Verdict    string `json:"verdict,omitempty"`
+	Decision   string `json:"decision,omitempty"`
+	Error      string `json:"error,omitempty"`
+	// Code is the refusal code of a refused record (package refusal), and
+	// Span where the refusal points in the statement, when known.
+	Code       string        `json:"code,omitempty"`
+	Span       *refusal.Span `json:"span,omitempty"`
+	Rows       int64         `json:"rows,omitempty"`
+	Affected   int64         `json:"affected,omitempty"`
+	DurationMS int64         `json:"duration_ms,omitempty"`
+	Truncated  bool          `json:"truncated,omitempty"`
+	Unmasked   bool          `json:"unmasked,omitempty"`
+	Warnings   []string      `json:"warnings,omitempty"`
 	// Intent is the agent's one-line reason for a plan (untrusted text,
 	// like SQL), kept on every record of that plan.
 	Intent string `json:"intent,omitempty"`
