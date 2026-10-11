@@ -37,24 +37,7 @@ func (y yesIO) AskSecret(context.Context, string) ([]byte, error) {
 // as safe.
 func assertNoLeak(t *testing.T, s engine.Session, d sqlclass.Dialect, rules pii.Rules, queries []string) {
 	t.Helper()
-	log, err := audit.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	eng := string(s.Flavor())
-	p := config.Profile{Name: "it", Engine: eng, Host: "127.0.0.1", Tier: config.TierWrite, Credentials: config.CredentialsAsk,
-		Limits: config.DefaultLimits(false), Detectors: []string{}}
-	srv, err := console.NewServer(console.ServerConfig{
-		Policy: config.NewPolicy(p, rules.Mask, rules.Allow), RulesPath: filepath.Join(t.TempDir(), pii.RulesFile), Session: nopClose{s},
-		DBUser: "it", Databases: []string{"app"}, Audit: log, IO: yesIO{t}, Version: "it",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	call := func(method string, params any) ipc.Response {
-		raw, _ := json.Marshal(params)
-		return srv.Handle(context.Background(), ipc.Request{JSONRPC: "2.0", ID: 1, Method: method, Params: raw})
-	}
+	call := leakServer(t, s, rules)
 	for _, q := range queries {
 		resp := call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
 		if resp.Error != nil {
@@ -80,6 +63,76 @@ func assertNoLeak(t *testing.T, s engine.Session, d sqlclass.Dialect, rules pii.
 		if strings.Contains(string(resp.Result), "@example.com") {
 			t.Errorf("%s: leaked %s", q, resp.Result)
 		}
+	}
+}
+
+// assertWriteRowsMasked runs each write through a console server and
+// requires that it is accepted, runs, and returns rows in which every
+// e-mail of big is masked.
+func assertWriteRowsMasked(t *testing.T, s engine.Session, rules pii.Rules, queries []string) {
+	t.Helper()
+	call := leakServer(t, s, rules)
+	for _, q := range queries {
+		resp := call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
+		if resp.Error != nil {
+			t.Errorf("%s: refused: %s", q, resp.Error.Message)
+			continue
+		}
+		var pr ipc.PlanResult
+		if err := json.Unmarshal(resp.Result, &pr); err != nil {
+			t.Fatal(err)
+		}
+		resp = call(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+		if resp.Error != nil {
+			t.Errorf("%s: run failed: %s", q, resp.Error.Message)
+			continue
+		}
+		var rr ipc.RunResult
+		if err := json.Unmarshal(resp.Result, &rr); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(rr.Text, "@example.com") {
+			t.Errorf("%s: leaked %s", q, rr.Text)
+		}
+		if !strings.Contains(rr.Text, "<redacted>") {
+			t.Errorf("%s: no masked cell in %s", q, rr.Text)
+		}
+	}
+}
+
+// assertPlanRefused requires that locksql refuses each statement before
+// it runs.
+func assertPlanRefused(t *testing.T, s engine.Session, rules pii.Rules, queries []string) {
+	t.Helper()
+	call := leakServer(t, s, rules)
+	for _, q := range queries {
+		if resp := call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q}); resp.Error == nil {
+			t.Errorf("%s: accepted", q)
+		}
+	}
+}
+
+// leakServer is a console server on s at tier write that approves every
+// prompt; it returns the client call.
+func leakServer(t *testing.T, s engine.Session, rules pii.Rules) func(method string, params any) ipc.Response {
+	t.Helper()
+	log, err := audit.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := string(s.Flavor())
+	p := config.Profile{Name: "it", Engine: eng, Host: "127.0.0.1", Tier: config.TierWrite, Credentials: config.CredentialsAsk,
+		Limits: config.DefaultLimits(false), Detectors: []string{}}
+	srv, err := console.NewServer(console.ServerConfig{
+		Policy: config.NewPolicy(p, rules.Mask, rules.Allow), RulesPath: filepath.Join(t.TempDir(), pii.RulesFile), Session: nopClose{s},
+		DBUser: "it", Databases: []string{"app"}, Audit: log, IO: yesIO{t}, Version: "it",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func(method string, params any) ipc.Response {
+		raw, _ := json.Marshal(params)
+		return srv.Handle(context.Background(), ipc.Request{JSONRPC: "2.0", ID: 1, Method: method, Params: raw})
 	}
 }
 
@@ -175,4 +228,69 @@ func writeLeakQueries(d sqlclass.Dialect) []string {
 		}
 	}
 	return nil
+}
+
+// writeMaskedQueries return rows from a write that rename or move big.email:
+// the write analysis resolves them and masks the column. They change no
+// seed data; the DELETE removes the row seedReturned inserts.
+func writeMaskedQueries(d sqlclass.Dialect) []string {
+	switch d {
+	case sqlclass.MySQL: // MariaDB only
+		return []string{
+			"DELETE FROM big WHERE status = 'wret' RETURNING email AS x, id",
+			"INSERT INTO small (id, label) VALUES (9001, 'z') RETURNING label, (SELECT email FROM big WHERE id = 1) AS e",
+		}
+	case sqlclass.Postgres:
+		return []string{
+			"UPDATE big SET status = status WHERE id < 3 RETURNING email AS x",
+			"UPDATE big SET status = status WHERE id < 3 RETURNING id AS email, email AS id",
+			"UPDATE big AS b SET status = b.status FROM small s WHERE s.id = b.id RETURNING *",
+			"DELETE FROM small s USING big b WHERE b.id = 1 AND s.id = 9002 RETURNING b.email, s.id",
+			"UPDATE small SET label = label WHERE id = 1 RETURNING (SELECT email FROM big WHERE id = 1) AS e",
+			"WITH u AS (UPDATE big SET status = status WHERE id < 3 RETURNING email AS e) SELECT e AS z FROM u",
+			"WITH d AS (DELETE FROM small WHERE false RETURNING 1) SELECT email AS x FROM big WHERE id < 3 LIMIT 3",
+			"DELETE FROM big WHERE status = 'wret' RETURNING email AS x",
+		}
+	}
+	return nil
+}
+
+// writeRefusedQueries copy big.email into another column or transform it
+// on its way out.
+func writeRefusedQueries(d sqlclass.Dialect) []string {
+	switch d {
+	case sqlclass.MySQL:
+		return []string{
+			"INSERT INTO small (id, label) SELECT id + 7000, x FROM (SELECT id, email AS x FROM big) d WHERE id < 3",
+			"INSERT INTO small (id, label) SELECT id + 7000, x FROM (SELECT id, email AS x FROM big) d WHERE id < 3 RETURNING label",
+			"DELETE FROM big WHERE status = 'wret' RETURNING concat(email, '') AS x",
+		}
+	case sqlclass.Postgres:
+		return []string{
+			"INSERT INTO small (id, label) SELECT i + 7000, x FROM big AS b(i, s, x, c) WHERE i < 3",
+			"WITH s(a, b) AS (SELECT id, email FROM big) INSERT INTO small SELECT a + 7000, b FROM s WHERE a < 3",
+			"UPDATE big SET status = status WHERE id < 3 RETURNING email || ''",
+			"WITH u AS (UPDATE big SET status = status WHERE id < 3 RETURNING email AS e) SELECT lower(e) FROM u",
+			"WITH u AS (UPDATE big SET status = status WHERE id < 3 RETURNING email AS e) SELECT e FROM u ORDER BY e",
+		}
+	}
+	return nil
+}
+
+// seedReturned inserts the row the write tests delete, and the cleanup of
+// what they may leave.
+func seedReturned(t *testing.T, s engine.Session) {
+	t.Helper()
+	run := func(q string) {
+		st := sqlclass.Statement{Class: sqlclass.Write, Kind: "insert", SQL: q, Limit: -1}
+		if _, err := s.Run(context.Background(), "app", st, 10); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	run("INSERT INTO big (status, email) VALUES ('wret', 'wret@example.com')")
+	run("INSERT INTO small (id, label) VALUES (9002, 'y')")
+	t.Cleanup(func() {
+		run("DELETE FROM big WHERE status = 'wret'")
+		run("DELETE FROM small WHERE id > 3")
+	})
 }

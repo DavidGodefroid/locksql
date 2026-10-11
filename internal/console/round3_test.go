@@ -27,7 +27,8 @@ func TestWriteReturningPIIRefusedBeforeRun(t *testing.T) {
 	if h.sess.runCount() != 0 {
 		t.Fatal("a refused statement ran")
 	}
-	// A plain RETURNING of the rule column is allowed: it is masked by name.
+	// A plain RETURNING of the rule column is allowed: it is masked by
+	// provenance.
 	h.plan(t, "UPDATE users SET note = 'x' WHERE id = 1 RETURNING id, email", false)
 
 	// A read resolves a nested * over a PII source to that source and masks
