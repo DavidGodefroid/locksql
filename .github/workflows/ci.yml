@@ -138,6 +138,10 @@ jobs:
         if: matrix.target == 'runner'
         run: |
           cd /tmp
+          # The runner exports XDG_*_HOME under /home/runner, which sudo
+          # keeps: the console account would read the runner's config. A
+          # login session of the console account has none of them.
+          unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_CACHE_HOME XDG_DATA_HOME
           LOCKSQL_FIRSTQUERY=1 LOCKSQL_FIRSTQUERY_BIN="$RUNNER_TEMP/fq/locksql" "$RUNNER_TEMP/fq/firstquery.test" -test.v
       - name: in a fresh container
         if: matrix.target != 'runner'
