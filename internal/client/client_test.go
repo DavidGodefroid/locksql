@@ -15,6 +15,7 @@ import (
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 )
 
 // runtimeDir points the socket paths at a short private temp dir.
@@ -213,6 +214,45 @@ func TestCallReturnsRPCError(t *testing.T) {
 	var re *ipc.RPCError
 	if !errors.As(err, &re) || re.Code != ipc.CodeDenied {
 		t.Fatalf("err = %v, want RPCError %d", err, ipc.CodeDenied)
+	}
+}
+
+// A refusal's structured form crosses the socket intact.
+func TestCallReturnsRefusalData(t *testing.T) {
+	runtimeDir(t)
+	cwd := t.TempDir()
+	info := refusal.Info{Code: refusal.NoLimit, Retry: refusal.RetryRewrite, Hint: "add LIMIT", Span: &refusal.Span{Line: 2, Col: 3, Token: "FROM"}}
+	startFake(t, cwd, "uat", func(req ipc.Request) ipc.Response {
+		r := rpcErr(req.ID, ipc.CodeRefused, "a top-level LIMIT n is required")
+		r.Error.Data = &info
+		return r
+	})
+	c, err := Dial(cwd, "uat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, err = c.Plan(context.Background(), ipc.PlanParams{SQL: "SELECT 1"})
+	e := DescribeError(err)
+	if e.Kind != "refused" || e.Refusal == nil || *e.Refusal.Span != *info.Span || e.Refusal.Code != info.Code || e.Refusal.Hint != info.Hint {
+		t.Fatalf("%+v", e)
+	}
+}
+
+func TestRefusalText(t *testing.T) {
+	err := &ipc.RPCError{Code: ipc.CodeRefused, Message: "a top-level LIMIT n is required",
+		Data: &refusal.Info{Code: refusal.NoLimit, Retry: refusal.RetryRewrite, Hint: "end the statement with LIMIT n", Span: &refusal.Span{Line: 2, Col: 7, Token: "users\x1b"}}}
+	if got, want := ErrorText(err), "refused [E_NO_LIMIT]: a top-level LIMIT n is required"; got != want {
+		t.Errorf("text %q, want %q", got, want)
+	}
+	got := RefusalDetail(err)
+	for _, want := range []string{"at line 2, column 7 (users\\x1b)", "hint: end the statement with LIMIT n", "retry: rewrite"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("detail lacks %q:\n%s", want, got)
+		}
+	}
+	if RefusalDetail(&ipc.RPCError{Code: ipc.CodeDenied, Message: "denied"}) != "" {
+		t.Error("detail for a denial")
 	}
 }
 

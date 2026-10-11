@@ -11,6 +11,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 )
 
 // sandbox returns a fresh project root and points HOME and the XDG user directories at an empty temporary home, which the test
@@ -482,6 +483,39 @@ func TestTemplatesCarryTheRules(t *testing.T) {
 		} {
 			if !strings.Contains(s, want) {
 				t.Errorf("%s lacks %q", name, want)
+			}
+		}
+	}
+}
+
+// The instructions teach the retry rule of every refusal code: each code
+// is listed once, under the rule the console sends with it.
+func TestTemplatesTeachEveryRefusalCode(t *testing.T) {
+	for name, body := range map[string]string{
+		"skill.md":        mustTemplate(t, "templates/skill.md"),
+		"agents.md":       mustTemplate(t, "templates/agents.md"),
+		"cursor-rule.mdc": cursorRule(),
+	} {
+		start := strings.Index(body, "- `retry: rewrite`")
+		if start < 0 {
+			t.Errorf("%s has no retry rules", name)
+			continue
+		}
+		rules := body[start:]
+		for _, c := range refusal.Codes() {
+			if strings.Count(body, "`"+string(c)+"`") != 1 {
+				t.Errorf("%s: %s listed %d times, want once", name, c, strings.Count(body, "`"+string(c)+"`"))
+				continue
+			}
+			at := strings.Index(rules, "`"+string(c)+"`")
+			if at < 0 {
+				t.Errorf("%s: %s is not under a retry rule", name, c)
+				continue
+			}
+			rule := rules[strings.LastIndex(rules[:at], "- `retry: ")+len("- `retry: "):]
+			rule = rule[:strings.IndexByte(rule, '`')]
+			if rule != string(c.Retry()) {
+				t.Errorf("%s: %s taught as %s, the console sends %s", name, c, rule, c.Retry())
 			}
 		}
 	}

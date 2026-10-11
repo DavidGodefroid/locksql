@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -123,14 +124,14 @@ func (an *analyzer) checkSizeArgs(f *FuncCall) error {
 	for k, a := range f.Args {
 		if k == 0 && (f.Name == "LPAD" || f.Name == "RPAD") {
 			if callsSizeFunc(a) {
-				return refusef("%s: the string argument may not call REPEAT, LPAD, RPAD, SPACE, ZEROBLOB, format or printf, or hold a subquery", name)
+				return refusef(refusal.Size, "%s: the string argument may not call REPEAT, LPAD, RPAD, SPACE, ZEROBLOB, format or printf, or hold a subquery", name)
 			}
 			continue
 		}
 		switch a.(type) {
 		case *Literal, *ColumnRef:
 		default:
-			return refusef("%s: arguments must be literals or columns", name)
+			return refusef(refusal.Size, "%s: arguments must be literals or columns", name)
 		}
 	}
 	if i >= len(f.Args) {
@@ -138,15 +139,15 @@ func (an *analyzer) checkSizeArgs(f *FuncCall) error {
 	}
 	n, ok := lengthLiteral(f.Args[i])
 	if !ok {
-		return refusef("%s: the length argument must be an integer literal at most %d", name, maxSizeArg)
+		return refusef(refusal.Size, "%s: the length argument must be an integer literal at most %d", name, maxSizeArg)
 	}
 	if f.Name == "REPEAT" {
 		str, ok := an.stringLiteral(f.Args[0])
 		if !ok {
-			return refuse("repeat: the string argument must be a string literal")
+			return refuse(refusal.Size, "repeat: the string argument must be a string literal")
 		}
 		if len(str)*n > maxSizeArg {
-			return refusef("repeat: the result would exceed %d bytes", maxSizeArg)
+			return refusef(refusal.Size, "repeat: the result would exceed %d bytes", maxSizeArg)
 		}
 	}
 	return nil
@@ -219,7 +220,7 @@ func (an *analyzer) checkReplaceArgs(f *FuncCall) error {
 		return nil
 	}
 	if s, ok := an.stringLiteral(f.Args[i]); !ok || len(s) > maxReplacement {
-		return refusef("%s: the replacement must be a string literal of at most %d bytes", strings.ToLower(f.Name), maxReplacement)
+		return refusef(refusal.Size, "%s: the replacement must be a string literal of at most %d bytes", strings.ToLower(f.Name), maxReplacement)
 	}
 	return nil
 }
@@ -248,7 +249,7 @@ func (an *analyzer) checkFormat(f *FuncCall) error {
 	fs, ok := an.stringLiteral(f.Args[0])
 	if !ok || strings.Contains(fs, "\\") {
 		// A backslash may be an escape (E'...') hiding a digit.
-		return refusef("%s: the format string must be a literal", name)
+		return refusef(refusal.Size, "%s: the format string must be a literal", name)
 	}
 	for i := 0; i < len(fs); i++ {
 		if fs[i] != '%' {
@@ -261,7 +262,7 @@ func (an *analyzer) checkFormat(f *FuncCall) error {
 		// Flags, position, width and precision, up to the first letter.
 		for ; i < len(fs) && !isLetter(fs[i]); i++ {
 			if fs[i] == '*' {
-				return refusef("%s: a width or precision taken from an argument (*) is not allowed", name)
+				return refusef(refusal.Size, "%s: a width or precision taken from an argument (*) is not allowed", name)
 			}
 			if fs[i] < '0' || fs[i] > '9' {
 				continue
@@ -276,7 +277,7 @@ func (an *analyzer) checkFormat(f *FuncCall) error {
 			}
 			digits := strings.TrimLeft(fs[i:j], "0")
 			if n, err := strconv.Atoi(digits); len(digits) > 6 || err == nil && n > maxSizeArg {
-				return refusef("%s: a width or precision exceeds %d", name, maxSizeArg)
+				return refusef(refusal.Size, "%s: a width or precision exceeds %d", name, maxSizeArg)
 			}
 			i = j - 1
 		}

@@ -15,6 +15,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 )
 
 // fakeConn is a console client that answers from canned values.
@@ -29,6 +30,7 @@ type fakeConn struct {
 	runResult ipc.RunResult
 	runErr    error
 	planIn    ipc.PlanParams
+	planErr   error
 }
 
 func (f *fakeConn) record(m string) {
@@ -60,6 +62,9 @@ func (f *fakeConn) Plan(_ context.Context, p ipc.PlanParams) (ipc.PlanResult, er
 	f.mu.Lock()
 	f.planIn = p
 	f.mu.Unlock()
+	if f.planErr != nil {
+		return ipc.PlanResult{}, f.planErr
+	}
 	return ipc.PlanResult{PlanID: "p1", Profile: f.profile, Host: "127.0.0.1", DB: "app", SQL: p.SQL,
 		Class: "read", Verdict: "OK", Summary: "users lookup ~1 · est. 1 rows examined"}, nil
 }
@@ -343,6 +348,50 @@ func TestNoConsoleErrorCarriesStartCommand(t *testing.T) {
 		if name != "locksql_status" && !r.IsError {
 			t.Errorf("%s: no console is not an error", name)
 		}
+	}
+}
+
+// A refusal comes back as a tool error whose text names the code, the
+// place and the retry rule, and whose structured content carries them as
+// fields.
+func TestRefusalIsStructured(t *testing.T) {
+	info := &refusal.Info{Code: refusal.NoLimit, Retry: refusal.RetryRewrite, Hint: refusal.NoLimit.Hint(),
+		Span: &refusal.Span{Line: 1, Col: 21}}
+	f := &fakeConn{profile: "uat", planErr: &ipc.RPCError{Code: ipc.CodeRefused, Message: "a top-level LIMIT n is required", Data: info}}
+	cs := connect(t, withFake(f), nil)
+	r := call(t, cs, "locksql_plan", map[string]any{"sql": "SELECT id FROM users"})
+	if !r.IsError {
+		t.Fatal("a refusal is not an error")
+	}
+	got := text(r)
+	for _, want := range []string{"refused [E_NO_LIMIT]: a top-level LIMIT n is required", "at line 1, column 21", "hint: end the statement with LIMIT n", "retry: rewrite"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("text lacks %q:\n%s", want, got)
+		}
+	}
+	b, err := json.Marshal(r.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Refusal *refusal.Info `json:"refusal"`
+	}
+	if err := json.Unmarshal(b, &out); err != nil || out.Refusal == nil || out.Refusal.Code != refusal.NoLimit ||
+		out.Refusal.Retry != refusal.RetryRewrite || out.Refusal.Span == nil || out.Refusal.Span.Col != 21 {
+		t.Fatalf("structured content %s", b)
+	}
+
+	// A refusal at run time is structured the same way.
+	f = &fakeConn{profile: "uat", runErr: &ipc.RPCError{Code: ipc.CodeRefused, Message: "fewer than 5 rows match the PII filter (k-anonymity)",
+		Data: &refusal.Info{Code: refusal.KAnon, Retry: refusal.RetryStop, Hint: refusal.KAnon.Hint()}}}
+	cs = connect(t, withFake(f), nil)
+	r = call(t, cs, "locksql_run", map[string]any{"plan_id": "p1"})
+	if !r.IsError || !strings.Contains(text(r), "refused [E_K_ANON]") || !strings.Contains(text(r), "retry: stop") {
+		t.Fatalf("run refusal: %v %s", r.IsError, text(r))
+	}
+	b, _ = json.Marshal(r.StructuredContent)
+	if !strings.Contains(string(b), `"code":"E_K_ANON"`) {
+		t.Fatalf("structured content %s", b)
 	}
 }
 

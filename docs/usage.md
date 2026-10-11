@@ -628,7 +628,10 @@ locksql doctor   [--profile P]
 - `--db` defaults to the profile's `database`. A profile that names one
   serves that database only: another `--db` is refused.
 - `--json` gives machine-readable output on every client command. A failure
-  prints `{"error": {"kind": ..., "message": ...}}`.
+  prints `{"error": {"kind": ..., "message": ...}}`; a refusal adds
+  `"refusal": {"code", "retry", "hint", "span"}` (see
+  [Refusal codes](#refusal-codes)). Without `--json`, a refusal prints
+  `refused [CODE]: message`, then the place, the hint and the retry rule.
 - Exit codes: 0 ok · 1 refused, denied or failed · 2 no console running (the
   error names the `locksql console --profile P` command to start) · 3 usage or
   configuration error.
@@ -818,6 +821,68 @@ the audit record. They never refuse and never carry a value:
 - the agent filtered on cells of one result in more than `limits.reference_probe`
   distinct ways (default 5; an `IN` list counts once).
 
+### Refusal codes
+
+Every refusal carries a stable code next to its message, so that the agent
+knows whether to rewrite the statement, ask the user or stop, without guessing
+from the prose. The client answer (`--json`, MCP structured content, the
+JSON-RPC error's `data`) holds:
+
+| Field | Content |
+|---|---|
+| `code` | one of the codes below; never renamed |
+| `retry` | `rewrite`, `ask_user` or `stop`: what the agent may do next |
+| `hint` | how to rewrite the statement, when a rewrite exists |
+| `span` | `{"line", "col", "token"}`: where the check stopped, in the statement as sent (line and column from 1, the column in characters), when known |
+
+The `token` is a keyword, an operator, a punctuation sign or a name as the
+agent wrote it, never a literal. The hint and the message are written by
+locksql: neither quotes the database's text nor a value the agent could not
+see (a typed value, a referenced cell). A refusal decided on the console under
+a PII filter (the weight check) carries only its code and the code's hint.
+The audit record of a refusal holds the `code` and the `span`.
+
+The retry rules:
+
+- `rewrite`: the statement can be fixed. Rewrite it as the hint says and plan
+  it again, once; the console checks the new statement in full. A rewrite that
+  only rewords the same question to get around a PII, k-anonymity or policy
+  rule is a violation of the agent rules, not a fix.
+- `ask_user`: only the human can lift it (tier, unmask, database, limits).
+  Tell the user; `request` / `locksql_request_change` only queues a proposal.
+- `stop`: final for this question. Tell the user; do not retry, reword or
+  split it.
+
+| Code | Refused | Retry | Typical rewrite |
+|---|---|---|---|
+| `E_UNSUPPORTED_SYNTAX` | a construct the parser cannot read with certainty (an operator, a clause, a MySQL double-quoted string, unbalanced parentheses) | rewrite | plainer SQL: standard operators, `CONCAT()` instead of `\|\|` in MySQL, a CTE or subquery instead of the construct |
+| `E_MULTI_STATEMENT` | several statements (`;` chaining) | rewrite | one statement per plan |
+| `E_FORBIDDEN_TOKEN` | a comment, a variable (`@x`, `:=`), a bind parameter (`?`, `$1`, `:name`), a backslash, a Unicode escape, a control character | rewrite | remove it; write values as literals, or as `'${name}'` placeholders against a PII column |
+| `E_STATEMENT_KIND` | a statement this path does not run: `SHOW`, `DESCRIBE`, `PRAGMA`, `EXPLAIN` of a write, a data-modifying CTE, an unknown leading word | rewrite | `SELECT`, `WITH ... SELECT` or `EXPLAIN SELECT`; `tables` / `describe` for metadata |
+| `E_INVALID_SQL` | a statement the engine would reject too: arms with different column counts, a derived table without alias, a position out of range, a window function without `OVER` | rewrite | fix it as the message says |
+| `E_UNKNOWN_NAME` | an unknown table, column or database, or a table several schemas hold | rewrite | check the names with `tables` / `describe`; qualify the table |
+| `E_TOO_COMPLEX` | nesting too deep, or a recursive CTE too deep to analyse | rewrite | fewer nesting levels and CTE steps |
+| `E_SIZE` | a statement that could build an oversized value (`REPEAT`, `LPAD`, wide concatenation, a growing recursive CTE) | rewrite | select the columns as they are |
+| `E_FORBIDDEN` | a construct refused at every tier: file access, `SLEEP`/`BENCHMARK`, locks and locking reads, transaction and session control, `SELECT ... INTO`, sequences, credentials, server control | stop | none: do not reach the same effect another way |
+| `E_FUNCTION` | a function outside the allowlist (`internal/sqlast/funcs.go`) | rewrite | an allowlisted function, or the plain column |
+| `E_SYSTEM_OBJECT` | a system schema or relation, the statement history views, session metadata (`CURRENT_USER`, ...) | rewrite | `tables` / `describe` |
+| `E_NO_LIMIT` | no top-level `LIMIT`, or one that does not end the statement | rewrite | end with `LIMIT n` (`LIMIT 1` for an aggregate); the span points at the end of the statement |
+| `E_LIMIT_TOO_HIGH` | `LIMIT` above `limits.max_rows` | rewrite | `LIMIT max_rows` or less (the hint names it) |
+| `E_TIER` | a statement class above the profile tier | ask_user | none |
+| `E_DATABASE_NOT_SERVED` | a database outside the profile's `database` | ask_user | a database `status` lists |
+| `E_UNMASK_OFF` | `--unmask` without `--allow-unmask` on the console | ask_user | run it masked |
+| `E_COST` | the weight check: rows examined, full scans, cartesian joins, `explain_cost_refuse` | rewrite | a selective filter on an indexed column, a narrower range, fewer joins |
+| `E_K_ANON` | fewer than `k_anonymity` rows behind a PII filter, group or aggregate | stop | none: do not narrow, split or shift the filter |
+| `E_ENGINE` | the database could not plan the statement or run a k-anonymity count; the details stay on the console | stop | none: the human sees the database's message |
+| `E_PLACEHOLDER` | a placeholder or cell reference used outside `pii_col = '${...}'` in `WHERE`/`HAVING`, malformed, unknown, unusable, or in a write | rewrite | `col = '${name}'` or `col IN ('${a}', '${b}')` in the `WHERE` of a read |
+| `E_MASKED_FILTER` | a PII column filtered or joined other than by equality: `LIKE`, ranges, negations, `OR`, a comparison with a non-PII column, a filter in a `JOIN` condition, `EXPLAIN` of a PII filter | rewrite | filter on a non-PII key, or `=`, `IN` (literals or placeholders), `IS NULL` under `AND` |
+| `E_MASKED_EXPRESSION` | a function or expression over a PII column | rewrite | the plain column (masked), or `COUNT`/`MIN`/`MAX` |
+| `E_MASKED_ORDER` | a PII column in `ORDER BY`, `DISTINCT ON`, a window's `PARTITION BY`/`ORDER BY` | rewrite | order or partition by a non-PII column |
+| `E_MASKED_SET_OP` | `UNION`, `INTERSECT`, `EXCEPT` or duplicate removal mixing a PII column with other values | rewrite | `UNION ALL` between PII columns, without `DISTINCT` |
+| `E_MASK_UNCERTAIN` | a result whose masking cannot be proven: an alias, a whole-row reference or a label the engine cannot trace, a result whose columns differ from the analysis | rewrite | PII columns by their plain name |
+| `E_MASKED_WRITE` | a write that copies a PII column or stores a value the agent chose into one | stop | none (a masked column may only be set to `NULL` or `DEFAULT`) |
+| `E_POLICY` | a refusal no check named (fail-closed; should not happen) | stop | none: report it as a bug |
+
 ### MCP server
 
 `locksql mcp [--profile P]` serves the same operations to an agent as MCP tools
@@ -845,6 +910,10 @@ finds the project's consoles.
   the structured content, so that JSON clients do not round them.
 - When no console runs, every tool answers with the exact
   `locksql console --profile P` command the human must start.
+- A refusal is a tool error whose text reads `refused [CODE]: message`, then
+  the place, the hint and the retry rule; `locksql_plan` and `locksql_run`
+  also return it as structured content, `{"refusal": {"code", "retry",
+  "hint", "span"}}` (see [Refusal codes](#refusal-codes)).
 
 ## 5. Output
 

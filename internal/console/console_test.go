@@ -23,6 +23,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -46,6 +47,8 @@ type fakeSession struct {
 	indexes []engine.IndexDesc
 	cols    []engine.ColumnInfo // appended to the catalog Columns answers
 	colsErr error               // answers the catalog Columns calls
+	// explainErr answers the EXPLAIN calls.
+	explainErr error
 }
 
 func (f *fakeSession) ServerVersion() string { return "11.4.0-MariaDB" }
@@ -85,6 +88,9 @@ func (f *fakeSession) Explain(_ context.Context, _ string, sql string) (engine.P
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.explains = append(f.explains, sql)
+	if f.explainErr != nil {
+		return engine.Plan{}, f.explainErr
+	}
 	if f.kplan != nil && strings.Contains(sql, "COUNT(*)") {
 		return *f.kplan, nil
 	}
@@ -353,6 +359,30 @@ func wantCode(t *testing.T, resp ipc.Response, code int) {
 	}
 	if resp.Error.Code != code {
 		t.Fatalf("want error %d, got %d %q", code, resp.Error.Code, resp.Error.Message)
+	}
+	wantRefusalData(t, resp)
+}
+
+// wantRefusalData checks the structured form of a refusal: every refusal
+// names a known code other than the fail-closed one, its retry rule and a
+// hint; any other error carries none.
+func wantRefusalData(t *testing.T, resp ipc.Response) {
+	t.Helper()
+	d := resp.Error.Data
+	if resp.Error.Code != ipc.CodeRefused {
+		if d != nil {
+			t.Fatalf("error %d carries refusal data %+v", resp.Error.Code, d)
+		}
+		return
+	}
+	if d == nil {
+		t.Fatalf("refusal without a code: %q", resp.Error.Message)
+	}
+	if !d.Code.Known() || d.Code == refusal.Policy {
+		t.Fatalf("refusal %q has code %q", resp.Error.Message, d.Code)
+	}
+	if d.Retry != d.Code.Retry() || d.Hint == "" {
+		t.Fatalf("refusal %q: %+v", resp.Error.Message, d)
 	}
 }
 

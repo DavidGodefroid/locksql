@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/DavidGodefroid/locksql/internal/audit"
@@ -18,6 +19,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/render"
 	"github.com/DavidGodefroid/locksql/internal/secrets"
 	"github.com/DavidGodefroid/locksql/internal/sqlast"
@@ -223,11 +225,11 @@ func (s *Server) checkDB(id int64, db string) (string, *ipc.Response) {
 	if db == "" || slices.Contains(s.cfg.Databases, db) {
 		return db, nil
 	}
-	msg := fmt.Sprintf("unknown database %q; databases: %s", db, strings.Join(s.cfg.Databases, ", "))
+	ref := refusal.Newf(refusal.UnknownName, "unknown database %q; databases: %s", db, strings.Join(s.cfg.Databases, ", "))
 	if s.profile.Database != "" {
-		msg = fmt.Sprintf("database %q is not served: this profile serves %q only (set database = \"\" to serve every database the account can see)", db, s.profile.Database)
+		ref = refusal.Newf(refusal.DatabaseNotServed, "database %q is not served: this profile serves %q only (set database = \"\" to serve every database the account can see)", db, s.profile.Database)
 	}
-	r := errResp(id, ipc.CodeRefused, msg)
+	r := refusedResp(id, ref.Reason, ref.Info("", 0))
 	return "", &r
 }
 
@@ -271,23 +273,48 @@ func (s *Server) catalog(ctx context.Context, req ipc.Request) ipc.Response {
 	return okResp(req.ID, result)
 }
 
-// refuse audits and reports a refused plan; intent is the agent's.
-func (s *Server) refuse(ctx context.Context, id int64, intent, db, sql, class, verdict, reason string) ipc.Response {
-	return s.refuseRec(id, withPeerRecord(ctx, audit.Record{Event: audit.EventRefused, DB: db, SQL: sql, Class: class, Verdict: verdict, Error: reason, Intent: intent}))
+// refuse audits and reports a refused plan; intent is the agent's. src is
+// the statement as the agent sent it: the position of r counts in it.
+func (s *Server) refuse(ctx context.Context, id int64, intent, db, sql, class, verdict, src string, r *refusal.Error) ipc.Response {
+	return s.refuseRec(id, withPeerRecord(ctx, audit.Record{Event: audit.EventRefused, DB: db, SQL: sql, Class: class, Verdict: verdict, Intent: intent}), src, r)
 }
 
 // refuseWarned is refuse for a plan whose warnings are computed: the audit
 // record carries them.
-func (s *Server) refuseWarned(ctx context.Context, id int64, pl *plan, class, reason string) ipc.Response {
-	return s.refuseRec(id, withPeerRecord(ctx, audit.Record{Event: audit.EventRefused, DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Error: reason, Warnings: pl.warnings, Intent: pl.intent}))
+func (s *Server) refuseWarned(ctx context.Context, id int64, pl *plan, class string, r *refusal.Error) ipc.Response {
+	return s.refuseRec(id, withPeerRecord(ctx, audit.Record{Event: audit.EventRefused, DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Warnings: pl.warnings, Intent: pl.intent}), pl.src, r)
 }
 
-func (s *Server) refuseRec(id int64, rec audit.Record) ipc.Response {
-	reason := rec.Error
+// refuseRec audits and answers a refusal: its prose, its code and, when
+// known, the place in src it points at.
+func (s *Server) refuseRec(id int64, rec audit.Record, src string, r *refusal.Error) ipc.Response {
+	info := r.Info(src, 0)
+	rec.Error, rec.Code, rec.Span = r.Reason, string(info.Code), info.Span
 	s.audit(rec)
-	s.println(paint.Fail("refused: " + safeText(reason, false)))
-	return errResp(id, ipc.CodeRefused, reason)
+	s.println(paint.Fail("refused [" + string(info.Code) + "]: " + safeText(r.Reason, false)))
+	return refusedResp(id, r.Reason, info)
 }
+
+// refusedResp is the one answer that carries ipc.CodeRefused: the prose
+// message and its structured form.
+func refusedResp(id int64, msg string, info refusal.Info) ipc.Response {
+	r := errResp(id, ipc.CodeRefused, msg)
+	r.Error.Data = &info
+	return r
+}
+
+// shifted moves the position of the refusal err is (or the fail-closed
+// one it becomes) by base bytes, from the text a check read to the
+// statement the agent sent.
+func shifted(err error, base int) *refusal.Error {
+	r := refusal.From(err)
+	r.Shift(base)
+	return r
+}
+
+// lead is the offset of the statement in sql: the length of its leading
+// blanks, which the checks trim.
+func lead(sql string) int { return len(sql) - len(strings.TrimLeftFunc(sql, unicode.IsSpace)) }
 
 func (s *Server) policyPending(id int64) *ipc.Response {
 	if s.pending == nil {
@@ -318,31 +345,32 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		return *r
 	}
 	auditSQL := capSQL(p.SQL)
+	base := lead(p.SQL)
 	if p.Unmask && !s.cfg.AllowUnmask {
-		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "", "", "unmasked output is off in this console: run the query masked, or ask the human to restart the console with --allow-unmask")
+		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "", "", p.SQL, refusal.New(refusal.UnmaskOff, "unmasked output is off in this console: run the query masked, or ask the human to restart the console with --allow-unmask"))
 	}
-	inner, explain := splitExplain(s.dialect, p.SQL)
+	inner, explain, off := splitExplain(s.dialect, p.SQL)
 	st, err := sqlclass.Classify(s.dialect, inner, s.profile.Limits.MaxRows)
 	if err != nil {
-		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "", "", err.Error())
+		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "", "", p.SQL, shifted(err, base+off))
 	}
 	if st.Class == sqlclass.Read && st.Kind != "select" {
-		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "read", "", fmt.Sprintf(
+		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "read", "", p.SQL, refusal.Newf(refusal.StatementKind,
 			"%s is not allowed: only SELECT, WITH ... SELECT and EXPLAIN SELECT are (use the catalog commands to list and describe tables)",
-			strings.ToUpper(st.Kind)))
+			strings.ToUpper(st.Kind)).At(base+off, strings.ToUpper(st.Kind)))
 	}
 	if explain && st.Class != sqlclass.Read {
-		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, st.Class.String(), "", "only EXPLAIN SELECT is allowed")
+		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, st.Class.String(), "", p.SQL, refusal.New(refusal.StatementKind, "only EXPLAIN SELECT is allowed").At(base+off, ""))
 	}
 	class := st.Class.String()
 	if int(st.Class) > int(s.profile.Tier) {
-		return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", fmt.Sprintf(
+		return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", p.SQL, refusal.Newf(refusal.Tier,
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
 	}
 	if st.Class != sqlclass.Read && sqlast.HasPlaceholder(s.dialect, st.SQL) {
 		// A write is never analysed for placeholders: it would run with
 		// the literal text '${...}'.
-		return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", "placeholders are only allowed in read statements, compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")
+		return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", p.SQL, refusal.New(refusal.Placeholder, "placeholders are only allowed in read statements, compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')"))
 	}
 	sess, r := s.session(ctx, req.ID)
 	if r != nil {
@@ -353,27 +381,27 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		// CTE must not move PII under another label, since refusing its
 		// result afterwards would not undo the write.
 		if err := pii.PlanCheck(st, s.rules, s.dialect, sess.OriginColumns()); err != nil {
-			return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", err.Error())
+			return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", p.SQL, shifted(err, base+off))
 		}
 	}
 
-	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String()}
+	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String(), src: p.SQL, base: base}
 	if st.Class == sqlclass.Read {
 		// The read path: the statement is parsed in full and every column
 		// resolved before anything runs.
 		full := strings.TrimSpace(p.SQL)
-		reason, refused, err := s.readPlan(ctx, sess, pl, full)
+		r, err := s.readPlan(ctx, sess, pl, full)
 		if err != nil {
 			return s.failed(req.ID, "plan", err)
 		}
-		if refused {
-			return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, class, "", reason)
+		if r != nil {
+			return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, class, "", p.SQL, r)
 		}
 		pl.st.SQL = strings.TrimSuffix(full, ";")
 		// Under a PII filter the verdict is a statistic of the filtered
 		// value: it is decided by query.run, on the console.
-		if reason, refused := s.assess(pl); refused && !estimatesHidden(pl) {
-			return s.refuse(ctx, req.ID, p.Intent, db, pl.st.SQL, class, pl.level, reason)
+		if r := s.assess(pl); r != nil && !estimatesHidden(pl) {
+			return s.refuse(ctx, req.ID, p.Intent, db, pl.st.SQL, class, pl.level, p.SQL, r)
 		}
 	} else {
 		pl.summary = "no EXPLAIN for " + strings.ToUpper(st.Kind)
@@ -396,18 +424,18 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 }
 
 // assess sets the plan's weight verdict under the limits in force. It
-// reports the refusal reason when the verdict is REFUSE.
-func (s *Server) assess(pl *plan) (string, bool) {
+// returns the refusal when the verdict is REFUSE.
+func (s *Server) assess(pl *plan) *refusal.Error {
 	v := weight.Assess(*pl.explain, s.profile.Limits, s.profile.Production)
 	pl.level, pl.summary, pl.reasons = v.Level.String(), v.Summary, v.Reasons
 	s.noteRefused(pl)
 	if v.Level != weight.Refuse {
-		return "", false
+		return nil
 	}
 	if len(v.Reasons) == 0 {
-		return "weight check: " + v.Summary, true
+		return refusal.New(refusal.Cost, "weight check: "+v.Summary)
 	}
-	return "weight check: " + strings.Join(v.Reasons, "; "), true
+	return refusal.New(refusal.Cost, "weight check: "+strings.Join(v.Reasons, "; "))
 }
 
 func (s *Server) noteRefused(pl *plan) {
@@ -471,28 +499,28 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	}
 	class := pl.st.Class.String()
 	if int(pl.st.Class) > int(s.profile.Tier) {
-		return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, fmt.Sprintf(
+		return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, refusal.Newf(refusal.Tier,
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
 	}
 	// The limits may have changed since query.plan (a tightening is applied
 	// at once): the verdict shown and enforced is the one under the policy
 	// in force now.
-	hiddenRefusal := ""
+	var hiddenRefusal *refusal.Error
 	if pl.explain != nil {
-		reason, refused := s.assess(pl)
-		if !refused {
-			if reason, refused = s.assessK(pl); refused {
+		r := s.assess(pl)
+		if r == nil {
+			if r = s.assessK(pl); r != nil {
 				pl.level = weight.Refuse.String()
-				pl.reasons = append(pl.reasons, reason)
+				pl.reasons = append(pl.reasons, r.Reason)
 			}
 		}
-		if refused {
+		if r != nil {
 			if !estimatesHidden(pl) {
-				return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, reason)
+				return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, r)
 			}
 			// Under a PII filter an immediate answer would tell the
 			// agent the verdict: the refusal waits for the human.
-			hiddenRefusal = reason
+			hiddenRefusal = r
 		}
 	}
 	sess, r := s.session(ctx, req.ID)
@@ -503,7 +531,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask, Warnings: pl.warnings, Intent: pl.intent})
 
 	s.screen(ctx, pl)
-	if hiddenRefusal != "" {
+	if hiddenRefusal != nil {
 		return s.refuseOnScreen(ctx, req.ID, rec, hiddenRefusal)
 	}
 	// The values are asked before the approval, and asked even when the
@@ -548,16 +576,16 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		// The values are known now: analyse again, so that the statement
 		// and its k-anonymity checks carry them. pl.st.SQL is the statement
 		// as the agent wrote it, placeholders included: the audit keeps it.
-		if reason, refused, err := s.analyzeRead(ctx, sess, pl, pl.st.SQL); err != nil || refused {
+		if r, err := s.analyzeRead(ctx, sess, pl, pl.st.SQL); err != nil || r != nil {
 			if err != nil {
 				// Approved already: the failure is audited like a run's.
 				s.auditRunFailed(rec, s.auditErrText(err, pl))
 				return s.failedPlan(req.ID, "plan", err, pl)
 			}
-			return s.refuseWarned(ctx, req.ID, pl, class, reason)
+			return s.refuseWarned(ctx, req.ID, pl, class, r)
 		}
 		if missing, _ := s.placeholders(pl); len(missing) > 0 {
-			return s.refuseWarned(ctx, req.ID, pl, class, "a placeholder has no value")
+			return s.refuseWarned(ctx, req.ID, pl, class, refusal.New(refusal.Placeholder, "a placeholder has no value"))
 		}
 	}
 
@@ -570,12 +598,13 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	start := time.Now()
 	// Success or failure, the answer leaves on the next quantum.
 	defer s.level(ctx, start)
-	if reason, err := s.kCheck(rctx, sess, pl); err != nil || reason != "" {
+	if r, err := s.kCheck(rctx, sess, pl); err != nil || r != nil {
 		if err != nil {
 			s.auditRunFailed(rec, s.auditErrText(err, pl))
 			return s.failedPlan(req.ID, "k-anonymity check", err, pl)
 		}
-		return s.refuseWarned(ctx, req.ID, pl, class, reason+" (approved, but not run)")
+		r.Reason += " (approved, but not run)"
+		return s.refuseWarned(ctx, req.ID, pl, class, r)
 	}
 	var res engine.Result
 	var err error
@@ -611,13 +640,18 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	if !pl.unmask && pl.an != nil {
 		if err := s.maskRead(&res, pl, sess); err != nil {
 			s.println(paint.Fail("result dropped: " + safeText(err.Error(), false)))
-			return s.refuseWarned(ctx, req.ID, pl, class, "the result could not be masked with certainty and was dropped: "+err.Error())
+			return s.refuseWarned(ctx, req.ID, pl, class, refusal.New(refusal.MaskUncertain, "the result could not be masked with certainty and was dropped: "+err.Error()))
 		}
 	} else if !pl.unmask {
 		origin := sess.OriginColumns()
 		if pii.NeedsAliasCheck(res, origin) {
 			if err := pii.ResultAliasViolation(pl.st, s.rules, s.dialect, res.Columns); err != nil {
-				return s.refuseWarned(ctx, req.ID, pl, class, err.Error()+" (the result was dropped)")
+				r := shifted(err, pl.base)
+				if r.Code == refusal.Policy {
+					r.Code = refusal.MaskUncertain
+				}
+				r.Reason += " (the result was dropped)"
+				return s.refuseWarned(ctx, req.ID, pl, class, r)
 			}
 		}
 		pii.MaskResult(&res, s.rules, s.detectors, origin)
@@ -751,17 +785,21 @@ func (s *Server) unanswered(ctx context.Context, id int64, rec audit.Record) *ip
 // check under a PII filter. The agent learns of the refusal only once the
 // human has seen it and pressed Enter, so that answering it tells no more
 // than a denial would; --skip-permissions does not skip this prompt.
-func (s *Server) refuseOnScreen(ctx context.Context, id int64, rec audit.Record, reason string) ipc.Response {
+//
+// The client learns the code and its default hint only: the reason, its
+// figures and any position stay on the console.
+func (s *Server) refuseOnScreen(ctx context.Context, id int64, rec audit.Record, r *refusal.Error) ipc.Response {
 	s.println(paint.Paint(s.frameColour(), "│ ") + red + "verdict REFUSE: this statement cannot be approved" + reset)
 	bell(s.cfg.IO)
-	rec.Error = reason // kept when the prompt goes unanswered too
+	// Kept when the prompt goes unanswered too.
+	rec.Error, rec.Code = r.Reason, string(r.Code)
 	if _, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold("Press Enter to refuse ")), ApprovalTimeout); !ok {
 		return *s.unanswered(ctx, id, rec)
 	}
 	rec.Event = audit.EventRefused
 	s.audit(rec)
-	s.println(paint.Fail("refused: " + safeText(reason, false)))
-	return errResp(id, ipc.CodeRefused, hiddenWeightRefusal)
+	s.println(paint.Fail("refused [" + string(r.Code) + "]: " + safeText(r.Reason, false)))
+	return refusedResp(id, hiddenWeightRefusal, refusal.New(refusal.Cost, hiddenWeightRefusal).Info("", 0))
 }
 
 // result renders the masked result as capped JSON rows and TSV text.

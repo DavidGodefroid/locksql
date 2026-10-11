@@ -3,6 +3,8 @@ package sqlclass
 import (
 	"fmt"
 	"strings"
+
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 )
 
 // Statement is a classified statement, ready for the policy checks.
@@ -21,16 +23,31 @@ type Statement struct {
 	Limit int
 }
 
-// Refusal is the error Classify and Lex return for a refused statement.
-// Reason never quotes literal values from the statement.
-type Refusal struct{ Reason string }
+// Refusal is the error Classify and Lex return for a refused statement:
+// a code, a reason and, when known, the offset of the token refused in the
+// text checked (the input without its surrounding blanks). Reason never
+// quotes literal values from the statement.
+type Refusal = refusal.Error
 
-func (r *Refusal) Error() string { return r.Reason }
+func refuse(code refusal.Code, reason string) *Refusal { return refusal.New(code, reason) }
 
-func refuse(reason string) *Refusal { return &Refusal{Reason: reason} }
+func refusef(code refusal.Code, format string, args ...any) *Refusal {
+	return refusal.Newf(code, format, args...)
+}
 
-func refusef(format string, args ...any) *Refusal {
-	return &Refusal{Reason: fmt.Sprintf(format, args...)}
+// refuseAt is refuse pointing at token t. Only a word or a punctuation
+// sign is named: a literal or a quoted name gets a position alone.
+func refuseAt(t Token, code refusal.Code, reason string) *Refusal {
+	return refusal.New(code, reason).At(t.Pos, TokenText(t))
+}
+
+// TokenText is the text of t a refusal may name: a word or a punctuation
+// sign, "" for a literal or a quoted name.
+func TokenText(t Token) string {
+	if t.Kind == TokWord || t.Kind == TokPunct {
+		return t.Text
+	}
+	return ""
 }
 
 type set map[string]struct{}
@@ -242,7 +259,7 @@ func Classify(d Dialect, sql string, maxRows int) (Statement, error) {
 		text = strings.TrimSpace(text[:len(text)-1])
 	}
 	if text == "" {
-		return Statement{}, refuse("empty statement")
+		return Statement{}, refuse(refusal.UnsupportedSyntax, "empty statement")
 	}
 	toks, err := Lex(d, text)
 	if err != nil {
@@ -252,7 +269,7 @@ func Classify(d Dialect, sql string, maxRows int) (Statement, error) {
 	// 1. A single statement.
 	for _, t := range toks {
 		if t.Kind == TokPunct && t.Text == ";" {
-			return Statement{}, refuse("exactly one statement is allowed (no ';' chaining)")
+			return Statement{}, refuseAt(t, refusal.MultiStatement, "exactly one statement is allowed (no ';' chaining)")
 		}
 	}
 
@@ -268,17 +285,17 @@ func Classify(d Dialect, sql string, maxRows int) (Statement, error) {
 		if first.Kind != TokPunct {
 			what = "a literal or quoted name" // never echo literal values
 		}
-		return Statement{}, refusef("statements starting with %s cannot be classified", what)
+		return Statement{}, refusef(refusal.StatementKind, "statements starting with %s cannot be classified", what).At(first.Pos, TokenText(first))
 	}
 	if why, ok := forbiddenLeading[first.Text]; ok {
-		return Statement{}, refusef("%s is not allowed (%s)", first.Text, why)
+		return Statement{}, refusef(refusal.Forbidden, "%s is not allowed (%s)", first.Text, why).At(first.Pos, first.Text)
 	}
 	l, ok := commonLeading[first.Text]
 	if !ok {
 		l, ok = dialectLeading[d][first.Text]
 	}
 	if !ok {
-		return Statement{}, refusef("statements starting with %.40s cannot be classified", first.Text)
+		return Statement{}, refusef(refusal.StatementKind, "statements starting with %.40s cannot be classified", first.Text).At(first.Pos, first.Text)
 	}
 	st := Statement{Class: l.class, Kind: l.kind, SQL: text, Limit: -1}
 	if st.Class == Read && st.Kind == "select" {
@@ -309,14 +326,14 @@ func Classify(d Dialect, sql string, maxRows int) (Statement, error) {
 func checkForbidden(d Dialect, toks []Token) error {
 	for k, t := range toks {
 		if d == SQLite && sqliteRawTables.has(sqliteName(t)) {
-			return refusef("%s is not allowed (it exposes raw database pages or storage details)", strings.ToLower(sqliteName(t)))
+			return refusef(refusal.SystemObject, "%s is not allowed (it exposes raw database pages or storage details)", strings.ToLower(sqliteName(t))).At(t.Pos, TokenText(t))
 		}
 		name := t.nameIn(d)
 		if name == "" {
 			continue
 		}
 		if isCall(toks, k) && isForbiddenFunc(name) {
-			return refusef("forbidden function: %.64s", name)
+			return refusef(refusal.Forbidden, "forbidden function: %.64s", name).At(t.Pos, TokenText(t))
 		}
 		if t.Kind != TokWord {
 			continue
@@ -324,10 +341,10 @@ func checkForbidden(d Dialect, toks []Token) error {
 		switch name {
 		case "INTO":
 			if k+1 < len(toks) && (toks[k+1].Text == "OUTFILE" || toks[k+1].Text == "DUMPFILE") && toks[k+1].Kind == TokWord {
-				return refusef("INTO %s is not allowed (writes a file on the server)", toks[k+1].Text)
+				return refusef(refusal.Forbidden, "INTO %s is not allowed (writes a file on the server)", toks[k+1].Text).At(t.Pos, t.Text)
 			}
 		case "SONAME":
-			return refuse("SONAME is not allowed (loads native code)")
+			return refuse(refusal.Forbidden, "SONAME is not allowed (loads native code)")
 		}
 	}
 	return nil
@@ -430,9 +447,9 @@ func checkShow(toks []Token) error {
 	}
 	switch {
 	case word(1) == "CREATE" && word(2) == "USER":
-		return refuse("SHOW CREATE USER is not allowed (it returns the password hash)")
+		return refuse(refusal.Forbidden, "SHOW CREATE USER is not allowed (it returns the password hash)")
 	case word(1) == "GRANTS":
-		return refuse("SHOW GRANTS is not allowed (MariaDB includes password hashes); query the privilege tables instead")
+		return refuse(refusal.Forbidden, "SHOW GRANTS is not allowed (MariaDB includes password hashes); query the privilege tables instead")
 	}
 	return nil
 }
@@ -453,11 +470,11 @@ func checkRead(d Dialect, toks []Token, st *Statement, maxRows int) error {
 		}
 		switch t.Text {
 		case "INTO":
-			return refuse("SELECT ... INTO is not allowed (it writes a table, a variable or a file)")
+			return refuseAt(t, refusal.Forbidden, "SELECT ... INTO is not allowed (it writes a table, a variable or a file)")
 		case "PROCEDURE":
-			return refuse("PROCEDURE is not allowed in a read")
+			return refuseAt(t, refusal.Forbidden, "PROCEDURE is not allowed in a read")
 		case "LOCK":
-			return refuse("locking reads (LOCK IN SHARE MODE) are not allowed")
+			return refuseAt(t, refusal.Forbidden, "locking reads (LOCK IN SHARE MODE) are not allowed")
 		case "FOR":
 			clause := []string{"FOR"}
 			for i := 1; i <= 3; i++ {
@@ -467,18 +484,18 @@ func checkRead(d Dialect, toks []Token, st *Statement, maxRows int) error {
 				}
 				clause = append(clause, w)
 				if w == "UPDATE" || w == "SHARE" {
-					return refusef("locking reads (%s) are not allowed", strings.Join(clause, " "))
+					return refusef(refusal.Forbidden, "locking reads (%s) are not allowed", strings.Join(clause, " ")).At(t.Pos, t.Text)
 				}
 			}
 		case "NEXT":
 			if next(1) == "VALUE" && next(2) == "FOR" {
-				return refuse("NEXT VALUE FOR advances a sequence; sequence changes are not allowed in a read")
+				return refuseAt(t, refusal.Forbidden, "NEXT VALUE FOR advances a sequence; sequence changes are not allowed in a read")
 			}
 		}
 	}
 	for k, t := range toks {
 		if name := t.nameIn(d); sequenceFuncs.has(name) && isCall(toks, k) {
-			return refusef("%s advances a sequence; sequence changes are not allowed in a read", name)
+			return refusef(refusal.Forbidden, "%s advances a sequence; sequence changes are not allowed in a read", name).At(t.Pos, TokenText(t))
 		}
 	}
 	switch st.Kind {
@@ -494,7 +511,7 @@ func checkRead(d Dialect, toks []Token, st *Statement, maxRows int) error {
 		return err
 	}
 	if maxRows > 0 && n > maxRows {
-		return refusef("LIMIT %d exceeds the maximum of %d rows", n, maxRows)
+		return refusef(refusal.LimitTooHigh, "LIMIT %d exceeds the maximum of %d rows", n, maxRows).WithHint(fmt.Sprintf("use LIMIT %d or less", maxRows))
 	}
 	st.Limit = n
 	return nil
@@ -503,7 +520,7 @@ func checkRead(d Dialect, toks []Token, st *Statement, maxRows int) error {
 // checkDescribe accepts DESCRIBE|DESC table, db.table, optionally followed
 // by a column name or pattern. Other forms are EXPLAIN in disguise.
 func checkDescribe(toks []Token) error {
-	bad := refuse("DESCRIBE accepts a table name only (DESCRIBE [db.]table [column])")
+	bad := refuse(refusal.InvalidSQL, "DESCRIBE accepts a table name only (DESCRIBE [db.]table [column])")
 	rest := toks[1:]
 	isName := func(t Token) bool {
 		return t.Kind == TokQuotedIdent || t.Kind == TokWord && !describeStop.has(t.Text)
@@ -530,14 +547,14 @@ func checkPragma(toks []Token) error {
 	rest := toks[1:]
 	for _, t := range rest {
 		if t.Kind == TokPunct && t.Text == "=" {
-			return refuse("PRAGMA with an assignment is not allowed")
+			return refuseAt(t, refusal.Forbidden, "PRAGMA with an assignment is not allowed")
 		}
 	}
 	if len(rest) >= 2 && rest[1].Kind == TokPunct && rest[1].Text == "." {
 		rest = rest[2:]
 	}
 	if len(rest) == 0 || rest[0].Kind != TokWord && rest[0].Kind != TokQuotedIdent {
-		return refuse("PRAGMA needs a pragma name")
+		return refuse(refusal.InvalidSQL, "PRAGMA needs a pragma name")
 	}
 	name := rest[0].Name()
 	rest = rest[1:]
@@ -548,9 +565,9 @@ func checkPragma(toks []Token) error {
 		rest[1].Kind != TokPunct:
 		return nil
 	case pragmaSettings.has(name):
-		return refusef("PRAGMA %s with an argument changes the setting; only the read form is allowed", name)
+		return refusef(refusal.Forbidden, "PRAGMA %s with an argument changes the setting; only the read form is allowed", name)
 	}
-	return refusef("PRAGMA %.64s is not allowed (only introspection and setting reads are)", name)
+	return refusef(refusal.Forbidden, "PRAGMA %.64s is not allowed (only introspection and setting reads are)", name)
 }
 
 // checkPrivileged applies the DDL and ADMIN rules: no credentials in the
@@ -570,7 +587,7 @@ func checkPrivileged(d Dialect, toks []Token) error {
 	}
 	for _, t := range toks {
 		if credentialStmt && t.Kind == TokWord && credentialWords.has(t.Text) {
-			return refuse("statements that carry credentials (PASSWORD, IDENTIFIED) are not allowed: the audit log would record the secret")
+			return refuseAt(t, refusal.Forbidden, "statements that carry credentials (PASSWORD, IDENTIFIED) are not allowed: the audit log would record the secret")
 		}
 	}
 	switch first {
@@ -581,17 +598,17 @@ func checkPrivileged(d Dialect, toks []Token) error {
 				continue
 			}
 			if sessionSettings.has(name) || hasAnyPrefix(name, sessionSettingPrefixes) {
-				return refusef("SET of %.64s is not allowed (it would weaken the console's session guards)", name)
+				return refusef(refusal.Forbidden, "SET of %.64s is not allowed (it would weaken the console's session guards)", name).At(t.Pos, TokenText(t))
 			}
 		}
 	case "ALTER":
 		if second == "SYSTEM" {
-			return refuse("ALTER SYSTEM is not allowed (server configuration)")
+			return refuse(refusal.Forbidden, "ALTER SYSTEM is not allowed (server configuration)")
 		}
 	case "CREATE":
 		for _, t := range toks[1:] {
 			if t.Kind == TokWord && t.Text == "EXTENSION" {
-				return refuse("CREATE EXTENSION is not allowed (extensions can load native code)")
+				return refuseAt(t, refusal.Forbidden, "CREATE EXTENSION is not allowed (extensions can load native code)")
 			}
 		}
 	case "ANALYZE":
@@ -600,13 +617,13 @@ func checkPrivileged(d Dialect, toks []Token) error {
 			// A MariaDB statement may also be parenthesised; PostgreSQL's
 			// ANALYZE (VERBOSE) t option list is not a statement.
 			if t.Kind == TokWord && analyzeStatement.has(t.Text) || d == MySQL && t.Text == "(" {
-				return refuse("ANALYZE of a statement is not allowed (it runs the statement)")
+				return refuseAt(t, refusal.Forbidden, "ANALYZE of a statement is not allowed (it runs the statement)")
 			}
 		}
 	case "VACUUM":
 		for _, t := range toks[1:] {
 			if t.Kind == TokWord && t.Text == "INTO" {
-				return refuse("VACUUM INTO is not allowed (writes a file)")
+				return refuseAt(t, refusal.Forbidden, "VACUUM INTO is not allowed (writes a file)")
 			}
 		}
 	}

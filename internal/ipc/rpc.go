@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 )
 
 // ProtocolMajor is exchanged in the hello handshake. A client and a console
@@ -36,11 +38,12 @@ type Response struct {
 }
 
 // RPCError is a JSON-RPC 2.0 error object. Message must never carry a
-// secret; the console sanitises it.
+// secret; the console sanitises it. Data is set on CodeRefused only: the
+// structured form of the refusal (code, retry, hint and span).
 type RPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-	Data    any    `json:"data,omitempty"`
+	Code    int           `json:"code"`
+	Message string        `json:"message"`
+	Data    *refusal.Info `json:"data,omitempty"`
 }
 
 func (e *RPCError) Error() string { return e.Message }

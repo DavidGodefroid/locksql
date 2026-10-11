@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 )
 
 func readLines(t *testing.T, path string) []map[string]any {
@@ -154,8 +156,8 @@ func TestConcurrentWritesStayWholeLines(t *testing.T) {
 // hold a password or row data; adding one must be a deliberate change here.
 func TestRecordFieldSet(t *testing.T) {
 	want := []string{
-		"affected", "class", "db", "db_user", "decision", "duration_ms", "engine", "error",
-		"event", "host", "intent", "peer_pid", "peer_uid", "peer_user", "profile", "reason", "rows", "sql", "ssh_host", "ssh_host_key", "truncated", "ts",
+		"affected", "class", "code", "db", "db_user", "decision", "duration_ms", "engine", "error",
+		"event", "host", "intent", "peer_pid", "peer_uid", "peer_user", "profile", "reason", "rows", "span", "sql", "ssh_host", "ssh_host_key", "truncated", "ts",
 		"unmasked", "verdict", "warnings",
 	}
 	l, err := Open(t.TempDir())
@@ -167,6 +169,7 @@ func TestRecordFieldSet(t *testing.T) {
 		Class: "read", SQL: "s", Verdict: "OK", Decision: "y", Error: "e",
 		Rows: 1, Affected: 2, DurationMS: 3, Truncated: true, Unmasked: true, Warnings: []string{"w"}, Intent: "i", Reason: "r",
 		SSHHost: "b", SSHHostKey: "SHA256:k", PeerUID: new(int), PeerPID: 4, PeerUser: "agent",
+		Code: "E_NO_LIMIT", Span: &refusal.Span{Line: 1, Col: 2, Token: "FROM"},
 	}
 	if err := l.Write(full); err != nil {
 		t.Fatal(err)

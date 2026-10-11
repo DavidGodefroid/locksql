@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/DavidGodefroid/locksql/internal/refusal"
 )
 
 // corpusMaxRows is the max_rows used by every corpus case.
@@ -415,6 +417,10 @@ func runCorpus(t *testing.T, d Dialect, cases []corpusCase) {
 			var r *Refusal
 			if !errors.As(err, &r) {
 				t.Errorf("%s: error %T is not *Refusal", name, err)
+			} else if !r.Code.Known() || r.Code == refusal.Policy {
+				t.Errorf("%s: refusal without a code: %q", name, err)
+			} else if r.Pos > len(strings.TrimSpace(c.sql)) {
+				t.Errorf("%s: position %d out of the statement", name, r.Pos)
 			}
 			if !strings.Contains(err.Error(), c.wantErr) {
 				t.Errorf("%s: refusal %q does not contain %q", name, err, c.wantErr)
@@ -488,6 +494,9 @@ func FuzzLexNoPanic(f *testing.F) {
 				var r *Refusal
 				if !errors.As(err, &r) {
 					t.Fatalf("Classify(%v): error %T is not *Refusal", d, err)
+				}
+				if !r.Code.Known() || r.Code == refusal.Policy {
+					t.Fatalf("Classify(%v, %q): refusal without a code: %v", d, sql, err)
 				}
 				continue
 			}
