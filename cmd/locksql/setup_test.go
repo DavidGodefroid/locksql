@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -62,7 +63,16 @@ func newSetupFixture(t *testing.T, separatedAlready bool, onPath ...string) *set
 	}
 	d := fakeDoctor(separatedSys())
 	d.current = func() (*user.User, error) { return me, nil }
-	d.stat = os.Stat
+	// The directories above the test's own (macOS: /var/folders/.../T, mode
+	// 0700) are outside the fixture: show them as enterable by everyone.
+	outside := filepath.Dir(f.root)
+	d.stat = func(p string) (os.FileInfo, error) {
+		fi, err := os.Stat(p)
+		if err == nil && fi.IsDir() && p != outside && !strings.HasPrefix(p, outside+string(filepath.Separator)) {
+			return enterable{fi}, nil
+		}
+		return fi, err
+	}
 	d.ownerOf = func(fi os.FileInfo) (int, int, bool) {
 		uid, gid, ok := fileOwner(fi)
 		if f.chowned && fi.Name() == ".locksql" && fi.IsDir() {
@@ -75,6 +85,11 @@ func newSetupFixture(t *testing.T, separatedAlready bool, onPath ...string) *set
 	return f
 }
 
+// enterable is a directory any account may enter.
+type enterable struct{ os.FileInfo }
+
+func (e enterable) Mode() os.FileMode { return e.FileInfo.Mode() | 0o055 }
+
 func (f *setupFixture) run(args ...string) int {
 	return runEnv(f.e, append([]string{"setup"}, args...))
 }
@@ -84,7 +99,11 @@ func TestSetupInteractive(t *testing.T) {
 	// The password question is declined, then the wizard: name, engine
 	// (an invalid one first, which asks again), file; then the root step
 	// for the project is confirmed.
-	f.e.stdin = strings.NewReader("n\ndemo\noracle\ndemo\nsqlite\ndata/app.db\ny\n")
+	answers := "n\ndemo\noracle\ndemo\nsqlite\ndata/app.db\ny\n"
+	if runtime.GOOS != "linux" {
+		answers = strings.TrimPrefix(answers, "n\n") // the password question is Linux only
+	}
+	f.e.stdin = strings.NewReader(answers)
 	if code := f.run(); code != exitOK {
 		t.Fatalf("code %d\n%s", code, f.out)
 	}

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/DavidGodefroid/locksql/internal/audit"
+	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/refusal"
 )
 
@@ -17,9 +18,12 @@ import (
 // test's account.
 func writeAudit(t *testing.T, recs ...audit.Record) string {
 	t.Helper()
-	state := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", state)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
+	state, err := config.StateDir() // macOS: under HOME, not XDG_STATE_HOME
+	if err != nil {
+		t.Fatal(err)
+	}
 	l, err := audit.Open(state)
 	if err != nil {
 		t.Fatal(err)

@@ -67,6 +67,7 @@ type screen struct {
 	mu   sync.Mutex
 	buf  strings.Builder
 	done chan struct{} // closed when the console exits
+	err  error         // the console's exit, once done is closed
 }
 
 func (s *screen) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.buf.String() }
@@ -89,7 +90,7 @@ func (s *screen) waitFor(t *testing.T, from int, d time.Duration, prompts ...str
 		}
 		select {
 		case <-s.done:
-			t.Fatalf("console: exited before %q; screen:\n%s", prompts, s.String())
+			t.Fatalf("console: exited (%v) before %q; screen:\n%s", s.err, prompts, s.String())
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
@@ -152,13 +153,16 @@ func TestFirstQueryInThreeCommands(t *testing.T) {
 			"/usr/local/bin/locksql", "console", "--project", project}
 	}
 	t.Logf("command 3: %s", strings.Join(console, " "))
+	// What the console account sees, for a failure before the console prints.
+	pre, preErr := exec.Command("sudo", "-u", "locksql", "-H", "--", "sh", "-c", "id; ls -ld "+shellQuote(project)+"; locksql version").CombinedOutput()
+	t.Logf("as the console account: %v\n%s", preErr, pre)
 	cmd := exec.Command(console[0], console[1:]...)
 	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 50, Cols: 160})
 	if err != nil {
 		t.Fatal(err)
 	}
 	scr := &screen{done: make(chan struct{})}
-	go func() { cmd.Wait(); close(scr.done) }()
+	go func() { scr.err = cmd.Wait(); close(scr.done) }()
 	go func() {
 		r := bufio.NewReader(tty)
 		buf := make([]byte, 4096)

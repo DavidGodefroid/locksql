@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -228,6 +229,9 @@ func handshakeClientAuth(t *testing.T, cfg *tls.Config, cert tls.Certificate, cl
 }
 
 func TestTLSConfigClientCertificate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no group or other mode bits on Windows: every file reads as 0666")
+	}
 	caFile, server := testCA(t, "db.example")
 	certFile, keyFile, clients := clientPair(t, 0o600)
 	for _, mode := range []string{config.TLSRequire, config.TLSVerifyCA, config.TLSVerifyFull} {
@@ -251,6 +255,9 @@ func TestTLSConfigClientCertificate(t *testing.T) {
 }
 
 func TestTLSConfigClientKeyChecks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no group or other mode bits on Windows: every file reads as 0666")
+	}
 	caFile, _ := testCA(t, "db.example")
 	certFile, keyFile, _ := clientPair(t, 0o640)
 	p := config.Profile{Engine: config.EngineMySQL, Host: "db.example", TLS: config.TLSVerifyFull, TLSCA: caFile, TLSCert: certFile, TLSKey: keyFile}

@@ -457,6 +457,9 @@ func (h *harness) auditRecords(t *testing.T) []map[string]any {
 // account, from the kernel's peer credentials, but not its process name,
 // which the agent chooses.
 func TestAuditNamesTheRequester(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no uid on Windows: the peer of a record is a Unix socket credential")
+	}
 	h := newHarness(t, uatProfile())
 	uid := os.Getuid()
 	ctx := withPeer(context.Background(), ipc.Cred{UID: uid, GID: os.Getgid(), PID: 4242})
