@@ -40,6 +40,8 @@ type isolationEnv struct {
 	terminalOwner func() (int, bool)
 	clientAllowed func(sys *sysconf.Config, uid int) bool
 	clientGID     func(sys *sysconf.Config) (int, error)
+	// accountExists reports whether uid names an account.
+	accountExists func(uid int) bool
 }
 
 func realIsolationEnv(tty *os.File) isolationEnv {
@@ -63,6 +65,10 @@ func realIsolationEnv(tty *os.File) isolationEnv {
 		},
 		clientAllowed: func(sys *sysconf.Config, uid int) bool { return sys.ClientAllowed(uid) },
 		clientGID:     func(sys *sysconf.Config) (int, error) { return sys.ClientGID() },
+		accountExists: func(uid int) bool {
+			_, err := user.LookupId(strconv.Itoa(uid))
+			return err == nil
+		},
 	}
 }
 
@@ -120,13 +126,23 @@ func checkIsolation(io IO, env isolationEnv, p config.Profile) (*isolation, erro
 	if env.clientAllowed(sys, iso.self) {
 		return nil, fmt.Errorf("console: the account %q may also connect as a client (group %q or allowed_uids): the separation would be void", name, sys.ClientGroup)
 	}
+	// Another account's session or terminal is refused when that account
+	// may reach the console (the agent's: it could read the terminal and
+	// type into it) or names no account. An account outside the client
+	// group (an administrator handing the console off with sudo, su or
+	// machinectl, while the agents run under an account of their own) is
+	// out of the agent's reach.
+	agentSide := func(uid int) bool { return !env.accountExists(uid) || env.clientAllowed(sys, uid) }
 	if lu, ok := env.loginUID(); ok && lu >= 0 && lu != iso.self {
-		return nil, fmt.Errorf("console: started from the login session of uid %d (sudo or su): that account shares this terminal and display; log in as %q in a session of its own",
-			lu, sys.ServiceUser)
+		if agentSide(lu) {
+			return nil, fmt.Errorf("console: started from the login session of uid %d (sudo or su), which may reach the console: that account shares this terminal and display; log in as %q in a session of its own",
+				lu, sys.ServiceUser)
+		}
+		io.Println(fmt.Sprintf("started from the login session of uid %d, an account outside the client group", lu))
 	}
-	if owner, ok := env.terminalOwner(); ok && owner != iso.self {
-		return nil, fmt.Errorf("console: the terminal belongs to uid %d, not to %q: its owner can read it and type into it; open a terminal in %q's own session",
-			owner, sys.ServiceUser, sys.ServiceUser)
+	if owner, ok := env.terminalOwner(); ok && owner != iso.self && agentSide(owner) {
+		return nil, fmt.Errorf("console: the terminal belongs to uid %d, which may reach the console: its owner can read it and type into it; open a terminal in %q's own session",
+			owner, sys.ServiceUser)
 	}
 	gid, err := env.clientGID(sys)
 	if err != nil {
