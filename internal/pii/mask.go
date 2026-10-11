@@ -132,29 +132,16 @@ func detect(v any, ds []Detector) any {
 // is cut there, and ends with "…", before detection: nothing past the
 // scanned part can reach the output. The renderer cuts cells much earlier
 // (max_cell_chars), so the cut is normally invisible; it bounds the time a
-// huge value can cost.
+// huge value can cost. The engines already cut a cell at
+// engine.MaxCellBytes, which is no more.
 const DetectLimit = 64 << 10
-
-// cutTail is how far back a cut retreats over value-like characters, so that
-// a value split by the cut (a partial number or address) is dropped whole.
-const cutTail = 64
 
 func cutForDetection(s string) string {
 	if len(s) <= DetectLimit {
 		return s
 	}
-	end := DetectLimit
-	for end > 0 && !utf8.RuneStart(s[end]) {
-		end--
-	}
-	for back := 0; back < cutTail && end > 0 && strings.IndexByte(valueChars, s[end-1]) >= 0; back++ {
-		end--
-	}
-	return s[:end] + "…"
+	return engine.CutAt(s, DetectLimit)
 }
-
-// valueChars may belong to a detected value.
-const valueChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz@._%+-/() "
 
 // AliasViolation is the fallback for result columns without an origin: it
 // refuses a READ select in which a rule-matched column (matched by name, see

@@ -190,25 +190,39 @@ it append-only for the console account too.
   | `prefer` | if offered | no | no |
   | `require` | yes, else refuse | only with `tls_ca` | no |
   | `verify-ca` | yes, else refuse | yes | no |
-  | `verify-full` | yes, else refuse | yes | yes (`host`) |
+  | `verify-full` | yes, else refuse | yes | yes (`host`, or `tls_server_name`) |
 
   The default is `verify-full`, except `prefer` when `host` is a Unix socket
   path or a loopback host (`localhost` or a loopback IP literal).
   `production = true` refuses `disable` and `prefer` unless the host is
   loopback or a socket path. `tls_ca` is a PEM bundle that replaces the
   system roots; it is refused with `disable` and `prefer`, and with
-  `require` it verifies the chain, as libpq does. A weaker `tls` or
-  any change of `tls_ca` loosens the approved policy and needs the human's
-  confirmation.
+  `require` it verifies the chain, as libpq does. `tls_server_name`
+  replaces `host` as the name `verify-full` checks. `tls_cert` and
+  `tls_key` present a client certificate (the key must be mode 0600, in the
+  console account's files). A weaker `tls` or any change of `tls_ca`,
+  `tls_cert`, `tls_key` or `tls_server_name` loosens the approved policy and
+  needs the human's confirmation. `locksql doctor` checks these files and
+  their expiry, and, for a profile without `ssh`, fetches the server's
+  certificate with a TLS handshake that sends no secret, and reports a chain
+  or a name that would not verify and a certificate close to its end.
 
   Below `verify-ca` an active attacker on the path can intercept or downgrade
-  the connection, and obtain the password. The MariaDB/MySQL clear-text guard
-  protects plain TCP connections only: over TLS, go-mysql answers
-  `mysql_clear_password`, `sha256_password` and a `caching_sha2_password`
-  full authentication (the MySQL 8 default) in clear, so an attacker
-  terminating TLS gets the password. On plain TCP (`disable`, or `prefer`
-  after a fallback) the guard refuses a full authentication, so a MySQL 8
-  account logs in only while the server's authentication cache holds it.
+  the connection, read and change the traffic, and relay a login, but is
+  not handed the password. On MariaDB/MySQL, a connection whose server is
+  not authenticated (plain TCP, and TLS to a remote host under `prefer` or
+  `require` without `tls_ca`) answers no request for the password in clear:
+  an auth switch to `mysql_clear_password` or `sha256_password`, or a
+  `caching_sha2_password` full authentication (the MySQL 8 default), is
+  refused before the driver can answer. Under unverified TLS, locksql makes
+  the TLS upgrade below the driver and reads the authentication in clear to
+  do so. A MySQL 8 account therefore logs in over such a connection only
+  while the server's authentication cache holds it, and the refusal names
+  the remedy (`tls = "verify-full"`, with `tls_ca` for a private CA, or an
+  account with `mysql_native_password` or `ed25519`). Under `verify-ca` and
+  `verify-full` a full authentication sends the password inside the
+  verified TLS connection, as the MySQL clients do. A loopback host or a
+  socket path under TLS is not guarded.
   On PostgreSQL, a connection to a remote host under `disable`, `prefer` or
   `require` without `tls_ca` answers no clear-text or MD5 password request
   (libpq's `require_auth=!password,!md5`): a server, or an attacker on the
@@ -274,10 +288,17 @@ it append-only for the console account too.
   rows change, which the affected-row count reveals anyway, and the human
   approves them. A write that returns no rows and stores no query's rows is
   checked by column name only (see the copies and planted values below).
-- **Size bound.** The size bound counts bytes built from literals and string
-  functions; numeric arithmetic (`1e131071`, `^`) and formatting of stored
-  data (`jsonb_pretty`) can still produce a value of hundreds of megabytes on
-  the server, bounded by `statement_timeout`.
+- **Size bound.** The statement's size bound counts bytes built from
+  literals and string functions; numeric arithmetic (`1e131071`, `^`) and
+  formatting of stored data (`jsonb_pretty`) can still make the server
+  compute and send a value of hundreds of megabytes, bounded by
+  `statement_timeout`. The console keeps at most 64 KiB of each cell
+  (`cut_cells` tells the agent which were cut): PostgreSQL columns are cut
+  while they are read off the wire and the rest is dropped unread into
+  memory; MariaDB and MySQL rows are read whole by the driver, up to the
+  server's `max_allowed_packet`, and cut before they are copied; SQLite
+  runs in the console's process, so a value is cut after the driver has
+  copied it out of the database file.
 - **Clear results on the human's screen.** With the clear results on
   (Ctrl-O, `--show-results`) and for an unmasked run, the clear rows stay in the scrollback of the console's
   terminal, and are visible to anyone who sees that screen (screen sharing,

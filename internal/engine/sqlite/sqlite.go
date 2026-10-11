@@ -334,6 +334,22 @@ func (s *session) query(ctx context.Context, q string, withOrigins bool, maxRows
 		if err := rows.Scan(ptrs...); err != nil {
 			return engine.Result{}, wrap(ctx, err)
 		}
+		for i, v := range vals {
+			var cut bool
+			switch x := v.(type) {
+			case string:
+				if len(x) > engine.MaxCellBytes {
+					vals[i], cut = engine.CapText([]byte(x[:engine.MaxCellBytes+1]))
+				}
+			case []byte:
+				if len(x) > engine.MaxCellBytes {
+					vals[i], cut = engine.CapBytes(x)
+				}
+			}
+			if cut {
+				res.MarkCut(len(res.Rows), i)
+			}
+		}
 		res.Rows = append(res.Rows, vals)
 	}
 	if err := rows.Err(); err != nil {

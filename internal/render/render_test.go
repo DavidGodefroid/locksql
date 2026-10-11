@@ -261,3 +261,43 @@ func FuzzRenderNoPanic(f *testing.F) {
 		}
 	})
 }
+
+// TestCutCellsReported checks that the agent is told how many cells it got
+// cut: by max_cell_chars, or by the engine's cap while reading (CutCells),
+// even when the rest still fits max_cell_chars.
+func TestCutCellsReported(t *testing.T) {
+	l := limits()
+	l.MaxCellChars = 1 << 20
+	res := engine.Result{Columns: cols("a", "b"), Rows: [][]any{
+		{"short", strings.Repeat("9", 100) + "…"}, // cut by the engine
+		{"x", "y"},
+	}}
+	res.MarkCut(0, 1)
+	out := render(t, res, l, "json")
+	var got struct {
+		CutCells int `json:"cut_cells"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil || got.CutCells != 1 {
+		t.Errorf("json cut_cells = %d (%v): %s", got.CutCells, err, out)
+	}
+	if out := render(t, res, l, "tsv"); !strings.Contains(out, "[1 cell cut") {
+		t.Errorf("tsv: %q", out)
+	}
+
+	res = engine.Result{Columns: cols("a"), Rows: [][]any{{strings.Repeat("x", 500)}, {strings.Repeat("y", 500)}, {"z"}}}
+	if out := render(t, res, limits(), "tsv"); !strings.Contains(out, "[2 cells cut") || !strings.Contains(out, "200 characters") {
+		t.Errorf("tsv: %q", out)
+	}
+	out = render(t, res, limits(), "json")
+	if err := json.Unmarshal([]byte(out), &got); err != nil || got.CutCells != 2 {
+		t.Errorf("json cut_cells = %d: %s", got.CutCells, out)
+	}
+
+	res = engine.Result{Columns: cols("a"), Rows: [][]any{{"z"}}}
+	if out := render(t, res, limits(), "json"); strings.Contains(out, "cut_cells") {
+		t.Errorf("cut_cells on a result without cuts: %s", out)
+	}
+	if out := render(t, res, limits(), "tsv"); strings.Contains(out, "cut") {
+		t.Errorf("tsv mentions a cut: %q", out)
+	}
+}

@@ -129,7 +129,8 @@ func SSHString(s *SSHProfile) string {
 // (0 means unlimited), a longer idle_timeout or max_session, a removed PII
 // rule or detector, an added allow rule, any change of engine, host, port,
 // path, database or user, and a credentials mode other than ask, a weaker
-// tls mode, any change of tls_ca and any change of the ssh table.
+// tls mode, any change of tls_ca, tls_cert, tls_key or tls_server_name and
+// any change of the ssh table.
 func Diff(approved, current Policy) []Change {
 	a, c := canonical(approved), canonical(current)
 	ap, cp := a.Profile, c.Profile
@@ -161,6 +162,11 @@ func Diff(approved, current Policy) []Change {
 	}
 	// A new CA can vouch for any certificate: every change loosens.
 	same("tls_ca", ap.TLSCA, cp.TLSCA)
+	// Another client certificate is another identity on the server, and
+	// another server name accepts another certificate: every change loosens.
+	same("tls_cert", ap.TLSCert, cp.TLSCert)
+	same("tls_key", ap.TLSKey, cp.TLSKey)
+	same("tls_server_name", ap.TLSServerName, cp.TLSServerName)
 
 	switch as, cs := ap.SSH, cp.SSH; {
 	case as == nil && cs == nil:
