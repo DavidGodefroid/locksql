@@ -52,7 +52,7 @@ root.
 
 | Threat | Mitigation |
 |---|---|
-| The agent runs a query the human did not approve | The console is the only connection holder. `query.run` needs a one-shot plan id (valid 10 minutes) and an explicit approval, or `--skip-permissions` outside production. |
+| The agent runs a query the human did not approve | The console is the only connection holder. `query.run` needs a one-shot plan id (valid 10 minutes) and an explicit approval, or auto mode outside production, switched from the console's keyboard only. |
 | The agent loosens its own policy | The socket protocol has no method that loosens policy. Config and PII file edits are detected by a policy fingerprint diff; a loosening is held until the human confirms it. The approved policy is stored outside the repository. |
 | Credential leak | Secrets exist only in console memory or the OS keychain (the console account's, in separated mode). They never go through argv, environment, files, logs, the socket or error messages (errors are sanitised). Config keys named like secrets and DSNs with passwords are refused. Core dumps are disabled (`RLIMIT_CORE=0`, and `PR_SET_DUMPABLE=0` on Linux); when that fails, the console warns, and refuses to open a production profile. `credentials_ttl` bounds how long one secret stays in use, and `limits.idle_timeout` and `limits.max_session` end an idle or long session, with its connection and secret (raising either is a loosening). `doctor` flags a secret left in the agent's keychain. |
 | Statement smuggling | The classifier refuses several statements, comments, variables, bind parameters and unbalanced quotes, and classifies by keywords outside literals per dialect. Reads are limited to `SELECT`, `WITH ... SELECT` and `EXPLAIN SELECT` and parsed in full by a fail-closed parser: unknown syntax is refused. Multi-statements are off in every driver; PostgreSQL uses the extended protocol only. Tier `read` is also enforced by a read-only session and transaction on the server. |
@@ -96,28 +96,36 @@ unmask request is refused before parsing and audited; with it, each unmasked
 query is still approved by the human and never auto-approved, and its clear
 result is printed in the console, never in the audit log.
 
-## `--show-results`
+## Console switches: clear results and auto mode
 
-A console-only flag, off by default, that prints in the console the clear
-result of each masked query it runs. It changes nothing for the agent, which
-still gets the masked cells: the human is the trusted party and already sees
-the SQL and holds the credentials. No client, config file or environment
-variable can turn it on, and `locksql status` only reports it. It is accepted
-on production profiles with a red warning at start; every approval screen
-says the result will be shown in clear. The audit log still holds no row
-data.
+Two behaviours of the console switch while it runs, from its own keyboard
+only: Ctrl-O (or `:results`) prints the clear result of each masked query
+in the console, Shift+Tab (or `:mode`) turns auto mode on and off.
+`--show-results` and `--auto` only set the starting state. No client,
+config file or environment variable can set either: the keys are read from
+the console's terminal, which the separated setup keeps away from the
+agent, and no socket method or config field reaches them. Each switch is
+audited (`mode` and `results` records with the new state), announced on
+the console and shown on the status row fixed at the bottom of the
+terminal, so the state is visible at all times, not only at start.
 
-## `--skip-permissions`
+**Clear results** change nothing for the agent, which still gets the masked
+cells: the human is the trusted party and already sees the SQL and holds
+the credentials. `locksql status` only reports it. It is accepted on
+production profiles with a red warning; every approval screen says the
+result will be shown in clear. The audit log still holds no row data.
 
-Auto-approval is a console-only flag. It is ignored on production profiles,
-never covers unmasked queries, never overrides REFUSE, marks every console
-line with `AUTO-APPROVE` and audits each decision as `auto`.
+**Auto mode** is unavailable on production profiles (the key says so),
+never covers unmasked queries, never overrides REFUSE, ends each
+auto-approved frame with `auto-approved` and audits each decision as
+`auto`.
 
 ## Audit
 
 The console appends one JSONL record per event (login, policy change,
 refusal, approval, denial, timeout, auto-approval, abandoned approval, run,
-catalog read, logout) to `<user state dir>/locksql/audit.log`, mode 0600.
+catalog read, mode and results switch, logout) to
+`<user state dir>/locksql/audit.log`, mode 0600.
 Records contain the SQL and metadata, never secrets and never row data. The
 approval (or auto-approval) of a statement is written before anything runs,
 and a `run` record follows with the outcome (`decision` `ok` or `failed`,
@@ -219,8 +227,8 @@ it append-only for the console account too.
   functions; numeric arithmetic (`1e131071`, `^`) and formatting of stored
   data (`jsonb_pretty`) can still produce a value of hundreds of megabytes on
   the server, bounded by `statement_timeout`.
-- **Clear results on the human's screen.** With `--show-results` (and for an
-  unmasked run) the clear rows stay in the scrollback of the console's
+- **Clear results on the human's screen.** With the clear results on
+  (Ctrl-O, `--show-results`) and for an unmasked run, the clear rows stay in the scrollback of the console's
   terminal, and are visible to anyone who sees that screen (screen sharing,
   recording, a terminal that logs its output). That terminal is already the
   trusted party; locksql does not clear it.

@@ -6,10 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
@@ -48,6 +50,10 @@ func runConsole(e env, args []string) int {
 		fmt.Fprintln(e.stderr, "locksql console: warning:", err, "(the mode keys and the status line are off)")
 	}
 	defer term.Restore()
+	// Ctrl-C before the console runs ends the prompts, so that the
+	// deferred Restore runs: the terminal is never left in cbreak mode.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	name := *profile
 	if name == "" {
 		if code, failed := sysFail(e, " console"); failed {
@@ -69,7 +75,7 @@ func runConsole(e env, args []string) int {
 			pe.cwd = abs
 		}
 		var err error
-		if name, err = chooseProfile(pe, term); err != nil {
+		if name, err = chooseProfile(ctx, pe, term); err != nil {
 			return onboardFail(e, err)
 		}
 		if name == "" {
@@ -81,7 +87,10 @@ func runConsole(e env, args []string) int {
 			return exitUsage
 		}
 	}
-	return openConsole(e, name, consoleFlags{auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults}, *project, term)
+	if ctx.Err() != nil {
+		return exitFail
+	}
+	return openConsole(ctx, e, name, consoleFlags{auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults}, *project, term)
 }
 
 // consoleFlags are the console-only switches: no client or config file can
@@ -91,7 +100,7 @@ type consoleFlags struct {
 }
 
 // openConsole runs the console on profile until it ends.
-func openConsole(e env, profile string, f consoleFlags, project string, term *console.Terminal) int {
+func openConsole(ctx context.Context, e env, profile string, f consoleFlags, project string, term *console.Terminal) int {
 	cwd := project
 	if cwd != "" {
 		abs, err := filepath.Abs(cwd)
@@ -101,7 +110,7 @@ func openConsole(e env, profile string, f consoleFlags, project string, term *co
 		}
 		cwd = abs
 	}
-	err := console.Run(context.Background(), console.Options{
+	err := console.Run(ctx, console.Options{
 		Profile:     profile,
 		Auto:        f.auto,
 		AllowUnmask: f.allowUnmask,
@@ -126,7 +135,7 @@ var errAborted = errors.New("aborted")
 
 // chooseProfile returns the only profile, asks among several, or returns
 // "" when none is configured.
-func chooseProfile(e env, io console.IO) (string, error) {
+func chooseProfile(ctx context.Context, e env, io console.IO) (string, error) {
 	cfg, err := config.Load(e.cwd)
 	if err != nil {
 		return "", usageError{err.Error()}
@@ -142,7 +151,7 @@ func chooseProfile(e env, io console.IO) (string, error) {
 		io.Println(fmt.Sprintf("  %d) %s", i+1, n))
 	}
 	for {
-		l, ok := io.Ask(context.Background(), "Profile: ", 30*time.Minute)
+		l, ok := io.Ask(ctx, "Profile: ", 30*time.Minute)
 		if !ok {
 			return "", errAborted
 		}
