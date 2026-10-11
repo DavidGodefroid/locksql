@@ -37,6 +37,20 @@ func (y yesIO) AskSecret(context.Context, string) ([]byte, error) {
 // as safe.
 func assertNoLeak(t *testing.T, s engine.Session, d sqlclass.Dialect, rules pii.Rules, queries []string) {
 	t.Helper()
+	asAgent(t, s, "app", rules, queries, func(q string, run bool, answer string) {
+		if run && strings.Contains(answer, "@example.com") { // a plan echoes the literals of q
+			t.Errorf("%s: leaked %s", q, answer)
+		}
+	})
+}
+
+// asAgent runs each query through a console server, the way a client would
+// (plan, approval, run, mask), and hands seen every answer the agent gets:
+// the plan or its refusal (run false), then the result or the error of the
+// run (run true). It fails on a k-anonymity check that cannot be planned
+// or run: that is a refusal hiding a bug.
+func asAgent(t *testing.T, s engine.Session, db string, rules pii.Rules, queries []string, seen func(q string, run bool, answer string)) {
+	t.Helper()
 	log, err := audit.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -45,8 +59,8 @@ func assertNoLeak(t *testing.T, s engine.Session, d sqlclass.Dialect, rules pii.
 	p := config.Profile{Name: "it", Engine: eng, Host: "127.0.0.1", Tier: config.TierWrite, Credentials: config.CredentialsAsk,
 		Limits: config.DefaultLimits(false), Detectors: []string{}}
 	srv, err := console.NewServer(console.ServerConfig{
-		Policy: config.NewPolicy(p, rules.Mask, rules.Allow), RulesPath: filepath.Join(t.TempDir(), pii.RulesFile), Session: nopClose{s},
-		DBUser: "it", Databases: []string{"app"}, Audit: log, IO: yesIO{t}, Version: "it",
+		Policy: config.NewPolicy(p, rules.Mask, rules.Allow).WithModes(rules.Modes), RulesPath: filepath.Join(t.TempDir(), pii.RulesFile), Session: nopClose{s},
+		DBUser: "it", Databases: []string{db}, Audit: log, IO: yesIO{t}, Version: "it",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -55,8 +69,15 @@ func assertNoLeak(t *testing.T, s engine.Session, d sqlclass.Dialect, rules pii.
 		raw, _ := json.Marshal(params)
 		return srv.Handle(context.Background(), ipc.Request{JSONRPC: "2.0", ID: 1, Method: method, Params: raw})
 	}
+	answer := func(r ipc.Response) string {
+		if r.Error != nil {
+			return r.Error.Message
+		}
+		return string(r.Result)
+	}
 	for _, q := range queries {
-		resp := call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
+		resp := call(ipc.MethodQueryPlan, ipc.PlanParams{DB: db, SQL: q})
+		seen(q, false, answer(resp))
 		if resp.Error != nil {
 			if strings.Contains(resp.Error.Message, "k-anonymity check of this statement cannot be planned") {
 				t.Errorf("%s: %s", q, resp.Error.Message) // a k-check the server rejects
@@ -68,17 +89,9 @@ func assertNoLeak(t *testing.T, s engine.Session, d sqlclass.Dialect, rules pii.
 			t.Fatal(err)
 		}
 		resp = call(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
-		if resp.Error != nil {
-			if strings.Contains(resp.Error.Message, "k-anonymity check could not run") {
-				t.Errorf("%s: %s", q, resp.Error.Message)
-			}
-			if strings.Contains(resp.Error.Message, "@example.com") {
-				t.Errorf("%s: leaked in an error: %s", q, resp.Error.Message)
-			}
-			continue
-		}
-		if strings.Contains(string(resp.Result), "@example.com") {
-			t.Errorf("%s: leaked %s", q, resp.Result)
+		seen(q, true, answer(resp))
+		if resp.Error != nil && strings.Contains(resp.Error.Message, "k-anonymity check could not run") {
+			t.Errorf("%s: %s", q, resp.Error.Message)
 		}
 	}
 }
