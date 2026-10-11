@@ -67,6 +67,7 @@ func fakeDoctor(sys *sysconf.Config) doctorEnv {
 		tiocsti:  func() (bool, bool) { return false, true },
 		ptrace:   func() (int, bool) { return 1, true },
 		keychain: func(string, string, int) error { return secrets.ErrNotFound },
+		readFile: os.ReadFile,
 		status: func(string, string) (*ipc.StatusResult, error) {
 			return &ipc.StatusResult{Tier: "read", Health: &ipc.Health{Separated: true, Display: "wayland", ExplainOK: true}}, nil
 		},

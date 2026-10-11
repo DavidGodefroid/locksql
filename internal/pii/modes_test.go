@@ -212,3 +212,30 @@ func TestMaskOutputsReferenceNeedsMaskedIdentity(t *testing.T) {
 		}
 	}
 }
+
+// A cell the engine cut holds only the start of its value: a reference to
+// it would stand for a value that does not exist, so it gets none.
+func TestMaskOutputsNoReferenceForCutCell(t *testing.T) {
+	res := engine.Result{
+		Columns: []engine.ResultColumn{{Label: "email"}},
+		Rows:    [][]any{{"alice@example.com"}, {"bob@exa…"}},
+	}
+	res.MarkCut(1, 0)
+	prov := sqlast.Prov{Kind: sqlast.KindIdentity, Sources: []sqlast.Source{{DB: "app", Table: "users", Column: "email"}}}
+	outs := []sqlast.Output{{Label: "EMAIL", Mask: ModeRedact, Prov: prov}}
+	var calls int
+	cell := func(row, col int, v any) string { calls++; return fmt.Sprintf("r1.%d.%d", row+1, col+1) }
+	if err := MaskOutputs(&res, outs, Rules{Mask: []string{"app.users.email"}}, nil, cell, true); err != nil {
+		t.Fatal(err)
+	}
+	if res.Rows[0][0] != "<redacted:r1.1.1>" || res.Rows[1][0] != Redacted || calls != 1 {
+		t.Errorf("rows %v, %d references", res.Rows, calls)
+	}
+}
+
+// The engine's cap never makes the detectors cut a value again.
+func TestEngineCapWithinDetectLimit(t *testing.T) {
+	if engine.MaxCellBytes > DetectLimit {
+		t.Errorf("engine.MaxCellBytes %d > DetectLimit %d", engine.MaxCellBytes, DetectLimit)
+	}
+}

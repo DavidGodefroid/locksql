@@ -34,7 +34,7 @@ func (s *session) query(ctx context.Context, q string, args ...any) ([][]any, er
 		for _, row := range r.Values {
 			vals := make([]any, len(row))
 			for i := range row {
-				vals[i] = value(row[i], r.Fields[i])
+				vals[i], _ = value(row[i], r.Fields[i])
 			}
 			out.Rows = append(out.Rows, vals)
 		}

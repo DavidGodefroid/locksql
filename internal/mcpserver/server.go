@@ -167,6 +167,7 @@ type (
 		Columns    []string `json:"columns"`
 		Rows       [][]any  `json:"rows"`
 		Truncated  bool     `json:"truncated"`
+		CutCells   int      `json:"cut_cells,omitempty"`
 		Affected   int64    `json:"affected,omitempty"`
 		DurationMS int64    `json:"duration_ms"`
 	}
@@ -478,7 +479,7 @@ func (t *tools) run(ctx context.Context, req *mcp.CallToolRequest, in RunIn) (*m
 	if err != nil {
 		return nil, RunOut{}, err
 	}
-	out := RunOut{Columns: nonNil(r.Columns), Rows: exactRows(r.Rows), Truncated: r.Truncated, Affected: r.Affected, DurationMS: r.DurationMS}
+	out := RunOut{Columns: nonNil(r.Columns), Rows: exactRows(r.Rows), Truncated: r.Truncated, CutCells: r.CutCells, Affected: r.Affected, DurationMS: r.DurationMS}
 	return render(func(w *bytes.Buffer) {
 		w.WriteString(UntrustedPreamble + "\n")
 		var b bytes.Buffer

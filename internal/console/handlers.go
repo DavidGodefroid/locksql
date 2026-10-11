@@ -784,6 +784,7 @@ func (s *Server) result(res engine.Result) (ipc.RunResult, error) {
 		Columns   []string `json:"columns"`
 		Rows      [][]any  `json:"rows"`
 		Truncated bool     `json:"truncated"`
+		CutCells  int      `json:"cut_cells"`
 	}
 	dec := json.NewDecoder(&jb)
 	dec.UseNumber() // keep 64-bit integers exact
@@ -793,7 +794,7 @@ func (s *Server) result(res engine.Result) (ipc.RunResult, error) {
 	if j.Rows == nil {
 		j.Rows = [][]any{}
 	}
-	return ipc.RunResult{Columns: j.Columns, Rows: j.Rows, Truncated: j.Truncated, Affected: res.Affected, Text: tb.String()}, nil
+	return ipc.RunResult{Columns: j.Columns, Rows: j.Rows, Truncated: j.Truncated, CutCells: j.CutCells, Affected: res.Affected, Text: tb.String()}, nil
 }
 
 func (s *Server) piiAdd(req ipc.Request) ipc.Response {

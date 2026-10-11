@@ -460,6 +460,8 @@ each; the exit code is 1 when any check fails.
 | binary | the running binary can be changed by a non-root account (fails in separated mode) |
 | secret store | separated mode with a secret for the profile left in the agent's keychain; keychain unavailable |
 | tls, ssh, ssh key (per profile) | a remote database that verifies nothing (through a bastion: the bastion-to-database leg); an `ssh.key` that is missing or readable by group or others (not checked from the agent's account in a separated setup) |
+| tls_ca, tls_cert, tls_key (per profile) | a file that is missing or holds no PEM certificate, a certificate expired or expiring within 30 days, a key readable by group or others (files the agent's account cannot read are not checked) |
+| server certificate (per profile without `ssh`) | a TLS handshake that sends no user name and no secret: the server offers no TLS under `require` or stronger, its chain does not verify against `tls_ca` (or the system roots), it does not name `host` (or `tls_server_name`) under `verify-full`, it is expired or expires within 30 days; under `prefer` or `require` it says whether `verify-full` would pass |
 | agent wiring | an installed agent is not wired for this account (warns; not checked as root or as the console account) |
 | project access, project .locksql, project config.toml / pii.toml | separated mode, from an account other than the console's, inside a project: the console account cannot enter a directory down to the project (mode bits and POSIX ACLs), does not own `.locksql/` or it is writable by group or others, or cannot read a config |
 | console (per profile) | not running; then, from its `health`: not separated, an X11 display, database privileges beyond the tier, EXPLAIN failing |
@@ -752,7 +754,8 @@ the socket and is audited.
 
 ### TLS to the database
 
-`tls` and `tls_ca` set the transport security of a network profile:
+`tls` and `tls_ca` set the transport security of a network profile;
+`tls_cert`, `tls_key` and `tls_server_name` are optional:
 
 ```toml
 [profiles.prod]
@@ -760,6 +763,9 @@ engine = "postgres"
 host   = "db.example.com"
 tls    = "verify-full"          # disable | prefer | require | verify-ca | verify-full
 tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
+tls_cert = "/home/locksql/.config/locksql/app.crt"  # optional client certificate (PEM)
+tls_key  = "/home/locksql/.config/locksql/app.key"  # its private key (PEM, unencrypted, mode 0600)
+tls_server_name = "db.internal"  # optional: the name verify-full checks instead of host
 ```
 
 - Default: `verify-full` for a remote host, `prefer` for a Unix socket or a
@@ -768,10 +774,27 @@ tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
 - `tls_ca` is refused with `disable` and `prefer`. With `require`, as in libpq,
   it verifies the chain against `tls_ca` (as `verify-ca`), not the host name.
 - `production = true` refuses `disable` and `prefer` on a remote host.
+- `tls_cert` and `tls_key` go together and need `require` or stronger. The
+  certificate is presented when the server asks for one (PostgreSQL
+  `clientcert`/`cert` in `pg_hba.conf`, MySQL `REQUIRE X509`). The key file
+  is read by the console account and refused when group or others can read
+  it; keep both files in that account's home.
+- `tls_server_name` needs `verify-full`: use it when `host` is an IP address
+  or an alias that the certificate does not name.
+- On MariaDB and MySQL, a remote host under `prefer` or `require` (without
+  `tls_ca`) answers no request for the password in clear
+  (`mysql_clear_password`, `sha256_password`, a `caching_sha2_password` full
+  authentication): connect with `verify-ca` or `verify-full`, or use an
+  account with `mysql_native_password` or `ed25519`. PostgreSQL refuses
+  `password` and `md5` the same way.
 - Through an `ssh` bastion, `tls` protects the leg from the bastion to the
   database, and its default follows `host` as seen from the bastion (see
   [Reaching a remote server through SSH](#reaching-a-remote-server-through-ssh)).
-- `locksql doctor` warns when a remote profile verifies nothing. See
+- `locksql doctor` warns when a remote profile verifies nothing, checks
+  that `tls_ca`, `tls_cert` and `tls_key` are readable PEM files (from the
+  console account), reports certificates that expire within 30 days, and
+  verifies the server's certificate chain with a TLS handshake that sends
+  no secret (a profile without `ssh`). See
   [Transport security](security-model.md#out-of-scope-and-limitations) for the modes.
 
 ### Approving a query
@@ -829,6 +852,7 @@ The console watches the config and PII files while it runs.
   `idle_timeout` or `max_session`, a higher or removed
   `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
   host, port, engine, user or database, a weaker `tls` or any change of `tls_ca`,
+  `tls_cert`, `tls_key` or `tls_server_name`,
   any change of the `ssh` table (except `ssh.credentials` set to `ask`),
   `ask → keychain`, a removed mask rule or detector, a mask mode
   changed to anything but `redact`, a new allow rule) waits for you. Plans are
@@ -836,8 +860,9 @@ The console watches the config and PII files while it runs.
   `Apply these changes? [y/N]`.
 - If you refuse, the last approved policy stays in force.
 - If an applied change alters the connection target (engine, host, port,
-  path, user or database) or its transport (`tls`, `tls_ca` or the `ssh`
-  table), the session ends: restart the console.
+  path, user or database) or its transport (`tls`, `tls_ca`, `tls_cert`,
+  `tls_key`, `tls_server_name` or the `ssh` table), the session ends:
+  restart the console.
 
 The approved policy is stored outside the repository, in
 `<user state dir>/locksql/approved/`.
@@ -1096,6 +1121,13 @@ finds the project's consoles.
 - TSV by default, JSON with `--json` or through MCP.
 - Caps: `max_rows` rows, `max_cell_chars` per cell (cut with `…`) and
   `max_output_bytes` in total (cut with a marker).
+- Each engine keeps at most 64 KiB of a cell while it reads the result, so
+  a huge value (a numeric power, `jsonb_pretty`, a large blob) never costs
+  the console more; the cut text ends with `…` and drops a value split by
+  the cut. The number of cells cut, by either cap, is reported: `cut_cells`
+  in JSON and in the MCP structured content, and a
+  `[N cells cut: ...]` line in TSV. A cell cut by the engine carries no
+  reference (`<redacted>`), since it holds only the start of its value.
 - Control and bidirectional characters are escaped. NULL prints as `NULL`.
 - Masked cells follow the rule's mode: `redact` (the default for a rule
   without `mode`) gives `<redacted:rN.R.C>` (result, row, column; plain

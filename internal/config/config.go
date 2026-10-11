@@ -112,6 +112,12 @@ type Profile struct {
 	// optional PEM bundle that replaces the system roots.
 	TLS   string `json:"tls,omitempty"`
 	TLSCA string `json:"tls_ca,omitempty"`
+	// TLSCert and TLSKey are the PEM files of a client certificate and its
+	// private key, presented when the server asks for one. TLSServerName
+	// replaces host as the name verify-full checks in the certificate.
+	TLSCert       string `json:"tls_cert,omitempty"`
+	TLSKey        string `json:"tls_key,omitempty"`
+	TLSServerName string `json:"tls_server_name,omitempty"`
 	// SSH, when set, is the bastion the profile is reached through.
 	SSH        *SSHProfile `json:"ssh,omitempty"`
 	Port       int         `json:"port"`
@@ -254,6 +260,9 @@ type rawProfile struct {
 	Credentials string    `toml:"credentials"`
 	TLS         string    `toml:"tls"`
 	TLSCA       string    `toml:"tls_ca"`
+	TLSCert     string    `toml:"tls_cert"`
+	TLSKey      string    `toml:"tls_key"`
+	TLSServer   string    `toml:"tls_server_name"`
 	SSH         *rawSSH   `toml:"ssh"`
 	Tier        string    `toml:"tier"`
 	Production  bool      `toml:"production"`
@@ -369,7 +378,8 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	errf := func(format string, a ...any) error {
 		return fmt.Errorf("profile %q: "+format, append([]any{name}, a...)...)
 	}
-	for _, f := range []struct{ key, val string }{{"host", r.Host}, {"path", r.Path}, {"user", r.User}, {"database", r.Database}, {"tls_ca", r.TLSCA}} {
+	for _, f := range []struct{ key, val string }{{"host", r.Host}, {"path", r.Path}, {"user", r.User}, {"database", r.Database}, {"tls_ca", r.TLSCA},
+		{"tls_cert", r.TLSCert}, {"tls_key", r.TLSKey}, {"tls_server_name", r.TLSServer}} {
 		if embedsPassword(f.val) {
 			return Profile{}, errf("%s looks like a DSN with an embedded password; locksql never reads secrets from config files", f.key)
 		}
@@ -388,7 +398,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	p := Profile{
 		Name: name, Engine: r.Engine, Host: r.Host, Path: r.Path, Port: r.Port,
 		User: r.User, Database: r.Database, Credentials: r.Credentials,
-		TLS: r.TLS, TLSCA: r.TLSCA,
+		TLS: r.TLS, TLSCA: r.TLSCA, TLSCert: r.TLSCert, TLSKey: r.TLSKey, TLSServerName: r.TLSServer,
 		Production: r.Production, Detectors: r.Detectors,
 		Limits: Limits{
 			ExplainRowsWarn: r.Limits.ExplainRowsWarn, ExplainRowsRefuse: r.Limits.ExplainRowsRefuse,
@@ -422,8 +432,14 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	if p.Port < 0 || p.Port > 65535 {
 		return Profile{}, errf("port %d out of range", p.Port)
 	}
-	if p.Engine == EngineSQLite && (p.TLS != "" || p.TLSCA != "") {
-		return Profile{}, errf("tls and tls_ca are not used by sqlite")
+	if p.Engine == EngineSQLite && (p.TLS != "" || p.TLSCA != "" || p.TLSCert != "" || p.TLSKey != "" || p.TLSServerName != "") {
+		return Profile{}, errf("tls, tls_ca, tls_cert, tls_key and tls_server_name are not used by sqlite")
+	}
+	if (p.TLSCert == "") != (p.TLSKey == "") {
+		return Profile{}, errf("tls_cert and tls_key go together: set both, or neither")
+	}
+	if p.TLSServerName != "" && !validServerName(p.TLSServerName) {
+		return Profile{}, errf("tls_server_name: want a DNS name or an IP address")
 	}
 	if p.TLS != "" && TLSRank(p.TLS) < 0 {
 		return Profile{}, errf("unknown tls mode %q (want disable, prefer, require, verify-ca or verify-full)", p.TLS)
@@ -511,6 +527,12 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	if p.TLSCA != "" && TLSRank(p.TLS) < TLSRank(TLSRequire) {
 		return Profile{}, errf("tls_ca needs tls = \"require\", \"verify-ca\" or \"verify-full\"")
 	}
+	if p.TLSCert != "" && TLSRank(p.TLS) < TLSRank(TLSRequire) {
+		return Profile{}, errf("tls_cert needs tls = \"require\", \"verify-ca\" or \"verify-full\"")
+	}
+	if p.TLSServerName != "" && p.TLS != TLSVerifyFull {
+		return Profile{}, errf("tls_server_name needs tls = \"verify-full\", the only mode that checks the name")
+	}
 	if p.Production && TLSRank(p.TLS) < TLSRank(TLSRequire) && !strings.HasPrefix(p.Host, "/") && !IsLoopback(p.Host) {
 		return Profile{}, errf("a production profile on a remote host needs tls = \"require\" or stronger, or an ssh tunnel to the database's own host")
 	}
@@ -554,6 +576,15 @@ func TLSRank(mode string) int {
 		mode = TLSPrefer
 	}
 	return slices.Index(tlsModes, mode)
+}
+
+// serverNameRe is a DNS name: dot-separated labels of letters, digits and
+// inner hyphens.
+var serverNameRe = regexp.MustCompile(`^(?i)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.?$`)
+
+// validServerName reports a DNS name or an IP literal.
+func validServerName(s string) bool {
+	return len(s) <= 253 && (serverNameRe.MatchString(s) || net.ParseIP(s) != nil)
 }
 
 // TLSVerifiesChain reports a tls mode that verifies the server's certificate
