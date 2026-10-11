@@ -28,6 +28,7 @@ var testCatalog = fakeCatalog{
 	"app.users":    {"id", "email", "name", "salary", "status"},
 	"app.orders":   {"id", "user_id", "email", "total"},
 	"app.contacts": {"id", "email"},
+	"app.notes":    {"id", "v"},
 }
 
 var testRules = map[string]string{
