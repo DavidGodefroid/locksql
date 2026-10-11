@@ -54,7 +54,7 @@ root.
 |---|---|
 | The agent runs a query the human did not approve | The console is the only connection holder. `query.run` needs a one-shot plan id (valid 10 minutes) and an explicit approval, or `--skip-permissions` outside production. |
 | The agent loosens its own policy | The socket protocol has no method that loosens policy. Config and PII file edits are detected by a policy fingerprint diff; a loosening is held until the human confirms it. The approved policy is stored outside the repository. |
-| Credential leak | Secrets exist only in console memory or the OS keychain (the console account's, in separated mode). They never go through argv, environment, files, logs, the socket or error messages (errors are sanitised). Config keys named like secrets and DSNs with passwords are refused. Core dumps are disabled (`RLIMIT_CORE=0`, and `PR_SET_DUMPABLE=0` on Linux). `credentials_ttl` bounds how long one secret stays in use, and `limits.idle_timeout` and `limits.max_session` end an idle or long session, with its connection and secret (raising either is a loosening). `doctor` flags a secret left in the agent's keychain. |
+| Credential leak | Secrets exist only in console memory or the OS keychain (the console account's, in separated mode). They never go through argv, environment, files, logs, the socket or error messages (errors are sanitised). Config keys named like secrets and DSNs with passwords are refused. Core dumps are disabled (`RLIMIT_CORE=0`, and `PR_SET_DUMPABLE=0` on Linux); when that fails, the console warns, and refuses to open a production profile. `credentials_ttl` bounds how long one secret stays in use, and `limits.idle_timeout` and `limits.max_session` end an idle or long session, with its connection and secret (raising either is a loosening). `doctor` flags a secret left in the agent's keychain. |
 | Statement smuggling | The classifier refuses several statements, comments, variables, bind parameters and unbalanced quotes, and classifies by keywords outside literals per dialect. Reads are limited to `SELECT`, `WITH ... SELECT` and `EXPLAIN SELECT` and parsed in full by a fail-closed parser: unknown syntax is refused. Multi-statements are off in every driver; PostgreSQL uses the extended protocol only. Tier `read` is also enforced by a read-only session and transaction on the server. |
 | Dangerous functions and statements | Reads may call only allowlisted functions (`internal/sqlast/funcs.go`); schema-qualified (possibly user-defined) functions and system schemas and relations are refused. At every tier: file and OS access, engine escape hatches (`ATTACH`, `load_extension`, `dblink`), SQLite raw storage tables (`sqlite_dbpage`, `dbstat`), sleeps, benchmarks, advisory locks, `FOR UPDATE`, session tampering (`SET ROLE`, `set_config`, guarded `SET` targets) and statements carrying credentials are refused. On PostgreSQL a read's transaction is rolled back, so a `SET` smuggled through a function it calls does not outlive the statement. |
 | Server overload | READ statements need `LIMIT n <= max_rows`; `EXPLAIN` estimates the rows examined and refuses heavy plans, and `explain_cost_refuse` caps the engine's total cost (not on SQLite); k-anonymity counts are weighed too; under a PII filter the verdict is decided at run time: a REFUSE verdict is shown to the human on the console before the agent is told, and the agent only learns that the weight check refused; a server-side timeout plus a client-side cancel (on MySQL the server-side `max_execution_time` covers SELECT only: a write or DDL is ended by the client-side `KILL QUERY` at the deadline); one request at a time. A recursive CTE gets a WARN on PostgreSQL and SQLite, whose planners mark it and can only guess how often it iterates. The parser bounds the bytes a statement can build from literals and size functions (65 536 per value, at most 64 column-width inputs, through every CTE and derived-table layer); `string_agg`-like aggregates over large stored columns remain bounded only by `statement_timeout`. |
@@ -69,7 +69,7 @@ root.
 | Prompt injection through data | Rows are framed as untrusted data in every output; the generated agent instructions say so; control and bidirectional characters are escaped in client output and on the console screen, so data cannot spoof the approval prompt. |
 | Type-ahead approval | Pending input is flushed before each prompt (`tcflush`). |
 | The agent mimics the human | In separated mode the console refuses to start as any account but `service_user`, when that account may also connect as a client, when started through `sudo`/`su` from another login session (`loginuid`), or when its terminal belongs to another uid. An X11 session, where any client can read and inject input, is refused on production profiles and with `x11 = "refuse"`, and warned about otherwise. The binary and `system.toml` are root-owned; `doctor` fails on password-less `sudo` for the agent's account. |
-| Approval spoofing through the socket | Approval comes only from the console terminal; no socket method approves, and no socket method loosens policy. The approval screen names the requesting uid, pid and process as the kernel reports them. |
+| Approval spoofing through the socket | Approval comes only from the console terminal; no socket method approves, and no socket method loosens policy. The approval screen names the requesting uid and pid as the kernel reports them, and the process by its executable path when the kernel lets the console read it (a process of its own account), else by its self-reported name, labelled as such. |
 | A client stuck or killed during an approval | The approval is abandoned or times out after 5 minutes; the socket keeps serving. |
 | A fake console | In separated mode clients check through peer credentials that the socket is served by `service_user`, and the socket directory is owned by it. |
 | Another local user | The socket directory is `service_user:client_group` mode 2710 on Linux (0710 on macOS), the socket 0660, and each peer is checked with `SO_PEERCRED` (Linux) or `LOCAL_PEERCRED` (macOS): the console's own uid, a member of `client_group` or an `allowed_uids` entry. |
@@ -116,15 +116,26 @@ line with `AUTO-APPROVE` and audits each decision as `auto`.
 ## Audit
 
 The console appends one JSONL record per event (login, policy change,
-refusal, approval, denial, timeout, auto-approval, abandoned approval,
+refusal, approval, denial, timeout, auto-approval, abandoned approval, run,
 catalog read, logout) to `<user state dir>/locksql/audit.log`, mode 0600.
 Records contain the SQL and metadata, never secrets and never row data. The
+approval (or auto-approval) of a statement is written before anything runs,
+and a `run` record follows with the outcome (`decision` `ok` or `failed`,
+rows, affected, duration, error): a console stopped mid-run still leaves
+the approved statement on record. The
 records of a client request (refusal, decision, catalog read) name the
 requester from the kernel's peer credentials: `peer_uid`, `peer_pid` and
 `peer_user` (the account name, when it resolves). The process name the
-approval screen shows is the agent's choice and is not recorded. `intent` is
+approval screen shows is the agent's choice (labelled `self-reported name`
+when the executable path cannot be read) and is not recorded. `intent` is
 the agent's one-line reason for a plan: untrusted agent text, stored raw
 like the SQL. `reason` is the reason the human typed with a denial.
+
+The log is protected from the agent by the uid separation (the console
+account's state directory is mode 0700), not from the console account or
+root: the file is opened `O_APPEND` with no hash chain, so it is
+append-only by convention, not tamper-evident. On Linux, `chattr +a` makes
+it append-only for the console account too.
 
 ## Out of scope and limitations
 

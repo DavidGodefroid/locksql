@@ -124,8 +124,9 @@ func Run(ctx context.Context, o Options) error {
 	if err := SameUserRefused(sys); err != nil {
 		return err
 	}
-	if err := harden(); err != nil {
-		o.IO.Println("warning: could not disable core dumps: " + err.Error())
+	hardenErr := hardenProcess()
+	if hardenErr != nil {
+		o.IO.Println(paint.Warn(red + "could not disable core dumps: " + safeText(hardenErr.Error(), false) + reset))
 	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -192,6 +193,10 @@ func Run(ctx context.Context, o Options) error {
 	}
 	p = approved.Profile
 	st.profile = p
+	if err := hardenRefusal(hardenErr, p.Production); err != nil {
+		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
+		return err
+	}
 
 	// Separation from the agent, before any secret is asked for.
 	iso, err := checkIsolation(o.IO, isoEnv, p)
@@ -321,6 +326,20 @@ func Run(ctx context.Context, o Options) error {
 	s.audit(audit.Record{Event: audit.EventLogout, Decision: reason})
 	o.IO.Println(paint.Step("session ended: " + reason))
 	return serveErr
+}
+
+// hardenProcess is harden; tests replace it.
+var hardenProcess = harden
+
+// hardenRefusal is the error of a console whose core-dump protection could
+// not be set up (hardenErr) on a production profile, where that protection
+// is part of the credential mitigations; nil otherwise, where the console
+// only warned.
+func hardenRefusal(hardenErr error, production bool) error {
+	if hardenErr == nil || !production {
+		return nil
+	}
+	return fmt.Errorf("console: refused: core dumps could not be disabled (%v) and the profile is production; the secret would be exposed in a dump", hardenErr)
 }
 
 // where is the profile's host (and port) or SQLite path, escaped for the

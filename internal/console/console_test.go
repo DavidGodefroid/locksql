@@ -552,8 +552,13 @@ func TestPlanExpiringDuringApprovalDoesNotRun(t *testing.T) {
 	if n := h.sess.runCount(); n != 0 {
 		t.Fatalf("expired plan ran %d times", n)
 	}
-	if log := h.auditLog(t); !strings.Contains(log, `"decision":"expired"`) || strings.Contains(log, `"event":"approved"`) {
-		t.Errorf("audit log:\n%s", log)
+	// The approval is on record, then the expiry; nothing ran.
+	var events []string
+	for _, r := range h.auditRecords(t) {
+		events = append(events, fmt.Sprint(r["event"], ":", r["decision"]))
+	}
+	if !slices.Equal(events, []string{"approved:approved", "timeout:expired"}) {
+		t.Errorf("audit events %v", events)
 	}
 }
 
@@ -1401,7 +1406,7 @@ func TestIntentShownAndAudited(t *testing.T) {
 			t.Errorf("%v record without the intent: %v", r["event"], r)
 		}
 	}
-	if !slices.Equal(events, []string{"approved", "refused", "denied"}) {
+	if !slices.Equal(events, []string{"approved", "run", "refused", "denied"}) {
 		t.Errorf("events %v", events)
 	}
 
@@ -1417,7 +1422,7 @@ func TestIntentShownAndAudited(t *testing.T) {
 	if n := strings.Count(screen, "agent: "); n != 1 || strings.Contains(screen, "\x1b[2J") {
 		t.Errorf("intent lines %d, screen:\n%q", n, screen)
 	}
-	if rec := h.auditRecords(t)[3]; rec["intent"] != nil {
+	if rec := h.auditRecords(t)[4]; rec["intent"] != nil {
 		t.Errorf("empty intent audited: %v", rec)
 	}
 }

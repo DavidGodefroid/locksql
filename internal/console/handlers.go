@@ -531,6 +531,11 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		}
 		rec.Event, rec.Decision = audit.EventApproved, "approved"
 	}
+	// The decision is on record before anything runs: a console stopped
+	// between the approval and the end of the run still leaves a trace of
+	// what was approved. The run record follows, with the outcome.
+	s.audit(rec)
+	rec.Event, rec.Decision = audit.EventRun, "ok"
 	// The prompts may have waited: check the TTL again, so that an
 	// approval or a value landing after it runs nothing.
 	if s.now().Sub(pl.created) > PlanTTL {
@@ -546,8 +551,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		if reason, refused, err := s.analyzeRead(ctx, sess, pl, pl.st.SQL); err != nil || refused {
 			if err != nil {
 				// Approved already: the failure is audited like a run's.
-				rec.Error = s.auditErrText(err, pl)
-				s.audit(rec)
+				s.auditRunFailed(rec, s.auditErrText(err, pl))
 				return s.failedPlan(req.ID, "plan", err, pl)
 			}
 			return s.refuseWarned(ctx, req.ID, pl, class, reason)
@@ -568,8 +572,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	defer s.level(ctx, start)
 	if reason, err := s.kCheck(rctx, sess, pl); err != nil || reason != "" {
 		if err != nil {
-			rec.Error = s.auditErrText(err, pl)
-			s.audit(rec)
+			s.auditRunFailed(rec, s.auditErrText(err, pl))
 			return s.failedPlan(req.ID, "k-anonymity check", err, pl)
 		}
 		return s.refuseWarned(ctx, req.ID, pl, class, reason+" (approved, but not run)")
@@ -589,8 +592,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	rec.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
 		// The audit log never holds row data, even for an unmask run.
-		rec.Error = s.auditErrText(err, pl)
-		s.audit(rec)
+		s.auditRunFailed(rec, s.auditErrText(err, pl))
 		s.println(paint.Fail("failed: " + safeText(s.errText(err, pl.st.SQL, false, pl), false)))
 		if errors.Is(err, engine.ErrConnLost) {
 			return s.failed(req.ID, "statement failed", err)
@@ -622,8 +624,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	}
 	out, err := s.result(res)
 	if err != nil {
-		rec.Error = secrets.Sanitize(err)
-		s.audit(rec)
+		s.auditRunFailed(rec, secrets.Sanitize(err))
 		return errResp(req.ID, ipc.CodeInternal, "render: "+rec.Error)
 	}
 	rec.Rows, rec.Affected, rec.Truncated = int64(len(out.Rows)), res.Affected, out.Truncated
@@ -644,6 +645,13 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		}
 	}
 	return okResp(req.ID, out)
+}
+
+// auditRunFailed writes the run record of an approved statement that did
+// not complete: errText is already sanitised.
+func (s *Server) auditRunFailed(rec audit.Record, errText string) {
+	rec.Event, rec.Decision, rec.Error = audit.EventRun, "failed", errText
+	s.audit(rec)
 }
 
 // cloneResult copies the rows of res, which masking rewrites in place.

@@ -535,8 +535,9 @@ tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
 ╰─ Approve? [y/N]
 ```
 
-- The screen names the requesting uid, pid and process (as the kernel reports
-  them), the agent's `intent` when it gave one (one line of at most 200 bytes,
+- The screen names the requesting uid and pid (as the kernel reports them)
+  and the process: its executable path when the console can read it, else
+  its self-reported name, labelled as such; then the agent's `intent` when it gave one (one line of at most 200 bytes,
   dimmed, untrusted text: the agent's claim, not a fact), the relations read, the PII columns touched and in which clause
   (highlighted in red in the SQL), each masked output and its mode, the
   k-anonymity counts that run first and the row cap.
@@ -855,7 +856,7 @@ finds the project's consoles.
 | `<user config dir>/locksql/pii.toml` | PII column rules outside a project |
 | `<user config dir>/locksql/config.toml` | personal profiles |
 | `<user state dir>/locksql/approved/*.json` | last approved policies |
-| `<user state dir>/locksql/audit.log` | JSONL audit log, mode 0600; the records of a client request name the requester (`peer_uid`, `peer_pid`, `peer_user`) |
+| `<user state dir>/locksql/audit.log` | JSONL audit log, mode 0600 (`O_APPEND`, no hash chain: `chattr +a` for more); the records of a client request name the requester (`peer_uid`, `peer_pid`, `peer_user`); an approval is written before the run, a `run` record after it |
 | `<runtime dir>/<project-hash>-<profile>.sock` | console socket (tests only) |
 | `/etc/locksql/system.toml` | separated mode setup (root-owned) |
 | `<socket_dir>/<project-hash>-<profile>.sock` | console socket (separated mode), mode 0660 |

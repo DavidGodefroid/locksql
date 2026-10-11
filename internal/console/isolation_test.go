@@ -3,6 +3,8 @@ package console
 import (
 	"context"
 	"os"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -171,5 +173,23 @@ func TestIsolationSeparated(t *testing.T) {
 		if _, err := checkIsolation(&fakeIO{}, env, uatProfile()); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// The approval screen names the process by its executable when the kernel
+// lets the console read it, else by its self-reported name, labelled.
+func TestProcessText(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux /proc only")
+	}
+	own := processText(os.Getpid())
+	if !strings.HasPrefix(own, "exe /") {
+		t.Errorf("own process: %q", own)
+	}
+	if got := processText(1 << 30); got != "" {
+		t.Errorf("unknown pid: %q", got)
+	}
+	if who := peerText(withPeer(context.Background(), ipc.Cred{UID: os.Getuid(), PID: os.Getpid()})); !strings.Contains(who, "pid "+strconv.Itoa(os.Getpid())+" · exe /") {
+		t.Errorf("peerText: %q", who)
 	}
 }

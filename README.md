@@ -330,8 +330,9 @@ only guide the agent; the console's checks are the guarantee.
   request changes. A config edit that loosens the policy (higher tier, larger
   limits, new host, removed PII rule, ...) only takes effect after you
   confirm it in the console.
-- **Audit.** Every login, policy change, refusal, decision, catalog read and
-  logout is appended to a JSONL audit log (mode 0600). The records of a client
+- **Audit.** Every login, policy change, refusal, decision, run, catalog
+  read and logout is appended to a JSONL audit log (mode 0600): the approval
+  before the statement runs, its outcome after. The records of a client
   request name the requester: its uid, pid and account. Never secrets, never
   row data.
 
