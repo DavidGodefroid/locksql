@@ -11,8 +11,10 @@
 //     above explain_rows_warn;
 //   - WARN when the estimate exceeds explain_rows_warn, on a full scan above
 //     it, on a sort or a temporary table above it, on a smaller cartesian
-//     join, and, on a production profile, on a full scan of a table whose
-//     size the engine does not know.
+//     join, on a recursive CTE (the engine marks it when its planner can only
+//     guess how often the recursion iterates: PostgreSQL, SQLite), and, on a
+//     production profile, on a full scan of a table whose size the engine
+//     does not know.
 package weight
 
 import (
@@ -90,6 +92,7 @@ type scan struct {
 	sorts      []sized // rows fed to each sort
 	temps      []sized // rows fed to each temporary table
 	correlated bool
+	recursive  bool // a recursive CTE, whose row estimate is a guess
 }
 
 type sized struct {
@@ -149,6 +152,11 @@ func Assess(p engine.Plan, l config.Limits, production bool) Verdict {
 		if x.rows > warn {
 			flag(Warn, fmt.Sprintf("temporary table over ~%s rows", num(x.rows)))
 		}
+	}
+	if s.recursive {
+		// The planner cannot know how often the recursion iterates: a
+		// small estimate proves nothing, so the human sees the statement.
+		flag(Warn, "recursive CTE: the planner's row estimate is a guess")
 	}
 	if l.ExplainCostRefuse > 0 && p.Cost > l.ExplainCostRefuse {
 		flag(Refuse, fmt.Sprintf("estimated cost %s > explain_cost_refuse %s", costText(p.Cost), costText(l.ExplainCostRefuse)))
@@ -218,6 +226,9 @@ func (s *scan) cost(g *engine.PlanNode) int64 {
 	}
 	if g.Temp {
 		s.temps = append(s.temps, sized{g.Detail, total})
+	}
+	if g.Recursive {
+		s.recursive = true
 	}
 	return total
 }

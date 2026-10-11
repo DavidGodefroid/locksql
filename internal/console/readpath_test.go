@@ -3,7 +3,9 @@ package console
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
+	"github.com/DavidGodefroid/locksql/internal/engine/sqlite"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 )
 
@@ -65,6 +68,59 @@ func TestKAnonymityRefusesSmallSets(t *testing.T) {
 	pr = h.plan(t, "SELECT email, count(*) FROM users GROUP BY email LIMIT 5", false)
 	h.io.answers = []string{"y"}
 	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+}
+
+// An IN list is an OR over its values: with k = 2, two values that exist
+// twice each must not carry a third, absent one through the check. Each value
+// is counted apart on a real SQLite database and the smallest count decides.
+func TestKAnonymityINCountsEachValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, note TEXT)`,
+		`INSERT INTO users (email, note) VALUES ('a@example.com', 'n'), ('a@example.com', 'n'), ('b@example.com', 'n'), ('b@example.com', 'n')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	p := config.Profile{
+		Name: "lite", Engine: config.EngineSQLite, Path: path, Tier: config.TierRead,
+		Detectors: []string{"email"}, Limits: config.DefaultLimits(false),
+	}
+	p.Limits.KAnonymity = 2
+	sess, err := sqlite.Engine{}.Connect(context.Background(), p, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sess.Close() })
+	h := newHarness(t, p, func(c *ServerConfig) {
+		c.Policy = config.NewPolicy(p, []string{"main.users.email"}, nil)
+		c.Session, c.Databases = sess, []string{"main"}
+	})
+	run := func(q string) ipc.Response {
+		t.Helper()
+		var pr ipc.PlanResult
+		h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "main", SQL: q}, &pr)
+		h.io.answers = []string{"y"}
+		return h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	}
+	resp := run("SELECT id FROM users WHERE email IN ('a@example.com', 'b@example.com', 'absent@example.com') LIMIT 5")
+	wantCode(t, resp, ipc.CodeRefused)
+	if !strings.Contains(resp.Error.Message, "fewer than 2 rows") {
+		t.Errorf("refusal: %q", resp.Error.Message)
+	}
+	if out := h.io.output(); !strings.Contains(out, "SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM") {
+		t.Errorf("approval screen does not show the per-value count:\n%s", out)
+	}
+	// The values that exist pass.
+	if resp := run("SELECT id FROM users WHERE email IN ('a@example.com', 'b@example.com') LIMIT 5"); resp.Error != nil {
+		t.Errorf("existing values refused: %d %q", resp.Error.Code, resp.Error.Message)
+	}
 }
 
 func TestResponseIsLevelled(t *testing.T) {
@@ -284,20 +340,24 @@ func TestReferenceRoundTrip(t *testing.T) {
 
 // A column that may hold a literal the agent wrote gets no reference on any
 // row: a reference to it would be a lookup of a chosen value without the
-// k-anonymity check.
+// k-anonymity check. INTERSECT with a literal is an equality test on the
+// PII column, refused outright.
 func TestNoReferenceForLiteralColumn(t *testing.T) {
-	for _, op := range []string{"UNION ALL", "INTERSECT"} {
-		h := newHarness(t, uatProfile())
-		h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"alice@example.com"}, {"john@x.com"}}}
-		pr := h.plan(t, "SELECT email FROM users "+op+" SELECT 'john@x.com' LIMIT 50", false)
-		h.io.answers = []string{"y"}
-		var rr ipc.RunResult
-		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
-		for _, row := range rr.Rows {
-			if row[0] != "<redacted>" {
-				t.Errorf("%s: row %v", op, row)
-			}
+	h := newHarness(t, uatProfile())
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"alice@example.com"}, {"john@x.com"}}}
+	pr := h.plan(t, "SELECT email FROM users UNION ALL SELECT 'john@x.com' LIMIT 50", false)
+	h.io.answers = []string{"y"}
+	var rr ipc.RunResult
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	for _, row := range rr.Rows {
+		if row[0] != "<redacted>" {
+			t.Errorf("row %v", row)
 		}
+	}
+	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT email FROM users INTERSECT SELECT 'john@x.com' LIMIT 50"})
+	wantCode(t, resp, ipc.CodeRefused)
+	if !strings.Contains(resp.Error.Message, "set operation compares a PII column") {
+		t.Errorf("INTERSECT refusal %q", resp.Error.Message)
 	}
 }
 
@@ -376,9 +436,9 @@ func TestNoReferenceUnderAgentLiteralFilter(t *testing.T) {
 		"SELECT email FROM users WHERE email = 'victim@x.com' LIMIT 50",
 		"SELECT email FROM users WHERE email IN ('victim@x.com', 'b@x.com') LIMIT 50",
 		"SELECT email FROM users GROUP BY email HAVING email = 'victim@x.com' LIMIT 5",
-		"SELECT email FROM users INTERSECT SELECT email FROM users WHERE email = 'victim@x.com' LIMIT 5",
-		"SELECT email FROM users UNION SELECT email FROM users WHERE email = 'victim@x.com' LIMIT 5",
-		"SELECT b.email FROM users a JOIN users b ON a.email = b.email WHERE a.email = 'victim@x.com' LIMIT 5",
+		"SELECT email FROM users WHERE id IN (SELECT id FROM users INTERSECT SELECT id FROM users WHERE email = 'victim@x.com') LIMIT 5",
+		"SELECT email FROM users UNION ALL SELECT email FROM users WHERE email = 'victim@x.com' LIMIT 5",
+		"SELECT u.email FROM users u JOIN orders o ON o.user_id = u.id WHERE u.email = 'victim@x.com' LIMIT 5",
 		"SELECT email FROM users WHERE id IN (SELECT id FROM users WHERE email = 'victim@x.com') LIMIT 5",
 		"SELECT email FROM users WHERE email IN ('${r9.1.1}', 'victim@x.com') LIMIT 5",
 	} {
@@ -432,4 +492,87 @@ func TestRecursiveCTENotConvergedRefused(t *testing.T) {
 	h := newHarness(t, uatProfile())
 	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "WITH RECURSIVE c(a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,n) AS (SELECT email,'victim@x.com',email,email,email,email,email,email,email,email,1 FROM users UNION ALL SELECT a10,a2,a2,a3,a4,a5,a6,a7,a8,a9,n+1 FROM c WHERE n < 12) SELECT a1 FROM c WHERE n >= 10 LIMIT 50"})
 	wantCode(t, resp, ipc.CodeRefused)
+}
+
+// Under a PII filter the weight verdict is a 1-bit oracle on the planner's
+// statistics: query.plan answers OK with the estimates hidden, and query.run
+// shows the REFUSE to the human, who presses Enter before the client gets a
+// generic refusal. Neither the main EXPLAIN nor a k-anonymity count's, nor
+// --skip-permissions, makes the answer come without the human.
+func TestWeightVerdictUnderPIIFilterDecidedAtRun(t *testing.T) {
+	const q = "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1"
+	heavy := heavyPlan()
+	for _, tc := range []struct {
+		name string
+		opts []hopt
+		set  func(*fakeSession)
+	}{
+		{"main EXPLAIN", nil, func(f *fakeSession) { f.plan = heavyPlan() }},
+		{"k-anonymity count", nil, func(f *fakeSession) { f.kplan = &heavy }},
+		{"skip-permissions", []hopt{skip}, func(f *fakeSession) { f.plan = heavyPlan() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, uatProfile(), tc.opts...)
+			tc.set(h.sess)
+			resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
+			if resp.Error != nil {
+				t.Fatalf("plan refused under a PII filter: %q", resp.Error.Message)
+			}
+			var pr ipc.PlanResult
+			if err := json.Unmarshal(resp.Result, &pr); err != nil {
+				t.Fatal(err)
+			}
+			if pr.PlanID == "" || pr.Verdict != "OK" || pr.Summary != "estimates hidden: the statement filters on a PII column" || pr.Reasons != nil {
+				t.Fatalf("plan result: %+v", pr)
+			}
+			if strings.Contains(h.auditLog(t), `"event":"refused"`) {
+				t.Error("plan refusal audited under a PII filter")
+			}
+			h.io.answers = []string{"y"} // ignored: Enter refuses whatever is typed
+			run := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+			wantCode(t, run, ipc.CodeRefused)
+			if run.Error.Message != "refused by the weight check (the details are shown on the console)" {
+				t.Errorf("run refusal: %q", run.Error.Message)
+			}
+			if h.io.promptCount() != 1 || !strings.Contains(h.io.prompts[0], "Press Enter to refuse") {
+				t.Errorf("prompts %q, want one Press Enter to refuse", h.io.prompts)
+			}
+			if h.sess.runCount() != 0 {
+				t.Fatal("a REFUSE verdict ran")
+			}
+			for _, s := range []string{string(resp.Result), run.Error.Message} {
+				if strings.Contains(s, "000") || strings.Contains(s, "est.") {
+					t.Errorf("an estimate reaches the client: %s", s)
+				}
+			}
+			out := ansi.ReplaceAllString(h.io.output(), "")
+			for _, want := range []string{"verdict REFUSE", "50 000 000", "verdict REFUSE: this statement cannot be approved"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("the console does not show %q: %s", want, out)
+				}
+			}
+			if !strings.Contains(h.auditLog(t), `"event":"refused"`) {
+				t.Error("run refusal not audited")
+			}
+		})
+	}
+
+	// No answer: the approval timeout applies, as for any prompt.
+	h := newHarness(t, uatProfile())
+	h.sess.plan = heavyPlan()
+	pr := h.plan(t, q, false)
+	h.io.timeout = true
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeTimeout)
+	// The audit record keeps the weight reason the human did not see out.
+	recs := h.auditRecords(t)
+	if last := recs[len(recs)-1]; last["event"] != "timeout" || !strings.Contains(fmt.Sprint(last["error"]), "50 000 000") {
+		t.Errorf("timeout record: %v", last)
+	}
+
+	// Without a PII filter the verdict is answered at plan time, as before.
+	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT id FROM users WHERE id = 1 LIMIT 1"})
+	wantCode(t, resp, ipc.CodeRefused)
+	if !strings.HasPrefix(resp.Error.Message, "weight check") {
+		t.Errorf("plan refusal: %q", resp.Error.Message)
+	}
 }

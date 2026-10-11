@@ -435,9 +435,11 @@ func needsNoTx(st sqlclass.Statement) bool {
 	return false
 }
 
-// Run executes one classified statement: inside BEGIN READ ONLY for the
-// read class, inside BEGIN … COMMIT (ROLLBACK on error) for the others,
-// except the few statements PostgreSQL only runs outside a transaction.
+// Run executes one classified statement: inside BEGIN READ ONLY … ROLLBACK
+// for the read class, so a session-level SET made by a function the read
+// calls (set_config(..., false)) does not outlive it; inside BEGIN … COMMIT
+// (ROLLBACK on error) for the others, except the few statements PostgreSQL
+// only runs outside a transaction.
 func (s *session) Run(ctx context.Context, db string, st sqlclass.Statement, maxRows int) (engine.Result, error) {
 	if int(st.Class) > int(s.tier) {
 		return engine.Result{}, fmt.Errorf("postgres: a %s statement exceeds tier %s", st.Class, s.tier)
@@ -461,7 +463,7 @@ func (s *session) Run(ctx context.Context, db string, st sqlclass.Statement, max
 	if err != nil {
 		return engine.Result{}, err
 	}
-	res, err := s.inTx(ctx, dc, begin, true, func(ctx context.Context) (engine.Result, error) {
+	res, err := s.inTx(ctx, dc, begin, st.Class != sqlclass.Read, func(ctx context.Context) (engine.Result, error) {
 		res, keys, err := s.stream(ctx, dc, st.SQL, maxRows)
 		if err != nil {
 			return res, err

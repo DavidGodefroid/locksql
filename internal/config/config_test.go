@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,40 @@ func writeFixture(t *testing.T, fixture, dst string) {
 	}
 }
 
+func TestSessionLimits(t *testing.T) {
+	parse := func(t *testing.T, production bool, limits string) Limits {
+		t.Helper()
+		body := fmt.Sprintf("[profiles.app]\nengine=\"mysql\"\nhost=\"/run/db.sock\"\nproduction=%t\n[profiles.app.limits]\n%s", production, limits)
+		ps, err := ParseProfiles([]byte(body), "config.toml", t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ps["app"].Limits
+	}
+	cases := []struct {
+		name       string
+		production bool
+		limits     string
+		idle, max  time.Duration
+	}{
+		{"defaults", false, "", 20 * time.Minute, 4 * time.Hour},
+		{"production defaults", true, "", 10 * time.Minute, 2 * time.Hour},
+		{"set", false, "idle_timeout=\"5m\"\nmax_session=\"8h\"\n", 5 * time.Minute, 8 * time.Hour},
+		{"bounds", false, "idle_timeout=\"1m\"\nmax_session=\"24h\"\n", time.Minute, 24 * time.Hour},
+		{"equal", true, "idle_timeout=\"30m\"\nmax_session=\"30m\"\n", 30 * time.Minute, 30 * time.Minute},
+		// A defaulted idle timeout never exceeds an explicit max_session.
+		{"short session", false, "max_session=\"5m\"\n", 5 * time.Minute, 5 * time.Minute},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			l := parse(t, c.production, c.limits)
+			if l.IdleTimeout != c.idle || l.MaxSession != c.max {
+				t.Errorf("idle_timeout=%s max_session=%s, want %s and %s", l.IdleTimeout, l.MaxSession, c.idle, c.max)
+			}
+		})
+	}
+}
+
 func TestLoadFillsDefaults(t *testing.T) {
 	root := installProject(t, "basic.toml")
 	cfg, err := LoadFrom(root, "")
@@ -53,7 +88,7 @@ func TestLoadFillsDefaults(t *testing.T) {
 	if uat.Limits != DefaultLimits(false) {
 		t.Errorf("uat limits = %+v, want %+v", uat.Limits, DefaultLimits(false))
 	}
-	want := Limits{StatementTimeout: 30 * time.Second, ExplainRowsWarn: 100_000, ExplainRowsRefuse: 1_000_000, MaxRows: 200, MaxCellChars: 200, MaxOutputBytes: 65_536, KAnonymity: 5, ReferenceProbe: 5}
+	want := Limits{StatementTimeout: 30 * time.Second, ExplainRowsWarn: 100_000, ExplainRowsRefuse: 1_000_000, MaxRows: 200, MaxCellChars: 200, MaxOutputBytes: 65_536, KAnonymity: 5, ReferenceProbe: 5, IdleTimeout: 20 * time.Minute, MaxSession: 4 * time.Hour}
 	if uat.Limits != want {
 		t.Errorf("non-production defaults = %+v, want %+v", uat.Limits, want)
 	}
@@ -179,6 +214,14 @@ func TestLoadInlineErrors(t *testing.T) {
 		{"bad credentials", "[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\ncredentials=\"env\"\n", "credentials"},
 		{"bad detector", "[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\ndetectors=[\"dna\"]\n", "detector"},
 		{"negative limit", "[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\n[profiles.a.limits]\nmax_rows=-1\n", "max_rows"},
+		{"idle_timeout not a duration", "[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\n[profiles.a.limits]\nidle_timeout=\"soon\"\n", "limits.idle_timeout"},
+		{"max_session not a duration", "[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\n[profiles.a.limits]\nmax_session=\"8\"\n", "limits.max_session"},
+		{"idle_timeout below 1m", "[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\n[profiles.a.limits]\nidle_timeout=\"30s\"\n", "limits.idle_timeout"},
+		{"idle_timeout negative", "[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\n[profiles.a.limits]\nidle_timeout=\"-5m\"\n", "limits.idle_timeout"},
+		{"max_session above 24h", "[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\n[profiles.a.limits]\nmax_session=\"25h\"\n", "limits.max_session"},
+		{"max_session below 1m", "[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\n[profiles.a.limits]\nmax_session=\"30s\"\n", "limits.max_session"},
+		{"idle_timeout above max_session", "[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\n[profiles.a.limits]\nidle_timeout=\"3h\"\nmax_session=\"2h\"\n", "limits.idle_timeout"},
+		{"idle_timeout above production max_session", "[profiles.app]\nengine=\"mysql\"\nhost=\"/run/db.sock\"\nproduction=true\n[profiles.app.limits]\nidle_timeout=\"3h\"\n", "limits.idle_timeout"},
 		{"warn above refuse", "[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\n[profiles.a.limits]\nexplain_rows_warn=10\nexplain_rows_refuse=5\n", "explain_rows_warn"},
 		{"sqlite no path", "[profiles.a]\nengine=\"sqlite\"\n", "path"},
 		{"mysql no host", "[profiles.a]\nengine=\"mysql\"\n", "host"},

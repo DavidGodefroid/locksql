@@ -259,6 +259,57 @@ func TestReferenceProbeLoosening(t *testing.T) {
 	if ch := Diff(old, a); len(ch) != 0 {
 		t.Errorf("0 -> default reported: %+v", ch)
 	}
+	// ... and the default is what a new value is compared with: raising it
+	// from there loosens, lowering it tightens.
+	huge := a
+	huge.Profile.Limits.ReferenceProbe = 999999
+	if ch := Diff(old, huge); len(ch) != 1 || ch[0].Field != "limits.reference_probe" || !ch[0].Loosens || ch[0].Old != "5" {
+		t.Errorf("0 -> 999999: %+v", ch)
+	}
+	low := a
+	low.Profile.Limits.ReferenceProbe = 2
+	if ch := Diff(old, low); len(ch) != 1 || ch[0].Loosens {
+		t.Errorf("0 -> 2: %+v", ch)
+	}
+}
+
+func TestSessionLimitsDiff(t *testing.T) {
+	p := Profile{Name: "uat", Engine: EngineSQLite, Path: "/x", Limits: DefaultLimits(false)}
+	a := NewPolicy(p, nil, nil)
+	for _, f := range []struct {
+		field string
+		set   func(*Limits, time.Duration)
+		get   func(Limits) time.Duration
+	}{
+		{"limits.idle_timeout", func(l *Limits, d time.Duration) { l.IdleTimeout = d }, func(l Limits) time.Duration { return l.IdleTimeout }},
+		{"limits.max_session", func(l *Limits, d time.Duration) { l.MaxSession = d }, func(l Limits) time.Duration { return l.MaxSession }},
+	} {
+		longer, shorter := a, a
+		f.set(&longer.Profile.Limits, f.get(a.Profile.Limits)+time.Hour)
+		f.set(&shorter.Profile.Limits, f.get(a.Profile.Limits)/2)
+		if Fingerprint(longer) == Fingerprint(a) {
+			t.Errorf("%s: not in the fingerprint", f.field)
+		}
+		if ch := Diff(a, longer); len(ch) != 1 || ch[0].Field != f.field || !ch[0].Loosens {
+			t.Errorf("longer %s: %+v", f.field, ch)
+		}
+		if ch := Diff(a, shorter); len(ch) != 1 || ch[0].Field != f.field || ch[0].Loosens {
+			t.Errorf("shorter %s: %+v", f.field, ch)
+		}
+	}
+	// An approved policy from before the limits existed stores 0: the
+	// default of its own production flag applies, so nothing changed and
+	// the fingerprint is the same.
+	old := a
+	old.Profile.Limits.IdleTimeout, old.Profile.Limits.MaxSession = 0, 0
+	if ch := Diff(old, a); len(ch) != 0 || Fingerprint(old) != Fingerprint(a) {
+		t.Errorf("0 -> default reported: %+v", ch)
+	}
+	longer := a
+	longer.Profile.Limits.MaxSession = 8 * time.Hour
+	if ch := Diff(old, longer); len(ch) != 1 || !ch[0].Loosens || ch[0].Old != "4h0m0s" || ch[0].New != "8h0m0s" {
+		t.Errorf("0 -> 8h: %+v", ch)
+	}
 }
 
 func TestDiffModesAndNewLimits(t *testing.T) {

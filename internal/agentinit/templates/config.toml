@@ -12,7 +12,7 @@
 # host        = "127.0.0.1"         # for sqlite, use path instead of host and port
 # port        = 5432
 # user        = ""                  # empty: asked at console start
-# database    = ""                  # empty: chosen per query, listed at start
+# database    = ""                  # set: the only database served; empty: chosen per query
 # credentials = "ask"               # ask | keychain
 # tier        = "read"              # read | write | ddl | admin
 # production  = false               # true: stricter limits, typed approval

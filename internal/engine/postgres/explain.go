@@ -233,6 +233,7 @@ func (b *builder) walk(n *pgNode, g *engine.PlanNode, c walkCtx) []string {
 	case "Append", "Merge Append", "Recursive Union", "BitmapAnd", "BitmapOr":
 		if n.NodeType == "Recursive Union" {
 			g.Temp = true
+			g.Recursive = true
 		}
 		for _, ch := range regular {
 			b.group(ch, g, n.NodeType+" member", c.loop)

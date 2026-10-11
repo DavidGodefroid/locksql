@@ -40,7 +40,7 @@ never sees a credential and never opens a connection.
 <p align="center"><sub>Claude Code (left, account <code>alice</code>) and the locksql console (right, account <code>locksql</code>, started with <code>--show-results</code>). Claude gets <code>&lt;redacted:rN.R.C&gt;</code> references, filters on them without seeing a value, then searches on an email the human types in the console.</sub></p>
 
 > [!NOTE]
-> **Pre-release** (`v0.3.x`). See [Install](#install).
+> **Pre-release** (`v0.4.x`). See [Install](#install).
 
 ## Why locksql?
 
@@ -131,6 +131,16 @@ them masked; `--allow-unmask` is the only way an agent can ask for raw PII.
 
 </td>
 </tr>
+<tr>
+<td colspan="2" valign="top">
+
+**🔐 Remote, verified**<br>
+TLS verifies the server certificate by default (`tls = "verify-full"`), and an
+`ssh` table reaches a database behind a bastion: the console opens the tunnel
+itself, checks the bastion's host key and listens on no local port.
+
+</td>
+</tr>
 </table>
 
 ## Quick start
@@ -198,6 +208,7 @@ sequenceDiagram
    ```
    ╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
    │ requested by uid 1000 (alice) · pid 48211 (claude)
+   │ agent: list the Belgian customers to check the email campaign
    │
    │   SELECT id, email FROM customers WHERE country = 'BE' LIMIT 20
    │
@@ -241,7 +252,7 @@ Full walkthrough: [docs/usage.md](docs/usage.md).
 |---|---|---|---|---|
 | `mariadb` | 10.1+ (tested 10.11, 11.4) | `SET SESSION TRANSACTION READ ONLY` + `START TRANSACTION READ ONLY` | `max_statement_time` + `KILL QUERY` | `EXPLAIN FORMAT=JSON` |
 | `mysql` | 8.0+ (tested 8.0, 8.4) | same as MariaDB | `max_execution_time` + `KILL QUERY` | `EXPLAIN FORMAT=JSON` |
-| `postgres` | 13+ (tested 13, 17) | `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY` + `BEGIN READ ONLY` | `statement_timeout` + cancel request | `EXPLAIN (FORMAT JSON, VERBOSE)` |
+| `postgres` | 13+ (tested 13, 17) | `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY` + `BEGIN READ ONLY` … `ROLLBACK` | `statement_timeout` + cancel request | `EXPLAIN (FORMAT JSON, VERBOSE)` |
 | `sqlite` | 3 (pure Go, in-process) | `mode=ro` + `query_only` | interrupt on deadline | `EXPLAIN QUERY PLAN` + `sqlite_stat1` |
 
 All engines are pure Go: the binary is built with `CGO_ENABLED=0`. locksql
@@ -264,7 +275,8 @@ only guide the agent; the console's checks are the guarantee.
 - **Human approval.** Every statement is shown and approved in the console
   terminal; no socket method can approve. On a production profile you type the
   profile name, not `y`. Pending keystrokes are flushed before each prompt, so
-  type-ahead never approves. No answer within 5 minutes means denied.
+  type-ahead never approves. No answer within 5 minutes means denied. You can
+  deny with a reason the agent reads (`n use the orders table`).
 - **Fail closed.** A dialect-aware classifier refuses anything it cannot
   classify with certainty: several statements, comments, variables, bind
   parameters, file and OS access, sleeps and locks, session tampering. Reads
@@ -275,8 +287,9 @@ only guide the agent; the console's checks are the guarantee.
   is also enforced server side (read-only session and transaction).
 - **Weight check.** A READ statement must carry `LIMIT n` with `n <= max_rows`.
   The console runs `EXPLAIN` and refuses statements that would examine too
-  many rows (or cost more than `explain_cost_refuse`); REFUSE cannot be
-  overridden from the console.
+  many rows (or cost more than `explain_cost_refuse`); a recursive CTE is at
+  least WARN on PostgreSQL and SQLite, whose planners only guess how often it
+  iterates; REFUSE cannot be overridden from the console.
 - **PII masking.** At every start the console scans the schema and proposes
   rules for columns that look like personal data (multilingual names and
   types) and that no rule names yet. Every output column is resolved to its
@@ -311,13 +324,15 @@ only guide the agent; the console's checks are the guarantee.
   `limits.reference_probe`.
   Warnings never refuse and never carry a value.
 - **Quiet failures.** Clients get a generic message, never the server's error
-  text, and no timings; `query.run` answers on a 250 ms quantum.
+  text, and no timings; once the statement is approved, `query.run` answers
+  on a 250 ms quantum (a refusal before approval is not quantized).
 - **The AI tightens, the human loosens.** Agents may add mask rules and
   request changes. A config edit that loosens the policy (higher tier, larger
   limits, new host, removed PII rule, ...) only takes effect after you
   confirm it in the console.
 - **Audit.** Every login, policy change, refusal, decision, catalog read and
-  logout is appended to a JSONL audit log (mode 0600). Never secrets, never
+  logout is appended to a JSONL audit log (mode 0600). The records of a client
+  request name the requester: its uid, pid and account. Never secrets, never
   row data.
 
 Details and threat model: [docs/security-model.md](docs/security-model.md).
@@ -360,6 +375,8 @@ max_cell_chars      = 200
 max_output_bytes    = 65536
 k_anonymity         = 5
 explain_cost_refuse = 0             # engine cost units; 0 = off
+idle_timeout        = "20m"         # the session ends after this long idle
+max_session         = "4h"          # ... and after this long in all
 ```
 
 A database reachable only from a bastion gets an `ssh` table: the console
@@ -395,7 +412,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `host`, `port` | required host; port 3306 / 5432 | a host starting with `/` is a Unix socket (MariaDB/MySQL) |
 | `path` | required for sqlite | relative to the project root; the file is never created |
 | `user` | asked at start | |
-| `database` | none | the default database for queries |
+| `database` | none | the only database served (and scanned for PII); empty: every database the account can see, chosen per query with `--db` |
 | `credentials` | `ask` | `keychain` offers to save the secret after the first successful login; `locksql forget --profile P` removes it |
 | `credentials_ttl` | none | a duration of at least `1m` (`"20m"`, `"1h"`): the connection is closed and the secret asked again once it is that old |
 | `tier` | `read` | highest statement class allowed |
@@ -409,6 +426,8 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `limits.max_output_bytes` | 65 536 | output is cut with a marker |
 | `limits.k_anonymity` | 5 (production 10) | smallest row count a PII filter, a group or an aggregate of a PII column may cover; lowering it is a loosening |
 | `limits.reference_probe` | 5 | distinct cells of one result the agent may filter on one by one before the console warns (an `IN` list counts once); raising it is a loosening |
+| `limits.idle_timeout` | 20m (production 10m), or `max_session` when that is shorter | the console session ends after this long without activity; at least `1m` and at most `max_session`; raising it is a loosening |
+| `limits.max_session` | 4h (production 2h) | the console session ends after this long in all; at most `24h`; raising it is a loosening |
 | `limits.explain_cost_refuse` | 0 (off) | refuse plans above this total cost, in the engine's own units; SQLite reports no cost and is not checked |
 | `ssh.host`, `ssh.port`, `ssh.user` | required host and user; port 22 | the bastion; not with sqlite or a Unix socket `host` |
 | `ssh.auth` | required | `key`, `agent` (`SSH_AUTH_SOCK` of the console) or `password` |
@@ -530,6 +549,7 @@ iteration, and it is deliberately narrow:
 | | |
 |---|---|
 | 📘 [docs/usage.md](docs/usage.md) | console, client commands, MCP server, agent integration |
+| 🐳 [docs/docker.md](docs/docker.md) | running the console and the agent's MCP server in Docker, with nothing installed |
 | 🛡️ [docs/security-model.md](docs/security-model.md) | threat model and mitigations, and an upstream recommendation (PII encrypted at rest with a blind index) |
 | 🚨 [SECURITY.md](SECURITY.md) | reporting a vulnerability |
 | 🧑‍💻 [CONTRIBUTING.md](CONTRIBUTING.md) | building and testing |
@@ -547,7 +567,7 @@ PATH), then installs `/usr/local/bin/locksql`, with `sudo` if needed:
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh
 less install.sh                     # read it first
-sh install.sh                       # LOCKSQL_VERSION=v0.3.0 to pin a version
+sh install.sh                       # LOCKSQL_VERSION=v0.4.0 to pin a version
 ```
 
 `LOCKSQL_INSTALL_DIR=~/.local/bin` installs without `sudo`, but the binary is
@@ -589,7 +609,16 @@ sudo install -m 0755 locksql /usr/local/bin/locksql
 ```
 
 **From source.** `go install github.com/DavidGodefroid/locksql/cmd/locksql@latest`
-(Go 1.26 or later).
+(Go 1.26 or later), then `sudo locksql install --trust-binary`.
+
+**Docker.** Nothing to install but Docker: the image holds the separated
+setup, the console runs in one container and the agent's MCP server in
+another. Read what Docker does and does not separate first:
+[docs/docker.md](docs/docker.md).
+
+```sh
+docker build -t locksql https://github.com/DavidGodefroid/locksql.git
+```
 
 ## Build
 

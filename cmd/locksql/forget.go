@@ -53,16 +53,23 @@ func runForget(e env, args []string) int {
 		fmt.Fprintf(e.stderr, "locksql forget: profile %s has no keychain secret (no server credentials)\n", p.Name)
 		return exitFail
 	}
-	hosts := []string{p.Host}
-	if p.SSH != nil {
-		hosts = append(hosts, "ssh:"+p.SSH.Host)
+	type item struct {
+		host string
+		port int
 	}
-	for _, host := range hosts {
-		switch err := secrets.KeychainDelete(p.Name, host); {
+	items := []item{{p.Host, p.Port}}
+	if p.SSH != nil {
+		items = append(items, item{"ssh:" + p.SSH.Host, p.SSH.Port})
+	}
+	// KeychainDelete also removes the item stored under the legacy name,
+	// without the port.
+	for _, it := range items {
+		account := secrets.KeychainAccount(p.Name, it.host, it.port)
+		switch err := secrets.KeychainDelete(p.Name, it.host, it.port); {
 		case err == nil:
-			fmt.Fprintf(e.stdout, "removed the keychain secret of %s@%s\n", p.Name, host)
+			fmt.Fprintf(e.stdout, "removed the keychain secret of %s\n", account)
 		case errors.Is(err, secrets.ErrNotFound):
-			fmt.Fprintf(e.stdout, "no keychain secret for %s@%s, nothing to remove\n", p.Name, host)
+			fmt.Fprintf(e.stdout, "no keychain secret for %s, nothing to remove\n", account)
 		default:
 			fmt.Fprintln(e.stderr, "locksql forget:", secrets.Sanitize(err))
 			return exitFail

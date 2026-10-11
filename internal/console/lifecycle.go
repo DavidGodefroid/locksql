@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -204,6 +205,7 @@ func Run(ctx context.Context, o Options) error {
 		o.IO.Println(red + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + reset)
 		o.IO.Println(red + "  " + ui.MarkWarn + " PRODUCTION profile " + p.Name + " (" + st.where() + ")" + reset)
 		o.IO.Println(red + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + reset)
+		bell(o.IO)
 		ans, ok := o.IO.Ask(ctx, fmt.Sprintf("Type the profile name %q to continue: ", p.Name), ApprovalTimeout)
 		if !ok || strings.TrimSpace(ans) != p.Name {
 			return errors.New("console: production profile not confirmed")
@@ -254,6 +256,7 @@ func Run(ctx context.Context, o Options) error {
 		closeSess()
 		return fmt.Errorf("console: listing databases: %s", secrets.Sanitize(err))
 	}
+	dbs = servedDatabases(p.Database, dbs)
 	o.IO.Println(paint.OK("databases: " + safeText(strings.Join(dbs, ", "), false)))
 	health := &ipc.Health{Separated: iso.sys != nil, Display: iso.display.Kind, Privileges: nonNil(st.privWarns),
 		ReadOnly: p.Tier == config.TierRead}
@@ -359,7 +362,7 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 			}
 		}
 		ans, ok := io.Ask(ctx, "Apply these changes? [y/N] ", ApprovalTimeout)
-		if !ok || strings.TrimSpace(ans) != "y" {
+		if !ok || !strings.EqualFold(strings.TrimSpace(ans), "y") {
 			st.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused"})
 			return config.Policy{}, "", errors.New("console: the policy was not approved")
 		}
@@ -395,7 +398,7 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 	if ctx.Err() != nil {
 		return config.Policy{}, "", ctx.Err()
 	}
-	if !ok || strings.TrimSpace(ans) != "y" {
+	if !ok || !strings.EqualFold(strings.TrimSpace(ans), "y") {
 		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused"})
 		io.Println("changes refused: the last approved policy applies")
 		return *ap, config.Fingerprint(cur), nil
@@ -459,10 +462,15 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 	var secret []byte
 	fromKeychain := false
 	if keychain {
-		s, err := secrets.KeychainGet(p.Name, p.Host)
+		s, legacy, err := secrets.KeychainGet(p.Name, p.Host, p.Port, defaultPort(p.Engine))
 		switch {
 		case err == nil:
 			secret, fromKeychain = s, true
+			if legacy == secrets.LegacyMoved {
+				st.io.Println(migratedLine(p.Name, p.Host, p.Port))
+			}
+		case errors.Is(err, secrets.ErrNotFound) && legacy == secrets.LegacyRemoved:
+			st.io.Println(removedLine(p.Name, p.Host, p.Port))
 		case errors.Is(err, secrets.ErrNotFound):
 			if first {
 				st.io.Println("no secret in the OS keychain yet")
@@ -504,17 +512,36 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 }
 
 func (st *starter) offerSave(ctx context.Context, secret []byte, prompt string) {
-	st.offerSaveAs(ctx, st.profile.Host, secret, prompt)
+	st.offerSaveAs(ctx, st.profile.Host, st.profile.Port, secret, prompt)
+}
+
+// defaultPort is config.DefaultPort; tests that connect through a fake
+// engine replace it.
+var defaultPort = config.DefaultPort
+
+// migratedLine tells the human that a keychain item stored under its old
+// name, without the port, now has the new one.
+func migratedLine(profile, host string, port int) string {
+	return "moved the keychain secret of " + safeText(profile+"@"+host, false) + " to " +
+		safeText(secrets.KeychainAccount(profile, host, port), false) + " (the port is now part of its name)"
+}
+
+// removedLine tells the human that a keychain item stored under its old
+// name, without the port, was deleted because the profile is on another
+// port than the one it was migrated to.
+func removedLine(profile, host string, port int) string {
+	return "removed the pre-upgrade keychain item " + safeText(profile+"@"+host, false) +
+		"; answer \"Save in OS keychain?\" to store the secret for " + safeText(host+":"+strconv.Itoa(port), false)
 }
 
 // offerSaveAs offers to store secret in the OS keychain under the
-// profile's name and host.
-func (st *starter) offerSaveAs(ctx context.Context, host string, secret []byte, prompt string) {
+// profile's name, host and port.
+func (st *starter) offerSaveAs(ctx context.Context, host string, port int, secret []byte, prompt string) {
 	ans, ok := st.io.Ask(ctx, prompt, ApprovalTimeout)
-	if !ok || strings.TrimSpace(ans) != "y" {
+	if !ok || !strings.EqualFold(strings.TrimSpace(ans), "y") {
 		return
 	}
-	if err := secrets.KeychainSet(st.profile.Name, host, secret); err != nil {
+	if err := secrets.KeychainSet(st.profile.Name, host, port, secret); err != nil {
 		st.io.Println("not saved: " + secrets.Sanitize(err, secret))
 		return
 	}
@@ -580,12 +607,8 @@ func (st *starter) privileges(ctx context.Context, sess engine.Session) error {
 func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []string, rulesPath, stateDir, key string, ap config.Policy) (config.Policy, error) {
 	_, statErr := os.Stat(rulesPath)
 	firstRun := errors.Is(statErr, fs.ErrNotExist)
-	scan := dbs
-	if st.profile.Database != "" {
-		scan = []string{st.profile.Database}
-	}
 	var cols []engine.ColumnInfo
-	for _, db := range scan {
+	for _, db := range servedDatabases(st.profile.Database, dbs) {
 		c, err := sess.Columns(ctx, db)
 		if err != nil {
 			st.io.Println("PII scan of " + safeText(db, false) + " skipped: " + safeText(secrets.Sanitize(err), false))
@@ -761,4 +784,14 @@ func readyLines(socket, root string, showResults bool) []string {
 		out = append(out, "  "+paint.Dim("results  ")+paint.Yellow("shown in clear in this console (--show-results)"))
 	}
 	return append(out, "  "+paint.Dim("commands ")+paint.Accent(":review")+"  "+paint.Accent(":status")+"  "+paint.Accent(":quit")+paint.Dim(" · Ctrl-C ends the session"))
+}
+
+// servedDatabases is what the console serves: the profile's database alone
+// when it names one (the PII scan covers that database only), else every
+// database the account lists.
+func servedDatabases(profileDB string, listed []string) []string {
+	if profileDB != "" {
+		return []string{profileDB}
+	}
+	return listed
 }

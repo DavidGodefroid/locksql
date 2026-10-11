@@ -57,6 +57,24 @@ func TestParsePlan(t *testing.T) {
 	}
 }
 
+// TestParsePlanRecursiveStep checks that the recursive step of a recursive
+// CTE marks its group Recursive, and nothing else.
+func TestParsePlanRecursiveStep(t *testing.T) {
+	rows := []eqpRow{
+		{ID: 2, Parent: 0, Detail: "CO-ROUTINE r"},
+		{ID: 5, Parent: 2, Detail: "SETUP"},
+		{ID: 6, Parent: 5, Detail: "SCAN CONSTANT ROW"},
+		{ID: 17, Parent: 2, Detail: "RECURSIVE STEP"},
+		{ID: 18, Parent: 17, Detail: "SCAN r"},
+		{ID: 30, Parent: 0, Detail: "SCAN r"},
+	}
+	root := parsePlan(rows, stats{}, nil)
+	co := root.Children[0]
+	if root.Recursive || co.Recursive || len(co.Children) != 2 || co.Children[0].Recursive || !co.Children[1].Recursive {
+		t.Errorf("plan = %+v", root)
+	}
+}
+
 // fixtureDB builds a schema whose sqlite_stat1 claims production-like sizes,
 // so the captured plans exercise the weight model (Task 8).
 func fixtureDB(t *testing.T) string {
@@ -102,6 +120,7 @@ var fixtureQueries = []struct{ name, sql string }{
 	{"cartesian", "SELECT * FROM users, orders"},
 	{"correlated", "SELECT u.id, (SELECT count(*) FROM orders o WHERE o.total = u.id) FROM users u"},
 	{"unknown_size", "SELECT * FROM nostat WHERE v = 'x'"},
+	{"recursive_cte", "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r WHERE n < 2000000000) SELECT count(*) FROM r LIMIT 1"},
 }
 
 // TestExplainFixtures captures normalised plans for the weight model tests.

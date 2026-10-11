@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,10 +28,12 @@ import (
 
 // fakeSession is a scripted engine.Session.
 type fakeSession struct {
-	mu       sync.Mutex
-	origin   bool
-	dbs      []string
-	plan     engine.Plan
+	mu     sync.Mutex
+	origin bool
+	dbs    []string
+	plan   engine.Plan
+	// kplan, when set, answers the EXPLAIN of the k-anonymity counts.
+	kplan    *engine.Plan
 	result   engine.Result
 	runErr   error
 	explains []string
@@ -80,6 +85,9 @@ func (f *fakeSession) Explain(_ context.Context, _ string, sql string) (engine.P
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.explains = append(f.explains, sql)
+	if f.kplan != nil && strings.Contains(sql, "COUNT(*)") {
+		return *f.kplan, nil
+	}
 	return f.plan, nil
 }
 func (f *fakeSession) Run(_ context.Context, _ string, st sqlclass.Statement, _ int) (engine.Result, error) {
@@ -128,6 +136,14 @@ type fakeIO struct {
 	onAsk func()
 	// secrets answer AskSecret, in order; none left fails the prompt.
 	secrets []string
+	// bells counts the terminal bells, kept out of out.
+	bells int
+}
+
+func (f *fakeIO) Bell() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bells++
 }
 
 func (f *fakeIO) Println(s string) {
@@ -375,6 +391,114 @@ func TestApprovedRunReturnsMaskedRows(t *testing.T) {
 	log := h.auditLog(t)
 	if !strings.Contains(log, `"event":"approved"`) || strings.Contains(log, "alice@example.com") {
 		t.Errorf("audit log:\n%s", log)
+	}
+}
+
+// auditRecords decodes the audit log, one map per line.
+func (h *harness) auditRecords(t *testing.T) []map[string]any {
+	t.Helper()
+	var recs []map[string]any
+	for _, l := range strings.Split(strings.TrimSpace(h.auditLog(t)), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(l), &m); err != nil {
+			t.Fatalf("audit line %q: %v", l, err)
+		}
+		recs = append(recs, m)
+	}
+	return recs
+}
+
+// Every record of a client request names the requester: its uid, pid and
+// account, from the kernel's peer credentials, but not its process name,
+// which the agent chooses.
+func TestAuditNamesTheRequester(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	uid := os.Getuid()
+	ctx := withPeer(context.Background(), ipc.Cred{UID: uid, GID: os.Getgid(), PID: 4242})
+	if r := h.callCtx(t, ctx, ipc.MethodCatalogList, ipc.TablesParams{DB: "app"}); r.Error != nil {
+		t.Fatal(r.Error.Message)
+	}
+	r := h.callCtx(t, ctx, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers})
+	if r.Error != nil {
+		t.Fatal(r.Error.Message)
+	}
+	var pr ipc.PlanResult
+	if err := json.Unmarshal(r.Result, &pr); err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, h.callCtx(t, ctx, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "DELETE FROM users WHERE id = 1"}), ipc.CodeRefused)
+	// The run comes from another process than the plan: it is the one named.
+	h.io.answers = []string{"y"}
+	runCtx := withPeer(context.Background(), ipc.Cred{UID: uid, GID: os.Getgid(), PID: 4343})
+	if r := h.callCtx(t, runCtx, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}); r.Error != nil {
+		t.Fatal(r.Error.Message)
+	}
+	// uid 0 is a uid, not an unknown one.
+	root := withPeer(context.Background(), ipc.Cred{UID: 0, PID: 1})
+	if r := h.callCtx(t, root, ipc.MethodCatalogList, ipc.TablesParams{DB: "app"}); r.Error != nil {
+		t.Fatal(r.Error.Message)
+	}
+
+	name := ""
+	if u, err := user.LookupId(strconv.Itoa(uid)); err == nil {
+		name = u.Username
+	}
+	want := map[string]float64{"catalog": 4242, "refused": 4242, "approved": 4343}
+	seen := map[string]bool{}
+	rootSeen := false
+	for _, rec := range h.auditRecords(t) {
+		ev, _ := rec["event"].(string)
+		for k := range rec {
+			if strings.Contains(k, "comm") || strings.Contains(k, "process") {
+				t.Errorf("%s record carries the process name: %v", ev, rec)
+			}
+		}
+		pid, ok := want[ev]
+		if !ok {
+			continue
+		}
+		if rec["peer_pid"] == float64(1) {
+			rootSeen = rec["peer_uid"] == float64(0)
+			continue
+		}
+		seen[ev] = true
+		if rec["peer_uid"] != float64(uid) || rec["peer_pid"] != pid {
+			t.Errorf("%s record: peer_uid %v peer_pid %v, want %d %v", ev, rec["peer_uid"], rec["peer_pid"], uid, pid)
+		}
+		if name != "" && rec["peer_user"] != name {
+			t.Errorf("%s record: peer_user %v, want %q", ev, rec["peer_user"], name)
+		}
+	}
+	if len(seen) != len(want) {
+		t.Errorf("records seen %v, want %v", seen, want)
+	}
+	if !rootSeen {
+		t.Error("the catalog read of uid 0 does not record peer_uid 0")
+	}
+	// Without a peer in the request there is nothing to name.
+	h2 := newHarness(t, uatProfile())
+	h2.ok(t, ipc.MethodCatalogList, ipc.TablesParams{DB: "app"}, nil)
+	if log := h2.auditLog(t); strings.Contains(log, "peer_") {
+		t.Errorf("a record without a peer names one:\n%s", log)
+	}
+}
+
+// A database error is server text: it reaches the console screen escaped,
+// so that it cannot drive the human's terminal.
+func TestRunErrorIsEscapedOnScreen(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.sess.runErr = errors.New("Deadlock found \x1b]0;approved\x07\x1b[2J when trying to get lock")
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	if r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}); r.Error == nil {
+		t.Fatal("the run error was not reported")
+	}
+	out := h.io.output()
+	if strings.Contains(out, "\x1b]0;") || strings.Contains(out, "\x1b[2J") || strings.Contains(out, "\x07") {
+		t.Errorf("raw control sequences from the server reached the screen: %q", out)
+	}
+	if !strings.Contains(out, `\x1b]0;approved\x07`) {
+		t.Errorf("escaped error text missing from the screen: %q", out)
 	}
 }
 
@@ -684,9 +808,13 @@ func TestLooseningFileEditBlocksUntilReviewed(t *testing.T) {
 	h.s.CheckPolicy()
 	wantCode(t, h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers}), ipc.CodePolicyPending)
 
-	// :review accepted → applied and recorded.
-	h.io.answers = []string{"y"}
+	// :review accepted (the answer is case-insensitive) → applied and
+	// recorded; the prompt rings the bell.
+	h.io.answers = []string{"Y"}
 	h.s.Command(context.Background(), ":review")
+	if h.io.bells != 1 {
+		t.Errorf("bells = %d, want 1 for the :review prompt", h.io.bells)
+	}
 	h.ok(t, ipc.MethodStatus, nil, &st)
 	if st.Limits.MaxRows != 5000 {
 		t.Fatalf("accepted change not applied: max_rows=%d", st.Limits.MaxRows)
@@ -745,7 +873,7 @@ func TestHelloStatusLogout(t *testing.T) {
 	var st ipc.StatusResult
 	h.ok(t, ipc.MethodStatus, nil, &st)
 	if st.Profile != "uat" || st.Engine != "mariadb" || st.Tier != "read" || len(st.Databases) != 2 ||
-		st.IdleTimeoutInS != int(IdleTimeout/time.Second) || st.SessionEndsInS != int(MaxSession/time.Second) {
+		st.IdleTimeoutInS != 20*60 || st.SessionEndsInS != 4*3600 || st.Limits.IdleTimeout != 20*time.Minute || st.Limits.MaxSession != 4*time.Hour {
 		t.Fatalf("status: %+v", st)
 	}
 	h.ok(t, ipc.MethodLogout, nil, nil)
@@ -754,18 +882,138 @@ func TestHelloStatusLogout(t *testing.T) {
 	}
 }
 
+// A profile that sets database serves that database only: the PII scan
+// covers it alone, so another database the account can see would be read
+// without its rules.
+func TestProfileDatabaseServedOnly(t *testing.T) {
+	p := uatProfile()
+	p.Database = "app"
+	h := newHarness(t, p)
+	const want = `database "other" is not served: this profile serves "app" only (set database = "" to serve every database the account can see)`
+	for _, c := range []struct {
+		method string
+		params any
+	}{
+		{ipc.MethodCatalogList, ipc.TablesParams{DB: "other"}},
+		{ipc.MethodCatalogDescribe, ipc.DescribeParams{DB: "other", Table: "users"}},
+		{ipc.MethodQueryPlan, ipc.PlanParams{DB: "other", SQL: "SELECT id FROM users LIMIT 5"}},
+	} {
+		resp := h.call(t, c.method, c.params)
+		wantCode(t, resp, ipc.CodeRefused)
+		if resp.Error.Message != want {
+			t.Errorf("%s: %q", c.method, resp.Error.Message)
+		}
+	}
+	// A qualified name does not reach the other database either.
+	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT email FROM other.users LIMIT 5"})
+	wantCode(t, resp, ipc.CodeRefused)
+	if !strings.Contains(resp.Error.Message, "unknown table other.users") {
+		t.Errorf("qualified name: %q", resp.Error.Message)
+	}
+	if n := len(h.sess.explains) + h.sess.catalog; n != 0 {
+		t.Errorf("session reached %d times, want 0", n)
+	}
+	var st ipc.StatusResult
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if !slices.Equal(st.Databases, []string{"app"}) {
+		t.Errorf("status databases = %v, want [app]", st.Databases)
+	}
+	h.ok(t, ipc.MethodCatalogList, ipc.TablesParams{DB: "app"}, nil)
+	h.ok(t, ipc.MethodCatalogList, ipc.TablesParams{}, nil)
+
+	// Without a profile database, every listed database is served.
+	h = newHarness(t, uatProfile())
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if !slices.Equal(st.Databases, []string{"app", "other"}) {
+		t.Errorf("status databases = %v, want [app other]", st.Databases)
+	}
+	for _, db := range []string{"app", "other"} {
+		h.ok(t, ipc.MethodCatalogList, ipc.TablesParams{DB: db}, nil)
+		h.ok(t, ipc.MethodCatalogDescribe, ipc.DescribeParams{DB: db, Table: "users"}, nil)
+		h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: db, SQL: "SELECT id FROM users LIMIT 5"}, nil)
+	}
+}
+
+func TestServedDatabases(t *testing.T) {
+	listed := []string{"app", "other"}
+	if got := servedDatabases("app", listed); !slices.Equal(got, []string{"app"}) {
+		t.Errorf("profile database: %v", got)
+	}
+	if got := servedDatabases("", listed); !slices.Equal(got, listed) {
+		t.Errorf("no profile database: %v", got)
+	}
+}
+
 func TestIdleAndMaxSession(t *testing.T) {
+	idle := config.DefaultLimits(false).IdleTimeout
 	h := newHarness(t, uatProfile())
-	h.now = h.now.Add(IdleTimeout - time.Second)
+	h.now = h.now.Add(idle - time.Second)
 	h.s.Tick()
 	if _, ended := h.s.Ended(); ended {
 		t.Fatal("ended before the idle timeout")
 	}
 	h.ok(t, ipc.MethodStatus, nil, nil)
-	h.now = h.now.Add(IdleTimeout + time.Second)
+	h.now = h.now.Add(idle + time.Second)
 	h.s.Tick()
 	if reason, ended := h.s.Ended(); !ended || reason != "idle timeout" {
 		t.Fatalf("idle: %q %v", reason, ended)
+	}
+}
+
+// The profile's limits.idle_timeout and limits.max_session drive Tick, and
+// a policy change applied while running takes effect at the next tick.
+func TestCustomSessionLimits(t *testing.T) {
+	p := uatProfile()
+	p.Limits.IdleTimeout, p.Limits.MaxSession = 3*time.Minute, 10*time.Minute
+	cur := config.NewPolicy(p, []string{"app.users.email"}, nil)
+	h := newHarness(t, p, func(c *ServerConfig) {
+		c.LoadPolicy = func() (config.Policy, error) { return cur, nil }
+	})
+	var st ipc.StatusResult
+	h.ok(t, ipc.MethodStatus, nil, &st)
+	if st.IdleTimeoutInS != 180 || st.SessionEndsInS != 600 {
+		t.Fatalf("status: idle %ds, ends in %ds", st.IdleTimeoutInS, st.SessionEndsInS)
+	}
+	h.s.Command(context.Background(), ":status")
+	if out := h.io.output(); !strings.Contains(out, "(max_session 10m0s) · idle_timeout 3m0s") {
+		t.Errorf(":status does not show the session limits:\n%s", out)
+	}
+	if got := strings.Join(describePolicy(cur), "\n"); !strings.Contains(got, "session: idle_timeout 3m0s · max_session 10m0s") {
+		t.Errorf("describePolicy does not show the session limits:\n%s", got)
+	}
+	h.now = h.now.Add(3*time.Minute - time.Second)
+	h.s.Tick()
+	if _, ended := h.s.Ended(); ended {
+		t.Fatal("ended before the custom idle timeout")
+	}
+	h.ok(t, ipc.MethodStatus, nil, nil) // activity
+
+	// A shorter idle timeout tightens: applied at once, used by the next tick.
+	p.Limits.IdleTimeout = time.Minute
+	cur = config.NewPolicy(p, []string{"app.users.email"}, nil)
+	h.s.CheckPolicy()
+	if h.io.promptCount() != 0 {
+		t.Fatal("a shorter idle timeout asked for confirmation")
+	}
+	h.now = h.now.Add(time.Minute + time.Second)
+	h.s.Tick()
+	if reason, ended := h.s.Ended(); !ended || reason != "idle timeout" {
+		t.Fatalf("custom idle: %q %v", reason, ended)
+	}
+
+	h = newHarness(t, p)
+	for range 10 {
+		h.now = h.now.Add(59 * time.Second)
+		h.ok(t, ipc.MethodStatus, nil, nil)
+		h.s.Tick()
+	}
+	if _, ended := h.s.Ended(); ended { // 9m50s in, active
+		t.Fatal("ended before the custom max_session")
+	}
+	h.now = h.now.Add(10 * time.Second)
+	h.s.Tick()
+	if reason, ended := h.s.Ended(); !ended || reason != "maximum session length" {
+		t.Fatalf("custom max_session: %q %v", reason, ended)
 	}
 }
 
@@ -1124,5 +1372,162 @@ func TestFlagNoticesAndReadyLines(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(readyLines("/run/x.sock", "", false), "\n"), "results") {
 		t.Error("results line without the flag")
+	}
+}
+
+// The agent's intent is one line shown on the approval screen, under the
+// requester, and kept on every audit record of the plan.
+func TestIntentShownAndAudited(t *testing.T) {
+	const intent = "find why order 88123 was not emailed"
+	h := newHarness(t, uatProfile())
+	var pr ipc.PlanResult
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Intent: intent}, &pr)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	screen := ansi.ReplaceAllString(h.io.output(), "")
+	if !strings.Contains(screen, "│ agent: "+intent+"\n") {
+		t.Errorf("approval screen lacks the intent:\n%s", screen)
+	}
+
+	// Refused at plan time and denied at the prompt: the intent is kept.
+	wantCode(t, h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "DELETE FROM users WHERE id = 1", Intent: intent}), ipc.CodeRefused)
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Intent: intent}, &pr)
+	h.io.answers = []string{"n"}
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeDenied)
+	var events []string
+	for _, r := range h.auditRecords(t) {
+		events = append(events, fmt.Sprint(r["event"]))
+		if r["intent"] != intent {
+			t.Errorf("%v record without the intent: %v", r["event"], r)
+		}
+	}
+	if !slices.Equal(events, []string{"approved", "refused", "denied"}) {
+		t.Errorf("events %v", events)
+	}
+
+	// No intent, no line; control characters are escaped.
+	before := len(h.io.out)
+	pr = h.plan(t, selectUsers, false)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Intent: "a\x1b[2Jb"}, &pr)
+	h.io.answers = []string{"y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	screen = strings.Join(h.io.out[before:], "\n")
+	if n := strings.Count(screen, "agent: "); n != 1 || strings.Contains(screen, "\x1b[2J") {
+		t.Errorf("intent lines %d, screen:\n%q", n, screen)
+	}
+	if rec := h.auditRecords(t)[3]; rec["intent"] != nil {
+		t.Errorf("empty intent audited: %v", rec)
+	}
+}
+
+func TestIntentMustBeOneShortLine(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Intent: strings.Repeat("x", 200)}, nil)
+	for _, bad := range []string{strings.Repeat("x", 201), "two\nlines", "cr\rhere"} {
+		resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Intent: bad})
+		wantCode(t, resp, ipc.CodeInvalidParams)
+		if resp.Error.Message != "intent must be one line of at most 200 bytes" {
+			t.Errorf("%q: message %q", bad, resp.Error.Message)
+		}
+	}
+}
+
+// "n <reason>" denies with a reason the agent reads and the audit keeps;
+// "Y" approves; "N" denies without a reason. Each approval prompt rings
+// the bell.
+func TestDenyWithReason(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	deny := func(answer string) ipc.Response {
+		t.Helper()
+		pr := h.plan(t, selectUsers, false)
+		h.io.answers = []string{answer}
+		resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+		wantCode(t, resp, ipc.CodeDenied)
+		return resp
+	}
+	lastReason := func() any {
+		t.Helper()
+		recs := h.auditRecords(t)
+		r := recs[len(recs)-1]
+		if r["event"] != "denied" {
+			t.Fatalf("last record %v", r)
+		}
+		return r["reason"]
+	}
+
+	resp := deny("n use the orders table")
+	if want := "denied by the human: use the orders table; do not retry unless asked"; resp.Error.Message != want {
+		t.Errorf("message %q, want %q", resp.Error.Message, want)
+	}
+	if r := lastReason(); r != "use the orders table" {
+		t.Errorf("audit reason %v", r)
+	}
+	if !strings.Contains(h.io.output(), "denied: use the orders table") {
+		t.Errorf("console output:\n%s", h.io.output())
+	}
+
+	resp = deny("  NO   wrong\tdatabase  ")
+	if want := `denied by the human: wrong\x09database; do not retry unless asked`; resp.Error.Message != want {
+		t.Errorf("message %q, want %q", resp.Error.Message, want)
+	}
+
+	resp = deny("n " + strings.Repeat("é", 150))
+	if want := "denied by the human: " + strings.Repeat("é", 100) + "; do not retry unless asked"; resp.Error.Message != want {
+		t.Errorf("a 300-byte reason is not cut at 200 bytes: %q", resp.Error.Message)
+	}
+
+	for _, a := range []string{"N", "n", "no", "nope, wrong table", "n\x00"} {
+		resp = deny(a)
+		if resp.Error.Message != "denied by the human; do not retry unless asked" || lastReason() != nil {
+			t.Errorf("%q: message %q, reason %v", a, resp.Error.Message, lastReason())
+		}
+	}
+
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"Y"}
+	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	if h.io.bells != h.io.promptCount() {
+		t.Errorf("bells %d for %d approval prompts", h.io.bells, h.io.promptCount())
+	}
+	if strings.Contains(h.io.output(), "\a") {
+		t.Error("the bell reached the output lines")
+	}
+}
+
+// On production the approval answer stays the exact profile name; a
+// reason denies the same way.
+func TestProductionDenyWithReason(t *testing.T) {
+	h := newHarness(t, prodProfile())
+	pr := h.plan(t, selectUsers, false)
+	h.io.answers = []string{"PROD"}
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeDenied)
+	pr = h.plan(t, selectUsers, false)
+	h.io.answers = []string{"n not on prod"}
+	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	wantCode(t, resp, ipc.CodeDenied)
+	if !strings.Contains(resp.Error.Message, "denied by the human: not on prod;") {
+		t.Errorf("message %q", resp.Error.Message)
+	}
+}
+
+// The value prompt rings the bell too.
+func TestValuePromptRingsTheBell(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	pr := h.plan(t, "SELECT id FROM users WHERE email = '${e}' LIMIT 1", false)
+	h.io.secrets = []string{"a@example.com"}
+	h.io.answers = []string{"n"}
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeDenied)
+	if h.io.bells != 2 {
+		t.Errorf("bells = %d, want 2 (value and approval prompts)", h.io.bells)
+	}
+}
+
+func TestTerminalBell(t *testing.T) {
+	var out strings.Builder
+	NewTerminal(nil, &out).Bell()
+	if out.String() != "\a" {
+		t.Fatalf("bell wrote %q", out.String())
 	}
 }

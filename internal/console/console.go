@@ -28,9 +28,9 @@ import (
 
 // Session timeouts, spec §6.
 const (
+	// The idle timeout and the maximum session length are the profile's
+	// limits.idle_timeout and limits.max_session.
 	ApprovalTimeout = 5 * time.Minute
-	IdleTimeout     = 20 * time.Minute
-	MaxSession      = 4 * time.Hour
 	PlanTTL         = 10 * time.Minute
 	// PolicyPoll is how often the config files are checked for changes.
 	PolicyPoll = 2 * time.Second
@@ -46,6 +46,19 @@ type IO interface {
 	Ask(ctx context.Context, prompt string, timeout time.Duration) (string, bool)
 	// AskSecret reads a line with echo off.
 	AskSecret(ctx context.Context, prompt string) ([]byte, error)
+}
+
+// Beller is implemented by an IO that can ring the terminal bell, so that
+// a human away from the console notices a prompt waiting for them.
+type Beller interface {
+	Bell()
+}
+
+// bell rings io's bell when it has one.
+func bell(io IO) {
+	if b, ok := io.(Beller); ok {
+		b.Bell()
+	}
 }
 
 // LineSource is implemented by an IO that also delivers the lines the human
@@ -132,7 +145,11 @@ type plan struct {
 	unmask   bool
 	created  time.Time
 	warnings []string
+	intent   string       // the agent's one-line reason, shown and audited
 	explain  *engine.Plan // the EXPLAIN result, assessed again when the plan runs
+	// kExplains are the EXPLAIN results of the k-anonymity counts, assessed
+	// again when the plan runs.
+	kExplains []engine.Plan
 	// an is the analysis of a read statement (nil for other classes);
 	// runSQL is the statement that runs; isExplain marks an EXPLAIN
 	// SELECT, answered with the plan.
@@ -196,6 +213,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	cfg.Databases = servedDatabases(cfg.Policy.Profile.Database, cfg.Databases)
 	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, probes: map[int]map[string]bool{}, keys: map[string]bool{}, quantum: cfg.Quantum}
 	if err := s.apply(cfg.Policy); err != nil {
 		return nil, err
@@ -267,13 +285,15 @@ func (s *Server) End(reason string) {
 // Ended reports whether the session is over, and why.
 func (s *Server) Ended() (string, bool) { return s.reason, s.ended }
 
-// Tick ends the session on idle or maximum session timeout.
+// Tick ends the session on idle or maximum session timeout, as set by the
+// policy in force: a policy change applies from the next tick.
 func (s *Server) Tick() {
 	now := s.now()
+	l := s.profile.Limits
 	switch {
-	case now.Sub(s.started) >= MaxSession:
+	case now.Sub(s.started) >= l.MaxSession:
 		s.End("maximum session length")
-	case now.Sub(s.lastSeen) >= IdleTimeout:
+	case now.Sub(s.lastSeen) >= l.IdleTimeout:
 		s.End("idle timeout")
 	}
 }

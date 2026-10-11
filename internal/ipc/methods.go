@@ -60,7 +60,14 @@ type PlanParams struct {
 	DB     string `json:"db"`
 	SQL    string `json:"sql"`
 	Unmask bool   `json:"unmask,omitempty"`
+	// Intent is one line from the agent saying why the query is needed,
+	// shown to the human on the approval screen and audited. It is
+	// untrusted text of at most MaxIntent bytes.
+	Intent string `json:"intent,omitempty"`
 }
+
+// MaxIntent bounds PlanParams.Intent.
+const MaxIntent = 200
 
 // PlanResult is an approved, one-shot plan.
 type PlanResult struct {

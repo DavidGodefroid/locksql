@@ -313,7 +313,7 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		// without a rename is masked by name.
 		r := mustRun(t, s, "SELECT email FROM v_big ORDER BY id LIMIT 1")
 		pii.MaskResult(&r, rules, nil, s.OriginColumns())
-		if v := fmt.Sprint(r.Rows[0][0]); !strings.Contains(v, "***") {
+		if v := fmt.Sprint(r.Rows[0][0]); v != "<redacted>" { // the rule has no mode
 			t.Errorf("view email not masked: %s", v)
 		}
 		r = mustRun(t, s, "SELECT b.email FROM big b ORDER BY id LIMIT 1")

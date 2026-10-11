@@ -155,7 +155,8 @@ func TestConcurrentWritesStayWholeLines(t *testing.T) {
 func TestRecordFieldSet(t *testing.T) {
 	want := []string{
 		"affected", "class", "db", "db_user", "decision", "duration_ms", "engine", "error",
-		"event", "host", "profile", "rows", "sql", "ssh_host", "ssh_host_key", "truncated", "ts", "unmasked", "verdict", "warnings",
+		"event", "host", "intent", "peer_pid", "peer_uid", "peer_user", "profile", "reason", "rows", "sql", "ssh_host", "ssh_host_key", "truncated", "ts",
+		"unmasked", "verdict", "warnings",
 	}
 	l, err := Open(t.TempDir())
 	if err != nil {
@@ -164,8 +165,8 @@ func TestRecordFieldSet(t *testing.T) {
 	full := Record{
 		Event: EventApproved, Profile: "p", Engine: "mysql", Host: "h", DB: "d", DBUser: "u",
 		Class: "read", SQL: "s", Verdict: "OK", Decision: "y", Error: "e",
-		Rows: 1, Affected: 2, DurationMS: 3, Truncated: true, Unmasked: true, Warnings: []string{"w"},
-		SSHHost: "b", SSHHostKey: "SHA256:k",
+		Rows: 1, Affected: 2, DurationMS: 3, Truncated: true, Unmasked: true, Warnings: []string{"w"}, Intent: "i", Reason: "r",
+		SSHHost: "b", SSHHostKey: "SHA256:k", PeerUID: new(int), PeerPID: 4, PeerUser: "agent",
 	}
 	if err := l.Write(full); err != nil {
 		t.Fatal(err)
@@ -178,6 +179,9 @@ func TestRecordFieldSet(t *testing.T) {
 	sort.Strings(keys)
 	if !reflect.DeepEqual(keys, want) {
 		t.Fatalf("field set = %v\nwant        %v", keys, want)
+	}
+	if got["peer_uid"] != float64(0) {
+		t.Errorf("peer uid 0 (root) not recorded: %v", got["peer_uid"])
 	}
 
 	// Compile-time shape: every Record field is accounted for.

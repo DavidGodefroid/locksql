@@ -37,6 +37,9 @@ func shape(n engine.PlanNode) string {
 	if n.Temp {
 		parts = append(parts, "temp")
 	}
+	if n.Recursive {
+		parts = append(parts, "recursive")
+	}
 	for _, c := range n.Children {
 		parts = append(parts, shape(c))
 	}
@@ -69,6 +72,9 @@ var fixtureShapes = map[string]map[string]string{
 	"scalar_subquery": {"*": "{small:full:3 {small:full:3}}"},
 	// Hash join: the hashed inner side is read once.
 	"join_no_index": {"*": "{big:full:N {big:full:N}}"},
+	// The recursive CTE is an InitPlan; its Recursive Union marks the group
+	// recursive (captured on 17 only).
+	"recursive_cte": {"17": "{r:full:31 {temp recursive {} {r:full:3}}}"},
 }
 
 var fixtureVersions = []string{"13", "17"}
@@ -81,8 +87,14 @@ func TestParsePlanFixtures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(files) != len(fixtureShapes) {
-			t.Errorf("%s: %d fixtures, want %d", v, len(files), len(fixtureShapes))
+		want := 0
+		for _, byVersion := range fixtureShapes {
+			if byVersion[v] != "" || byVersion["*"] != "" {
+				want++
+			}
+		}
+		if len(files) != want {
+			t.Errorf("%s: %d fixtures, want %d", v, len(files), want)
 		}
 		for _, f := range files {
 			name := strings.TrimSuffix(filepath.Base(f), ".json")

@@ -42,7 +42,7 @@ var helpSections = []helpSection{
 		{"locksql", "", "wire agents and lead to the separated setup (or start the console)"},
 		{"console", "[--profile P] [--project DIR] [--skip-permissions]", "run the approval console"},
 		{"forget", "--profile P", "remove the keychain secret"},
-		{"install", "[--client USER] [--print]", "separate the console from the agent (sudo)"},
+		{"install", "[--client USER] [--print] [--trust-binary]", "separate the console from the agent (sudo)\n(--trust-binary: copy a binary root does not own)"},
 		{"doctor", "[--profile P]", "check that this machine is safe-ready"},
 		{"init", "[claude|codex|cursor|gemini ...]", "write agent integration files into the project\n(default: the agents found on this machine)"},
 	}},
