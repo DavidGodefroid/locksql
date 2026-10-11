@@ -40,7 +40,7 @@ never sees a credential and never opens a connection.
 <p align="center"><sub>Claude Code (left, account <code>alice</code>) and the locksql console (right, account <code>locksql</code>, started with <code>--show-results</code>). Claude gets <code>&lt;redacted:rN.R.C&gt;</code> references, filters on them without seeing a value, then searches on an email the human types in the console.</sub></p>
 
 > [!NOTE]
-> **Pre-release** (`v0.4.x`). See [Install](#install).
+> **Pre-release** (`v0.5.x`). See [Install](#install).
 
 ## Why locksql?
 
@@ -608,7 +608,7 @@ PATH), then installs `/usr/local/bin/locksql`, with `sudo` if needed:
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh
 less install.sh                     # read it first
-sh install.sh                       # LOCKSQL_VERSION=v0.4.0 to pin a version
+sh install.sh                       # LOCKSQL_VERSION=v0.5.0 to pin a version
 ```
 
 `LOCKSQL_INSTALL_DIR=~/.local/bin` installs without `sudo`, but the binary is
