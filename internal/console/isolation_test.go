@@ -24,6 +24,7 @@ func fakeIsolation(sys *sysconf.Config, display string) isolationEnv {
 		terminalOwner: func() (int, bool) { return 900, true },
 		clientAllowed: func(_ *sysconf.Config, uid int) bool { return uid == 1000 },
 		clientGID:     func(*sysconf.Config) (int, error) { return 950, nil },
+		accountExists: func(uid int) bool { return uid == 0 || uid == 900 || uid == 1000 || uid == 1500 },
 	}
 }
 
@@ -168,6 +169,8 @@ func TestIsolationSeparated(t *testing.T) {
 		"console in the group": func(e *isolationEnv) { e.clientAllowed = func(*sysconf.Config, int) bool { return true } },
 		"started through sudo": func(e *isolationEnv) { e.loginUID = func() (int, bool) { return 1000, true } },
 		"someone else's tty":   func(e *isolationEnv) { e.terminalOwner = func() (int, bool) { return 1000, true } },
+		"unknown login uid":    func(e *isolationEnv) { e.loginUID = func() (int, bool) { return 4242, true } },
+		"unknown tty owner":    func(e *isolationEnv) { e.terminalOwner = func() (int, bool) { return 4242, true } },
 	}
 	for name, mutate := range cases {
 		env := fakeIsolation(separated(), sysconf.DisplayWayland)
@@ -193,5 +196,22 @@ func TestProcessText(t *testing.T) {
 	}
 	if who := peerText(withPeer(context.Background(), ipc.Cred{UID: os.Getuid(), PID: os.Getpid()})); !strings.Contains(who, "pid "+strconv.Itoa(os.Getpid())+" · exe /") {
 		t.Errorf("peerText: %q", who)
+	}
+}
+
+// An account outside the client group (an administrator who handed the
+// console off with sudo or su, while the agents run under an account of
+// their own) may start the console from its session and terminal: the
+// agent's account can read neither.
+func TestIsolationAcceptsNonClientSession(t *testing.T) {
+	env := fakeIsolation(separated(), sysconf.DisplayTTY)
+	env.loginUID = func() (int, bool) { return 1500, true }
+	env.terminalOwner = func() (int, bool) { return 1500, true }
+	io := &fakeIO{}
+	if _, err := checkIsolation(io, env, uatProfile()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(io.out, "\n"), "login session of uid 1500, an account outside the client group") {
+		t.Errorf("not reported: %q", io.out)
 	}
 }

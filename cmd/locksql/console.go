@@ -42,6 +42,14 @@ func runConsole(e env, args []string) int {
 		fmt.Fprintln(e.stderr, "locksql console: must run in a terminal: it asks the human for credentials and approvals")
 		return exitUsage
 	}
+	// Started from another account of a separated setup: open the console
+	// in the console account, or say how.
+	if proj, err := consoleProject(e.cwd, *project); err == nil {
+		a := consoleArgs{profile: *profile, project: proj, auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults}
+		if code, handled := handoffConsole(e, a); handled {
+			return code
+		}
+	}
 	fmt.Fprint(e.stdout, e.paint.Banner(version))
 	fmt.Fprintln(e.stdout)
 	term := console.NewTerminal(os.Stdin, e.stdout)

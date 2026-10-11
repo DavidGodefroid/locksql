@@ -7,7 +7,60 @@ configuration reference.
 
 ## 1. Set up
 
-### One command
+### `locksql setup`
+
+From your account (the one your agents run as), in the project:
+
+```sh
+locksql setup [--project DIR] [--client USER] [--trust-binary] [--yes]
+              [--profile NAME --engine E (--path FILE | --host H [--port N]
+               [--user U] [--database D] [--credentials ask|keychain])]
+```
+
+It runs four steps and ends with the one command that starts the console:
+
+1. **Agents.** Wires every installed agent for your account, as bare
+   `locksql` does ([Agent wiring](#agent-wiring)).
+2. **Console account.** Without a separated setup, runs `locksql install`
+   ([section 2](#2-separate-the-console-from-the-agent)): it shows the root
+   script and runs it with `sudo` once you confirm, then offers
+   `sudo passwd locksql` so that you can log in as the console account. On
+   macOS the script is only printed: run it as an administrator, then run
+   setup again.
+3. **Database profile.** When the project has no profile (or a profile is
+   given by flags), asks for its name (default `dev`), engine (`sqlite`,
+   `postgres`, `mariadb`, `mysql`), then the SQLite file relative to the
+   project, or host, port, user (empty: asked at console start), database
+   (empty: chosen per query) and whether the console account's keychain
+   keeps the password (`credentials = "keychain"`). It never asks for a
+   password. The profile is appended to `<project>/.locksql/config.toml`
+   (created when absent; the commented example of `locksql init` is kept),
+   and only once the result loads. A remote host gets the default
+   `tls = "verify-full"`.
+4. **Project access.** Runs the project checks of `locksql doctor` and
+   their repairs (see [`--fix`](#locksql-doctor---fix)): the console
+   account must enter every directory down to the project, own
+   `.locksql/` and read the configs.
+
+The project is the directory holding `.locksql/config.toml`, else the git
+root, else the current directory, or `--project`. Run again, setup changes
+nothing that is already in place: no second install, the profiles are kept,
+only missing access is repaired.
+
+Without a terminal (CI, scripts), setup needs `--yes`, which runs the root
+steps without asking (`sudo` may still ask for a password), and the profile
+as flags when the project has none:
+
+```sh
+locksql setup --yes --engine sqlite --path demo.db
+locksql setup --yes --profile uat --engine postgres --host db.internal --user reporting
+```
+
+After the first setup, log out and in again (your account joined
+`locksql-clients`), then start the console as setup printed it,
+in a session of the console account ([section 3](#3-start-the-console)).
+
+### Bare `locksql`
 
 ```sh
 locksql
@@ -284,11 +337,13 @@ mode as a failure. On Linux and macOS (and inside WSL2 on Windows, see
 [Windows (WSL2)](#windows-wsl2)), `locksql install` sets it up once:
 
 ```sh
-locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print] [--trust-binary]
+locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print] [--trust-binary] [--yes]
 ```
 
 It prints the root script and, on Linux, runs it with `sudo` after you
-confirm (`--print` only prints; on macOS it always only prints).
+confirm (`--yes` runs it without asking, and without a terminal; `--print`
+only prints; on macOS it always only prints). A binary already installed as
+`/usr/local/bin/locksql` is left in place.
 
 - The binary it copies is the one running. Unless that binary is owned by
   root and writable by neither group nor others, `install` refuses: run from
@@ -342,6 +397,10 @@ sudo chmod 0755 <project>/.locksql
 chmod 0644 <project>/.locksql/config.toml   # pii.toml is written 0644
 ```
 
+`locksql setup` and `locksql doctor --fix` make these changes, and give the
+console account an ACL entry on the directories it cannot enter on the
+way to the project (a home directory of mode 0750, for example).
+
 The agent's account can still edit a file it owns in place, but it can no
 longer create or replace files in `.locksql/` (a `git checkout` that changes
 them needs the console account). An edit of these files from the agent's side
@@ -358,9 +417,16 @@ In separated mode the console refuses to start when:
 
 - it does not run as `service_user`;
 - `service_user` is itself in `client_group` or `allowed_uids`;
-- it was started through `sudo` or `su` from another account's login session
-  (Linux `loginuid`);
-- its terminal belongs to another uid.
+- it was started through `sudo` or `su` from the login session (Linux
+  `loginuid`) of an account that may reach the console (`client_group` or
+  `allowed_uids`), or of a uid that names no account;
+- its terminal belongs to such an account or uid.
+
+The login session and the terminal of an account outside the client group
+(an administrator's, when the agents run under an account of their own) are
+accepted: the agent's account can read neither. The console then prints
+`started from the login session of uid N, an account outside the client
+group`.
 
 It serves a peer only when the kernel reports (`SO_PEERCRED` on Linux,
 `LOCAL_PEERCRED` on macOS) the console's own uid, a member of
@@ -375,7 +441,7 @@ others: the console refuses to start in one on a production profile or with
 ### `locksql doctor`
 
 ```sh
-locksql doctor [--profile P]
+locksql doctor [--profile P] [--fix [--yes]]
 ```
 
 Run it from both accounts. Each check prints ✓ (ok), ▲ (warning) or ✗
@@ -394,7 +460,33 @@ each; the exit code is 1 when any check fails.
 | binary | the running binary can be changed by a non-root account (fails in separated mode) |
 | secret store | separated mode with a secret for the profile left in the agent's keychain; keychain unavailable |
 | tls, ssh, ssh key (per profile) | a remote database that verifies nothing (through a bastion: the bastion-to-database leg); an `ssh.key` that is missing or readable by group or others (not checked from the agent's account in a separated setup) |
+| agent wiring | an installed agent is not wired for this account (warns; not checked as root or as the console account) |
+| project access, project .locksql, project config.toml / pii.toml | separated mode, from an account other than the console's, inside a project: the console account cannot enter a directory down to the project (mode bits and POSIX ACLs), does not own `.locksql/` or it is writable by group or others, or cannot read a config |
 | console (per profile) | not running; then, from its `health`: not separated, an X11 display, database privileges beyond the tier, EXPLAIN failing |
+
+#### `locksql doctor --fix`
+
+`--fix` runs the checks, then makes the repairs they offer, reports each
+one (`repaired: ...` or `not repaired: ...`) and runs the checks again. The
+repairs are small and idempotent; a second run finds nothing to do:
+
+| Check | Repair | Runs as |
+|---|---|---|
+| agent wiring | wires the agents, as bare `locksql` | you |
+| client access | `usermod -aG locksql-clients YOU` (macOS: `dseditgroup`); log out and in again | root |
+| console account isolated | removes the console account from the client group | root |
+| socket directory | recreates it with owner `service_user:client_group`, mode 2710 (macOS 0710), and on Linux rewrites `/etc/tmpfiles.d/locksql.conf` | root |
+| project access | `setfacl -m u:locksql:x DIR` (`rx` on the project itself): an ACL entry for the console account only, never a wider mode; Linux, when `setfacl` exists | you for your directories, else root |
+| project .locksql | `chown locksql .locksql && chmod 0755 .locksql` | root |
+| project config.toml, pii.toml | `chmod 0644` | you when you own it, else root |
+
+The root repairs run as one script, shown before `sudo` runs it, after
+`Run them now with sudo? [y/N]` (or at once with `--yes`; without a
+terminal `--fix` needs `--yes`). Everything else is left to the steps
+shown: a `system.toml` or a binary that root does not own is never
+re-owned (it could hold another account's changes: run `sudo locksql
+install` again), a secret in the agent's keychain is not deleted, and
+`sudo` rules are not touched.
 
 ### Windows (WSL2)
 
@@ -521,7 +613,8 @@ differs in an issue.
 
 ## 3. Start the console
 
-In a terminal you keep in view, in the `locksql` session:
+In a terminal you keep in view, in the `locksql` session (switch user on
+the desktop, or log in on a text console with Ctrl-Alt-F3):
 
 ```sh
 locksql console [--profile dev] [--project DIR] [--auto] [--allow-unmask] [--show-results]
@@ -530,6 +623,24 @@ locksql console [--profile dev] [--project DIR] [--auto] [--allow-unmask] [--sho
 Without `--profile` the console uses the only profile, or asks which one when
 there are several. It first wires agents installed since the last run (see
 [Agent wiring](#agent-wiring)).
+
+Run from another account of a separated setup, `locksql console` does
+not start in that terminal:
+
+- from an account that may reach the console (the agent's: the client
+  group or `allowed_uids`), it prints why and the command to run in the
+  `locksql` session (`locksql console --project <project root>` with your
+  flags), and exits with 1. The agents run in that account and can read its
+  terminals: what you type there, the database password included, would
+  reach them;
+- from another account (an administrator's, when the agents run under an
+  account of their own), it opens the console as `locksql` through the
+  first helper available: `sudo -u locksql -H`, `machinectl shell
+  locksql@` (Linux with systemd) or `su -l locksql`. The helper asks for its
+  own authentication; locksql passes it only the console's flags and the
+  project, never a secret, and the binary run is a root-owned one
+  (`/usr/local/bin/locksql` when the running one is not). The console then
+  applies its own isolation checks (section 2).
 
 `--project` names the project directory (default: the current directory);
 the console and the agent must agree on it, since it selects the socket. A

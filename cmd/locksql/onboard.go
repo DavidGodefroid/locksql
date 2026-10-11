@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"strings"
@@ -53,24 +52,25 @@ func (e env) geteuid() int {
 
 // wireAgents wires every detected agent that is not wired yet, one line
 // per agent that had a file written. It never fails: an agent that cannot
-// be wired gets one line and the others go on.
-func wireAgents(e env) {
+// be wired gets one line and the others go on. It returns the agents
+// found.
+func wireAgents(e env) []string {
 	if _, err := sysConfig(e); err != nil {
-		return // cannot tell whether this is the service account
+		return nil // cannot tell whether this is the service account
 	}
 	if _, service := isServiceAccount(e); service {
-		return // the agents live in the other account's home
+		return nil // the agents live in the other account's home
 	}
 	if e.agentEnv == nil {
-		return
+		return nil
 	}
 	if e.geteuid() == 0 {
 		fmt.Fprintln(e.stdout, "not wiring agents as root; run locksql from your own account")
-		return
+		return nil
 	}
 	ae, err := e.agentEnv()
 	if err != nil {
-		return
+		return nil
 	}
 	found := agentinit.Detect(ae)
 	var lines []string
@@ -98,12 +98,13 @@ func wireAgents(e env) {
 		}
 	}
 	if len(lines) == 0 {
-		return
+		return found
 	}
 	fmt.Fprintf(e.stdout, "Agents found: %s\n", e.paint.Bold(strings.Join(found, ", ")))
 	for _, l := range lines {
 		fmt.Fprintln(e.stdout, l)
 	}
+	return found
 }
 
 // projectDirHint names the project of cwd, or a placeholder outside one.
@@ -125,8 +126,9 @@ func separatedSteps(e env) string {
 	}
 	dir := projectDirHint(e)
 	return fmt.Sprintf(`Separated mode: the console runs as %s and serves one project at a time.
-  1. Put the database profile in %s/.locksql/config.toml (`+"`locksql init <agent>`"+` writes a
-     commented example there).
+  1. Put the database profile in %s/.locksql/config.toml (`+"`locksql setup`"+` asks for it
+     and gives the console account access to the project; `+"`locksql init <agent>`"+` writes
+     a commented example).
   2. In the locksql session (account %s), run:  locksql console --project %s
 Agents working in that project then reach the console.
 `, account, dir, account, dir)
@@ -142,12 +144,9 @@ holds the database password, and the agent's account cannot read its terminal.
 // install's exit code; any answer but y returns exitOK. Either way the
 // steps follow.
 func offerInstall(e env) int {
-	fmt.Fprint(e.stdout, "Set it up now with sudo locksql install? [y/N] ")
 	// One reader for both prompts: install must not lose buffered input.
-	br := bufio.NewReader(e.stdin)
-	e.stdin = br
-	ans, _ := br.ReadString('\n')
-	if strings.TrimSpace(strings.ToLower(ans)) != "y" {
+	e.stdin = lineReader(e)
+	if !confirm(e, "Set it up now with sudo locksql install? [y/N] ") {
 		fmt.Fprintln(e.stdout, "\nLater: run sudo locksql install, then locksql doctor.")
 		return exitOK
 	}

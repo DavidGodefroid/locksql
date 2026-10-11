@@ -106,6 +106,55 @@ jobs:
           docker run --rm -v locksql-run:/run/locksql locksql doctor
           docker run --rm --user locksql -v locksql-run:/run/locksql -v locksql-home:/home/locksql locksql doctor
 
+  # The README's "first query in 3 commands" on a fresh machine: the
+  # runner's VM image and fresh Ubuntu and Fedora containers. The test
+  # installs the binary, runs locksql setup, starts the console in the
+  # console account's own terminal, then an agent plans and runs a SQLite
+  # query that the test approves by typing y in the console, as the human
+  # would: approval has no other way in. It changes the machine (an account,
+  # a group, /usr/local/bin, /etc/locksql), so it runs in CI only.
+  first-query:
+    name: first query (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [runner, "ubuntu:24.04", "fedora:42"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+      - name: build locksql and the test
+        run: |
+          mkdir -p "$RUNNER_TEMP/fq"
+          go build -o "$RUNNER_TEMP/fq/locksql" ./cmd/locksql
+          go test -c -tags firstquery -o "$RUNNER_TEMP/fq/firstquery.test" ./test/firstquery
+      - name: on the runner
+        if: matrix.target == 'runner'
+        run: |
+          cd /tmp
+          LOCKSQL_FIRSTQUERY=1 LOCKSQL_FIRSTQUERY_BIN="$RUNNER_TEMP/fq/locksql" "$RUNNER_TEMP/fq/firstquery.test" -test.v
+      - name: in a fresh container
+        if: matrix.target != 'runner'
+        env:
+          IMAGE: ${{ matrix.target }}
+        run: |
+          docker run --rm -v "$RUNNER_TEMP/fq:/w:ro" "$IMAGE" sh -c '
+            set -e
+            if command -v apt-get >/dev/null; then
+              apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sudo >/dev/null
+            else
+              dnf install -y -q sudo util-linux util-linux-script shadow-utils >/dev/null
+            fi
+            useradd -m -s /bin/bash agent
+            echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent
+            su agent -c "cd /tmp && LOCKSQL_FIRSTQUERY=1 LOCKSQL_FIRSTQUERY_BIN=/w/locksql /w/firstquery.test -test.v"'
+
   # Real servers in Docker. The harness in test/integration starts one
   # throwaway container per image (named ls-it-*, port on 127.0.0.1), seeds
   # it through docker exec and removes it when the test binary exits; the
