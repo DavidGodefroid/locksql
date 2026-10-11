@@ -420,7 +420,13 @@ In separated mode the console refuses to start when:
 - it was started through `sudo` or `su` from the login session (Linux
   `loginuid`) of an account that may reach the console (`client_group` or
   `allowed_uids`), or of a uid that names no account;
-- its terminal belongs to such an account or uid.
+- its terminal belongs to such an account or uid;
+- it runs in a `machinectl shell` (Linux, a `container-shell@` unit) while
+  a running `machinectl shell` process belongs to such an account or uid,
+  or none can be found: `loginuid` and the terminal name the console
+  account there, but the keystrokes come from the caller's terminal;
+- it runs in an SSH login from this machine (logind `REMOTE_HOST` a
+  loopback address), whose client account cannot be identified.
 
 The login session and the terminal of an account outside the client group
 (an administrator's, when the agents run under an account of their own) are

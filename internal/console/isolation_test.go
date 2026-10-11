@@ -16,15 +16,17 @@ import (
 
 func fakeIsolation(sys *sysconf.Config, display string) isolationEnv {
 	return isolationEnv{
-		loadSys:       func() (*sysconf.Config, error) { return sys, nil },
-		display:       func() sysconf.Display { return sysconf.Display{Kind: display, Detail: display} },
-		uid:           func() int { return 900 },
-		userName:      func() (string, error) { return "locksql", nil },
-		loginUID:      func() (int, bool) { return 900, true },
-		terminalOwner: func() (int, bool) { return 900, true },
-		clientAllowed: func(_ *sysconf.Config, uid int) bool { return uid == 1000 },
-		clientGID:     func(*sysconf.Config) (int, error) { return 950, nil },
-		accountExists: func(uid int) bool { return uid == 0 || uid == 900 || uid == 1000 || uid == 1500 },
+		loadSys:        func() (*sysconf.Config, error) { return sys, nil },
+		display:        func() sysconf.Display { return sysconf.Display{Kind: display, Detail: display} },
+		uid:            func() int { return 900 },
+		userName:       func() (string, error) { return "locksql", nil },
+		loginUID:       func() (int, bool) { return 900, true },
+		terminalOwner:  func() (int, bool) { return 900, true },
+		clientAllowed:  func(_ *sysconf.Config, uid int) bool { return uid == 1000 },
+		clientGID:      func(*sysconf.Config) (int, error) { return 950, nil },
+		accountExists:  func(uid int) bool { return uid == 0 || uid == 900 || uid == 1000 || uid == 1500 },
+		relay:          func() string { return "" },
+		machinectlUIDs: func() ([]int, bool) { return nil, true },
 	}
 }
 
@@ -213,5 +215,40 @@ func TestIsolationAcceptsNonClientSession(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(io.out, "\n"), "login session of uid 1500, an account outside the client group") {
 		t.Errorf("not reported: %q", io.out)
+	}
+}
+
+// A session opened through a relay names the console account in loginuid
+// and as the terminal owner, but the keystrokes come from the terminal of
+// whoever ran the relay.
+func TestIsolationRelays(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		relay  string
+		uids   []int
+		listed bool
+		want   string // "" accepted, else part of the refusal
+	}{
+		{"desktop session", "", nil, true, ""},
+		{"machinectl from the agent's account", sysconf.RelayMachinectl, []int{1000}, true, "uid 1000, which may reach the console"},
+		{"machinectl from an administrator", sysconf.RelayMachinectl, []int{1500}, true, ""},
+		{"machinectl, one of two callers is the agent", sysconf.RelayMachinectl, []int{1500, 1000}, true, "uid 1000"},
+		{"machinectl, caller not found", sysconf.RelayMachinectl, nil, true, "cannot tell which account"},
+		{"machinectl, /proc not listed", sysconf.RelayMachinectl, nil, false, "cannot tell which account"},
+		{"machinectl from a uid with no account", sysconf.RelayMachinectl, []int{4242}, true, "uid 4242"},
+		{"ssh from this machine", sysconf.RelaySSHLoopback, nil, true, "ssh from this machine"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := fakeIsolation(separated(), sysconf.DisplayWayland)
+			env.relay = func() string { return tc.relay }
+			env.machinectlUIDs = func() ([]int, bool) { return tc.uids, tc.listed }
+			_, err := checkIsolation(&fakeIO{}, env, uatProfile())
+			switch {
+			case tc.want == "" && err != nil:
+				t.Errorf("refused: %v", err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Errorf("err = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
