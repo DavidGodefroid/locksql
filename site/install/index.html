@@ -52,7 +52,7 @@
 <h1>Install locksql</h1>
 <div class="prose">
   <p class="lead">Every release ships a static binary for Linux and macOS (amd64, arm64), Linux packages, a <code>checksums.txt</code> and its cosign signature. No Go toolchain is needed.</p>
-  <p>locksql is a pre-release (<code>v0.5.x</code>). It supports Linux and macOS, on amd64 and arm64. On Windows it runs inside WSL2 (<a href="#windows">see below</a>); native Windows is not supported.</p>
+  <p>locksql is a pre-release (<code>v0.5.x</code>). It supports Linux and macOS, on amd64 and arm64. On Windows it runs inside WSL2 (<a href="#windows">see below</a>); native Windows is not supported. A <a href="#docker">Docker image</a> runs it with nothing else installed.</p>
 </div>
 
 <section aria-labelledby="script">
@@ -191,6 +191,34 @@ key         = "~/.ssh/id_ed25519"   # in the console account's home</code></pre>
   <pre tabindex="0"><code>locksql console [--profile dev] [--project DIR] [--auto] [--allow-unmask] [--show-results]</code></pre>
   <p class="prose">Never in a terminal of your account, where the agents run and could read what you type: run from there, <code>locksql console</code> prints the command for the <code>locksql</code> session instead of starting. When your agents run under an account of their own, <code>locksql console</code> from yours opens the console as <code>locksql</code> through <code>sudo -u</code>, <code>machinectl shell</code> or <code>su -l</code>.</p>
   <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#3-start-the-console">Starting the console, in the usage guide</a></p>
+</section>
+
+<section aria-labelledby="docker">
+  <h2 id="docker">Docker</h2>
+  <div class="prose">
+    <p>The image runs locksql with nothing installed on your machine but Docker. It holds the separated setup that <code>sudo locksql install</code> makes on a host: the console runs as <code>locksql</code>, the only account with the database credentials; the agent’s MCP server runs as <code>agent</code>, a member of <code>locksql-clients</code>; the socket directory is a named volume, <code>locksql-run</code>, shared by both, and the kernel checks every peer as on a host.</p>
+    <p>Build the image (from a clone, or straight from GitHub):</p>
+  </div>
+  <pre tabindex="0"><code>docker build -t locksql https://github.com/DavidGodefroid/locksql.git</code></pre>
+  <p class="prose">Mount the project at its own path: the socket name is derived from it, so the console and the agent must see the same one. In the project directory, write <code>.locksql/config.toml</code> and the agent files, then edit the profile:</p>
+  <pre tabindex="0"><code>docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+  -v "$PWD:$PWD" -w "$PWD" locksql init claude</code></pre>
+  <div class="prose">
+    <p>Inside a container <code>localhost</code> is the container: a database on your machine is <code>host = "host.docker.internal"</code> (on Linux, add <code>--add-host=host.docker.internal:host-gateway</code> to the console’s <code>docker run</code>), which is not loopback, so set <code>tls</code> for a local server without TLS. Keep <code>credentials = "ask"</code>: the container has no keychain.</p>
+    <p>Start the console in a terminal you keep in view:</p>
+  </div>
+  <pre tabindex="0"><code>docker run -it --rm --name locksql-console --user locksql \
+  -v "$PWD:$PWD" \
+  -v locksql-run:/run/locksql \
+  -v locksql-home:/home/locksql \
+  locksql console --project "$PWD"</code></pre>
+  <p class="prose">The <code>locksql-home</code> volume keeps the approved policy, the audit log and <code>known_hosts</code> between runs. The agent starts the MCP server in a throwaway container; for Claude Code:</p>
+  <pre tabindex="0"><code>claude mcp add --scope user locksql -- \
+  sh -c 'exec docker run -i --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql mcp'</code></pre>
+  <div class="prose">
+    <p><code>init</code> writes <code>locksql mcp</code> as the MCP command: replace that entry with the one above. Codex, Gemini CLI and Cursor take the same command and arguments.</p>
+    <p><strong>What it does not separate:</strong> whoever can run <code>docker</code> can attach to the console and type an approval, exec into it or open its volume, and an agent running shell commands in your account usually can. Docker mode keeps the credentials out of the agent’s reach and the approval in your terminal, but it is no boundary against an agent that runs commands of its own: for that, use <code>sudo locksql install</code> on the host, or run the agent in a container without the Docker socket. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/docker.md">Running locksql in Docker</a> has the details.</p>
+  </div>
 </section>
 
 <section aria-labelledby="windows">

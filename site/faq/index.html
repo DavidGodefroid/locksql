@@ -58,7 +58,7 @@
 </section>
 <section aria-labelledby="os">
   <h2 id="os">Which operating systems? Does it run on Windows?</h2>
-  <p>Linux and macOS, on amd64 and arm64. Native Windows is not supported: the separation relies on Unix accounts, socket peer credentials and terminals. On Windows, run locksql inside WSL2, with the agent inside WSL too for the boundary to hold. <a href="../install/#windows">Windows: inside WSL2</a>.</p>
+  <p>Linux and macOS, on amd64 and arm64. Native Windows is not supported: the separation relies on Unix accounts, socket peer credentials and terminals. On Windows, run locksql inside WSL2, with the agent inside WSL too for the boundary to hold. <a href="../install/#windows">Windows: inside WSL2</a>. A Docker image also runs it with nothing but Docker installed, with a weaker boundary against an agent that can run <code>docker</code>: <a href="../install/#docker">Docker</a>.</p>
 </section>
 <section aria-labelledby="setup">
   <h2 id="setup">How do I set it up?</h2>
