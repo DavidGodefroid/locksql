@@ -548,21 +548,18 @@ deliberately narrow:
   `tls = "verify-full"`; `prefer` is the default only for a Unix socket or a
   loopback host. `production = true` refuses `disable` and `prefer` on a
   remote host. Below `verify-ca` an active attacker on the path can intercept
-  or downgrade the connection, and obtain the password: the clear-text guard
-  protects plain TCP connections only, and go-mysql answers
-  `mysql_clear_password`, `sha256_password` and a `caching_sha2_password`
-  full authentication (the MySQL 8 default) in clear over any TLS, so an
-  attacker terminating TLS gets the MySQL/MariaDB password. On plain
-  TCP (`disable`, or `prefer` after a fallback) the guard refuses a full
-  authentication, so a MySQL 8 account logs in only while the server's
-  authentication cache holds it. On PostgreSQL, a remote host under
-  `disable`, `prefer` or `require` without `tls_ca` answers no clear-text or
-  MD5 password request (libpq's `require_auth=!password,!md5`): the
-  connection is refused with the remedy, `tls = "verify-full"` or a
-  SCRAM-SHA-256 password for the account. `verify-ca`
-  and `verify-full` prevent the impersonation. Through an `ssh` bastion the
-  SSH leg is encrypted and verified, but the bastion-to-database leg is
-  protected only by `tls`, unless the database runs on the bastion. See
+  or downgrade the connection and read the traffic, but is not handed the
+  password: a remote MariaDB/MySQL connection whose certificate is not
+  verified (or plain TCP) refuses `mysql_clear_password`, `sha256_password`
+  and a `caching_sha2_password` full authentication, so a MySQL 8 account
+  logs in that way only while the server's authentication cache holds it;
+  PostgreSQL refuses a clear-text or MD5 password request
+  (`require_auth=!password,!md5`). Each refusal names the remedy,
+  `tls = "verify-full"` (with `tls_ca` for a private CA). `verify-ca` and
+  `verify-full` prevent the impersonation; `tls_cert`/`tls_key` add a client
+  certificate. Through an `ssh` bastion the SSH leg is encrypted and
+  verified, but the bastion-to-database leg is protected only by `tls`,
+  unless the database runs on the bastion. See
   [Transport security](docs/security-model.md#out-of-scope-and-limitations).
 - One console per profile and project, one request at a time. No remote or
   shared consoles, no data export.

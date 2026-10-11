@@ -162,7 +162,7 @@ it append-only for the console account too.
   | `prefer` | if offered | no | no |
   | `require` | yes, else refuse | only with `tls_ca` | no |
   | `verify-ca` | yes, else refuse | yes | no |
-  | `verify-full` | yes, else refuse | yes | yes (`host`) |
+  | `verify-full` | yes, else refuse | yes | yes (`host`, or `tls_server_name`) |
 
   The default is `verify-full`, except `prefer` when `host` is a Unix socket
   path or a loopback host (`localhost` or a loopback IP literal).
