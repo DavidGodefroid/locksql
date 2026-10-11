@@ -172,3 +172,34 @@ func TestUnverifiedTLSHandshake(t *testing.T) {
 		t.Errorf("the handshake response does not start with the SSL request")
 	}
 }
+
+// TestRemoteServerWithoutTLS checks the TLS upgrade made below the driver
+// against a server that offers no TLS: prefer falls back to plain TCP, where
+// the clear-text guard still refuses, and require refuses.
+func TestRemoteServerWithoutTLS(t *testing.T) {
+	for _, mode := range []string{config.TLSPrefer, config.TLSRequire} {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := &fakeServer{ln: ln}
+		go f.serve(t)
+		p := config.Profile{Name: "t", Engine: config.EngineMySQL, Host: "db.example", Port: 3306, User: "u",
+			TLS: mode, Tier: config.TierRead, Limits: config.DefaultLimits(false)}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, err = Engine{}.Connect(ctx, p, []byte("S3cr3t-pa55word"), remoteDial(ln.Addr().String()))
+		cancel()
+		ln.Close()
+		f.done.Wait()
+		want := "does not support TLS"
+		if mode == config.TLSPrefer {
+			want = "unencrypted"
+		}
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", mode, err, want)
+		}
+		if bytes.Contains(f.got.Bytes(), []byte("S3cr3t-pa55word")) {
+			t.Errorf("%s: the password reached the server", mode)
+		}
+	}
+}

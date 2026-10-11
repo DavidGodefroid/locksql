@@ -133,3 +133,61 @@ func TestCapReaderBoundsMemory(t *testing.T) {
 		t.Errorf("the driver got %d bytes, want %d", got.Len(), want)
 	}
 }
+
+// timeoutOnce fails one Read with a timeout after `after` bytes, as a
+// read deadline set by a cancelled statement does; reads go on after it.
+type timeoutOnce struct {
+	r     io.Reader
+	after int
+	done  bool
+	n     int
+}
+
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+func (t *timeoutOnce) Read(p []byte) (int, error) {
+	if !t.done && t.n >= t.after {
+		t.done = true
+		return 0, timeoutErr{}
+	}
+	if !t.done && len(p) > t.after-t.n {
+		p = p[:t.after-t.n]
+	}
+	n, err := t.r.Read(p)
+	t.n += n
+	return n, err
+}
+
+// TestCapReaderResumesAfterTimeout checks that a read error such as a
+// timeout is returned once and does not end the stream: pgconn keeps a
+// connection whose read timed out, and reads the rest of the reply.
+func TestCapReaderResumesAfterTimeout(t *testing.T) {
+	stream := encode(t,
+		&pgproto3.DataRow{Values: [][]byte{bytes.Repeat([]byte("z"), 100)}},
+		&pgproto3.ReadyForQuery{TxStatus: 'I'},
+	)
+	cr := newCapReader(&timeoutOnce{r: bytes.NewReader(stream), after: 20})
+	var got []byte
+	buf := make([]byte, 7)
+	timeouts := 0
+	for {
+		n, err := cr.Read(buf)
+		got = append(got, buf[:n]...)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			timeouts++
+			if timeouts > 1 {
+				t.Fatalf("error repeated: %v", err)
+			}
+		}
+	}
+	if timeouts != 1 || !bytes.Equal(got, stream) {
+		t.Errorf("timeouts %d, got %d of %d bytes", timeouts, len(got), len(stream))
+	}
+}

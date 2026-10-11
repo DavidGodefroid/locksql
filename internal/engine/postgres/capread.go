@@ -28,7 +28,8 @@ type capReader struct {
 	r   io.Reader
 	buf []byte // read from r, not yet parsed
 	out []byte // parsed, ready for pgx
-	err error  // the error of r, returned once out is drained
+	err error  // the error of r, returned once, when out is drained
+	bad error  // a malformed message: every later read fails
 
 	hdr  [5]byte // the message header being read
 	nhdr int
@@ -51,15 +52,21 @@ func (c *capReader) buffered() int { return len(c.buf) + len(c.out) + len(c.row)
 
 func (c *capReader) Read(p []byte) (int, error) {
 	for len(c.out) == 0 {
-		if c.err != nil {
-			return 0, c.err
+		if c.bad != nil {
+			return 0, c.bad
+		}
+		if err := c.err; err != nil {
+			// Once: pgconn goes on reading a connection whose read timed
+			// out, and the parse state is kept for the rest.
+			c.err = nil
+			return 0, err
 		}
 		if cap(c.buf) == 0 {
 			c.buf = make([]byte, 0, 32<<10)
 		}
 		n, err := c.r.Read(c.buf[:cap(c.buf)])
 		if perr := c.parse(c.buf[:n]); perr != nil {
-			c.err = perr
+			c.bad = perr
 		} else if err != nil {
 			c.err = err
 		}
