@@ -43,6 +43,15 @@ go test -tags integration ./test/integration/
 ```
 
 - `LOCKSQL_IT_MYSQL` and `LOCKSQL_IT_POSTGRES` select a subset of versions.
+- The canary suite (`test/integration/canary_test.go`, `-run Canary`) seeds
+  masked columns with random `CANARY-<id>` values on every server and on
+  SQLite, runs a generated corpus of reads (joins, CTEs, unions, casts,
+  JSON, string, aggregate and window functions) through plan, approval, run
+  and masking, and fails when an answer to the agent holds a canary, 4
+  letters of one, or its hex, base64 or reversed form. A refusal is safe. A
+  leak it finds is fixed in the analyzer or the masker, with a regression
+  case in `internal/sqlast/adversarial_test.go` or the `pii` tests; a new
+  construct goes in `canaryDialectFor`.
 - The console test drives the binary in a pseudo-terminal and runs on Linux
   only.
 - `LOCKSQL_TEST_KEYCHAIN=1` also runs the keychain test against the real OS
