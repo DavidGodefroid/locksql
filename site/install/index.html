@@ -52,7 +52,7 @@
 <h1>Install locksql</h1>
 <div class="prose">
   <p class="lead">Every release ships a static binary for Linux and macOS (amd64, arm64), Linux packages, a <code>checksums.txt</code> and its cosign signature. No Go toolchain is needed.</p>
-  <p>locksql is a pre-release (<code>v0.4.x</code>). It supports Linux and macOS, on amd64 and arm64. On Windows it runs inside WSL2 (<a href="#windows">see below</a>); native Windows is not supported.</p>
+  <p>locksql is a pre-release (<code>v0.5.x</code>). It supports Linux and macOS, on amd64 and arm64. On Windows it runs inside WSL2 (<a href="#windows">see below</a>); native Windows is not supported.</p>
 </div>
 
 <section aria-labelledby="script">
@@ -60,7 +60,7 @@
   <p class="prose">Downloads the archive for your OS and architecture, checks it against <code>checksums.txt</code> (and the signature when <code>cosign</code> is on PATH), then installs <code>/usr/local/bin/locksql</code>, with <code>sudo</code> if needed:</p>
   <pre tabindex="0"><code>curl -fsSLO https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh
 less install.sh                     # read it first
-sh install.sh                       # LOCKSQL_VERSION=v0.4.0 to pin a version</code></pre>
+sh install.sh                       # LOCKSQL_VERSION=v0.5.0 to pin a version</code></pre>
   <p>Or, in one line:</p>
   <pre tabindex="0"><code>curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh</code></pre>
   <p class="prose"><code>LOCKSQL_INSTALL_DIR=~/.local/bin</code> installs without <code>sudo</code>, but the binary is then owned by your account and <code>locksql doctor</code> warns: in separated mode, the console must run a binary the agent cannot replace (<code>sudo locksql install</code> copies it to <code>/usr/local/bin</code>). To upgrade, run the script again.</p>
@@ -217,7 +217,7 @@ key         = "~/.ssh/id_ed25519"   # in the console account's home</code></pre>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
       </ul>
-      <p>Pre-release (<code>v0.4.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (<code>v0.5.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
     </div>
   </footer>
 </body>
