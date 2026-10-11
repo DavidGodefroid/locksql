@@ -116,6 +116,10 @@ jobs:
           check-latest: true
       - name: FuzzLexNoPanic
         run: go test -run '^$' -fuzz '^FuzzLexNoPanic$' -fuzztime 30s ./internal/sqlclass/
+      - name: FuzzParseNoPanic (sqlast)
+        run: go test -run '^$' -fuzz '^FuzzParseNoPanic$' -fuzztime 60s ./internal/sqlast/
+      - name: FuzzAnalyzeNoPanic (sqlast)
+        run: go test -run '^$' -fuzz '^FuzzAnalyzeNoPanic$' -fuzztime 120s ./internal/sqlast/
       - name: FuzzParsePlanNoPanic (mysql)
         run: go test -run '^$' -fuzz '^FuzzParsePlanNoPanic$' -fuzztime 30s ./internal/engine/mysql/
       - name: FuzzParsePlanNoPanic (postgres)

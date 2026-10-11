@@ -60,6 +60,18 @@ Never point a test at a real or remote database.
   per version.
 - Fuzz targets run nightly in CI; run one locally with, for example,
   `go test -run '^$' -fuzz '^FuzzLexNoPanic$' -fuzztime 30s ./internal/sqlclass/`.
+  A failing input is written under the package's `testdata/fuzz/`; commit it
+  with the fix, so `go test` replays it from then on.
+- The SQL parser and provenance analyzer (`internal/sqlast`) have
+  `FuzzParseNoPanic` and `FuzzAnalyzeNoPanic`, seeded from the classifier
+  corpus and the package's tests. Besides panics, the analyze target checks
+  the provenance of every accepted statement (an output that reveals column
+  values names its sources; a value of a masked column is never returned
+  unmasked). `metamorphic_test.go` checks that rewrites which keep a
+  statement's meaning (alias, CTE, subquery, swapped join, `UNION ALL` with
+  itself) keep its provenance in every dialect: a rewrite may be refused,
+  never accepted with a cleaner provenance. New syntax should get a base
+  statement there.
 
 ## Pull requests
 
