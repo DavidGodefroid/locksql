@@ -116,3 +116,26 @@ func TestProcReaders(t *testing.T) {
 		t.Errorf("PtraceScope = %d %v", s, ok)
 	}
 }
+
+// finger names fprintd's finger; empty is allowed until the install
+// script writes it.
+func TestLoadFinger(t *testing.T) {
+	SkipOwnerCheck = true
+	defer func() { SkipOwnerCheck = false }()
+	withFile(t, "finger = \"left-index-finger\"\n")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Finger != "left-index-finger" {
+		t.Errorf("Finger = %q", c.Finger)
+	}
+	withFile(t, "")
+	if c, err := Load(); err != nil || c.Finger != "" {
+		t.Fatalf("no finger: %+v, %v", c, err)
+	}
+	withFile(t, "finger = \"pinky\"\n")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), `system.toml: finger: unknown finger name "pinky"`) {
+		t.Fatalf("Load = %v", err)
+	}
+}
