@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/DavidGodefroid/locksql/internal/fingerprint"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 )
 
@@ -281,5 +283,93 @@ func TestSwitchesNotReachableFromClients(t *testing.T) {
 	}
 	if log := h.auditLog(t); strings.TrimSpace(log) != "" {
 		t.Errorf("audited:\n%s", log)
+	}
+}
+
+func fingerHarness(t *testing.T, v *fingerprint.Fake) *harness {
+	t.Helper()
+	return newHarness(t, uatProfile(), func(c *ServerConfig) {
+		c.Fingerprint = true
+		c.Approver = newFingerprintApprover(c.IO, v, "left-index-finger", time.Second)
+	})
+}
+
+// Level 2: Shift+Tab to auto asks a typed yes and a finger; a typed yes
+// alone, a refused answer or a failed finger leaves manual mode on.
+func TestLevel2AutoModeNeedsFinger(t *testing.T) {
+	v := &fingerprint.Fake{Results: []error{nil}}
+	h := fingerHarness(t, v)
+	h.io.answers = []string{"y"}
+	h.s.Key(KeyShiftTab)
+	if !h.s.autoApprove() || v.Calls != 1 {
+		t.Fatalf("auto = %v, finger calls = %d", h.s.autoApprove(), v.Calls)
+	}
+	if !strings.Contains(h.io.prompts[0], "Switch to auto mode? [y/N] ") {
+		t.Errorf("prompts %q", h.io.prompts)
+	}
+	// Tightening is immediate: no prompt, no finger.
+	h.s.Key(KeyShiftTab)
+	if h.s.autoApprove() || v.Calls != 1 || len(h.io.prompts) != 1 {
+		t.Fatalf("back to manual: auto = %v, calls = %d, prompts %q", h.s.autoApprove(), v.Calls, h.io.prompts)
+	}
+}
+
+func TestLevel2AutoModeRefusals(t *testing.T) {
+	cases := map[string]struct {
+		answers []string
+		results []error
+	}{
+		"typed no":        {[]string{"n"}, nil},
+		"no match":        {[]string{"y"}, []error{fingerprint.ErrNoMatch}},
+		"unavailable":     {[]string{"y"}, []error{fingerprint.ErrUnavailable}},
+		"no typed answer": {nil, nil},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			v := &fingerprint.Fake{Results: c.results}
+			h := fingerHarness(t, v)
+			h.io.answers = c.answers
+			h.io.timeout = c.answers == nil
+			h.s.Key(KeyShiftTab)
+			if h.s.autoApprove() {
+				t.Fatal("auto mode on without a finger")
+			}
+			if name == "typed no" && v.Calls != 0 {
+				t.Errorf("reader reached by a typed no")
+			}
+		})
+	}
+}
+
+// Level 2: results stay masked; showing them is refused without a prompt,
+// hiding them is immediate.
+func TestLevel2ShowResultsRefused(t *testing.T) {
+	v := &fingerprint.Fake{}
+	h := fingerHarness(t, v)
+	h.s.Key(KeyCtrlO)
+	if h.s.showResults || len(h.io.prompts) != 0 || v.Calls != 0 {
+		t.Fatalf("showResults = %v, prompts %q", h.s.showResults, h.io.prompts)
+	}
+	if out := h.io.output(); !strings.Contains(out, "results stay masked at level 2: the window is on the agent's desktop") {
+		t.Errorf("no refusal:\n%s", out)
+	}
+	h.s.showResults = true // as if set before: hiding stays free
+	h.s.Key(KeyCtrlO)
+	if h.s.showResults {
+		t.Error("hiding was refused")
+	}
+}
+
+// Level 1 (typed approvals on the desktop) and the session shape toggle
+// freely, as before.
+func TestLevel1TogglesFreely(t *testing.T) {
+	h := newHarness(t, uatProfile(), func(c *ServerConfig) { c.Boundary = "your desktop: the agent can read this window and type into it" })
+	h.s.Key(KeyShiftTab)
+	h.s.Key(KeyCtrlO)
+	if !h.s.autoApprove() || !h.s.showResults || len(h.io.prompts) != 0 {
+		t.Fatalf("auto = %v, results = %v, prompts %q", h.s.autoApprove(), h.s.showResults, h.io.prompts)
+	}
+	if st := h.io.statusLine(); !strings.Contains(st, "level 1") {
+		t.Errorf("status %q", st)
 	}
 }

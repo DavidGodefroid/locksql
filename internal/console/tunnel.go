@@ -53,8 +53,16 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 		if p.Production {
 			prompt = "Type the last 8 characters of the fingerprint to trust it: "
 		}
-		ans, ok := st.io.Ask(ctx, prompt, ApprovalTimeout)
-		if !ok || !hostKeyAnswerOK(p.Production, fp, ans) {
+		// The expected answer is matched exactly ("yes", or the last 8
+		// characters of the fingerprint), as hostKeyAnswerOK does.
+		expected := "yes"
+		if p.Production {
+			if len(fp) < 8 {
+				return false
+			}
+			expected = fp[len(fp)-8:]
+		}
+		if r := st.decide(ctx, Decision{Prompt: prompt, Expected: expected, Production: true}); r.Outcome != Approved {
 			return false
 		}
 		added = fp

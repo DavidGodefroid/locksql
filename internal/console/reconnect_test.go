@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -240,5 +241,21 @@ func TestServeConnDropsRequestOfClientGoneBeforeHandoff(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("serveConn still waits to hand over the request of a gone client")
+	}
+}
+
+// A lockout met during a reconnect ends the console: the human cannot go
+// on with a console whose fingerprint approver refuses every decision.
+func TestReconnectLockoutEndsConsole(t *testing.T) {
+	h := newHarness(t, uatProfile(), func(c *ServerConfig) {
+		c.Reconnect = func(context.Context, config.Profile) (engine.Session, error) {
+			return nil, fmt.Errorf("reconnect: %w", errLockedOut)
+		}
+	})
+	h.io.secrets = []string{"x"}
+	loseConnection(t, h)
+	wantCode(t, h.call(t, ipc.MethodCatalogList, ipc.TablesParams{DB: "app"}), ipc.CodeConnLost)
+	if reason, ended := h.s.Ended(); !ended || !strings.Contains(reason, "fingerprint") {
+		t.Fatalf("not ended by the lockout: %q %v", reason, ended)
 	}
 }

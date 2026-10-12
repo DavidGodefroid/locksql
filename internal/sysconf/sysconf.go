@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -64,7 +65,14 @@ type Config struct {
 	// read the keyboard and the screen of the others: "warn" (the default)
 	// or "refuse". Production profiles always refuse.
 	X11 string `toml:"x11"`
+	// Finger is the fprintd name of the finger enrolled for the console
+	// account and for nothing else on this machine ("left-index-finger");
+	// desktop mode names it in its prompt. Empty: "finger".
+	Finger string `toml:"finger"`
 }
+
+// fingerName matches fprintd's finger names.
+var fingerName = regexp.MustCompile(`^(left|right)-(thumb|index-finger|middle-finger|ring-finger|little-finger)$`)
 
 // Load reads the system configuration. It returns nil and no error when
 // the file does not exist (same-user mode).
@@ -112,6 +120,9 @@ func Load() (*Config, error) {
 	case X11Warn, X11Refuse:
 	default:
 		return nil, fmt.Errorf("sysconf: %s: x11 must be %q or %q", Path, X11Warn, X11Refuse)
+	}
+	if c.Finger != "" && !fingerName.MatchString(c.Finger) {
+		return nil, fmt.Errorf("sysconf: %s: finger: unknown finger name %q", Path, c.Finger)
 	}
 	return &c, nil
 }
