@@ -28,6 +28,7 @@
   <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
   <link rel="stylesheet" href="../assets/style.css">
+  <script src="../assets/anchors.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -87,6 +88,7 @@
 
     <h3 id="os-separation">OS separation</h3>
     <p><code>locksql install</code> creates a <code>locksql</code> console account and a <code>locksql-clients</code> group: the console runs as that account in its own login session, the agent’s account only reaches its socket, and the kernel checks every peer. The console refuses to start without this setup, since an agent in the console’s own account could read or type into its terminal.</p>
+    <p>It also refuses a session that names the console account but carries the agent’s keystrokes: started through <code>sudo</code> or <code>su</code> from the agent’s login session, on a terminal the agent’s account owns, in a <code>machinectl shell</code> opened from the agent’s account, or in an SSH login from the same machine. An administrator outside the client group can still hand the console off.</p>
 
     <h3 id="approval">Human approval</h3>
     <p>Every statement is shown and approved in the console terminal; no socket method can approve. On a production profile you type the profile name, not <code>y</code>. Pending keystrokes are flushed before each prompt, so type-ahead never approves. No answer within 5 minutes means denied.</p>
