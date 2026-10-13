@@ -288,7 +288,7 @@ func (s *Server) statusLines() []string {
 	if s.pending != nil {
 		pending = paint.Red("a loosening awaits :review")
 	}
-	return keyValues([][2]string{
+	rows := [][2]string{
 		{"profile", fmt.Sprintf("%s · %s %s · tier %s · production %t", st.Profile, st.Engine, safeText(st.Host, false), st.Tier, st.Production)},
 		{"databases", safeText(strings.Join(st.Databases, ", "), false)},
 		{"mode", mode + paint.Dim(" (Shift+Tab or :mode)")},
@@ -299,7 +299,15 @@ func (s *Server) statusLines() []string {
 		{"session", fmt.Sprintf("ends in %d min (max_session %s) · idle_timeout %s", st.SessionEndsInS/60, l.MaxSession, l.IdleTimeout)},
 		{"plans open", fmt.Sprint(len(s.plans))},
 		{"policy change", pending},
-	})
+	}
+	if s.cfg.Boundary != "" {
+		b := s.cfg.Boundary
+		if !s.cfg.Fingerprint {
+			b = paint.Red(b)
+		}
+		rows = append(rows, [2]string{"boundary", b})
+	}
+	return keyValues(rows)
 }
 
 // review shows the queued change requests and the pending policy change,
@@ -328,11 +336,12 @@ func (s *Server) review(ctx context.Context) {
 		s.println(red + "auto mode is on: once applied, statements run without a prompt" + reset)
 	}
 	bell(s.cfg.IO)
-	ans, ok := s.cfg.IO.Ask(ctx, "Apply these changes? [y/N] ", ApprovalTimeout)
+	r := s.decide(ctx, Decision{Prompt: "Apply these changes? [y/N] ", Expected: "y"})
 	s.pending = nil
-	if !ok || !strings.EqualFold(strings.TrimSpace(ans), "y") {
+	if r.Outcome != Approved {
 		s.refused = config.Fingerprint(next)
-		s.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused"})
+		reason, errText := noFingerFields(r)
+		s.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused", Reason: reason, Error: errText})
 		s.println("policy change refused: the last approved policy stays in force")
 		return
 	}
@@ -409,7 +418,11 @@ func (s *Server) adopt(p config.Policy, decision string) error {
 	if err := s.apply(p); err != nil {
 		return err
 	}
-	s.audit(audit.Record{Event: audit.EventPolicy, Decision: decision})
+	rec := audit.Record{Event: audit.EventPolicy, Decision: decision}
+	if decision == "applied" {
+		rec.Approval = s.approver.Mode()
+	}
+	s.audit(rec)
 	n := p.Profile
 	if n.Production && !old.Production && s.sess != nil {
 		// The start-up privilege audit accepted extra grants with a typed

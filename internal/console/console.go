@@ -125,7 +125,15 @@ type ServerConfig struct {
 	Databases []string
 	Audit     *audit.Log
 	IO        IO
-	Now       func() time.Time
+	// Approver takes every human decision; nil means typed approvals.
+	Approver Approver
+	// Fingerprint is true when Approver is the fingerprint approver
+	// (level 2): a typed answer alone then never widens anything.
+	Fingerprint bool
+	// Boundary names the desktop boundary for the status screen ("" in
+	// the session shape).
+	Boundary string
+	Now      func() time.Time
 	// Auto starts in auto mode: on non-production profiles, statements
 	// allowed by the tier and the weight check run without a prompt (never
 	// unmask, never REFUSE). Shift+Tab switches the mode while the console
@@ -191,6 +199,7 @@ type plan struct {
 // not safe for concurrent use: Serve runs every request on one goroutine.
 type Server struct {
 	cfg       ServerConfig
+	approver  Approver
 	approved  config.Policy
 	profile   config.Profile
 	rules     pii.Rules
@@ -247,8 +256,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if cfg.Approver == nil {
+		cfg.Approver = newTypedApprover(cfg.IO)
+	}
 	cfg.Databases = servedDatabases(cfg.Policy.Profile.Database, cfg.Databases)
-	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, probes: map[int]map[string]bool{}, keys: map[string]bool{}, quantum: cfg.Quantum,
+	s := &Server{cfg: cfg, approver: cfg.Approver, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, probes: map[int]map[string]bool{}, keys: map[string]bool{}, quantum: cfg.Quantum,
 		auto: cfg.Auto, showResults: cfg.ShowResults, allowUnmask: cfg.AllowUnmask}
 	if err := s.apply(cfg.Policy); err != nil {
 		return nil, err
@@ -299,6 +311,33 @@ func (s *Server) host() string {
 		return s.profile.Path
 	}
 	return s.profile.Host
+}
+
+// explainNoFinger tells the human why a finger did not approve.
+func explainNoFinger(println func(string), r Result) {
+	println(paint.Fail("denied: " + safeText(r.Err.Error(), false)))
+}
+
+// noFingerFields is the audit text of a refusal for want of a finger; it
+// is empty for any other outcome.
+func noFingerFields(r Result) (reason, errText string) {
+	if r.Outcome != NoFinger {
+		return "", ""
+	}
+	return "no fingerprint", r.Err.Error()
+}
+
+// decide asks the approver and explains a missing finger. Too many
+// non-matching fingers end the console.
+func (s *Server) decide(ctx context.Context, d Decision) Result {
+	r := s.approver.Approve(ctx, d)
+	if r.Outcome == NoFinger {
+		explainNoFinger(s.println, r)
+		if errors.Is(r.Err, ErrTooManyNoMatch) {
+			s.End("fingerprint: three non-matching fingers")
+		}
+	}
+	return r
 }
 
 // End stops the session after the current request.

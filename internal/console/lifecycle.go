@@ -45,6 +45,48 @@ type starter struct {
 	user    string
 	// privWarns are the start-up privilege audit's findings.
 	privWarns []string
+	// approver takes the human decisions of the start-up; nil means typed.
+	approver Approver
+	// lockedOut is set by decide on the third non-matching finger in a
+	// row: the console ends even after a decision whose refusal it would
+	// otherwise go past (offerSaveAs).
+	lockedOut bool
+}
+
+// errLockedOut ends a start-up after too many non-matching fingers.
+var errLockedOut = errors.New("console: fingerprint: three non-matching fingers")
+
+// checkLockedOut is errLockedOut once a start-up decision met the third
+// non-matching finger in a row; every start-up step that goes on after a
+// refused decision calls it.
+func (st *starter) checkLockedOut() error {
+	if st.lockedOut {
+		return errLockedOut
+	}
+	return nil
+}
+
+// decide asks the approver and explains a missing finger; the caller stops
+// on any outcome other than Approved, or calls checkLockedOut when it goes
+// on.
+func (st *starter) decide(ctx context.Context, d Decision) Result {
+	r := st.appr().Approve(ctx, d)
+	if r.Outcome == NoFinger {
+		explainNoFinger(st.io.Println, r)
+		if errors.Is(r.Err, ErrTooManyNoMatch) {
+			st.lockedOut = true
+		}
+	}
+	return r
+}
+
+// appr is the approver in force: typed when none was set (a starter built
+// without Run).
+func (st *starter) appr() Approver {
+	if st.approver == nil {
+		return newTypedApprover(st.io)
+	}
+	return st.approver
 }
 
 func (st *starter) audit(rec audit.Record) {
@@ -115,14 +157,20 @@ func Run(ctx context.Context, o Options) error {
 	if o.IO == nil {
 		return errors.New("console: no terminal")
 	}
-	// Same-user mode is refused before any prompt or file write.
-	isoEnv := newIsolationEnv(o.TTY)
-	sys, err := isoEnv.loadSys()
+	// Same-user mode, then any other isolation failure, is refused before
+	// any prompt or file write: nothing is audited, the state directory is
+	// not touched.
+	iso, err := checkIsolation(o.IO, newIsolationEnv(o.TTY))
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrConfig, err)
-	}
-	if err := SameUserRefused(sys); err != nil {
 		return err
+	}
+	if iso.verifier != nil {
+		defer closeVerifier(iso.verifier)
+	}
+	// Level 2 widens nothing from a typed answer: the start-up widening
+	// flags are refused before any prompt or file write.
+	if iso.verifier != nil && (o.Auto || o.AllowUnmask || o.ShowResults) {
+		return fmt.Errorf("%w: level 2 does not accept --auto, --allow-unmask or --show-results", ErrConfig)
 	}
 	hardenErr := hardenProcess()
 	if hardenErr != nil {
@@ -172,11 +220,27 @@ func Run(ctx context.Context, o Options) error {
 		o.IO.Println(safeText(n, false))
 	}
 	key := config.ApprovedKey(cfg.ProjectRoot, p.Name)
+	// A production profile, loaded or approved before, never runs in an
+	// X11 session: refused before the policy review, so that no X client
+	// can answer it and no approval is written.
+	if err := refuseX11Production(iso, o.StateDir, key, p); err != nil {
+		return err
+	}
 	log, err := audit.Open(o.StateDir)
 	if err != nil {
 		return err
 	}
-	st := &starter{o: o, io: o.IO, log: log, profile: p}
+	// With a verifier (level 2) every approval takes a fingerprint after the
+	// typed answer, and never falls back to a typed answer alone; without
+	// one (level 1, session) approvals are typed.
+	appr := newTypedApprover(o.IO)
+	if iso.desktop {
+		appr = newDesktopTypedApprover(o.IO)
+	}
+	if iso.verifier != nil {
+		appr = newFingerprintApprover(o.IO, iso.verifier, iso.sys.Finger, FingerDeadline)
+	}
+	st := &starter{o: o, io: o.IO, log: log, profile: p, approver: appr}
 
 	loadPolicy := func() (config.Policy, error) {
 		return policyFromFiles(o.Cwd, o.Profile, rulesPath)
@@ -191,6 +255,10 @@ func Run(ctx context.Context, o Options) error {
 	if err != nil {
 		return err
 	}
+	if err := st.checkLockedOut(); err != nil {
+		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
+		return err
+	}
 	p = approved.Profile
 	st.profile = p
 	if err := hardenRefusal(hardenErr, p.Production); err != nil {
@@ -198,9 +266,9 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 
-	// Separation from the agent, before any secret is asked for.
-	iso, err := checkIsolation(o.IO, isoEnv, p)
-	if err != nil {
+	// X11 is refused on a production profile, before any secret is asked
+	// for.
+	if err := iso.refuseX11IfProduction(p); err != nil {
 		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
 		return err
 	}
@@ -296,7 +364,7 @@ func Run(ctx context.Context, o Options) error {
 
 	s, err := NewServer(ServerConfig{
 		Policy: approved, RulesPath: rulesPath, StateDir: o.StateDir, ApprovedKey: key,
-		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Now: o.Now,
+		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Approver: st.approver, Fingerprint: iso.verifier != nil, Boundary: iso.boundary(), Now: o.Now,
 		Auto: o.Auto, AllowUnmask: o.AllowUnmask, ShowResults: o.ShowResults, Version: o.Version, LoadPolicy: loadPolicy,
 		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health,
 	})
@@ -326,6 +394,18 @@ func Run(ctx context.Context, o Options) error {
 	s.audit(audit.Record{Event: audit.EventLogout, Decision: reason})
 	o.IO.Println(paint.Step("session ended: " + reason))
 	return serveErr
+}
+
+// refuseX11Production is refuseX11IfProduction for the loaded profile p
+// and for the policy approved before under key, when there is one.
+func refuseX11Production(iso *isolation, stateDir, key string, p config.Profile) error {
+	if err := iso.refuseX11IfProduction(p); err != nil {
+		return err
+	}
+	if ap, err := config.LoadApproved(stateDir, key); err == nil {
+		return iso.refuseX11IfProduction(ap.Profile)
+	}
+	return nil // none yet, or unreadable: startPolicy reports it
 }
 
 // hardenProcess is harden; tests replace it.
@@ -380,15 +460,15 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 				}
 			}
 		}
-		ans, ok := io.Ask(ctx, "Apply these changes? [y/N] ", ApprovalTimeout)
-		if !ok || !strings.EqualFold(strings.TrimSpace(ans), "y") {
-			st.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused"})
+		if r := st.decide(ctx, Decision{Prompt: "Apply these changes? [y/N] ", Expected: "y"}); r.Outcome != Approved {
+			reason, errText := noFingerFields(r)
+			st.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused", Reason: reason, Error: errText})
 			return config.Policy{}, "", errors.New("console: the policy was not approved")
 		}
 		if err := config.SaveApproved(stateDir, key, cur); err != nil {
 			return config.Policy{}, "", err
 		}
-		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "applied"})
+		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "applied", Approval: st.appr().Mode()})
 		return cur, "", nil
 	}
 	if err != nil {
@@ -413,19 +493,20 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 	for _, line := range formatChanges(changes) {
 		io.Println(line)
 	}
-	ans, ok := io.Ask(ctx, "Apply these changes? [y/N] ", ApprovalTimeout)
+	r := st.decide(ctx, Decision{Prompt: "Apply these changes? [y/N] ", Expected: "y"})
 	if ctx.Err() != nil {
 		return config.Policy{}, "", ctx.Err()
 	}
-	if !ok || !strings.EqualFold(strings.TrimSpace(ans), "y") {
-		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused"})
+	if r.Outcome != Approved {
+		reason, errText := noFingerFields(r)
+		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused", Reason: reason, Error: errText})
 		io.Println("changes refused: the last approved policy applies")
 		return *ap, config.Fingerprint(cur), nil
 	}
 	if err := config.SaveApproved(stateDir, key, cur); err != nil {
 		return config.Policy{}, "", err
 	}
-	st.audit(audit.Record{Event: audit.EventPolicy, Decision: "applied"})
+	st.audit(audit.Record{Event: audit.EventPolicy, Decision: "applied", Approval: st.appr().Mode()})
 	return cur, "", nil
 }
 
@@ -447,6 +528,10 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 			return nil, err
 		}
 		tun, dial = t, t.Dial
+		if err := st.checkLockedOut(); err != nil {
+			tun.Close()
+			return nil, err
+		}
 	}
 	// Every return without a session closes the tunnel opened for it; a
 	// session takes the tunnel over and closes it with itself.
@@ -521,6 +606,10 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 	if err != nil {
 		return nil, fmt.Errorf("console: connect: %s", secrets.Sanitize(err, secret))
 	}
+	if err := st.checkLockedOut(); err != nil {
+		_ = sess.Close()
+		return nil, err
+	}
 	if n, ok := sess.(engine.Noticer); ok {
 		for _, msg := range n.Notices() {
 			st.io.Println(paint.Warn(red + "warning: " + msg + reset))
@@ -556,8 +645,7 @@ func removedLine(profile, host string, port int) string {
 // offerSaveAs offers to store secret in the OS keychain under the
 // profile's name, host and port.
 func (st *starter) offerSaveAs(ctx context.Context, host string, port int, secret []byte, prompt string) {
-	ans, ok := st.io.Ask(ctx, prompt, ApprovalTimeout)
-	if !ok || !strings.EqualFold(strings.TrimSpace(ans), "y") {
+	if r := st.decide(ctx, Decision{Prompt: prompt, Expected: "y"}); r.Outcome != Approved {
 		return
 	}
 	if err := secrets.KeychainSet(st.profile.Name, host, port, secret); err != nil {
@@ -612,8 +700,7 @@ func (st *starter) privileges(ctx context.Context, sess engine.Session) error {
 	if p.Tier == config.TierRead {
 		st.io.Println("the session stays read-only either way")
 	}
-	ans, ok := st.io.Ask(ctx, `Type "continue" to proceed: `, ApprovalTimeout)
-	if !ok || strings.TrimSpace(ans) != "continue" {
+	if r := st.decide(ctx, Decision{Prompt: `Type "continue" to proceed: `, Expected: "continue", Production: true}); r.Outcome != Approved {
 		return errors.New("console: stopped at the privilege audit")
 	}
 	return nil

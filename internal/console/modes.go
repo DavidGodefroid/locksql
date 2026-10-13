@@ -49,6 +49,18 @@ func (s *Server) toggleMode() {
 		s.println(paint.Warn("auto mode is not available on a production profile: every statement is prompted"))
 		return
 	}
+	if !s.auto && s.cfg.Fingerprint {
+		// Level 2: auto mode widens what runs unprompted, so a typed
+		// answer alone, which the agent could type too, never turns it on.
+		if r := s.decide(context.Background(), Decision{Prompt: "Switch to auto mode? [y/N] ", Expected: "y"}); r.Outcome != Approved {
+			if reason, errText := noFingerFields(r); reason != "" {
+				s.audit(audit.Record{Event: audit.EventMode, Decision: "refused", Reason: reason, Error: errText})
+			}
+			s.println("mode: still manual")
+			s.refreshStatus()
+			return
+		}
+	}
 	s.auto = !s.auto
 	s.audit(audit.Record{Event: audit.EventMode, Decision: s.modeName()})
 	if s.auto {
@@ -61,6 +73,12 @@ func (s *Server) toggleMode() {
 
 // toggleResults switches the clear results on or off, and says so.
 func (s *Server) toggleResults() {
+	if !s.showResults && s.cfg.Fingerprint {
+		// Level 2: the window is on the agent's desktop, which could read
+		// the clear results off it.
+		s.println(paint.Warn("results stay masked at level 2: the window is on the agent's desktop"))
+		return
+	}
 	s.showResults = !s.showResults
 	decision := "hidden"
 	if s.showResults {
@@ -96,13 +114,15 @@ func (s *Server) toggleUnmask(ctx context.Context) {
 		warn += " (PRODUCTION data)"
 	}
 	s.println(red + ui.MarkWarn + " " + warn + reset)
-	ans, ok := s.cfg.IO.Ask(ctx, "Allow unmasked output? [y/N] ", ApprovalTimeout)
-	if !ok || !strings.EqualFold(strings.TrimSpace(ans), "y") {
+	if r := s.decide(ctx, Decision{Prompt: "Allow unmasked output? [y/N] ", Expected: "y"}); r.Outcome != Approved {
+		if reason, errText := noFingerFields(r); reason != "" {
+			s.audit(audit.Record{Event: audit.EventUnmask, Decision: "refused", Reason: reason, Error: errText})
+		}
 		s.println("unmask: still off")
 		return
 	}
 	s.allowUnmask = true
-	s.audit(audit.Record{Event: audit.EventUnmask, Decision: "allowed"})
+	s.audit(audit.Record{Event: audit.EventUnmask, Decision: "allowed", Approval: s.approver.Mode()})
 	s.println(red + "unmask: allowed; clients may ask for unmasked output, approved here each time (:unmask: off)" + reset)
 	s.refreshStatus()
 }
@@ -137,6 +157,9 @@ func (s *Server) statusLine() string {
 	}
 	if n := len(s.plans); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d plan%s open", n, plural(n)))
+	}
+	if s.cfg.Boundary != "" && !s.cfg.Fingerprint {
+		parts = append(parts, paint.Red("level 1: desktop boundary"))
 	}
 	if s.pending != nil {
 		parts = append(parts, paint.Red("policy change pending")+" "+paint.Dim(":review"))

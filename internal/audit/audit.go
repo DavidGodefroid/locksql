@@ -74,6 +74,10 @@ type Record struct {
 	Intent string `json:"intent,omitempty"`
 	// Reason is the human's reason for a denial, escaped.
 	Reason string `json:"reason,omitempty"`
+	// Approval is how the human approved: "session" (typed in a login
+	// session of the console account), "desktop+typed" (typed in a desktop
+	// window, level 1) or "desktop+fingerprint" (level 2).
+	Approval string `json:"approval,omitempty"`
 	// The client behind a request, from the kernel's peer credentials:
 	// set on the records of client requests only. PeerUID is nil when
 	// unknown (uid 0 is root); PeerUser is the account name when it

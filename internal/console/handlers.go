@@ -150,6 +150,9 @@ func (s *Server) session(ctx context.Context, id int64) (engine.Session, *ipc.Re
 		if errors.Is(err, errPrivilegeAudit) {
 			s.End("privilege audit failed after reconnect")
 		}
+		if errors.Is(err, errLockedOut) {
+			s.End("fingerprint: three non-matching fingers")
+		}
 	}
 	r := errResp(id, ipc.CodeConnLost, "the database connection is lost; the human must restart the console")
 	return nil, &r
@@ -595,7 +598,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 				return *r
 			}
 		}
-		rec.Event, rec.Decision = audit.EventApproved, "approved"
+		rec.Event, rec.Decision, rec.Approval = audit.EventApproved, "approved", s.approver.Mode()
 	}
 	// The decision is on record before anything runs: a console stopped
 	// between the approval and the end of the run still leaves a trace of
@@ -748,18 +751,26 @@ func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Reco
 		prompt = "(r to retype ${" + strings.Join(reused, "}, ${") + "}) " + prompt
 	}
 	bell(s.cfg.IO)
-	ans, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold(prompt)), ApprovalTimeout)
-	if ok && canRetype && strings.TrimSpace(ans) == "r" {
+	d := Decision{Prompt: s.frameEnd(paint.Bold(prompt)), Expected: expected, Production: s.profile.Production}
+	if canRetype {
+		d.Retype = "r"
+	}
+	res := s.decide(ctx, d)
+	switch res.Outcome {
+	case RetypeRequested:
 		return nil, true
-	}
-	if !ok {
+	case Unanswered:
 		return s.unanswered(ctx, id, rec), false
-	}
-	ans = strings.TrimSpace(ans)
-	// "y" in any case; the production profile name exactly.
-	if ans == expected || (!s.profile.Production && strings.EqualFold(ans, expected)) {
+	case Approved:
 		return nil, false
+	case NoFinger:
+		rec.Event, rec.Decision, rec.Reason, rec.Error = audit.EventDenied, "denied", "no fingerprint", res.Err.Error()
+		rec.Approval = s.approver.Mode()
+		s.audit(rec)
+		resp := errResp(id, ipc.CodeDenied, "denied by the human: no fingerprint; do not retry unless asked")
+		return &resp, false
 	}
+	ans := res.Answer
 	rec.Event, rec.Decision = audit.EventDenied, "denied"
 	msg := "denied by the human; do not retry unless asked"
 	if reason := denyReason(ans); reason != "" {

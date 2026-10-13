@@ -7,12 +7,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zalando/go-keyring"
 
 	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
+	"github.com/DavidGodefroid/locksql/internal/fingerprint"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/secrets"
 )
@@ -302,5 +304,55 @@ func TestHardenRefusal(t *testing.T) {
 	got := hardenRefusal(err, true)
 	if got == nil || !strings.Contains(got.Error(), "refused") || !strings.Contains(got.Error(), "not permitted") {
 		t.Errorf("production: %v", got)
+	}
+}
+
+// In desktop mode a start-up decision that goes on after a missing finger
+// (saving the secret in the keychain) still ends the console on the third
+// non-matching finger in a row.
+func TestConnectEndsOnTooManyNoMatch(t *testing.T) {
+	st, io, _ := keychainStarter(t, 3307)
+	io.secrets = []string{"typed"}
+	io.answers = []string{"y"}
+	v := &fingerprint.Fake{Results: []error{fingerprint.ErrNoMatch}}
+	a := newFingerprintApprover(io, v, "left-index-finger", time.Second)
+	a.(*fingerprintApprover).noMatch = 2 // two misses already, in an earlier decision
+	st.approver = a
+	sess, err := st.connect(context.Background(), true)
+	if err == nil || err.Error() != "console: fingerprint: three non-matching fingers" {
+		t.Fatalf("connect = %v, %v", sess, err)
+	}
+	if sess != nil {
+		t.Error("session returned")
+	}
+}
+
+// A refused policy change goes on with the last approved policy, except
+// after the third non-matching finger in a row: then the start-up ends.
+func TestStartPolicyChangeLockout(t *testing.T) {
+	state := t.TempDir()
+	log, err := audit.Open(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := uatProfile()
+	key := config.ApprovedKey(t.TempDir(), "uat")
+	if err := config.SaveApproved(state, key, config.NewPolicy(p, []string{"*.*.email"}, nil)); err != nil {
+		t.Fatal(err)
+	}
+	io := &fakeIO{answers: []string{"y"}}
+	v := &fingerprint.Fake{Results: []error{fingerprint.ErrNoMatch}}
+	a := newFingerprintApprover(io, v, "left-index-finger", time.Second)
+	a.(*fingerprintApprover).noMatch = 2
+	st := &starter{io: io, log: log, profile: p, approver: a}
+	// The mask rule is gone: a loosening, reviewed.
+	if _, _, err := st.startPolicy(context.Background(), state, key, config.NewPolicy(p, nil, nil)); err != nil {
+		t.Fatalf("startPolicy: %v", err)
+	}
+	if v.Calls != 1 {
+		t.Fatalf("Verify calls = %d: the change was not reviewed", v.Calls)
+	}
+	if err := st.checkLockedOut(); err == nil || !strings.Contains(err.Error(), "three non-matching fingers") {
+		t.Fatalf("checkLockedOut = %v", err)
 	}
 }
