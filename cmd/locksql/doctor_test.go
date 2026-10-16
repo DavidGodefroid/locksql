@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
@@ -323,4 +324,45 @@ func TestDoctorReportsShowResults(t *testing.T) {
 		}
 	}
 	t.Fatal("no console check")
+}
+
+func TestDoctorVault(t *testing.T) {
+	p := config.Profile{Name: "p", Engine: config.EnginePostgres, Host: "127.0.0.1", TLS: config.TLSPrefer,
+		Credentials: config.CredentialsVault, VaultPath: "database/creds/app-ro"}
+	d := fakeDoctor(nil)
+	d.lookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	if !hasCheck(profileChecks(d, p, nil, t.TempDir()), checkFail, "vault CLI") {
+		t.Error("a missing vault CLI is not reported")
+	}
+	d.lookPath = func(string) (string, error) { return "/usr/bin/vault", nil }
+	if c := findCheck(profileChecks(d, p, nil, t.TempDir()), "credentials"); c == nil || c.state != checkOK || !strings.Contains(c.detail, "database/creds/app-ro") {
+		t.Errorf("credentials check = %+v", c)
+	}
+
+	// Separated: the console account reads Vault; a token held by the
+	// agent's account lets the agent read the login itself.
+	d = fakeDoctor(separatedSys())
+	if c := findCheck(profileChecks(d, p, separatedSys(), t.TempDir()), "credentials"); c == nil || c.state != checkOK || !strings.Contains(c.detail, "locksql") {
+		t.Errorf("separated credentials check = %+v", c)
+	}
+	d.getenv = func(k string) string {
+		if k == "VAULT_TOKEN" {
+			return "hvs.x"
+		}
+		return ""
+	}
+	c := findCheck(profileChecks(d, p, separatedSys(), t.TempDir()), "vault token")
+	if c == nil || c.state != checkFail || !strings.Contains(c.detail, "VAULT_TOKEN") || strings.Contains(c.detail+c.fix, "hvs.x") {
+		t.Errorf("VAULT_TOKEN check = %+v", c)
+	}
+	d.getenv = nil
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".vault-token"), []byte("hvs.y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d.current = func() (*user.User, error) { return &user.User{Uid: "1000", Username: "agent", HomeDir: home}, nil }
+	d.stat = os.Stat
+	if c := findCheck(profileChecks(d, p, separatedSys(), t.TempDir()), "vault token"); c == nil || c.state != checkFail || !strings.Contains(c.detail, ".vault-token") {
+		t.Errorf("~/.vault-token check = %+v", c)
+	}
 }

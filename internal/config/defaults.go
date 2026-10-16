@@ -17,6 +17,9 @@ const (
 const (
 	CredentialsAsk      = "ask"
 	CredentialsKeychain = "keychain"
+	// CredentialsVault reads the user and password from HashiCorp Vault
+	// with the vault CLI at every connection (Profile.VaultPath).
+	CredentialsVault = "vault"
 )
 
 // defaultPorts holds the port used when a network profile leaves port unset.

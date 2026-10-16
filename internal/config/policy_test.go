@@ -1,11 +1,13 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -347,6 +349,27 @@ func TestDiffModesAndNewLimits(t *testing.T) {
 	}
 	if ch := field(Diff(lower, a), "limits.k_anonymity"); ch == nil || ch.Loosens {
 		t.Errorf("k 2 → 5: %+v", ch)
+	}
+	vault := a
+	vault.Profile.Credentials, vault.Profile.VaultPath = CredentialsVault, "database/creds/ro"
+	if ch := field(Diff(a, vault), "credentials"); ch == nil || !ch.Loosens {
+		t.Errorf("credentials ask → vault: %+v", ch)
+	}
+	ask := a
+	ask.Profile.Credentials = CredentialsAsk
+	if ch := field(Diff(vault, ask), "credentials"); ch == nil || ch.Loosens {
+		t.Errorf("credentials vault → ask: %+v", ch)
+	}
+	otherRole := vault
+	otherRole.Profile.VaultPath = "database/creds/admin"
+	if ch := Diff(vault, otherRole); len(ch) != 1 || ch[0].Field != "vault_path" || !ch[0].Loosens {
+		t.Errorf("vault_path ro → admin: %+v", ch)
+	}
+	if Fingerprint(vault) == Fingerprint(otherRole) {
+		t.Error("vault_path not in the fingerprint")
+	}
+	if b, err := json.Marshal(a); err != nil || strings.Contains(string(b), "vault_path") {
+		t.Error("an approved policy without vault_path changes its encoding")
 	}
 	ttl := a
 	ttl.Profile.CredentialsTTL = 20 * 60e9

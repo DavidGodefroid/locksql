@@ -123,12 +123,25 @@ func (s *Server) status() ipc.StatusResult {
 	}
 }
 
+// credentialsExpirer is a session whose login expires (vaultSession).
+type credentialsExpirer interface{ CredentialsExpire() time.Time }
+
 // session returns the live session, reconnecting after a lost connection.
 func (s *Server) session(ctx context.Context, id int64) (engine.Session, *ipc.Response) {
+	expired := ""
 	if ttl := s.profile.CredentialsTTL; s.sess != nil && ttl > 0 && s.now().Sub(s.connected) >= ttl {
 		// A short-lived secret (a vault lease) has expired: close the
 		// connection and ask for a fresh one.
-		s.println(fmt.Sprintf("credentials_ttl (%s) reached: the connection is closed and the secret asked again", ttl))
+		expired = fmt.Sprintf("credentials_ttl (%s) reached: the connection is closed and the secret asked again", ttl)
+		if s.profile.Credentials == config.CredentialsVault {
+			expired = fmt.Sprintf("credentials_ttl (%s) reached: the connection is closed and a fresh login read from Vault", ttl)
+		}
+	} else if e, ok := s.sess.(credentialsExpirer); ok && !e.CredentialsExpire().IsZero() && !s.now().Before(e.CredentialsExpire()) {
+		// The Vault lease of the login nears its end.
+		expired = "the Vault lease of the login is ending: the connection is closed and a fresh login read from Vault"
+	}
+	if expired != "" {
+		s.println(expired)
 		_ = s.sess.Close()
 		s.sess = nil
 		if s.cfg.Reconnect == nil {

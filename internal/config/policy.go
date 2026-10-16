@@ -157,6 +157,8 @@ func Diff(approved, current Policy) []Change {
 	if ap.Credentials != cp.Credentials {
 		out = append(out, Change{Field: "credentials", Old: ap.Credentials, New: cp.Credentials, Loosens: cp.Credentials != CredentialsAsk})
 	}
+	// Another Vault path is another login, possibly with more grants.
+	same("vault_path", ap.VaultPath, cp.VaultPath)
 	if ap.TLS != cp.TLS {
 		out = append(out, Change{Field: "tls", Old: ap.TLS, New: cp.TLS, Loosens: TLSRank(cp.TLS) < TLSRank(ap.TLS)})
 	}

@@ -459,3 +459,43 @@ func TestTLSVerifiesChain(t *testing.T) {
 		}
 	}
 }
+
+func TestVaultCredentials(t *testing.T) {
+	parse := func(body string) (Profile, error) {
+		ps, err := ParseProfiles([]byte("[profiles.p]\n"+body), "t.toml", t.TempDir())
+		return ps["p"], err
+	}
+	p, err := parse("engine=\"postgres\"\nhost=\"127.0.0.1\"\ncredentials=\"vault\"\nvault_path=\"database/creds/app-ro\"\ncredentials_ttl=\"15m\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Credentials != CredentialsVault || p.VaultPath != "database/creds/app-ro" || p.User != "" || p.CredentialsTTL != 15*time.Minute {
+		t.Errorf("profile = %+v", p)
+	}
+	head := "engine=\"postgres\"\nhost=\"127.0.0.1\"\n"
+	for name, c := range map[string]struct{ body, err string }{
+		"no path":        {head + "credentials=\"vault\"\n", "needs vault_path"},
+		"path with ask":  {head + "vault_path=\"database/creds/x\"\n", "only used with credentials = \"vault\""},
+		"path keychain":  {head + "credentials=\"keychain\"\nvault_path=\"database/creds/x\"\n", "only used with"},
+		"sqlite":         {"engine=\"sqlite\"\npath=\"x.db\"\ncredentials=\"vault\"\nvault_path=\"kv/x\"\n", "not used by sqlite"},
+		"flag":           {head + "credentials=\"vault\"\nvault_path=\"-address=https://evil\"\n", "vault_path"},
+		"absolute":       {head + "credentials=\"vault\"\nvault_path=\"/database/creds/x\"\n", "vault_path"},
+		"space":          {head + "credentials=\"vault\"\nvault_path=\"database/creds/a b\"\n", "vault_path"},
+		"control":        {head + "credentials=\"vault\"\nvault_path=\"kv/\\u001b[2J\"\n", "control"},
+		"embedded":       {head + "credentials=\"vault\"\nvault_path=\"u:pw@kv/x\"\n", "embedded password"},
+		"unknown mode":   {head + "credentials=\"vaultx\"\n", "want ask, keychain or vault"},
+		"secret in path": {head + "credentials=\"vault\"\nvault_token=\"x\"\n", "looks like a secret"},
+	} {
+		if _, err := parse(c.body); err == nil || !strings.Contains(err.Error(), c.err) {
+			t.Errorf("%s: err = %v, want %q", name, err, c.err)
+		}
+	}
+	// Vault holds the database login only: the bastion's secret is asked.
+	p, err = parse(head + "credentials=\"vault\"\nvault_path=\"database/creds/x\"\n[profiles.p.ssh]\nhost=\"b\"\nuser=\"u\"\nauth=\"password\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.SSH.Credentials != CredentialsAsk {
+		t.Errorf("ssh.credentials = %q, want ask", p.SSH.Credentials)
+	}
+}

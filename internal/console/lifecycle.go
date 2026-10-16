@@ -295,7 +295,8 @@ func Run(ctx context.Context, o Options) error {
 	// 3. Host (confirmed with the policy) and user.
 	o.IO.Println(paint.OK(fmt.Sprintf("profile %s · %s %s %s", paint.Bold(p.Name), p.Engine, st.where(), paint.Dim("(approved policy)"))))
 	st.user = p.User
-	if st.user == "" && p.Engine != config.EngineSQLite {
+	// With credentials = "vault" the user comes with the login (connect).
+	if st.user == "" && p.Engine != config.EngineSQLite && p.Credentials != config.CredentialsVault {
 		ans, ok := o.IO.Ask(ctx, "Database user: ", ApprovalTimeout)
 		st.user = strings.TrimSpace(ans)
 		if !ok || st.user == "" {
@@ -559,11 +560,37 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 		return sess, nil
 	}
 
+	var sess engine.Session
+	if p.Credentials == config.CredentialsVault {
+		sess, err = st.connectVault(ctx, p, &prof, open, first)
+	} else {
+		sess, err = st.connectSecret(ctx, p, open, first)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := st.checkLockedOut(); err != nil {
+		_ = sess.Close()
+		return nil, err
+	}
+	if n, ok := sess.(engine.Noticer); ok {
+		for _, msg := range n.Notices() {
+			st.io.Println(paint.Warn(red + "warning: " + msg + reset))
+			st.audit(audit.Record{Event: audit.EventLogin, Decision: "notice", Error: msg})
+		}
+	}
+	return sess, nil
+}
+
+// connectSecret connects with a secret asked of the human or read from the
+// OS keychain (credentials = "ask" or "keychain").
+func (st *starter) connectSecret(ctx context.Context, p config.Profile, open func([]byte) (engine.Session, error), first bool) (engine.Session, error) {
 	ask := func() ([]byte, error) {
 		return st.io.AskSecret(ctx, fmt.Sprintf("Password for %s@%s: ", st.user, p.Host))
 	}
 	keychain := p.Credentials == config.CredentialsKeychain
 	var secret []byte
+	var err error
 	fromKeychain := false
 	if keychain {
 		s, legacy, err := secrets.KeychainGet(p.Name, p.Host, p.Port, defaultPort(p.Engine))
@@ -606,17 +633,90 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 	if err != nil {
 		return nil, fmt.Errorf("console: connect: %s", secrets.Sanitize(err, secret))
 	}
-	if err := st.checkLockedOut(); err != nil {
-		_ = sess.Close()
-		return nil, err
-	}
-	if n, ok := sess.(engine.Noticer); ok {
-		for _, msg := range n.Notices() {
-			st.io.Println(paint.Warn(red + "warning: " + msg + reset))
-			st.audit(audit.Record{Event: audit.EventLogin, Decision: "notice", Error: msg})
-		}
-	}
 	return sess, nil
+}
+
+// vaultRead is secrets.VaultRead; tests replace it.
+var vaultRead = secrets.VaultRead
+
+// connectVault connects with the login read from Vault at p.VaultPath
+// (credentials = "vault"): at every connection, so a rotated or
+// short-lived login is fetched fresh, and never stored. The username comes
+// from the secret, or from the profile's user when the secret has none; a
+// secret naming another user than the profile is refused. prof is the
+// profile open connects with.
+func (st *starter) connectVault(ctx context.Context, p config.Profile, prof *config.Profile, open func([]byte) (engine.Session, error), first bool) (engine.Session, error) {
+	fetched := st.now()
+	c, err := vaultRead(ctx, p.VaultPath)
+	if err != nil {
+		return nil, fmt.Errorf("console: credentials from Vault (%s): %w", safeText(p.VaultPath, false), err)
+	}
+	defer secrets.Wipe(c.Password)
+	user := c.User
+	switch {
+	case user == "" && p.User == "":
+		return nil, fmt.Errorf("console: the Vault secret at %s has no username field: set user in the profile", safeText(p.VaultPath, false))
+	case user == "":
+		user = p.User
+	case p.User != "" && user != p.User:
+		return nil, fmt.Errorf("console: the Vault secret at %s is for user %q, the profile sets user %q: remove user from the profile, or fix vault_path",
+			safeText(p.VaultPath, false), safeText(user, false), safeText(p.User, false))
+	case safeText(user, false) != user:
+		return nil, fmt.Errorf("console: the Vault secret at %s has a username with a control or formatting character", safeText(p.VaultPath, false))
+	}
+	st.user, prof.User = user, user
+	sess, err := open(c.Password)
+	if err != nil {
+		return nil, fmt.Errorf("console: connect with the Vault login of %s: %s", safeText(p.VaultPath, false), secrets.Sanitize(err, c.Password))
+	}
+	vs := &vaultSession{Session: sess, user: user}
+	line := "credentials from Vault: " + safeText(p.VaultPath, false) + " · user " + safeText(user, false)
+	if c.LeaseID != "" && c.LeaseDuration > 0 {
+		// Reconnect with a fresh login before the lease ends, when Vault
+		// may revoke the account and its connections.
+		vs.refreshAt = fetched.Add(c.LeaseDuration - c.LeaseDuration/10)
+		line += " · lease " + c.LeaseDuration.String()
+	}
+	if first {
+		st.io.Println(paint.OK(line))
+	} else {
+		st.io.Println(line)
+	}
+	return vs, nil
+}
+
+// now is the starter's clock.
+func (st *starter) now() time.Time {
+	if st.o.Now != nil {
+		return st.o.Now()
+	}
+	return time.Now()
+}
+
+// vaultSession is a session opened with a login read from Vault: it names
+// the login's user, which may change at every connection, and when to
+// reconnect with a fresh one.
+type vaultSession struct {
+	engine.Session
+	user string
+	// refreshAt is when the lease nears its end; zero for a secret without
+	// a lease.
+	refreshAt time.Time
+}
+
+// DBUser is the database user of the login.
+func (s *vaultSession) DBUser() string { return s.user }
+
+// CredentialsExpire is when the session must be replaced by one with a
+// fresh login; zero for never.
+func (s *vaultSession) CredentialsExpire() time.Time { return s.refreshAt }
+
+// Notices passes on the session's transport notices.
+func (s *vaultSession) Notices() []string {
+	if n, ok := s.Session.(engine.Noticer); ok {
+		return n.Notices()
+	}
+	return nil
 }
 
 func (st *starter) offerSave(ctx context.Context, secret []byte, prompt string) {
