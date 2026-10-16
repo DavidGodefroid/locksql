@@ -98,7 +98,7 @@ jobs:
     name: docker image
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: docker build
         run: docker build -t locksql .
       - name: doctor (agent and console accounts)
