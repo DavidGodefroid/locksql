@@ -146,7 +146,7 @@ func TestVaultReadFormat(t *testing.T) {
 // A path the CLI could read as a flag, or split, never reaches it.
 func TestVaultReadRefusesBadPath(t *testing.T) {
 	args := fakeVault(t, dbCreds, "", nil)
-	for _, p := range []string{"", "-address=https://evil", "/database/creds/x", "database/creds/a b", "database/creds/\x1bx", "a‮b"} {
+	for _, p := range []string{"", "-address=https://evil", "/database/creds/x", "database/creds/a b", "database/creds/\x1bx", "a\u202eb"} {
 		if _, err := VaultRead(context.Background(), p); err == nil {
 			t.Errorf("path %q accepted", p)
 		}
