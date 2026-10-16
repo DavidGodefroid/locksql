@@ -301,6 +301,10 @@ func (s *Server) audit(rec audit.Record) {
 	rec.Engine = s.profile.Engine
 	rec.Host = s.host()
 	rec.DBUser = s.cfg.DBUser
+	// A login read from Vault names its own user, new at every connection.
+	if u, ok := s.sess.(interface{ DBUser() string }); ok && u.DBUser() != "" {
+		rec.DBUser = u.DBUser()
+	}
 	if err := s.cfg.Audit.Write(rec); err != nil {
 		s.cfg.IO.Println("audit log write failed: " + err.Error())
 	}

@@ -4,6 +4,26 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+### Added
+
+- **Credentials from HashiCorp Vault.** `credentials = "vault"` with
+  `vault_path = "database/creds/<role>"` (or a KV secret) makes the console
+  read the database user and password with `vault read -format=json` at
+  every connection, as the console account and with its Vault token. The
+  login is kept in memory only, never in the keychain or on disk. Before a
+  dynamic login's lease ends, the console reconnects with a fresh one, and
+  the audit log names the user of each login. Errors tell apart a missing
+  CLI, a missing or refused token, an invalid path and an invalid role.
+  `locksql doctor` checks the CLI and, in separated mode, fails when the
+  agent's account holds a Vault token.
+
+### Upgrading
+
+- Nothing to do. Switching a profile to `credentials = "vault"` or changing
+  its `vault_path` is a loosening the console asks you to approve.
+
 ## v0.6.0 (2026-10-14)
 
 ### Added

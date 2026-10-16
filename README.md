@@ -71,8 +71,9 @@ In-agent approval is a convenience; a separate approval process is a boundary.
 <td width="50%" valign="top">
 
 **🔑 One key holder**<br>
-Credentials are typed at console start or read from the OS keychain. Never in
-argv, env, files, logs, the socket or error messages.
+Credentials are typed at console start, read from the OS keychain or fetched
+from HashiCorp Vault. Never in argv, env, files, logs, the socket or error
+messages.
 
 </td>
 <td width="50%" valign="top">
@@ -278,10 +279,13 @@ WSL2 ([guide](docs/usage.md#windows-wsl2)); native Windows is not supported.
 The console is the enforcement point. Skills, rules and MCP tool descriptions
 only guide the agent; the console's checks are the guarantee.
 
-- **One key holder.** Credentials are typed at console start (no echo) or read
-  from the OS keychain. They never appear in argv, environment, files, logs,
-  the socket protocol or error messages. The console disables core dumps.
-  `credentials_ttl` makes it ask again after a set time (vault leases).
+- **One key holder.** Credentials are typed at console start (no echo), read
+  from the OS keychain, or fetched from HashiCorp Vault with the `vault` CLI
+  at every connection (`credentials = "vault"`, suited to the database
+  secrets engine's per-user, short-lived logins). They never appear in argv,
+  environment, files, logs, the socket protocol or error messages. The
+  console disables core dumps. `credentials_ttl` makes it ask again after a
+  set time; a Vault lease is renewed with a fresh login before it ends.
 - **OS separation.** `locksql install` creates a `locksql` console account
   and a `locksql-clients` group: the console runs as that account in its own
   login session, the agent's account only reaches its socket, and the kernel
@@ -377,7 +381,7 @@ host        = "db.uat.example.com"  # or path = "app.db" for sqlite
 port        = 3306                  # default 3306, or 5432 for postgres
 user        = ""                    # empty: asked at console start
 database    = ""                    # empty: chosen per query (--db)
-credentials = "ask"                 # ask | keychain
+credentials = "ask"                 # ask | keychain | vault
 tls         = "verify-full"         # disable | prefer | require | verify-ca | verify-full
 tls_ca      = ""                    # optional PEM bundle replacing the system roots
 credentials_ttl = "20m"             # optional: ask for the secret again
@@ -396,6 +400,21 @@ k_anonymity         = 5
 explain_cost_refuse = 0             # engine cost units; 0 = off
 idle_timeout        = "20m"         # the session ends after this long idle
 max_session         = "4h"          # ... and after this long in all
+```
+
+With `credentials = "vault"` the console runs `vault read -format=json
+<vault_path>` at every connection, as the console account and with its
+environment (`VAULT_ADDR`, its token from `vault login`), and connects with
+the `username` and `password` of the secret. Nothing is stored. See
+[Credentials from HashiCorp Vault](docs/usage.md#credentials-from-hashicorp-vault).
+
+```toml
+[profiles.reporting]
+engine      = "postgres"
+host        = "db.internal"
+tls         = "verify-full"
+credentials = "vault"
+vault_path  = "database/creds/reporting-ro"   # or a KV secret: "secret/data/reporting"
 ```
 
 A database reachable only from a bastion gets an `ssh` table: the console
@@ -430,9 +449,10 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `engine` | required | `mariadb`, `mysql`, `postgres`, `sqlite` |
 | `host`, `port` | required host; port 3306 / 5432 | a host starting with `/` is a Unix socket (MariaDB/MySQL) |
 | `path` | required for sqlite | relative to the project root; the file is never created |
-| `user` | asked at start | |
+| `user` | asked at start | with `credentials = "vault"`: the secret's `username`; set it only for a secret without one |
 | `database` | none | the only database served (and scanned for PII); empty: every database the account can see, chosen per query with `--db` |
-| `credentials` | `ask` | `keychain` offers to save the secret after the first successful login; `locksql forget --profile P` removes it |
+| `credentials` | `ask` | `keychain` offers to save the secret after the first successful login; `locksql forget --profile P` removes it. `vault` reads the login from `vault_path` at every connection |
+| `vault_path` | required with `credentials = "vault"` | the Vault path read with `vault read`, such as `database/creds/<role>` or `secret/data/<name>`; any change is a loosening |
 | `credentials_ttl` | none | a duration of at least `1m` (`"20m"`, `"1h"`): the connection is closed and the secret asked again once it is that old |
 | `tier` | `read` | highest statement class allowed |
 | `production` | `false` | stricter limits, typed approval, auto mode unavailable |
@@ -451,7 +471,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `ssh.host`, `ssh.port`, `ssh.user` | required host and user; port 22 | the bastion; not with sqlite or a Unix socket `host` |
 | `ssh.auth` | required | `key`, `agent` (`SSH_AUTH_SOCK` of the console) or `password` |
 | `ssh.key` | required with `auth = "key"` | private key of the console account, mode 0600 |
-| `ssh.credentials` | the profile's `credentials` | `ask` or `keychain` for the passphrase or SSH password; `locksql forget --profile P` removes it too |
+| `ssh.credentials` | the profile's `credentials` (`ask` when that is `vault`) | `ask` or `keychain` for the passphrase or SSH password; `locksql forget --profile P` removes it too |
 
 </details>
 

@@ -130,6 +130,9 @@ type Profile struct {
 	// reconnect) once the connection is that old; 0 keeps it for the
 	// session. It suits short-lived secrets from a vault.
 	CredentialsTTL time.Duration `json:"credentials_ttl,omitempty"`
+	// VaultPath is the Vault path read for the login when Credentials is
+	// "vault", such as "database/creds/app-readonly".
+	VaultPath string `json:"vault_path,omitempty"`
 }
 
 // Config is the merged set of profiles visible from a working directory.
@@ -271,6 +274,7 @@ type rawProfile struct {
 	Limits      rawLimits `toml:"limits"`
 	// CredentialsTTL is a duration ("20m", "1h").
 	CredentialsTTL string `toml:"credentials_ttl"`
+	VaultPath      string `toml:"vault_path"`
 }
 
 type rawFile struct {
@@ -380,7 +384,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		return fmt.Errorf("profile %q: "+format, append([]any{name}, a...)...)
 	}
 	for _, f := range []struct{ key, val string }{{"host", r.Host}, {"path", r.Path}, {"user", r.User}, {"database", r.Database}, {"tls_ca", r.TLSCA},
-		{"tls_cert", r.TLSCert}, {"tls_key", r.TLSKey}, {"tls_server_name", r.TLSServer}} {
+		{"tls_cert", r.TLSCert}, {"tls_key", r.TLSKey}, {"tls_server_name", r.TLSServer}, {"vault_path", r.VaultPath}} {
 		if embedsPassword(f.val) {
 			return Profile{}, errf("%s looks like a DSN with an embedded password; locksql never reads secrets from config files", f.key)
 		}
@@ -398,7 +402,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 
 	p := Profile{
 		Name: name, Engine: r.Engine, Host: r.Host, Path: r.Path, Port: r.Port,
-		User: r.User, Database: r.Database, Credentials: r.Credentials,
+		User: r.User, Database: r.Database, Credentials: r.Credentials, VaultPath: r.VaultPath,
 		TLS: r.TLS, TLSCA: r.TLSCA, TLSCert: r.TLSCert, TLSKey: r.TLSKey, TLSServerName: r.TLSServer,
 		Production: r.Production, Detectors: r.Detectors,
 		Limits: Limits{
@@ -459,8 +463,23 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	}
 	switch p.Credentials {
 	case "", CredentialsAsk, CredentialsKeychain:
+		if p.VaultPath != "" {
+			return Profile{}, errf("vault_path is only used with credentials = \"vault\"")
+		}
+	case CredentialsVault:
+		if p.Engine == EngineSQLite {
+			return Profile{}, errf("credentials = \"vault\" is not used by sqlite")
+		}
+		if p.VaultPath == "" {
+			return Profile{}, errf("credentials = \"vault\" needs vault_path, such as \"database/creds/<role>\"")
+		}
+		// The path is an argument of the vault CLI: it must not read as a
+		// flag. The CLI checks it again (secrets.CheckVaultPath).
+		if strings.HasPrefix(p.VaultPath, "-") || strings.HasPrefix(p.VaultPath, "/") || strings.IndexFunc(p.VaultPath, unicode.IsSpace) >= 0 {
+			return Profile{}, errf("vault_path: want a path such as \"database/creds/<role>\", without spaces and not starting with '-' or '/'")
+		}
 	default:
-		return Profile{}, errf("unknown credentials mode %q (want ask or keychain)", p.Credentials)
+		return Profile{}, errf("unknown credentials mode %q (want ask, keychain or vault)", p.Credentials)
 	}
 	for _, d := range p.Detectors {
 		if !knownDetectors[d] {
@@ -679,7 +698,8 @@ func buildSSH(r rawSSH, p Profile, errf func(string, ...any) error) (*SSHProfile
 	}
 	if s.Credentials == "" {
 		s.Credentials = p.Credentials
-		if s.Credentials == "" {
+		// Vault holds the database login; the bastion's secret is asked.
+		if s.Credentials == "" || s.Credentials == CredentialsVault {
 			s.Credentials = CredentialsAsk
 		}
 	}

@@ -507,6 +507,9 @@ func describePolicy(p config.Policy) []string {
 		}
 		lines = append(lines, "  tls: "+safeText(mode, false))
 	}
+	if pr.VaultPath != "" {
+		lines = append(lines, "  vault: "+safeText(pr.VaultPath, false)+" (user and password read at every connection)")
+	}
 	if pr.SSH != nil {
 		lines = append(lines, "  ssh: "+safeText(config.SSHString(pr.SSH), false))
 	}

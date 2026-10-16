@@ -327,6 +327,67 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   `"decision":"hostkey-added"`. `locksql doctor` shows the bastion and
   reports a key file others can read.
 
+### Credentials from HashiCorp Vault
+
+With `credentials = "vault"` the console fetches the database login from
+[HashiCorp Vault](https://developer.hashicorp.com/vault) with the `vault`
+CLI at every connection: at start, at every reconnection, and before the
+lease of a dynamic login ends. It suits the
+[database secrets engine](https://developer.hashicorp.com/vault/docs/secrets/databases),
+which creates one short-lived account per request, and any secret that
+rotates often.
+
+```toml
+[profiles.reporting]
+engine      = "postgres"
+host        = "db.internal"
+tls         = "verify-full"
+credentials = "vault"
+vault_path  = "database/creds/reporting-ro"
+```
+
+- The console runs `vault read -format=json -- <vault_path>`. The CLI must
+  be in the console's `PATH` and authenticated: in separated mode, run
+  `vault login` (or set `VAULT_ADDR`, `VAULT_TOKEN`, `VAULT_NAMESPACE`,
+  `VAULT_CACERT`) **as the console account**, never as the agent's.
+  locksql never sees the Vault token: the CLI reads it from its own
+  environment or token helper.
+- The login is the `username` and `password` fields of the secret's data
+  (or of `data.data` for a KV version 2 secret, such as
+  `secret/data/reporting`). For a secret holding only a password, set `user`
+  in the profile; a secret whose `username` differs from the profile's
+  `user` is refused. Without `user`, the console does not ask for one.
+- The password lives in console memory only, for the time of the
+  connection: it is never saved in the keychain, never written to disk, and
+  wiped once the connection is open. The console prints
+  `credentials from Vault: <path> · user <username> · lease <duration>`;
+  the audit log names the user of each login (`db_user`).
+- A dynamic secret has a lease: once 90 % of it has passed, the console
+  closes the connection before the next request and reads a fresh login
+  (the privilege audit runs again on it). `credentials_ttl` also applies
+  when set. locksql neither renews nor revokes leases; Vault revokes them
+  when they end.
+- Errors say what to do and never quote the secret:
+  - `vault CLI not found`: install it in the console account's `PATH`;
+  - `not authenticated or not allowed`: no token, an expired one, or a
+    policy that may not read the path (`vault login` as the console
+    account);
+  - `invalid path`: nothing at the path, or no secrets engine mounted there;
+  - `invalid role`: the database secrets engine has no such role
+    (`vault list database/roles`);
+  - `server unreachable`: check `VAULT_ADDR` and `VAULT_CACERT`;
+  - `unexpected secret format`: the secret has no `password` field.
+  A failure stops the connection; the console does not fall back to asking.
+- `vault_path` must not start with `-` or `/` nor hold spaces. Changing it,
+  or setting `credentials` to `vault`, loosens the policy and waits for your
+  approval. `credentials = "vault"` is not used by SQLite, and an `ssh`
+  table keeps asking for its own secret (`ssh.credentials` defaults to
+  `ask`).
+- `locksql doctor` checks that the `vault` CLI is installed and, in
+  separated mode, fails when the agent's account holds a Vault token
+  (`VAULT_TOKEN` or `~/.vault-token`), which would let the agent read the
+  login itself.
+
 ## 2. Separate the console from the agent
 
 The console runs only in an account of its own: an agent in the console's
@@ -696,7 +757,9 @@ The console needs an interactive terminal. At start it:
    behaves like `ask`. In separated mode this is the console account's
    keychain. With `credentials_ttl`, the connection is closed once it is that
    old and the secret is asked again before the next request (suited to
-   short-lived secrets from a vault).
+   short-lived secrets from a vault). With `credentials = "vault"` nothing is
+   asked: the user and password are read from Vault at every connection (see
+   [Credentials from HashiCorp Vault](#credentials-from-hashicorp-vault)).
 4. **Connects** and prints the server flavour and version.
 5. **Audits privileges.** A tier `read` profile whose account can write is
    refused on production; on other profiles you get a red warning and must
@@ -871,7 +934,7 @@ The console watches the config and PII files while it runs.
   host, port, engine, user or database, a weaker `tls` or any change of `tls_ca`,
   `tls_cert`, `tls_key` or `tls_server_name`,
   any change of the `ssh` table (except `ssh.credentials` set to `ask`),
-  `ask → keychain`, a removed mask rule or detector, a mask mode
+  `ask → keychain` or `vault`, any change of `vault_path`, a removed mask rule or detector, a mask mode
   changed to anything but `redact`, a new allow rule) waits for you. Plans are
   refused with `policy_pending` until you run `:review` and answer
   `Apply these changes? [y/N]`.

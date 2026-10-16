@@ -66,6 +66,8 @@ type doctorEnv struct {
 	// wiring check.
 	agents   func() (agentinit.Env, error)
 	lookPath func(string) (string, error)
+	// getenv reads this process's environment (VAULT_TOKEN).
+	getenv   func(string) string
 	run      func(name string, args ...string) ([]byte, error)
 	readFile func(string) ([]byte, error)
 	// tlsProbe returns the certificates the profile's server presents,
@@ -104,6 +106,7 @@ func realDoctorEnv() doctorEnv {
 		acl:      readACL,
 		agents:   agentinit.SystemEnv,
 		lookPath: exec.LookPath,
+		getenv:   os.Getenv,
 		run: func(name string, args ...string) ([]byte, error) {
 			return exec.Command(name, args...).CombinedOutput()
 		},
@@ -576,6 +579,8 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 		default:
 			add(checkOK, "secret store", "OS keychain available", "")
 		}
+	} else if p.Credentials == config.CredentialsVault {
+		out = append(out, vaultChecks(d, p, sys, name)...)
 	} else if p.CredentialsTTL > 0 {
 		add(checkOK, "credentials", "asked at start, again every "+p.CredentialsTTL.String(), "")
 	} else {
@@ -686,4 +691,40 @@ func containsInt(s []int, v int) bool {
 		}
 	}
 	return false
+}
+
+// vaultChecks reports on a profile whose login is read from Vault. In a
+// separated setup the console account reads it, so a Vault token this
+// account holds lets the agent read the login itself.
+func vaultChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, name string) []check {
+	var out []check
+	add := func(state, title, detail, fix string) {
+		out = append(out, check{state: state, title: name + ": " + title, detail: detail, fix: fix})
+	}
+	if sys != nil {
+		var held []string
+		if d.getenv != nil && d.getenv("VAULT_TOKEN") != "" {
+			held = append(held, "VAULT_TOKEN is set")
+		}
+		if me, err := d.current(); err == nil && me.HomeDir != "" && d.stat != nil {
+			if _, err := d.stat(filepath.Join(me.HomeDir, ".vault-token")); err == nil {
+				held = append(held, "~/.vault-token exists")
+			}
+		}
+		if len(held) > 0 {
+			add(checkFail, "vault token", "this account holds a Vault token ("+strings.Join(held, ", ")+"), which the agent can use to read the login at "+p.VaultPath,
+				"unset VAULT_TOKEN and run `vault token revoke -self` here; log in to Vault as "+sys.ServiceUser+" instead")
+		} else {
+			add(checkOK, "credentials", "read from Vault at "+p.VaultPath+" by "+sys.ServiceUser+" at every connection", "")
+		}
+		return out
+	}
+	if d.lookPath != nil {
+		if _, err := d.lookPath(secrets.VaultCommand); err != nil {
+			add(checkFail, "vault CLI", "credentials = \"vault\" needs the vault CLI, not found in PATH", "install it: https://developer.hashicorp.com/vault/install")
+			return out
+		}
+	}
+	add(checkOK, "credentials", "read from Vault at "+p.VaultPath+" at every connection", "")
+	return out
 }
