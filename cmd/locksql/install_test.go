@@ -75,7 +75,7 @@ func TestInstallPinnedSourceChecksTheCopy(t *testing.T) {
 	if err := os.WriteFile(bin, []byte("binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	prefix, src := pinnedSource(bin, fileSHA256(t, bin), "sha256sum -c -")
+	prefix, src := pinnedSource("locksql install", bin, fileSHA256(t, bin), "sha256sum -c -")
 	run := func() (string, error) {
 		out, err := exec.Command("sh", "-c", "set -eu\n"+prefix+"cat "+src+"; echo; echo DONE").CombinedOutput()
 		return string(out), err
@@ -90,7 +90,7 @@ func TestInstallPinnedSourceChecksTheCopy(t *testing.T) {
 	if err == nil || strings.Contains(out, "DONE") || !strings.Contains(out, "the binary changed since its sha256 was printed") {
 		t.Fatalf("replaced binary: %v\n%s", err, out)
 	}
-	if prefix, src := pinnedSource(bin, "", "sha256sum -c -"); prefix != "" || src != shellQuote(bin) {
+	if prefix, src := pinnedSource("locksql install", bin, "", "sha256sum -c -"); prefix != "" || src != shellQuote(bin) {
 		t.Errorf("without a pin: %q, %q", prefix, src)
 	}
 }

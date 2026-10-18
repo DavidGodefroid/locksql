@@ -44,6 +44,7 @@ var helpSections = []helpSection{
 		{"console", "[--profile P] [--project DIR] [--skip-permissions]", "run the approval console"},
 		{"forget", "--profile P", "remove the keychain secret"},
 		{"install", "[--client USER] [--print] [--trust-binary] [--yes]", "separate the console from the agent (sudo)\n(--trust-binary: copy a binary root does not own)"},
+		{"update", "[--version vX.Y.Z] [--yes] [--allow-downgrade]", "replace /usr/local/bin/locksql with a release\n(cosign signature and checksum checked; sudo)"},
 		{"doctor", "[--profile P] [--fix [--yes]]", "check that this machine is safe-ready\n(--fix: repair permissions, socket dir, wiring)"},
 		{"init", "[claude|codex|cursor|gemini ...]", "write agent integration files into the project\n(default: the agents found on this machine)"},
 		{"stats", "[--log PATH] [--top N] [--export]", "count the refusals of the local audit log\n(--export: anonymised report, SQL shapes only)"},
@@ -168,6 +169,8 @@ func runEnv(e env, args []string) int {
 		return runInit(e, args[1:])
 	case "install":
 		return runInstall(e, args[1:])
+	case "update":
+		return runUpdate(e, args[1:])
 	case "setup":
 		return runSetup(e, args[1:])
 	case "doctor":

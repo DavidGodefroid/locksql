@@ -4,6 +4,25 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+### Added
+
+- **`locksql update`.** Replaces `/usr/local/bin/locksql` with the latest
+  release, or the one `--version` names, from your own account, asking for
+  `sudo` only for the final copy. Before that copy it checks the cosign
+  signature of `checksums.txt` against this repository's release workflow
+  (cosign is required: there is no unsigned path), the archive's checksum and
+  the new binary's version. The root script checks a root-owned copy against
+  the printed sha256 before installing it. A package's `/usr/bin/locksql`, or
+  a binary root does not own alone, is refused with how to upgrade it. An
+  older release needs `--allow-downgrade`.
+
+### Upgrading
+
+- From this release on, `locksql update` replaces running `scripts/install.sh`
+  again. Restart the console after an update.
+
 ## v0.7.0 (2026-10-18)
 
 ### Added

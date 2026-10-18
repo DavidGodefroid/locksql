@@ -162,6 +162,50 @@ jobs:
             echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent
             su agent -c "cd /tmp && LOCKSQL_FIRSTQUERY=1 LOCKSQL_FIRSTQUERY_BIN=/w/locksql /w/firstquery.test -test.v"'
 
+  # `locksql update` against the real latest release: an old build installed
+  # as scripts/install.sh would, then replaced by the release after its
+  # cosign signature, checksum and version are checked. It changes
+  # /usr/local/bin, so it runs in CI only.
+  update:
+    name: update (runner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+      - uses: sigstore/cosign-installer@v3
+      - name: install an old build in /usr/local/bin
+        run: |
+          go build -ldflags "-X main.version=0.0.1" -o "$RUNNER_TEMP/locksql" ./cmd/locksql
+          sudo install -m 0755 -o root -g root "$RUNNER_TEMP/locksql" /usr/local/bin/locksql
+      - name: locksql update --yes
+        run: |
+          tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/DavidGodefroid/locksql/releases/latest)
+          tag=${tag##*/}
+          echo "latest release: $tag"
+          /usr/local/bin/locksql update --yes
+          test "$(stat -c '%U:%G %a' /usr/local/bin/locksql)" = "root:root 755"
+          test "$(/usr/local/bin/locksql version)" = "locksql ${tag#v}"
+          echo "LATEST=${tag#v}" >> "$GITHUB_ENV"
+      - name: a second run is a no-op
+        run: |
+          # A release older than locksql update has no such command: run the
+          # second update from this commit, stamped with the latest version
+          # and installed the same way.
+          if ! /usr/local/bin/locksql update --yes > out.txt 2>&1; then
+            go build -ldflags "-X main.version=$LATEST" -o "$RUNNER_TEMP/locksql" ./cmd/locksql
+            sudo install -m 0755 -o root -g root "$RUNNER_TEMP/locksql" /usr/local/bin/locksql
+            /usr/local/bin/locksql update --yes > out.txt 2>&1
+          fi
+          cat out.txt
+          grep -q "already at v$LATEST" out.txt
+          test "$(stat -c '%U:%G %a' /usr/local/bin/locksql)" = "root:root 755"
+
   # Real servers in Docker. The harness in test/integration starts one
   # throwaway container per image (named ls-it-*, port on 127.0.0.1), seeds
   # it through docker exec and removes it when the test binary exits; the

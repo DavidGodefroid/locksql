@@ -43,6 +43,9 @@ type env struct {
 	// doc is what locksql doctor reads from the system; nil means the
 	// real one.
 	doc *doctorEnv
+	// upd is what locksql update reads from the system; nil means the
+	// real one.
+	upd *updateEnv
 	// euid is the effective user id; nil means os.Geteuid.
 	euid func() int
 	// paint colours human-facing output on stdout; the zero value is plain.
