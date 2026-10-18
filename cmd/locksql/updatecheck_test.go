@@ -396,3 +396,44 @@ func TestConsoleHandoffUpdateCheck(t *testing.T) {
 		t.Error("internal flag in the printed command")
 	}
 }
+
+// The process that runs the console (handled=false, no handoff) checks,
+// unless the forwarded --no-update-check or LOCKSQL_NO_UPDATE_CHECK says no.
+func TestConsoleUpdateNotice(t *testing.T) {
+	setVersion(t, "1.0.0")
+	for name, tc := range map[string]struct {
+		args   []string
+		optOut bool
+		notice bool
+	}{
+		"checks":          {args: []string{"console"}, notice: true},
+		"forwarded flag":  {args: []string{"console", noUpdateCheckFlag}},
+		"environment var": {args: []string{"console"}, optOut: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newCheckFixture(t, "v1.2.0")
+			if tc.optOut {
+				f.envv[noUpdateCheckEnv] = "1"
+			}
+			e, out, _ := onboardEnv(t, "codex")
+			var errb bytes.Buffer
+			e.stderr = &errb
+			e.chk = f.env()
+			// No profile, same user: the console refuses after the notice.
+			if code := runEnv(e, tc.args); code != exitFail {
+				t.Fatalf("code %d\n%s%s", code, out, &errb)
+			}
+			if !strings.Contains(out.String()+errb.String(), "separate account") {
+				t.Fatalf("not the console path:\n%s%s", out, &errb)
+			}
+			has := strings.Contains(errb.String(), "locksql v1.2.0 available (you run v1.0.0)")
+			want := int32(0)
+			if tc.notice {
+				want = 1
+			}
+			if has != tc.notice || f.hits.Load() != want {
+				t.Errorf("notice %v (want %v), hits %d (want %d)\n%s", has, tc.notice, f.hits.Load(), want, &errb)
+			}
+		})
+	}
+}
