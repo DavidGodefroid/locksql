@@ -17,6 +17,15 @@ This file records the changes a user or an agent has to know about.
   the printed sha256 before installing it. A package's `/usr/bin/locksql`, or
   a binary root does not own alone, is refused with how to upgrade it. An
   older release needs `--allow-downgrade`.
+- **New-version notice.** `locksql console` and `locksql doctor` print on
+  stderr when a newer release exists, with how to upgrade for the way
+  locksql was installed. At most one request a day: a single GET of
+  `releases/latest`, without added header or identifier, 2 s timeout, cached
+  in `$XDG_CACHE_HOME/locksql/update-check` (0700/0600). Failures print
+  nothing; the output and exit codes do not change. In a separated setup the
+  console checks in the console account only. `LOCKSQL_NO_UPDATE_CHECK=1`
+  turns it off, and is passed on through the console handoff. `locksql mcp`
+  never checks.
 
 ### Upgrading
 

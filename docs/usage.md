@@ -549,6 +549,38 @@ an account that is already compromised, which could change what `update`
 downloads, runs or prints before you confirm. Run it from an account you
 trust, and compare the printed sha256 when in doubt.
 
+#### New-version notice
+
+`locksql console` and `locksql doctor` tell you, on stderr, when a release
+newer than the running one exists:
+
+```text
+locksql v0.9.0 available (you run v0.8.0): locksql update
+```
+
+For a package's `/usr/bin/locksql` the first line is followed by the `apt`,
+`dnf` and `apk` commands with the version to use; for any other binary, by
+the releases page. Nothing else changes: not the output, not the exit code.
+
+- **One request a day.** The only request is a GET of
+  `https://github.com/DavidGodefroid/locksql/releases/latest` (redirect
+  followed, 2 s timeout), with no added header, body or identifier. Its time
+  and the tag found are cached in `$XDG_CACHE_HOME/locksql/update-check`
+  (else the user cache directory: `~/.cache` on Linux, `~/Library/Caches` on
+  macOS) of the account that runs the check, directory mode 0700, file mode
+  0600. A missing, corrupt or future-dated cache leads to a new check; a
+  failed check counts too.
+- **Silent.** A network error, a timeout, a non-200 status, a tag that is not
+  a version, or a cache that cannot be written prints nothing. A development
+  build (`dev`) never checks.
+- **Which account.** In a separated setup, the console checks in the console
+  account, after the handoff, never in the agent's account. `locksql mcp`
+  and the other commands never check.
+- **Off.** `LOCKSQL_NO_UPDATE_CHECK=1` turns it off: no request, no cache.
+  When `locksql console` hands off to the console account (`sudo -u`,
+  `machinectl shell`, `su -l` reset the environment), it passes the setting
+  on as the internal `--no-update-check` argument.
+
 ### `locksql doctor`
 
 ```sh
@@ -1399,6 +1431,9 @@ finds the project's consoles.
 - Runtime dir: `$XDG_RUNTIME_DIR/locksql` on Linux, `$TMPDIR/locksql` on
   macOS; `/tmp/locksql-<uid>`
   (owned by you, mode 0700) when `$XDG_RUNTIME_DIR` or `$TMPDIR` is unset.
+- `<user cache dir>/locksql/update-check`: time and tag of the last
+  new-version check of `console` and `doctor` (`$XDG_CACHE_HOME`, else
+  `os.UserCacheDir()`); `LOCKSQL_NO_UPDATE_CHECK=1` turns the check off.
 - `LOCKSQL_RUNTIME_DIR`: when set to an absolute path, the console sockets live
   in `$LOCKSQL_RUNTIME_DIR/locksql/` instead. The console and its clients must
   see the same value.

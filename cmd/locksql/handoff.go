@@ -92,6 +92,9 @@ func trustedBinary() (string, error) {
 type consoleArgs struct {
 	profile, project               string
 	auto, allowUnmask, showResults bool
+	// noUpdateCheck forwards LOCKSQL_NO_UPDATE_CHECK, which the helper
+	// does not pass on, as an internal flag.
+	noUpdateCheck bool
 }
 
 // argv is the console command line, after the binary.
@@ -205,7 +208,11 @@ and run there:
 		fmt.Fprintln(e.stderr, "locksql console:", err)
 		return exitFail, true
 	}
-	argv, name := helperArgv(h, sys.ServiceUser, bin, a.argv())
+	args := a.argv()
+	if a.noUpdateCheck {
+		args = append(args, noUpdateCheckFlag)
+	}
+	argv, name := helperArgv(h, sys.ServiceUser, bin, args)
 	if argv == nil {
 		fmt.Fprintf(e.stderr, "locksql console: no sudo, machinectl or su to reach the console account %s; log in as %s and run:\n    %s\n",
 			sys.ServiceUser, sys.ServiceUser, a.command())

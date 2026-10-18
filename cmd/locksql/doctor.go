@@ -161,6 +161,7 @@ func runDoctor(e env, args []string) int {
 		fmt.Fprintln(e.stderr, "usage:", usage)
 		return exitUsage
 	}
+	defer updateNotice(e)
 	d := realDoctorEnv()
 	if e.doc != nil {
 		d = *e.doc
