@@ -11,7 +11,7 @@ func TestWindowsRefusesCommands(t *testing.T) {
 	saved := hostOS
 	hostOS = "windows"
 	t.Cleanup(func() { hostOS = saved })
-	for _, args := range [][]string{nil, {"console"}, {"mcp"}, {"status"}, {"install"}, {"doctor"}, {"init"}, {"plan", "SELECT 1"}} {
+	for _, args := range [][]string{nil, {"console"}, {"mcp"}, {"status"}, {"install"}, {"update"}, {"doctor"}, {"init"}, {"plan", "SELECT 1"}} {
 		var out, errOut bytes.Buffer
 		if code := run(args, &out, &errOut); code != exitFail {
 			t.Errorf("%v: exit %d, want %d", args, code, exitFail)

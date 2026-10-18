@@ -505,6 +505,50 @@ An X11 session lets any X client read the keyboard and the screen of the
 others: the console refuses to start in one on a production profile or with
 `x11 = "refuse"`, and warns otherwise. Use Wayland or a text console.
 
+### `locksql update`
+
+```sh
+locksql update [--version vX.Y.Z] [--yes] [--allow-downgrade]
+```
+
+Replaces `/usr/local/bin/locksql` with a release (the latest, or the one
+`--version` names), on Linux and macOS. Run it from your own account, without
+`sudo`: it asks for `sudo` only for the final copy.
+
+- **Which binary.** Only a release installed as `/usr/local/bin/locksql`,
+  owned by root and writable by neither group nor others
+  (`scripts/install.sh` with the default directory, then
+  `sudo locksql install`). A package's `/usr/bin/locksql` is refused with the
+  `apt`, `dnf` or `apk` command that upgrades it; any other binary is refused
+  with a pointer to `scripts/install.sh`.
+- **Which version.** The latest release is the one
+  `https://github.com/DavidGodefroid/locksql/releases/latest` redirects to.
+  When it is the running version, `update` prints `already at vX` and exits 0.
+  An older release needs `--allow-downgrade`, and a development build
+  (`locksql version` prints `dev`) needs `--version`.
+- **Checks.** In a private temporary directory (mode 0700), `update`
+  downloads the archive for your OS and architecture, `checksums.txt` and
+  its signature, and refuses unless all of these pass:
+  `cosign verify-blob` with the identity of this repository's release
+  workflow on a version tag (cosign must be installed: there is no
+  unsigned path), the archive's sha256 against `checksums.txt`, and the
+  `locksql version` of the extracted binary against the release.
+- **Replacement.** It prints the new binary's sha256 and the root script,
+  then asks `[y/N]` (`--yes` skips the question; without a terminal and
+  without `--yes` it refuses). The script copies the binary to a root-owned
+  temporary file, checks it against that sha256 (`sha256sum -c` on Linux,
+  `shasum -a 256 -c` on macOS) and stops before any change when it differs,
+  then installs it as `/usr/local/bin/locksql`, root-owned, mode 0755.
+  Nothing else changes.
+- **Afterwards.** A running console keeps the old binary: restart it
+  (`locksql console` in the `locksql` account).
+
+The checks run in the account that invokes `update`, as with
+`scripts/install.sh`: they protect against a tampered download, not against
+an account that is already compromised, which could change what `update`
+downloads, runs or prints before you confirm. Run it from an account you
+trust, and compare the printed sha256 when in doubt.
+
 ### `locksql doctor`
 
 ```sh

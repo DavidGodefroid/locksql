@@ -639,7 +639,15 @@ sh install.sh                       # LOCKSQL_VERSION=v0.5.0 to pin a version
 `LOCKSQL_INSTALL_DIR=~/.local/bin` installs without `sudo`, but the binary is
 then owned by your account and `locksql doctor` warns: in separated mode, the
 console must run a binary the agent cannot replace (`sudo locksql install`
-copies it to `/usr/local/bin`). To upgrade, run the script again.
+copies it to `/usr/local/bin`).
+
+**Upgrade.** Run `locksql update` from your own account, without `sudo`: it
+replaces `/usr/local/bin/locksql` with the latest release (`--version vX.Y.Z`
+for another) once the release's cosign signature, its checksum and the new
+binary's version check out, and asks for `sudo` only for that copy. It needs
+`cosign` on PATH and a binary installed as above, owned by root; packages
+upgrade with their package manager. Restart the console afterwards. See
+[docs/usage.md](docs/usage.md#locksql-update).
 
 **Debian, Ubuntu, Fedora, RHEL, Alpine.** Packages install
 `/usr/bin/locksql`, owned by root. Copy-paste, the latest version and your

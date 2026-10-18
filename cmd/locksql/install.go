@@ -256,17 +256,18 @@ x11          = "refuse"
 // pinnedSource is the start of a root script that copies bin to a root-owned
 // temporary file and checks it against the sha256 pin (sumCmd checks a
 // "<sha256>  <path>" line on stdin), aborting before any change on a
-// mismatch; src is the file to install. Without a pin, bin itself is the
-// source: install refused it unless root owns it and alone may write it.
-func pinnedSource(bin, pin, sumCmd string) (prefix, src string) {
+// mismatch with a message prefixed by cmd ("locksql install"); src is the
+// file to install. Without a pin, bin itself is the source: install refused
+// it unless root owns it and alone may write it.
+func pinnedSource(cmd, bin, pin, sumCmd string) (prefix, src string) {
 	if pin == "" {
 		return "", shellQuote(bin)
 	}
 	return fmt.Sprintf(`tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 cat %s > "$tmp"
-echo '%s  '"$tmp" | %s >/dev/null 2>&1 || { echo 'locksql install: the binary changed since its sha256 was printed; nothing installed' >&2; exit 1; }
-`, shellQuote(bin), pin, sumCmd), `"$tmp"`
+echo '%s  '"$tmp" | %s >/dev/null 2>&1 || { echo '%s: the binary changed since its sha256 was printed; nothing installed' >&2; exit 1; }
+`, shellQuote(bin), pin, sumCmd, cmd), `"$tmp"`
 }
 
 // linuxInstallScript sets up a separated install on Linux. The socket
@@ -275,7 +276,7 @@ echo '%s  '"$tmp" | %s >/dev/null 2>&1 || { echo 'locksql install: the binary ch
 // the socket already has, which setgid makes the client group.
 func linuxInstallScript(bin, client, svc, group, pin string) string {
 	dir := "/run/locksql"
-	prefix, src := pinnedSource(bin, pin, "sha256sum -c -")
+	prefix, src := pinnedSource("locksql install", bin, pin, "sha256sum -c -")
 	return fmt.Sprintf(`set -eu
 %[7]sgetent group %[3]s >/dev/null || groupadd --system %[3]s
 id -u %[2]s >/dev/null 2>&1 || useradd --create-home --shell /bin/bash --comment "locksql console" %[2]s
@@ -309,7 +310,7 @@ func copyBinary(bin, pin, src, group string) string {
 
 func darwinInstallScript(bin, client, svc, group, pin string) string {
 	dir := sysconf.DefaultSocketDir()
-	prefix, src := pinnedSource(bin, pin, "shasum -a 256 -c -")
+	prefix, src := pinnedSource("locksql install", bin, pin, "shasum -a 256 -c -")
 	return fmt.Sprintf(`set -eu
 %[7]sdseditgroup -o read %[3]s >/dev/null 2>&1 || dseditgroup -o create %[3]s
 id -u %[2]s >/dev/null 2>&1 || sysadminctl -addUser %[2]s -fullName "locksql console" -password -
