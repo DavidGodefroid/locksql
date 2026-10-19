@@ -5,6 +5,7 @@
 # See docs/docker.md.
 #
 #   docker build -t locksql .
+#   docker build --target vault -t locksql .   # with the vault CLI, for credentials = "vault"
 
 FROM golang:1.26-alpine AS build
 WORKDIR /src
@@ -14,7 +15,20 @@ COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/locksql ./cmd/locksql
 
-FROM alpine:3.22
+# The HashiCorp Vault CLI, checked against the sums pinned here (update them
+# with VAULT_VERSION from releases.hashicorp.com/vault/<version>/).
+FROM alpine:3.22 AS vault-cli
+ARG TARGETARCH
+ARG VAULT_VERSION=2.2.0
+ARG VAULT_SHA256_amd64=05d78b0ac842ca7c522fc297df91527cd43c15420c4c5c0a969d48a7b0ff7b6d
+ARG VAULT_SHA256_arm64=9d9ae0ce520744fb095bdf150a6924f5583528fd385a2e92782f7a6d00cad53c
+RUN set -eu; arch=${TARGETARCH:-amd64}; \
+    case $arch in amd64) sum=$VAULT_SHA256_amd64 ;; arm64) sum=$VAULT_SHA256_arm64 ;; *) echo "no vault CLI for $arch" >&2; exit 1 ;; esac; \
+    wget -qO /tmp/vault.zip "https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_${arch}.zip"; \
+    echo "$sum  /tmp/vault.zip" | sha256sum -c -; \
+    unzip -q /tmp/vault.zip vault -d /out
+
+FROM alpine:3.22 AS console
 # ca-certificates: tls = "verify-full" checks remote servers against them.
 RUN apk add --no-cache ca-certificates \
  && addgroup -S -g 10000 locksql-clients \
@@ -38,3 +52,11 @@ WORKDIR /
 USER agent
 ENTRYPOINT ["locksql"]
 CMD ["help"]
+
+# The console with the vault CLI (docs/docker.md, Credentials from Vault).
+# Not the default: the CLI adds some 550 MB.
+FROM console AS vault
+COPY --from=vault-cli --chown=root:root --chmod=0755 /out/vault /usr/local/bin/vault
+
+# The default image.
+FROM console

@@ -105,6 +105,10 @@ jobs:
         run: |
           docker run --rm -v locksql-run:/run/locksql locksql doctor
           docker run --rm --user locksql -v locksql-run:/run/locksql -v locksql-home:/home/locksql locksql doctor
+      - name: docker build --target vault
+        run: |
+          docker build --target vault -t locksql:vault .
+          docker run --rm --user locksql --entrypoint vault locksql:vault version
 
   # The README's "first query in 3 commands" on a fresh machine: the
   # runner's VM image and fresh Ubuntu and Fedora containers. The test

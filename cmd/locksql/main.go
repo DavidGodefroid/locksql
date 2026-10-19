@@ -41,6 +41,7 @@ var helpSections = []helpSection{
 	{title: "Human commands", rows: []helpRow{
 		{"locksql", "", "wire agents and lead to the separated setup (or start the console)"},
 		{"setup", "[--project DIR] [--yes] [--engine E ...]", "install, wire agents and add a database profile,\nthen print the command that starts the console"},
+		{"profile", "add [--project DIR] [--engine E ...]", "add a database profile to the project\n(the profile step of setup, for a console in a container)"},
 		{"console", "[--profile P] [--project DIR] [--skip-permissions]", "run the approval console"},
 		{"forget", "--profile P", "remove the keychain secret"},
 		{"install", "[--client USER] [--print] [--trust-binary] [--yes]", "separate the console from the agent (sudo)\n(--trust-binary: copy a binary root does not own)"},
@@ -173,6 +174,8 @@ func runEnv(e env, args []string) int {
 		return runUpdate(e, args[1:])
 	case "setup":
 		return runSetup(e, args[1:])
+	case "profile":
+		return runProfile(e, args[1:])
 	case "doctor":
 		return runDoctor(e, args[1:])
 	case "stats":
