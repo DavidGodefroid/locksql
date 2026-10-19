@@ -3,8 +3,8 @@ package sqlast
 import (
 	"strings"
 
-	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // ParseWrite parses one data-modifying statement for the write analysis

@@ -17,12 +17,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/sqlast"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -305,7 +305,7 @@ func (s *Server) audit(rec audit.Record) {
 	if u, ok := s.sess.(interface{ DBUser() string }); ok && u.DBUser() != "" {
 		rec.DBUser = u.DBUser()
 	}
-	if err := s.cfg.Audit.Write(rec); err != nil {
+	if err := s.cfg.Audit.Append(rec); err != nil {
 		s.cfg.IO.Println("audit log write failed: " + err.Error())
 	}
 }

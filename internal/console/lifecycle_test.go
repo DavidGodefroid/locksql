@@ -13,11 +13,11 @@ import (
 
 	"github.com/DavidGodefroid/lockkit/fingerprint"
 	"github.com/DavidGodefroid/lockkit/secrets"
-	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/product"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 )
 
 type columnsSession struct {

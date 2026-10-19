@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/console"
 	"github.com/DavidGodefroid/locksql/internal/engine"

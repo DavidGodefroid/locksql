@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/lockkit/ui"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 )
 
 // The console's live switches: the approval mode (manual, where every

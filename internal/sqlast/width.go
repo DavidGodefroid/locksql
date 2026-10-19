@@ -3,8 +3,8 @@ package sqlast
 import (
 	"strings"
 
-	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // width bounds the size of a value. bytes is what the literals and the

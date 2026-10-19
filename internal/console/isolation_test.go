@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/lockkit/fingerprint"
-	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/lockkit/sysconf"
+	"github.com/DavidGodefroid/locksql/internal/config"
+	"github.com/DavidGodefroid/locksql/internal/ipc"
 )
 
 func fakeIsolation(sys *sysconf.Config, display string) isolationEnv {

@@ -21,8 +21,8 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
-	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/lockkit/secrets"
+	"github.com/DavidGodefroid/locksql/internal/config"
 )
 
 // ErrAuth marks an authentication failure: the bastion refused the

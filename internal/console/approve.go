@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
-	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 	"github.com/DavidGodefroid/lockkit/ui"
+	"github.com/DavidGodefroid/locksql/internal/config"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
+	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
 // ANSI colours of the console, which always runs in a terminal.

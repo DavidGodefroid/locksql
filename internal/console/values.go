@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/sqlast"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 )
 
 // typedValue is a value the human typed for a placeholder name. It lives

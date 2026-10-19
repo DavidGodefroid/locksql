@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 

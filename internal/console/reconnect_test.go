@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 )
 
 // fakeEngineName is a test-only engine handing out the session in fakeNext.

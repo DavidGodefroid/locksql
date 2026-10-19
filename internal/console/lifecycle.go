@@ -18,12 +18,12 @@ import (
 
 	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/lockkit/ui"
-	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/product"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	"github.com/DavidGodefroid/locksql/internal/tunnel"
 )
 
@@ -99,7 +99,7 @@ func (st *starter) audit(rec audit.Record) {
 	if st.profile.SSH != nil && rec.SSHHost == "" {
 		rec.SSHHost = st.profile.SSH.Host
 	}
-	if err := st.log.Write(rec); err != nil {
+	if err := st.log.Append(rec); err != nil {
 		st.io.Println("audit log write failed: " + err.Error())
 	}
 }

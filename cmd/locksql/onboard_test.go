@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DavidGodefroid/lockkit/sysconf"
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/lockkit/sysconf"
 )
 
 // onboardEnv isolates every directory locksql or an agent could write to

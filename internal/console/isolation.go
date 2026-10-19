@@ -14,10 +14,10 @@ import (
 
 	"github.com/DavidGodefroid/lockkit/fingerprint"
 	"github.com/DavidGodefroid/lockkit/sysconf"
-	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/product"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 )
 
 // isolation is how the console is kept apart from the agent: in a

@@ -9,8 +9,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/DavidGodefroid/locksql/internal/engine"
-	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // maskText is the mask format: first character + "***" + "(length in
