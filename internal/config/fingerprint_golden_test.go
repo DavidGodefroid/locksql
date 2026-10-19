@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -72,6 +73,16 @@ func TestFingerprintUnchanged(t *testing.T) {
 	var want map[string]string
 	if err := json.Unmarshal(raw, &want); err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		// A sqlite path is resolved with the OS separator: the golden values
+		// were captured on Unix, where locksql runs.
+		for name, p := range goldenPolicies(t) {
+			if p.Profile.Path != "" {
+				delete(want, name)
+				delete(got, name)
+			}
+		}
 	}
 	var names []string
 	for n := range want {
