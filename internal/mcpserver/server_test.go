@@ -15,6 +15,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
+	"github.com/DavidGodefroid/locksql/internal/product"
 	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
@@ -309,7 +310,7 @@ func TestNoConsoleInProjectHintNamesProject(t *testing.T) {
 	o := Options{
 		Profile: "uat",
 		Dial: func(p string) (Conn, error) {
-			return nil, &client.NoConsoleError{Profile: p, Project: "/work/app", Socket: "/x.sock", Err: errors.New("connect")}
+			return nil, &client.NoConsoleError{Product: product.P, Profile: p, Project: "/work/app", Socket: "/x.sock", Err: errors.New("connect")}
 		},
 	}
 	cs := connect(t, o, nil)
@@ -325,7 +326,7 @@ func TestNoConsoleErrorCarriesStartCommand(t *testing.T) {
 	o := Options{
 		Profile: "uat",
 		Dial: func(p string) (Conn, error) {
-			return nil, &client.NoConsoleError{Profile: p, Socket: "/x.sock", Err: errors.New("connect: no such file")}
+			return nil, &client.NoConsoleError{Product: product.P, Profile: p, Socket: "/x.sock", Err: errors.New("connect: no such file")}
 		},
 	}
 	cs := connect(t, o, nil)

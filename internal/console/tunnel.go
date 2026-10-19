@@ -8,11 +8,11 @@ import (
 	"strings"
 
 	"github.com/DavidGodefroid/lockkit/secrets"
+	"github.com/DavidGodefroid/lockkit/tunnel"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/product"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
-	"github.com/DavidGodefroid/locksql/internal/tunnel"
 )
 
 // hostKeyAnswerOK accepts "yes", or on a production profile the last 8
@@ -112,7 +112,7 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 		return v, nil
 	}
 	o := tunnel.Options{Profile: s, Home: home, HostKey: hk, HostKeyAlgorithms: algs, Secret: secret,
-		AgentSock: os.Getenv("SSH_AUTH_SOCK")}
+		AgentSock: os.Getenv("SSH_AUTH_SOCK"), ClientName: product.P.Name}
 	t, err := tunnel.Open(ctx, o)
 	savePrompt := "Save the SSH secret in the OS keychain? [y/N] "
 	if err != nil && retryKeychainSSHSecret(err, usedKeychain) {

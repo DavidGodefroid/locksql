@@ -1,20 +1,71 @@
+// Package ipc is locksql's console protocol: lockkit's transport and
+// methods (package lockkit/ipc, re-exported here under the same names)
+// plus the SQL methods and their types.
 package ipc
 
-import "github.com/DavidGodefroid/locksql/internal/config"
+import (
+	"net"
+
+	kipc "github.com/DavidGodefroid/lockkit/ipc"
+
+	"github.com/DavidGodefroid/locksql/internal/config"
+	"github.com/DavidGodefroid/locksql/internal/product"
+)
+
+// lockkit's transport.
+type (
+	Request  = kipc.Request
+	Response = kipc.Response
+	RPCError = kipc.RPCError
+	Cred     = kipc.Cred
+)
+
+// ProtocolMajor is exchanged in the hello handshake.
+const ProtocolMajor = kipc.ProtocolMajor
+
+// MaxMessage is the largest message, excluding the newline, in bytes.
+const MaxMessage = kipc.MaxMessage
+
+var (
+	ErrTooLarge       = kipc.ErrTooLarge
+	ErrAlreadyRunning = kipc.ErrAlreadyRunning
+
+	Compatible       = kipc.Compatible
+	WriteMsg         = kipc.WriteMsg
+	ReadMsg          = kipc.ReadMsg
+	Listen           = kipc.Listen
+	PeerCred         = kipc.PeerCred
+	PeerAllowed      = kipc.PeerAllowed
+	SharedSocketPath = kipc.SharedSocketPath
+)
+
+// RuntimeDirEnv overrides the runtime dir of locksql's sockets
+// (LOCKSQL_RUNTIME_DIR).
+var RuntimeDirEnv = product.P.RuntimeDirEnv()
+
+// SocketPath is locksql's console socket of a project and profile.
+func SocketPath(projectHash, profile string) (string, error) {
+	return kipc.SocketPath(product.P, projectHash, profile)
+}
+
+// ListenShared opens locksql's console socket in the shared directory.
+func ListenShared(path string, gid int) (net.Listener, error) {
+	return kipc.ListenShared(product.P, path, gid)
+}
 
 // Methods, spec §7. None of them loosens policy: change.request only queues
 // a proposal that the console shows to the human.
 const (
-	MethodHello           = "hello"
-	MethodStatus          = "status"
+	MethodHello           = kipc.MethodHello
+	MethodStatus          = kipc.MethodStatus
 	MethodCatalogList     = "catalog.list"
 	MethodCatalogDescribe = "catalog.describe"
 	MethodQueryPlan       = "query.plan"
 	MethodQueryRun        = "query.run"
-	MethodPIIList         = "pii.list"
-	MethodPIIAdd          = "pii.add"
-	MethodChangeRequest   = "change.request"
-	MethodLogout          = "logout"
+	MethodPIIList         = kipc.MethodPIIList
+	MethodPIIAdd          = kipc.MethodPIIAdd
+	MethodChangeRequest   = kipc.MethodChangeRequest
+	MethodLogout          = kipc.MethodLogout
 )
 
 // Methods lists every method name.
@@ -25,35 +76,31 @@ func Methods() []string {
 	}
 }
 
-// Error codes. The -320xx range is reserved by JSON-RPC for implementation
-// errors; the standard codes are kept for protocol faults.
+// Error codes (lockkit's).
 const (
-	CodeRefused       = -32001 // classifier, tier or weight check refused
-	CodeDenied        = -32002 // the human denied
-	CodeTimeout       = -32003 // no answer within the approval timeout
-	CodeNoSuchPlan    = -32004 // unknown, used or expired plan id
-	CodeConnLost      = -32005 // the database connection was lost
-	CodePolicyPending = -32006 // a policy change awaits the human
+	CodeRefused       = kipc.CodeRefused
+	CodeDenied        = kipc.CodeDenied
+	CodeTimeout       = kipc.CodeTimeout
+	CodeNoSuchPlan    = kipc.CodeNoSuchPlan
+	CodeConnLost      = kipc.CodeConnLost
+	CodePolicyPending = kipc.CodePolicyPending
 
-	CodeParseError     = -32700
-	CodeInvalidRequest = -32600
-	CodeMethodNotFound = -32601
-	CodeInvalidParams  = -32602
-	CodeInternal       = -32603
+	CodeParseError     = kipc.CodeParseError
+	CodeInvalidRequest = kipc.CodeInvalidRequest
+	CodeMethodNotFound = kipc.CodeMethodNotFound
+	CodeInvalidParams  = kipc.CodeInvalidParams
+	CodeInternal       = kipc.CodeInternal
 )
 
-// HelloParams opens a session; Client is a free-form name and version.
-type HelloParams struct {
-	ProtocolMajor int    `json:"protocol_major"`
-	Client        string `json:"client,omitempty"`
-}
-
-// HelloResult answers hello.
-type HelloResult struct {
-	ProtocolMajor  int    `json:"protocol_major"`
-	ConsoleVersion string `json:"console_version,omitempty"`
-	Profile        string `json:"profile"`
-}
+// lockkit's method types.
+type (
+	HelloParams   = kipc.HelloParams
+	HelloResult   = kipc.HelloResult
+	PIIListResult = kipc.PIIListResult
+	PIIAddParams  = kipc.PIIAddParams
+	ChangeParams  = kipc.ChangeParams
+	ChangeResult  = kipc.ChangeResult
+)
 
 // PlanParams asks for a plan (classification, EXPLAIN, weight, approval).
 type PlanParams struct {
@@ -155,25 +202,4 @@ type TablesResult struct {
 type DescribeParams struct {
 	DB    string `json:"db"`
 	Table string `json:"table"`
-}
-
-// PIIListResult answers pii.list with the column rules.
-type PIIListResult struct {
-	Mask  []string `json:"mask"`
-	Allow []string `json:"allow"`
-}
-
-// PIIAddParams proposes a mask pattern "db.table.column".
-type PIIAddParams struct {
-	Pattern string `json:"pattern"`
-}
-
-// ChangeParams queues a policy change proposal for the human.
-type ChangeParams struct {
-	Change string `json:"change"`
-}
-
-// ChangeResult answers change.request.
-type ChangeResult struct {
-	Queued bool `json:"queued"`
 }

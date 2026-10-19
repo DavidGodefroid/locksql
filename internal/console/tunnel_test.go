@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DavidGodefroid/lockkit/tunnel"
 	"github.com/DavidGodefroid/locksql/internal/engine"
-	"github.com/DavidGodefroid/locksql/internal/tunnel"
 )
 
 func TestHostKeyAnswer(t *testing.T) {

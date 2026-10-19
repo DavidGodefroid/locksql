@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/DavidGodefroid/lockkit/secrets"
+	"github.com/DavidGodefroid/lockkit/tunnel"
 	"github.com/DavidGodefroid/lockkit/ui"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
@@ -24,7 +25,6 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/product"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
-	"github.com/DavidGodefroid/locksql/internal/tunnel"
 )
 
 // ErrConfig marks usage and configuration errors (exit code 3).
