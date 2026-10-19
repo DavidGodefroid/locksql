@@ -47,8 +47,20 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
 MCP command, which is not on your machine: replace the `locksql` entry as in
 [Wire the agent](#wire-the-agent).
 
-Edit the profile in `.locksql/config.toml`. Inside a container,
-`localhost` is the container itself:
+Add a database profile with the wizard of `locksql setup` (its profile step
+alone: the account and access steps are the image's own):
+
+```sh
+docker run -it --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+  -v "$PWD:$PWD" -w "$PWD" locksql profile add
+```
+
+It asks for the engine, host, port, TLS and where the password comes from,
+never for the password itself, and appends the profile to
+`.locksql/config.toml`. `--engine` and its flags (`locksql profile add
+--engine postgres --host db.internal --credentials vault --vault-path
+database/creds/ro`) skip the questions. Inside a container, `localhost` is
+the container itself, and the wizard knows it:
 
 - a database on your machine is `host = "host.docker.internal"` (Docker
   Desktop; on Linux add `--add-host=host.docker.internal:host-gateway` to the
@@ -58,7 +70,7 @@ Edit the profile in `.locksql/config.toml`. Inside a container,
 - a database in another container is reached by its name on a shared
   network (`--network NAME` on the console's `docker run`);
 - `credentials = "keychain"` needs an OS keychain, which the container does
-  not have: keep `credentials = "ask"`;
+  not have: use `credentials = "ask"`, or `"vault"` with the image below;
 - a SQLite `path` is relative to the project root, which is mounted.
 
 ## Run the console
@@ -79,6 +91,28 @@ keeps the console account's state from one run to the next: the approved
 policy, the audit log and `~/.ssh/known_hosts` for an `ssh` profile. A key
 for `auth = "key"` must be in that volume, owned by `locksql` with mode 0600;
 `auth = "password"` needs nothing there.
+
+## Credentials from Vault
+
+`credentials = "vault"` runs the `vault` CLI in the console's container. The
+default image leaves it out (it adds some 550 MB); the `vault` target has it:
+
+```sh
+docker build --target vault -t locksql .
+```
+
+The console reads `VAULT_ADDR` (and `VAULT_CACERT`, `VAULT_NAMESPACE`) from
+its environment: add `-e VAULT_ADDR=https://vault.example.com` to its
+`docker run`. Log in once as the console account, with the same volumes; the
+token stays in `locksql-home`, out of the agents' reach:
+
+```sh
+docker run -it --rm --user locksql -e VAULT_ADDR=https://vault.example.com \
+  -v locksql-home:/home/locksql --entrypoint vault locksql login -method=oidc
+```
+
+Log in again when the token expires: the console then reports `not
+authenticated or not allowed`.
 
 ## Wire the agent
 

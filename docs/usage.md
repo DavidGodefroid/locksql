@@ -14,7 +14,8 @@ From your account (the one your agents run as), in the project:
 ```sh
 locksql setup [--project DIR] [--client USER] [--trust-binary] [--yes]
               [--profile NAME --engine E (--path FILE | --host H [--port N]
-               [--user U] [--database D] [--credentials ask|keychain])]
+               [--user U] [--database D] [--tls MODE]
+               [--credentials ask|keychain|vault [--vault-path P]])]
 ```
 
 It runs four steps and ends with the one command that starts the console:
@@ -31,12 +32,16 @@ It runs four steps and ends with the one command that starts the console:
    given by flags), asks for its name (default `dev`), engine (`sqlite`,
    `postgres`, `mariadb`, `mysql`), then the SQLite file relative to the
    project, or host, port, user (empty: asked at console start), database
-   (empty: chosen per query) and whether the console account's keychain
-   keeps the password (`credentials = "keychain"`). It never asks for a
-   password. The profile is appended to `<project>/.locksql/config.toml`
-   (created when absent; the commented example of `locksql init` is kept),
-   and only once the result loads. A remote host gets the default
-   `tls = "verify-full"`.
+   (empty: chosen per query), for a remote host the `tls` mode (default
+   `verify-full`), and where the password comes from: `ask` (typed at
+   console start), `keychain` (the console account's) or `vault` with its
+   path ([Credentials from HashiCorp Vault](#credentials-from-hashicorp-vault)).
+   It never asks for a password. The profile is appended to
+   `<project>/.locksql/config.toml` (created when absent; the commented
+   example of `locksql init` is kept), and only once the result loads.
+   `locksql profile add`, with the same profile flags, runs this step alone:
+   in a container ([docker.md](docker.md)) it offers
+   `host.docker.internal` as the host and never the keychain.
 4. **Project access.** Runs the project checks of `locksql doctor` and
    their repairs (see [`--fix`](#locksql-doctor---fix)): the console
    account must enter every directory down to the project, own

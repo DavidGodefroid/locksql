@@ -22,6 +22,7 @@ import (
 // holds a secret: the console asks for the password.
 type profileSpec struct {
 	name, engine, host, user, database, path, credentials string
+	tls, vaultPath                                        string
 	port                                                  int
 }
 
@@ -36,7 +37,7 @@ var setupNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 // a database profile for the project and the console account's access to
 // it, then the one command that starts the console.
 func runSetup(e env, args []string) int {
-	const usage = "locksql setup [--project DIR] [--client USER] [--trust-binary] [--yes] [--profile NAME --engine E (--path FILE | --host H [--port N] [--user U] [--database D] [--credentials ask|keychain])]"
+	const usage = "locksql setup [--project DIR] [--client USER] [--trust-binary] [--yes] [" + profileFlagsUsage + "]"
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	project := fs.String("project", "", "project directory (default: the project of the current directory)")
@@ -44,14 +45,7 @@ func runSetup(e env, args []string) int {
 	trust := fs.Bool("trust-binary", false, "as locksql install --trust-binary")
 	yes := fs.Bool("yes", false, "run the root steps without asking (sudo may still ask for a password)")
 	var s profileSpec
-	fs.StringVar(&s.name, "profile", "", "name of the profile to add (default dev)")
-	fs.StringVar(&s.engine, "engine", "", "engine of the profile to add: "+strings.Join(setupEngines, ", "))
-	fs.StringVar(&s.host, "host", "", "database host")
-	fs.IntVar(&s.port, "port", 0, "database port")
-	fs.StringVar(&s.user, "user", "", "database user (default: asked at console start)")
-	fs.StringVar(&s.database, "database", "", "the only database served (default: chosen per query)")
-	fs.StringVar(&s.path, "path", "", "SQLite file, relative to the project")
-	fs.StringVar(&s.credentials, "credentials", "", "ask or keychain")
+	s.flags(fs)
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		fmt.Fprintln(e.stderr, "usage:", usage)
 		return exitUsage
@@ -81,7 +75,7 @@ func runSetup(e env, args []string) int {
 		root = abs
 	}
 	given := s.engine != ""
-	if !given && (s.name != "" || s.host != "" || s.port != 0 || s.user != "" || s.database != "" || s.path != "" || s.credentials != "") {
+	if !given && s.anySet() {
 		return fail(exitUsage, "the profile flags need --engine")
 	}
 	if given {
@@ -165,12 +159,7 @@ func runSetup(e env, args []string) int {
 		if err := addProfile(root, s); err != nil {
 			return fail(exitFail, "%v", err)
 		}
-		fmt.Fprintf(e.stdout, "Profile %s written to %s (no secret: the console asks for the password).\n", s.name, configPath(root))
-		if s.engine == config.EngineSQLite {
-			if _, err := os.Stat(filepath.Join(root, s.path)); err != nil {
-				fmt.Fprintf(e.stdout, "%s %s does not exist yet: the console never creates it.\n", p.Yellow("note:"), filepath.Join(root, s.path))
-			}
-		}
+		profileWritten(e, root, s)
 	} else {
 		names := profileNames(existing)
 		fmt.Fprintf(e.stdout, "Kept the profiles of %s: %s\n", configPath(root), strings.Join(names, ", "))
@@ -262,13 +251,13 @@ func completeSpec(s profileSpec) (profileSpec, error) {
 	if !slices.Contains(setupEngines, s.engine) {
 		return s, fmt.Errorf("engine %q: want %s", s.engine, strings.Join(setupEngines, ", "))
 	}
-	for what, v := range map[string]string{"host": s.host, "user": s.user, "database": s.database, "path": s.path} {
+	for what, v := range map[string]string{"host": s.host, "user": s.user, "database": s.database, "path": s.path, "vault path": s.vaultPath} {
 		if strings.IndexFunc(v, func(r rune) bool { return unicode.IsControl(r) }) >= 0 || len(v) > 512 {
 			return s, fmt.Errorf("%s: control characters or too long", what)
 		}
 	}
 	if s.engine == config.EngineSQLite {
-		if s.host != "" || s.port != 0 || s.user != "" || s.database != "" || s.credentials != "" {
+		if s.host != "" || s.port != 0 || s.user != "" || s.database != "" || s.credentials != "" || s.tls != "" || s.vaultPath != "" {
 			return s, errors.New("sqlite takes --path only")
 		}
 		if s.path == "" {
@@ -292,14 +281,32 @@ func completeSpec(s profileSpec) (profileSpec, error) {
 	case "":
 		s.credentials = config.CredentialsAsk
 	case config.CredentialsAsk, config.CredentialsKeychain:
+	case config.CredentialsVault:
+		if s.vaultPath == "" {
+			return s, errors.New("credentials vault needs the vault path, such as database/creds/<role>")
+		}
+		if strings.HasPrefix(s.vaultPath, "-") || strings.HasPrefix(s.vaultPath, "/") || strings.IndexFunc(s.vaultPath, unicode.IsSpace) >= 0 {
+			return s, fmt.Errorf("vault path %q: no spaces, and not starting with - or /", s.vaultPath)
+		}
 	default:
-		return s, fmt.Errorf("credentials %q: want ask or keychain", s.credentials)
+		return s, fmt.Errorf("credentials %q: want ask, keychain or vault", s.credentials)
+	}
+	if s.vaultPath != "" && s.credentials != config.CredentialsVault {
+		return s, errors.New("a vault path needs credentials vault")
+	}
+	if s.tls != "" && config.TLSRank(s.tls) < 0 {
+		return s, fmt.Errorf("tls %q: want disable, prefer, require, verify-ca or verify-full", s.tls)
 	}
 	return s, nil
 }
 
 // askProfile is the profile wizard. It asks for no secret.
 func askProfile(e env, root string) (profileSpec, error) {
+	container := e.inContainer()
+	var taken map[string]config.Profile
+	if cfg, err := config.LoadFrom(root, ""); err == nil && cfg.ProjectRoot == root {
+		taken = cfg.Profiles
+	}
 	br := lineReader(e)
 	ask := func(label, def string) (string, error) {
 		if def != "" {
@@ -317,7 +324,7 @@ func askProfile(e env, root string) (profileSpec, error) {
 		}
 		return l, nil
 	}
-	fmt.Fprintf(e.stdout, "The profile goes to %s, read by both accounts.\nIt never holds a password: the console asks for it, or reads its own keychain.\n", configPath(root))
+	fmt.Fprintf(e.stdout, "The profile goes to %s, read by both accounts.\nIt never holds a password: the console asks for it, or reads it from its keychain or Vault.\n", configPath(root))
 	for {
 		var s profileSpec
 		var err error
@@ -333,7 +340,12 @@ func askProfile(e env, root string) (profileSpec, error) {
 				return s, err
 			}
 		} else if slices.Contains(setupEngines, s.engine) {
-			if s.host, err = ask("Host", "127.0.0.1"); err != nil {
+			host := "127.0.0.1"
+			if container {
+				// Inside a container, 127.0.0.1 is the container itself.
+				host = containerHostGateway
+			}
+			if s.host, err = ask("Host", host); err != nil {
 				return s, err
 			}
 			port, err := ask("Port", strconv.Itoa(config.DefaultPort(s.engine)))
@@ -349,16 +361,39 @@ func askProfile(e env, root string) (profileSpec, error) {
 			if s.database, err = ask("Database (empty: every database the account sees)", ""); err != nil {
 				return s, err
 			}
-			keep, err := ask("Keep the password in the console account's keychain? [y/N]", "n")
+			if !config.IsLoopback(s.host) {
+				// A remote server's certificate is verified by default; a
+				// server on this machine seldom has one.
+				def := config.TLSVerifyFull
+				if s.host == containerHostGateway {
+					def = config.TLSPrefer
+				}
+				if s.tls, err = ask("TLS (disable, prefer, require, verify-ca, verify-full)", def); err != nil {
+					return s, err
+				}
+			}
+			modes := []string{config.CredentialsAsk, config.CredentialsKeychain, config.CredentialsVault}
+			if container {
+				modes = []string{config.CredentialsAsk, config.CredentialsVault} // no keychain in a container
+			}
+			cred, err := ask("Password from ("+strings.Join(modes, ", ")+"; ask: typed at console start)", config.CredentialsAsk)
 			if err != nil {
 				return s, err
 			}
-			s.credentials = config.CredentialsAsk
-			if strings.EqualFold(keep, "y") || strings.EqualFold(keep, "yes") {
-				s.credentials = config.CredentialsKeychain
+			s.credentials = strings.ToLower(cred)
+			if s.credentials == config.CredentialsVault {
+				if s.vaultPath, err = ask("Vault path of the login (username and password)", "database/creds/"+s.name); err != nil {
+					return s, err
+				}
 			}
 		}
-		if s, err = completeSpec(s); err == nil {
+		if s, err = completeSpec(s); err == nil && container && s.credentials == config.CredentialsKeychain {
+			err = errors.New("a container has no keychain: ask or vault")
+		}
+		if _, dup := taken[s.name]; err == nil && dup {
+			err = fmt.Errorf("profile %s already exists", s.name)
+		}
+		if err == nil {
 			return s, nil
 		}
 		fmt.Fprintf(e.stdout, "  %s %v; again:\n", e.paint.Red("invalid:"), err)
@@ -385,13 +420,19 @@ func (s profileSpec) toml() string {
 	if s.database != "" {
 		fmt.Fprintf(&b, "database = %s\n", tomlString(s.database))
 	}
+	if s.tls != "" {
+		fmt.Fprintf(&b, "tls = %s\n", tomlString(s.tls))
+	}
 	fmt.Fprintf(&b, "credentials = %s\n", tomlString(s.credentials))
+	if s.vaultPath != "" {
+		fmt.Fprintf(&b, "vault_path = %s\n", tomlString(s.vaultPath))
+	}
 	return b.String()
 }
 
 const setupConfigHeader = `# locksql project configuration, read by the console and by the agents.
 # It never holds a secret: the console asks for the password, or reads it
-# from its own keychain. See https://github.com/DavidGodefroid/locksql
+# from its own keychain or Vault. See https://github.com/DavidGodefroid/locksql
 `
 
 // addProfile appends the profile to the project's config, creating it
