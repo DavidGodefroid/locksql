@@ -4,6 +4,17 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+### Changed
+
+- **Internal: locksql runs on lockkit.** The product-neutral half of
+  locksql moved to [lockkit](https://github.com/DavidGodefroid/lockkit),
+  shared with the other lock* tools (see CONTRIBUTING.md). No user-visible
+  change: same commands, flags, messages, config keys, IPC protocol, audit
+  lines, approved-policy fingerprints (no re-approval after the upgrade),
+  exit codes, paths and wired agent files, each pinned by a golden test.
+
 ## v0.8.0 (2026-10-19)
 
 ### Added

@@ -16,6 +16,22 @@ issue.
 - By contributing you agree that your work is licensed under the Apache
   License 2.0.
 
+## Where the code lives
+
+The product-neutral half of locksql (console socket and protocol, peer
+checks, approvals, terminal, isolation checks, secrets, audit log, config
+lookup and the approved-policy store, personal-data detectors, output
+caps, error scrubbing, signature checks, MCP plumbing, agent wiring) lives
+in [lockkit](https://github.com/DavidGodefroid/lockkit), shared with the
+other lock* tools; its GUIDE.md is the contract. This repository keeps what
+is SQL: engines, the classifier, the parser and provenance analyzer, the
+SQL policy (tiers, limits, column rules), the SQL refusal codes, locksql's
+console modes and start-up, its MCP tools and its agent texts.
+
+A fix in a shared package goes to lockkit first; locksql then pins the new
+lockkit version in `go.mod`. To work on both at once, add an uncommitted
+`go.work` (`use (. ../lockkit)`, listed in `.git/info/exclude`).
+
 ## Build
 
 ```sh
