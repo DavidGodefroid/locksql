@@ -168,8 +168,8 @@ yesterday?". Each query waits for your `y` in the console.
 `locksql setup` wires every installed agent (Claude Code, Codex, Gemini CLI,
 Cursor) for your account, creates the `locksql` console account with
 `sudo` once you confirm, asks for the database profile (engine, host, user,
-whether the console account's keychain keeps the password; never the
-password itself) and writes it to the project's `.locksql/config.toml`,
+where the password comes from: typed, the console account's keychain or
+Vault; never the password itself) and writes it to the project's `.locksql/config.toml`,
 gives the console account access to the project, and prints the command of
 step 3. Log out and in again after the first setup: your account joins the
 `locksql-clients` group. On macOS, setup prints the root commands for an

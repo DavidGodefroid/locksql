@@ -51,6 +51,8 @@ type env struct {
 	chk *updateCheckEnv
 	// euid is the effective user id; nil means os.Geteuid.
 	euid func() int
+	// container reports a process in a container; nil means the real check.
+	container func() bool
 	// paint colours human-facing output on stdout; the zero value is plain.
 	paint ui.Painter
 }

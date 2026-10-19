@@ -4,9 +4,22 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## Unreleased
+## v0.8.0 (2026-10-19)
 
 ### Added
+
+- **`locksql profile add`.** The database profile step of `locksql setup`
+  alone, for a console in a container (docs/docker.md): it appends a profile
+  to `.locksql/config.toml` from its questions or its flags. In a container
+  the wizard offers `host.docker.internal` as the host and never the
+  keychain.
+- **The setup wizard asks for TLS and Vault.** A remote host gets a `tls`
+  question (default `verify-full`), and the password source is now `ask`,
+  `keychain` or `vault` with its path (`--tls`, `--credentials vault`,
+  `--vault-path`).
+- **A Docker image with the vault CLI.** `docker build --target vault`
+  adds the HashiCorp Vault CLI, checked against pinned sums, for
+  `credentials = "vault"`. The default image stays without it.
 
 - **`locksql update`.** Replaces `/usr/local/bin/locksql` with the latest
   release, or the one `--version` names, from your own account, asking for
