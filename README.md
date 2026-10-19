@@ -648,6 +648,14 @@ binary's version check out, and asks for `sudo` only for that copy. It needs
 `cosign` on PATH and a binary installed as above, owned by root; packages
 upgrade with their package manager. Restart the console afterwards. See
 [docs/usage.md](docs/usage.md#locksql-update).
+`locksql console` and `locksql doctor` print on stderr when a newer release
+exists (`locksql vX available (you run vY): locksql update`, or the package
+or download instructions for other installs). They check at most once a day,
+with a single GET of `https://github.com/DavidGodefroid/locksql/releases/latest`
+(no added header or identifier, 2 s timeout), cached in
+`$XDG_CACHE_HOME/locksql/update-check`; a failure prints nothing.
+`LOCKSQL_NO_UPDATE_CHECK=1` turns it off. `locksql mcp` and the other
+commands never check.
 
 **Debian, Ubuntu, Fedora, RHEL, Alpine.** Packages install
 `/usr/bin/locksql`, owned by root. Copy-paste, the latest version and your

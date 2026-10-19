@@ -46,6 +46,9 @@ type env struct {
 	// upd is what locksql update reads from the system; nil means the
 	// real one.
 	upd *updateEnv
+	// chk is what the new-version notice of console and doctor reads from
+	// the system; nil means the real one.
+	chk *updateCheckEnv
 	// euid is the effective user id; nil means os.Geteuid.
 	euid func() int
 	// container reports a process in a container; nil means the real check.

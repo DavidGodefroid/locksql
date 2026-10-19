@@ -30,6 +30,7 @@ func runConsole(e env, args []string) int {
 	skip := fs.Bool("skip-permissions", false, "same as --auto (older name)")
 	allowUnmask := fs.Bool("allow-unmask", false, "let clients ask for unmasked PII output; each such query is still approved here, never auto-approved (off by default: unmask requests are refused); :unmask switches it while the console runs")
 	showResults := fs.Bool("show-results", false, "print in this console, in clear, the result of each masked query it runs; the client still gets it masked")
+	noUpdateCheck := fs.Bool(strings.TrimPrefix(noUpdateCheckFlag, "--"), false, "internal: no new-version check (the handoff passes LOCKSQL_NO_UPDATE_CHECK on with it)")
 	project := fs.String("project", "", "project directory (default: the current directory); the console account opens the agent's project from its own session")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -45,10 +46,16 @@ func runConsole(e env, args []string) int {
 	// Started from another account of a separated setup: open the console
 	// in the console account, or say how.
 	if proj, err := consoleProject(e.cwd, *project); err == nil {
-		a := consoleArgs{profile: *profile, project: proj, auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults}
+		a := consoleArgs{profile: *profile, project: proj, auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults,
+			noUpdateCheck: *noUpdateCheck || e.updateCheckOff()}
 		if code, handled := handoffConsole(e, a); handled {
 			return code
 		}
+	}
+	// This process runs the console: the new-version check runs here, in
+	// the console account, never in the agent's before the handoff.
+	if !*noUpdateCheck {
+		updateNotice(e)
 	}
 	fmt.Fprint(e.stdout, e.paint.Banner(version))
 	fmt.Fprintln(e.stdout)
