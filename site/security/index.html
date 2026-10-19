@@ -84,7 +84,7 @@
   <h2 id="enforces">What the console enforces</h2>
   <div class="prose">
     <h3 id="key-holder">One key holder</h3>
-    <p>Credentials are typed at console start (no echo) or read from the OS keychain. They never appear in argv, environment, files, logs, the socket protocol or error messages. The console disables core dumps. <code>credentials_ttl</code> makes it ask again after a set time (vault leases).</p>
+    <p>Credentials are typed at console start (no echo), or read from the OS keychain or HashiCorp Vault. They never appear in argv, environment, files, logs, the socket protocol or error messages. The console disables core dumps. <code>credentials_ttl</code> makes it ask again after a set time (vault leases).</p>
 
     <h3 id="os-separation">OS separation</h3>
     <p><code>locksql install</code> creates a <code>locksql</code> console account and a <code>locksql-clients</code> group: the console runs as that account in its own login session, the agent’s account only reaches its socket, and the kernel checks every peer. The console refuses to start without this setup, since an agent in the console’s own account could read or type into its terminal.</p>
@@ -297,7 +297,7 @@ certificate host keys and forwarding to a Unix socket on the bastion.</p>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
       </ul>
-      <p>Pre-release (<code>v0.5.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (<code>v0.8.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
     </div>
   </footer>
 </body>

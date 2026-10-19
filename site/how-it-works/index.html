@@ -61,7 +61,7 @@
   <pre tabindex="0" class="diagram" role="img" aria-label="Process layout: the console in your terminal holds credentials, policy, classifier, EXPLAIN, approval prompt, masking and audit, and talks to the database over its native protocol; the agent side runs locksql mcp or the locksql CLI with no secrets and no database connection; they talk over a local socket with JSON-RPC."><code> Your terminal                                    Agent side
  ┌───────────────────────────────────┐            ┌──────────────────────────────┐
  │ locksql console --profile dev     │  local     │ locksql mcp   (stdio MCP)    │◄── AI agent
- │  credentials (ask | OS keychain)  │  socket    │ locksql plan|run|status|pii  │◄── AI via shell
+ │  credentials: ask·keychain·Vault  │  socket    │ locksql plan|run|status|pii  │◄── AI via shell
  │  policy · classifier · EXPLAIN    │◄──────────►│ no secrets, no DB connection │
  │  approval prompt · masking · audit│  JSON-RPC  └──────────────────────────────┘
  └─────────────────┬─────────────────┘
@@ -342,7 +342,7 @@ SELECT COUNT(*) FROM orders o JOIN customers c ON o.customer_id = c.id
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
       </ul>
-      <p>Pre-release (<code>v0.5.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (<code>v0.8.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
     </div>
   </footer>
 </body>
