@@ -13,15 +13,6 @@ const (
 	EngineSQLite   = "sqlite"
 )
 
-// Credentials modes.
-const (
-	CredentialsAsk      = "ask"
-	CredentialsKeychain = "keychain"
-	// CredentialsVault reads the user and password from HashiCorp Vault
-	// with the vault CLI at every connection (Profile.VaultPath).
-	CredentialsVault = "vault"
-)
-
 // defaultPorts holds the port used when a network profile leaves port unset.
 var defaultPorts = map[string]int{
 	EngineMariaDB:  3306,
@@ -32,9 +23,6 @@ var defaultPorts = map[string]int{
 // DefaultPort is the port of engine when a profile leaves port unset, 0
 // for an engine without one (sqlite).
 func DefaultPort(engine string) int { return defaultPorts[engine] }
-
-// DefaultSSHPort is the port of an ssh table that leaves port unset.
-const DefaultSSHPort = 22
 
 // knownDetectors lists the value detectors a profile may enable.
 var knownDetectors = map[string]bool{

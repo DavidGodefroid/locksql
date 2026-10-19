@@ -1,18 +1,16 @@
 package config
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
-	"runtime"
+	"io/fs"
 	"slices"
 	"strconv"
 	"time"
+
+	kconfig "github.com/DavidGodefroid/lockkit/config"
+	"github.com/DavidGodefroid/lockkit/kit"
+
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 // Policy is the security-relevant view of one profile plus its PII rules.
@@ -25,15 +23,6 @@ type Policy struct {
 	// PIIModes maps a mask pattern to its mode when it is not the default
 	// (redact): partial or email.
 	PIIModes map[string]string `json:"pii_modes,omitempty"`
-}
-
-// Change is one difference between two policies. For list fields (detectors,
-// pii.mask, pii.allow) each added or removed element is its own Change, with
-// Old empty for an addition and New empty for a removal.
-type Change struct {
-	Field    string
-	Old, New string
-	Loosens  bool
 }
 
 // NewPolicy builds a policy with sorted, de-duplicated PII lists.
@@ -50,21 +39,10 @@ func (p Policy) WithModes(m map[string]string) Policy {
 // DefaultMaskMode is the mode of a mask rule that sets none.
 const DefaultMaskMode = "redact"
 
-// sortedSet returns a sorted, de-duplicated, non-nil copy of s.
-func sortedSet(s []string) []string {
-	out := slices.Clone(s)
-	slices.Sort(out)
-	out = slices.Compact(out)
-	if out == nil {
-		out = []string{}
-	}
-	return out
-}
-
 func canonical(p Policy) Policy {
-	p.Profile.Detectors = sortedSet(p.Profile.Detectors)
-	p.PIIMask = sortedSet(p.PIIMask)
-	p.PIIAllow = sortedSet(p.PIIAllow)
+	p.Profile.Detectors = kconfig.SortedSet(p.Profile.Detectors)
+	p.PIIMask = kconfig.SortedSet(p.PIIMask)
+	p.PIIAllow = kconfig.SortedSet(p.PIIAllow)
 	var modes map[string]string
 	for pat, m := range p.PIIModes {
 		if m == "" || m == DefaultMaskMode {
@@ -105,24 +83,9 @@ func (p Policy) modeOf(pat string) string {
 
 // Fingerprint returns the hex sha256 of the policy's canonical JSON.
 // List order does not change the fingerprint.
-func Fingerprint(p Policy) string {
-	b, err := json.Marshal(canonical(p))
-	if err != nil {
-		// Only an out-of-range Tier can fail; fingerprint its raw form so
-		// that it still differs from every valid policy.
-		b = fmt.Appendf(nil, "invalid:%#v", p)
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
-}
-
-// SSHString shows a bastion in a policy change.
-func SSHString(s *SSHProfile) string {
-	if s == nil {
-		return "none"
-	}
-	return s.User + "@" + s.Host + ":" + strconv.Itoa(s.Port) + " (" + s.Auth + ")"
-}
+// Only an out-of-range Tier can fail to encode; lockkit then fingerprints
+// its raw form so that it still differs from every valid policy.
+func Fingerprint(p Policy) string { return kconfig.Fingerprint(canonical(p)) }
 
 // Diff lists the changes from approved to current and marks each loosening
 // (spec section 4): a higher tier, production true→false, a larger limit
@@ -188,7 +151,7 @@ func Diff(approved, current Policy) []Change {
 
 	limit := func(field string, o, n int64, format func(int64) string) {
 		if o != n {
-			out = append(out, Change{Field: "limits." + field, Old: format(o), New: format(n), Loosens: looserLimit(o, n)})
+			out = append(out, Change{Field: "limits." + field, Old: format(o), New: format(n), Loosens: kconfig.LooserLimit(o, n)})
 		}
 	}
 	num := func(v int64) string { return strconv.FormatInt(v, 10) }
@@ -233,12 +196,12 @@ func Diff(approved, current Policy) []Change {
 	}
 	if ap.CredentialsTTL != cp.CredentialsTTL {
 		out = append(out, Change{Field: "credentials_ttl", Old: dur(int64(ap.CredentialsTTL)), New: dur(int64(cp.CredentialsTTL)),
-			Loosens: looserLimit(int64(ap.CredentialsTTL), int64(cp.CredentialsTTL))})
+			Loosens: kconfig.LooserLimit(int64(ap.CredentialsTTL), int64(cp.CredentialsTTL))})
 	}
 
-	out = append(out, setDiff("detectors", ap.Detectors, cp.Detectors, true)...)
-	out = append(out, setDiff("pii.mask", a.PIIMask, c.PIIMask, true)...)
-	out = append(out, setDiff("pii.allow", a.PIIAllow, c.PIIAllow, false)...)
+	out = append(out, kconfig.SetDiff("detectors", ap.Detectors, cp.Detectors, true)...)
+	out = append(out, kconfig.SetDiff("pii.mask", a.PIIMask, c.PIIMask, true)...)
+	out = append(out, kconfig.SetDiff("pii.allow", a.PIIAllow, c.PIIAllow, false)...)
 	for _, pat := range c.PIIMask {
 		if _, found := slices.BinarySearch(a.PIIMask, pat); !found {
 			if m := c.modeOf(pat); m != DefaultMaskMode {
@@ -256,69 +219,21 @@ func Diff(approved, current Policy) []Change {
 	return out
 }
 
-// looserLimit reports whether moving a limit from o to n loosens it.
-// Zero means unlimited.
-func looserLimit(o, n int64) bool {
-	switch {
-	case n == 0:
-		return o != 0
-	case o == 0:
-		return false
-	default:
-		return n > o
-	}
-}
-
-// setDiff reports removed and added elements of two sorted sets. When
-// removalLoosens, a removal loosens the policy; otherwise an addition does.
-func setDiff(field string, old, cur []string, removalLoosens bool) []Change {
-	var out []Change
-	for _, v := range old {
-		if _, found := slices.BinarySearch(cur, v); !found {
-			out = append(out, Change{Field: field, Old: v, Loosens: removalLoosens})
-		}
-	}
-	for _, v := range cur {
-		if _, found := slices.BinarySearch(old, v); !found {
-			out = append(out, Change{Field: field, New: v, Loosens: !removalLoosens})
-		}
-	}
-	return out
-}
-
-var stateKeyRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
-
 // ApprovedKey names the approved-policy file of a profile:
 // <ProjectHash(root)>-<profile>, or user-<profile> for a profile that comes
 // from the user config only (root == "").
-func ApprovedKey(root, profile string) string {
-	if root == "" {
-		return "user-" + profile
-	}
-	return ProjectHash(root) + "-" + profile
-}
-
-func approvedPath(stateDir, key string) (string, error) {
-	if !stateKeyRe.MatchString(key) {
-		return "", fmt.Errorf("config: invalid approved-policy key %q", key)
-	}
-	return filepath.Join(stateDir, appDirName, "approved", key+".json"), nil
-}
+func ApprovedKey(root, profile string) string { return kconfig.ApprovedKey(root, profile) }
 
 // LoadApproved reads <stateDir>/locksql/approved/<key>.json. When no policy
 // was approved yet, the error wraps fs.ErrNotExist.
 func LoadApproved(stateDir, key string) (*Policy, error) {
-	path, err := approvedPath(stateDir, key)
+	var p Policy
+	ok, err := kconfig.LoadApproved(product.P, stateDir, key, &p)
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("config: approved policy: %w", err)
-	}
-	var p Policy
-	if err := json.Unmarshal(b, &p); err != nil {
-		return nil, fmt.Errorf("config: approved policy %s: %w", path, err)
+	if !ok {
+		return nil, fmt.Errorf("config: approved policy: %w", fs.ErrNotExist)
 	}
 	p = canonical(p)
 	return &p, nil
@@ -327,67 +242,10 @@ func LoadApproved(stateDir, key string) (*Policy, error) {
 // SaveApproved atomically writes the policy to
 // <stateDir>/locksql/approved/<key>.json with mode 0600.
 func SaveApproved(stateDir, key string, p Policy) error {
-	path, err := approvedPath(stateDir, key)
-	if err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(canonical(p), "", "  ")
-	if err != nil {
-		return fmt.Errorf("config: approved policy: %w", err)
-	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("config: approved policy: %w", err)
-	}
-	tmp, err := os.CreateTemp(dir, "."+key+".*.tmp")
-	if err != nil {
-		return fmt.Errorf("config: approved policy: %w", err)
-	}
-	tmpName := tmp.Name()
-	ok := false
-	defer func() {
-		if !ok {
-			_ = tmp.Close()
-			_ = os.Remove(tmpName)
-		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		return fmt.Errorf("config: approved policy: %w", err)
-	}
-	if _, err := tmp.Write(append(b, '\n')); err != nil {
-		return fmt.Errorf("config: approved policy: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("config: approved policy: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("config: approved policy: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("config: approved policy: %w", err)
-	}
-	ok = true
-	return nil
+	return kconfig.SaveApproved(product.P, stateDir, key, canonical(p))
 }
 
 // StateDir returns the user state directory (without the locksql suffix):
 // $XDG_STATE_HOME or ~/.local/state on Linux and other Unix systems,
 // and os.UserConfigDir() on macOS.
-func StateDir() (string, error) {
-	switch runtime.GOOS {
-	case "darwin":
-		return os.UserConfigDir()
-	default:
-		if d := os.Getenv("XDG_STATE_HOME"); d != "" && filepath.IsAbs(d) {
-			return d, nil
-		}
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		if home == "" {
-			return "", errors.New("config: no home directory for the state dir")
-		}
-		return filepath.Join(home, ".local", "state"), nil
-	}
-}
+func StateDir() (string, error) { return kit.StateBase() }
