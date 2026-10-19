@@ -53,7 +53,7 @@
 <h1>Install locksql</h1>
 <div class="prose">
   <p class="lead">Every release ships a static binary for Linux and macOS (amd64, arm64), Linux packages, a <code>checksums.txt</code> and its cosign signature. No Go toolchain is needed.</p>
-  <p>locksql is a pre-release (<code>v0.5.x</code>). It supports Linux and macOS, on amd64 and arm64. On Windows it runs inside WSL2 (<a href="#windows">see below</a>); native Windows is not supported. A <a href="#docker">Docker image</a> runs it with nothing else installed.</p>
+  <p>locksql is a pre-release (<code>v0.8.x</code>). It supports Linux and macOS, on amd64 and arm64. On Windows it runs inside WSL2 (<a href="#windows">see below</a>); native Windows is not supported. A <a href="#docker">Docker image</a> runs it with nothing else installed.</p>
 </div>
 
 <section aria-labelledby="script">
@@ -61,10 +61,10 @@
   <p class="prose">Downloads the archive for your OS and architecture, checks it against <code>checksums.txt</code> (and the signature when <code>cosign</code> is on PATH), then installs <code>/usr/local/bin/locksql</code>, with <code>sudo</code> if needed:</p>
   <pre tabindex="0"><code>curl -fsSLO https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh
 less install.sh                     # read it first
-sh install.sh                       # LOCKSQL_VERSION=v0.5.0 to pin a version</code></pre>
+sh install.sh                       # LOCKSQL_VERSION=v0.8.0 to pin a version</code></pre>
   <p>Or, in one line:</p>
   <pre tabindex="0"><code>curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh</code></pre>
-  <p class="prose"><code>LOCKSQL_INSTALL_DIR=~/.local/bin</code> installs without <code>sudo</code>, but the binary is then owned by your account and <code>locksql doctor</code> warns: in separated mode, the console must run a binary the agent cannot replace (<code>sudo locksql install</code> copies it to <code>/usr/local/bin</code>). To upgrade, run the script again.</p>
+  <p class="prose"><code>LOCKSQL_INSTALL_DIR=~/.local/bin</code> installs without <code>sudo</code>, but the binary is then owned by your account and <code>locksql doctor</code> warns: in separated mode, the console must run a binary the agent cannot replace (<code>sudo locksql install</code> copies it to <code>/usr/local/bin</code>). To upgrade, run <code>locksql update</code> from your own account: it checks the cosign signature and the checksum of the new release, and asks <code>sudo</code> only for the final copy. <code>locksql console</code> and <code>locksql doctor</code> tell you when a newer release exists (at most one check a day; <code>LOCKSQL_NO_UPDATE_CHECK=1</code> turns it off).</p>
   <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/scripts/install.sh">Read the install script source</a></p>
 </section>
 
@@ -110,11 +110,13 @@ sudo install -m 0755 locksql /usr/local/bin/locksql</code></pre>
   <p class="prose">From your account (the one your agents run as), in the project:</p>
   <pre tabindex="0"><code>locksql setup [--project DIR] [--client USER] [--trust-binary] [--yes]</code></pre>
   <div class="prose">
-    <p>It wires every installed agent for your account, creates the <code>locksql</code> console account with <code>sudo</code> once you confirm, asks for the database profile (engine, host, user, whether the console account’s keychain keeps the password; never the password itself) and writes it to the project’s <code>.locksql/config.toml</code>, gives the console account access to the project, and prints the command that starts the console. Run again, it changes nothing already in place.</p>
+    <p>It wires every installed agent for your account, creates the <code>locksql</code> console account with <code>sudo</code> once you confirm, asks for the database profile (engine, host, user, the TLS mode of a remote host, and where the password comes from: typed at console start, the console account’s keychain or HashiCorp Vault; never the password itself) and writes it to the project’s <code>.locksql/config.toml</code>, gives the console account access to the project, and prints the command that starts the console. Run again, it changes nothing already in place.</p>
     <p>Log out and in again after the first setup: your account joins the <code>locksql-clients</code> group. On macOS, setup prints the root commands for an administrator to run, then you run setup again. Without a terminal (CI, scripts), setup needs <code>--yes</code> and the profile as flags:</p>
   </div>
   <pre tabindex="0"><code>locksql setup --yes --engine sqlite --path demo.db
-locksql setup --yes --profile uat --engine postgres --host db.internal --user reporting</code></pre>
+locksql setup --yes --profile uat --engine postgres --host db.internal --user reporting
+locksql setup --yes --profile prod --engine postgres --host db.internal --credentials vault --vault-path database/creds/ro</code></pre>
+  <p class="prose"><code>locksql profile add</code>, with the same profile flags or its questions, adds another profile to the project without the other steps.</p>
   <p class="prose">The steps below are what setup does, one by one. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#locksql-setup"><code>locksql setup</code> in the usage guide</a>.</p>
 
   <h3 id="wire">Wire your agents</h3>
@@ -144,7 +146,8 @@ host        = "db.uat.example.com"  # or path = "app.db" for sqlite
 port        = 3306                  # default 3306, or 5432 for postgres
 user        = ""                    # empty: asked at console start
 database    = ""                    # empty: chosen per query (--db)
-credentials = "ask"                 # ask | keychain
+credentials = "ask"                 # ask | keychain | vault
+vault_path  = ""                    # with vault: "database/creds/&lt;role&gt;" or a KV secret
 tls         = "verify-full"         # disable | prefer | require | verify-ca | verify-full
 tls_ca      = ""                    # optional PEM bundle replacing the system roots
 tls_cert    = ""                    # optional client certificate (PEM)
@@ -201,11 +204,14 @@ key         = "~/.ssh/id_ed25519"   # in the console account's home</code></pre>
     <p>Build the image (from a clone, or straight from GitHub):</p>
   </div>
   <pre tabindex="0"><code>docker build -t locksql https://github.com/DavidGodefroid/locksql.git</code></pre>
-  <p class="prose">Mount the project at its own path: the socket name is derived from it, so the console and the agent must see the same one. In the project directory, write <code>.locksql/config.toml</code> and the agent files, then edit the profile:</p>
+  <p class="prose">Mount the project at its own path: the socket name is derived from it, so the console and the agent must see the same one. In the project directory, write the agent files, then add a database profile with the wizard (it asks for no password):</p>
   <pre tabindex="0"><code>docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
-  -v "$PWD:$PWD" -w "$PWD" locksql init claude</code></pre>
+  -v "$PWD:$PWD" -w "$PWD" locksql init claude
+docker run -it --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+  -v "$PWD:$PWD" -w "$PWD" locksql profile add</code></pre>
   <div class="prose">
-    <p>Inside a container <code>localhost</code> is the container: a database on your machine is <code>host = "host.docker.internal"</code> (on Linux, add <code>--add-host=host.docker.internal:host-gateway</code> to the console’s <code>docker run</code>), which is not loopback, so set <code>tls</code> for a local server without TLS. Keep <code>credentials = "ask"</code>: the container has no keychain.</p>
+    <p>Inside a container <code>localhost</code> is the container: the wizard offers <code>host = "host.docker.internal"</code> for a database on your machine (on Linux, add <code>--add-host=host.docker.internal:host-gateway</code> to the console’s <code>docker run</code>) with <code>tls = "prefer"</code>, and never the keychain, which the container does not have: the password is typed at console start, or read from Vault.</p>
+    <p>For <code>credentials = "vault"</code>, build the image with the vault CLI (<code>docker build --target vault</code>; the default image leaves it out, it adds some 550 MB), add <code>-e VAULT_ADDR=…</code> to the console’s <code>docker run</code> and log in once as the console account: the token stays in the <code>locksql-home</code> volume.</p>
     <p>Start the console in a terminal you keep in view:</p>
   </div>
   <pre tabindex="0"><code>docker run -it --rm --name locksql-console --user locksql \
@@ -246,7 +252,7 @@ key         = "~/.ssh/id_ed25519"   # in the console account's home</code></pre>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
       </ul>
-      <p>Pre-release (<code>v0.5.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (<code>v0.8.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
     </div>
   </footer>
 </body>

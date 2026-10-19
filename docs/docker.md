@@ -27,7 +27,7 @@ or without cloning:
 docker build -t locksql https://github.com/DavidGodefroid/locksql.git
 ```
 
-`--build-arg VERSION=v0.5.0` sets the version that `locksql version` prints.
+`--build-arg VERSION=v0.8.0` sets the version that `locksql version` prints.
 
 ## Set up a project
 
