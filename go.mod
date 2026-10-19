@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/DavidGodefroid/lockkit v0.0.0-20261019180038-ee649145c816
+	github.com/DavidGodefroid/lockkit v0.0.0-20261019182012-bd757963c5db
 	github.com/creack/pty v1.1.24
 	github.com/go-mysql-org/go-mysql v1.16.0
 	github.com/jackc/pgx/v5 v5.11.0

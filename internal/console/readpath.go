@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	kconsole "github.com/DavidGodefroid/lockkit/console"
+
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/sqlast"
@@ -22,7 +24,7 @@ import (
 // it: the answer to query.run, success or failure, leaves at the next
 // multiple of it after the run started. A query cannot turn the time it
 // takes into a fine-grained signal (a timing side channel).
-const ResponseQuantum = 250 * time.Millisecond
+const ResponseQuantum = kconsole.ResponseQuantum
 
 // genericFailure is what a client learns when the database rejects a
 // statement: never the server's message, which can quote values.
@@ -425,22 +427,7 @@ func toInt(v any) (int64, bool) {
 }
 
 // level waits until the next multiple of ResponseQuantum after start.
-func (s *Server) level(ctx context.Context, start time.Time) {
-	if s.quantum <= 0 {
-		return
-	}
-	el := time.Since(start)
-	wait := s.quantum - el%s.quantum
-	if wait == s.quantum && el > 0 {
-		return
-	}
-	t := time.NewTimer(wait)
-	defer t.Stop()
-	select {
-	case <-t.C:
-	case <-ctx.Done():
-	}
-}
+func (s *Server) level(ctx context.Context, start time.Time) { kconsole.Level(ctx, s.quantum, start) }
 
 // explainResult is the result of an approved EXPLAIN statement: the
 // engine's plan, as the console read it.

@@ -314,10 +314,9 @@ func TestHardenRefusal(t *testing.T) {
 func TestConnectEndsOnTooManyNoMatch(t *testing.T) {
 	st, io, _ := keychainStarter(t, 3307)
 	io.secrets = []string{"typed"}
-	io.answers = []string{"y"}
-	v := &fingerprint.Fake{Results: []error{fingerprint.ErrNoMatch}}
-	a := newFingerprintApprover(io, v, "left-index-finger", time.Second)
-	a.(*fingerprintApprover).noMatch = 2 // two misses already, in an earlier decision
+	io.answers = []string{"y", "y", "y"}
+	v := &fingerprint.Fake{Results: []error{fingerprint.ErrNoMatch, fingerprint.ErrNoMatch, fingerprint.ErrNoMatch}}
+	a := twoMisses(newFingerprintApprover(io, v, "left-index-finger", time.Second)) // in earlier decisions
 	st.approver = a
 	sess, err := st.connect(context.Background(), true)
 	if err == nil || err.Error() != "console: fingerprint: three non-matching fingers" {
@@ -341,17 +340,17 @@ func TestStartPolicyChangeLockout(t *testing.T) {
 	if err := config.SaveApproved(state, key, config.NewPolicy(p, []string{"*.*.email"}, nil)); err != nil {
 		t.Fatal(err)
 	}
-	io := &fakeIO{answers: []string{"y"}}
-	v := &fingerprint.Fake{Results: []error{fingerprint.ErrNoMatch}}
-	a := newFingerprintApprover(io, v, "left-index-finger", time.Second)
-	a.(*fingerprintApprover).noMatch = 2
+	io := &fakeIO{answers: []string{"y", "y", "y"}}
+	v := &fingerprint.Fake{Results: []error{fingerprint.ErrNoMatch, fingerprint.ErrNoMatch, fingerprint.ErrNoMatch}}
+	a := twoMisses(newFingerprintApprover(io, v, "left-index-finger", time.Second))
+	before := v.Calls
 	st := &starter{io: io, log: log, profile: p, approver: a}
 	// The mask rule is gone: a loosening, reviewed.
 	if _, _, err := st.startPolicy(context.Background(), state, key, config.NewPolicy(p, nil, nil)); err != nil {
 		t.Fatalf("startPolicy: %v", err)
 	}
-	if v.Calls != 1 {
-		t.Fatalf("Verify calls = %d: the change was not reviewed", v.Calls)
+	if v.Calls != before+1 {
+		t.Fatalf("Verify calls = %d: the change was not reviewed", v.Calls-before)
 	}
 	if err := st.checkLockedOut(); err == nil || !strings.Contains(err.Error(), "three non-matching fingers") {
 		t.Fatalf("checkLockedOut = %v", err)

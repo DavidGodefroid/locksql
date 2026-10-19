@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/lockkit/tunnel"
 	"github.com/DavidGodefroid/lockkit/ui"
@@ -27,8 +28,9 @@ import (
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 )
 
-// ErrConfig marks usage and configuration errors (exit code 3).
-var ErrConfig = errors.New("configuration error")
+// ErrConfig marks usage and configuration errors (exit code 3). It is
+// lockkit's, which the isolation checks wrap too.
+var ErrConfig = kconsole.ErrConfig
 
 // errPrivilegeAudit marks a reconnection stopped by the privilege audit:
 // the console ends, as it would have at start-up.
@@ -409,9 +411,6 @@ func refuseX11Production(iso *isolation, stateDir, key string, p config.Profile)
 	}
 	return nil // none yet, or unreadable: startPolicy reports it
 }
-
-// hardenProcess is harden; tests replace it.
-var hardenProcess = harden
 
 // hardenRefusal is the error of a console whose core-dump protection could
 // not be set up (hardenErr) on a production profile, where that protection
