@@ -11,7 +11,8 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/DavidGodefroid/locksql/internal/secrets"
+	"github.com/DavidGodefroid/lockkit/secrets"
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 const forgetConfig = `
@@ -47,7 +48,7 @@ func forgetEnv(t *testing.T, terminal bool) (env, *bytes.Buffer, *bytes.Buffer) 
 
 func TestForgetDeletesTheKeychainItem(t *testing.T) {
 	keyring.MockInit()
-	if err := secrets.KeychainSet("uat", "db.uat.example.com", 3306, []byte("s3cret")); err != nil {
+	if err := product.Keychain.Set("uat", "db.uat.example.com", 3306, []byte("s3cret")); err != nil {
 		t.Fatal(err)
 	}
 	e, out, errb := forgetEnv(t, true)
@@ -60,7 +61,7 @@ func TestForgetDeletesTheKeychainItem(t *testing.T) {
 	if !strings.Contains(out.String(), "uat@db.uat.example.com:3306") {
 		t.Errorf("stdout does not name the item: %q", out.String())
 	}
-	if err := secrets.KeychainHas("uat", "db.uat.example.com", 3306); !errors.Is(err, secrets.ErrNotFound) {
+	if err := product.Keychain.Has("uat", "db.uat.example.com", 3306); !errors.Is(err, secrets.ErrNotFound) {
 		t.Errorf("item still there: %v", err)
 	}
 	// A second forget finds nothing and says so; that is not a failure.
@@ -77,7 +78,7 @@ func TestForgetDeletesTheSSHKeychainItem(t *testing.T) {
 		port int
 	}{{"db.internal", 5432}, {"ssh:bastion.example.com", 22}}
 	for _, it := range items {
-		if err := secrets.KeychainSet("tun", it.host, it.port, []byte("s3cret")); err != nil {
+		if err := product.Keychain.Set("tun", it.host, it.port, []byte("s3cret")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -86,7 +87,7 @@ func TestForgetDeletesTheSSHKeychainItem(t *testing.T) {
 		t.Fatalf("code = %d, stderr = %q", code, errb.String())
 	}
 	for _, it := range items {
-		if err := secrets.KeychainHas("tun", it.host, it.port); !errors.Is(err, secrets.ErrNotFound) {
+		if err := product.Keychain.Has("tun", it.host, it.port); !errors.Is(err, secrets.ErrNotFound) {
 			t.Errorf("item %s still there: %v", it.host, err)
 		}
 		if !strings.Contains(out.String(), secrets.KeychainAccount("tun", it.host, it.port)) {
@@ -94,14 +95,14 @@ func TestForgetDeletesTheSSHKeychainItem(t *testing.T) {
 		}
 	}
 	// Only the SSH secret saved: the missing DB item is not a failure.
-	if err := secrets.KeychainSet("tun", "ssh:bastion.example.com", 22, []byte("s3cret")); err != nil {
+	if err := product.Keychain.Set("tun", "ssh:bastion.example.com", 22, []byte("s3cret")); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
 	if code := runEnv(e, []string{"forget", "--profile", "tun"}); code != exitOK {
 		t.Fatalf("second forget: code = %d, stderr = %q", code, errb.String())
 	}
-	if err := secrets.KeychainHas("tun", "ssh:bastion.example.com", 22); !errors.Is(err, secrets.ErrNotFound) {
+	if err := product.Keychain.Has("tun", "ssh:bastion.example.com", 22); !errors.Is(err, secrets.ErrNotFound) {
 		t.Errorf("ssh item still there: %v", err)
 	}
 	if !strings.Contains(out.String(), "no keychain secret for tun@db.internal:5432") || !strings.Contains(out.String(), "removed the keychain secret of tun@ssh:bastion.example.com:22") {
@@ -114,7 +115,7 @@ func TestForgetDeletesTheSSHKeychainItem(t *testing.T) {
 func TestForgetDeletesLegacyItems(t *testing.T) {
 	keyring.MockInit()
 	for _, account := range []string{"tun@db.internal", "tun@ssh:bastion.example.com"} {
-		if err := keyring.Set(secrets.KeychainService, account, "s3cret"); err != nil {
+		if err := keyring.Set(product.P.KeychainService, account, "s3cret"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -123,7 +124,7 @@ func TestForgetDeletesLegacyItems(t *testing.T) {
 		t.Fatalf("code = %d, stderr = %q", code, errb.String())
 	}
 	for _, account := range []string{"tun@db.internal", "tun@ssh:bastion.example.com"} {
-		if _, err := keyring.Get(secrets.KeychainService, account); !errors.Is(err, keyring.ErrNotFound) {
+		if _, err := keyring.Get(product.P.KeychainService, account); !errors.Is(err, keyring.ErrNotFound) {
 			t.Errorf("legacy item %s still there: %v", account, err)
 		}
 	}

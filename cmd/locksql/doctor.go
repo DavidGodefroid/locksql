@@ -18,14 +18,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DavidGodefroid/lockkit/secrets"
+	"github.com/DavidGodefroid/lockkit/sysconf"
+	"github.com/DavidGodefroid/lockkit/ui"
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
-	"github.com/DavidGodefroid/locksql/internal/secrets"
-	"github.com/DavidGodefroid/locksql/internal/sysconf"
-	"github.com/DavidGodefroid/locksql/internal/ui"
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 // Check outcomes.
@@ -78,7 +79,7 @@ type doctorEnv struct {
 func realDoctorEnv() doctorEnv {
 	return doctorEnv{
 		goos:       runtime.GOOS,
-		loadSys:    sysconf.Load,
+		loadSys:    product.LoadSys,
 		display:    sysconf.DetectDisplay,
 		current:    user.Current,
 		lookupUser: user.Lookup,
@@ -115,7 +116,7 @@ func realDoctorEnv() doctorEnv {
 		ownerOf:    fileOwner,
 		tiocsti:    sysconf.LegacyTIOCSTI,
 		ptrace:     sysconf.PtraceScope,
-		keychain:   secrets.KeychainHas,
+		keychain:   product.Keychain.Has,
 		readFile:   os.ReadFile,
 		tlsProbe: func(p config.Profile) ([]*x509.Certificate, error) {
 			e, err := engine.Get(p.Engine)
@@ -314,7 +315,7 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 	sys, err := d.loadSys()
 	switch {
 	case err != nil:
-		add(checkFail, "system setup", err.Error(), "fix "+sysconf.Path+" (root-owned, mode 0644) or run sudo locksql install again")
+		add(checkFail, "system setup", err.Error(), "fix "+product.SysconfPath()+" (root-owned, mode 0644) or run sudo locksql install again")
 		return out
 	case sys == nil:
 		add(checkFail, "separation", "same-user mode: the console refuses to run in the agent's account",
@@ -451,7 +452,7 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 	fixable := func(state, title, detail, fix, what, root string) {
 		out = append(out, check{state: state, title: title, detail: detail, fix: fix, repair: &repair{what: what, root: root}})
 	}
-	add(checkOK, "system setup", sysconf.Path+" (root-owned)", "")
+	add(checkOK, "system setup", product.SysconfPath()+" (root-owned)", "")
 	svc, err := d.lookupUser(sys.ServiceUser)
 	if err != nil {
 		add(checkFail, "console account", fmt.Sprintf("%q does not exist", sys.ServiceUser), "run sudo locksql install")

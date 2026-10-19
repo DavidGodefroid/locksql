@@ -10,7 +10,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
-	"github.com/DavidGodefroid/locksql/internal/ui"
+	"github.com/DavidGodefroid/lockkit/ui"
 )
 
 // ANSI colours of the console, which always runs in a terminal.

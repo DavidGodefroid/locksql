@@ -13,7 +13,7 @@ import (
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
-	"github.com/DavidGodefroid/locksql/internal/sysconf"
+	"github.com/DavidGodefroid/lockkit/sysconf"
 )
 
 // expiryWarning is how long before its end a certificate is reported.

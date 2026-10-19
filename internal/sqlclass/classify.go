@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // Statement is a classified statement, ready for the policy checks.

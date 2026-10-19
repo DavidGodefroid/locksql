@@ -3,7 +3,7 @@ package sqlclass
 import (
 	"strings"
 
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // TokKind is the lexical kind of a token.

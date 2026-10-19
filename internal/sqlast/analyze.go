@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 

@@ -21,7 +21,7 @@ import (
 	"strings"
 
 	"github.com/DavidGodefroid/locksql/internal/audit"
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlast"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )

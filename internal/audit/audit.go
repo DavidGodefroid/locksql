@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // Events, spec §15.

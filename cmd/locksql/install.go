@@ -15,7 +15,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/DavidGodefroid/locksql/internal/sysconf"
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 var accountRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
@@ -39,8 +39,8 @@ func runInstall(e env, args []string) int {
 	fs.SetOutput(io.Discard)
 	var o installOpts
 	fs.StringVar(&o.client, "client", "", "the account the agent runs as (default: you)")
-	fs.StringVar(&o.svc, "user", sysconf.DefaultServiceUser, "the console account to create")
-	fs.StringVar(&o.group, "group", sysconf.DefaultClientGroup, "the group allowed to reach the console")
+	fs.StringVar(&o.svc, "user", product.P.Account, "the console account to create")
+	fs.StringVar(&o.group, "group", product.P.ClientsGroup, "the group allowed to reach the console")
 	fs.BoolVar(&o.printOnly, "print", false, "print the commands, do not run them")
 	fs.BoolVar(&o.trustBinary, "trust-binary", false, "copy this binary even when another account than root can change it")
 	fs.BoolVar(&o.yes, "yes", false, "run the commands without asking")
@@ -80,10 +80,10 @@ func installClient(o *installOpts) {
 // runs it once the human confirms (or o.yes). ran reports whether it ran.
 func doInstall(e env, o installOpts) (code int, ran bool) {
 	if o.svc == "" {
-		o.svc = sysconf.DefaultServiceUser
+		o.svc = product.P.Account
 	}
 	if o.group == "" {
-		o.group = sysconf.DefaultClientGroup
+		o.group = product.P.ClientsGroup
 	}
 	installClient(&o)
 	for what, v := range map[string]string{"--client": o.client, "--user": o.svc, "--group": o.group} {
@@ -309,7 +309,7 @@ func copyBinary(bin, pin, src, group string) string {
 }
 
 func darwinInstallScript(bin, client, svc, group, pin string) string {
-	dir := sysconf.DefaultSocketDir()
+	dir := product.P.SharedSocketDir()
 	prefix, src := pinnedSource("locksql install", bin, pin, "shasum -a 256 -c -")
 	return fmt.Sprintf(`set -eu
 %[7]sdseditgroup -o read %[3]s >/dev/null 2>&1 || dseditgroup -o create %[3]s

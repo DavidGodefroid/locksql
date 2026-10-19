@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/DavidGodefroid/locksql/internal/engine"
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 

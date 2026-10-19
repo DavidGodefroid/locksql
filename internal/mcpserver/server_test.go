@@ -15,7 +15,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // fakeConn is a console client that answers from canned values.

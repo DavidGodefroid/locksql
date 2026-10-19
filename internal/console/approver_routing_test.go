@@ -8,7 +8,7 @@ import (
 
 	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/fingerprint"
+	"github.com/DavidGodefroid/lockkit/fingerprint"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 )
 

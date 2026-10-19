@@ -12,11 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DavidGodefroid/lockkit/fingerprint"
+	"github.com/DavidGodefroid/lockkit/sysconf"
 	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/fingerprint"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
-	"github.com/DavidGodefroid/locksql/internal/sysconf"
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 // isolation is how the console is kept apart from the agent: in a
@@ -70,7 +71,7 @@ type isolationEnv struct {
 
 func realIsolationEnv(tty *os.File) isolationEnv {
 	return isolationEnv{
-		loadSys: sysconf.Load,
+		loadSys: product.LoadSys,
 		display: sysconf.DetectDisplay,
 		uid:     os.Getuid,
 		userName: func() (string, error) {
@@ -155,7 +156,7 @@ func checkIsolation(io IO, env isolationEnv) (*isolation, error) {
 	}
 	if name != sys.ServiceUser {
 		return nil, fmt.Errorf("console: this machine separates the console from the agent (%s): run the console as %q, in its own login session, not as %q",
-			sysconf.Path, sys.ServiceUser, name)
+			product.SysconfPath(), sys.ServiceUser, name)
 	}
 	if env.clientAllowed(sys, iso.self) {
 		return nil, fmt.Errorf("console: the account %q may also connect as a client (group %q or allowed_uids): the separation would be void", name, sys.ClientGroup)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/console"
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 // runConsole is `locksql console [--profile P] [--auto] [--allow-unmask]
@@ -57,7 +58,7 @@ func runConsole(e env, args []string) int {
 	if !*noUpdateCheck {
 		updateNotice(e)
 	}
-	fmt.Fprint(e.stdout, e.paint.Banner(version))
+	fmt.Fprint(e.stdout, e.paint.Banner(product.P.Name, product.P.Tagline, version))
 	fmt.Fprintln(e.stdout)
 	term := console.NewTerminal(os.Stdin, e.stdout)
 	if err := term.Interactive(); err != nil {

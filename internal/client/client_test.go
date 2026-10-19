@@ -17,7 +17,7 @@ import (
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // runtimeDir points the socket paths at a short private temp dir.

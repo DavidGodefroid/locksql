@@ -17,7 +17,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // This file renders console answers for the CLI. Text output is meant for

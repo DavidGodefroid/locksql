@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/DavidGodefroid/locksql/internal/audit"
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // logOf renders records as audit log lines.

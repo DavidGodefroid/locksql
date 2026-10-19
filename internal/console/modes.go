@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/DavidGodefroid/locksql/internal/audit"
-	"github.com/DavidGodefroid/locksql/internal/ui"
+	"github.com/DavidGodefroid/lockkit/ui"
 )
 
 // The console's live switches: the approval mode (manual, where every

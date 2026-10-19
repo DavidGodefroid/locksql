@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 func readLines(t *testing.T, path string) []map[string]any {

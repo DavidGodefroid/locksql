@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DavidGodefroid/locksql/internal/fingerprint"
+	"github.com/DavidGodefroid/lockkit/fingerprint"
 )
 
 func TestTypedApproverYes(t *testing.T) {

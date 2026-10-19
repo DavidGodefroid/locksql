@@ -15,7 +15,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/DavidGodefroid/locksql/internal/secrets"
+	"github.com/DavidGodefroid/lockkit/secrets"
 )
 
 // Key is a control key the human pressed, outside a line. Keys reach the

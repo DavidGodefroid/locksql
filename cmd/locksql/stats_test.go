@@ -11,7 +11,7 @@ import (
 
 	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // writeAudit writes records to the audit log of the state dir of this

@@ -7,10 +7,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
-	"github.com/DavidGodefroid/locksql/internal/secrets"
+	"github.com/DavidGodefroid/locksql/internal/product"
 	"github.com/DavidGodefroid/locksql/internal/tunnel"
 )
 
@@ -81,7 +82,7 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 	keychain := s.Credentials == config.CredentialsKeychain
 	var fromKeychain, asked []byte
 	if keychain {
-		if v, legacy, err := secrets.KeychainGet(p.Name, keychainHost, s.Port, config.DefaultSSHPort); err == nil {
+		if v, legacy, err := product.Keychain.Get(p.Name, keychainHost, s.Port, config.DefaultSSHPort); err == nil {
 			fromKeychain = v
 			if legacy == secrets.LegacyMoved {
 				st.io.Println(migratedLine(p.Name, keychainHost, s.Port))

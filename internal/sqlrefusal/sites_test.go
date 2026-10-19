@@ -1,4 +1,4 @@
-package refusal
+package sqlrefusal
 
 import (
 	"go/ast"

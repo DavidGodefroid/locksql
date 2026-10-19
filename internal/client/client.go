@@ -26,7 +26,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
-	"github.com/DavidGodefroid/locksql/internal/sysconf"
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 // ErrNoConsole means no console listens for the profile.
@@ -101,7 +101,7 @@ func ShellQuote(s string) string {
 // machine separates the console from the agent (sysconf), in the user's
 // runtime directory otherwise.
 func SocketPath(cwd, profile string) (string, error) {
-	sys, err := sysconf.Load()
+	sys, err := product.LoadSys()
 	if err != nil {
 		return "", err
 	}
@@ -162,7 +162,7 @@ func Dial(cwd, profile string) (*Client, error) {
 // socket runs as the console account: the kernel reports the server's
 // credentials to the client too.
 func checkConsole(conn net.Conn) error {
-	sys, err := sysconf.Load()
+	sys, err := product.LoadSys()
 	if err != nil || sys == nil {
 		return err
 	}

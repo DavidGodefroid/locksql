@@ -12,7 +12,7 @@ import (
 
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/pii"
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlast"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 	"github.com/DavidGodefroid/locksql/internal/weight"

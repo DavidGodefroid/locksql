@@ -11,12 +11,13 @@ import (
 
 	"github.com/zalando/go-keyring"
 
+	"github.com/DavidGodefroid/lockkit/fingerprint"
+	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
-	"github.com/DavidGodefroid/locksql/internal/fingerprint"
 	"github.com/DavidGodefroid/locksql/internal/pii"
-	"github.com/DavidGodefroid/locksql/internal/secrets"
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 type columnsSession struct {
@@ -208,7 +209,7 @@ func keychainStarter(t *testing.T, port int) (*starter, *fakeIO, config.Profile)
 	keyring.MockInit()
 	p := uatProfile()
 	p.Engine, p.Credentials, p.Port = fakeEngineName, config.CredentialsKeychain, port
-	if err := keyring.Set(secrets.KeychainService, p.Name+"@"+p.Host, "s3cret"); err != nil {
+	if err := keyring.Set(product.P.KeychainService, p.Name+"@"+p.Host, "s3cret"); err != nil {
 		t.Fatal(err)
 	}
 	oldNext, oldPort := fakeNext, defaultPort
@@ -243,7 +244,7 @@ func TestConnectMigratesLegacyKeychainItem(t *testing.T) {
 	if n := strings.Count(io.output(), want); n != 1 {
 		t.Errorf("migration line shown %d times in %q", n, io.output())
 	}
-	if _, err := keyring.Get(secrets.KeychainService, legacy); !errors.Is(err, keyring.ErrNotFound) {
+	if _, err := keyring.Get(product.P.KeychainService, legacy); !errors.Is(err, keyring.ErrNotFound) {
 		t.Errorf("legacy item kept: %v", err)
 	}
 }
@@ -272,7 +273,7 @@ func TestConnectRemovesLegacyKeychainItemOnOtherPort(t *testing.T) {
 		t.Errorf("migrated on a non-default port: %q", io.output())
 	}
 	for _, account := range []string{p.Name + "@" + p.Host, secrets.KeychainAccount(p.Name, p.Host, p.Port), secrets.KeychainAccount(p.Name, p.Host, 3306)} {
-		if _, err := keyring.Get(secrets.KeychainService, account); !errors.Is(err, keyring.ErrNotFound) {
+		if _, err := keyring.Get(product.P.KeychainService, account); !errors.Is(err, keyring.ErrNotFound) {
 			t.Errorf("%s after a start on another port: %v", account, err)
 		}
 	}
@@ -286,7 +287,7 @@ func TestConnectSavesKeychainSecretOnUpperY(t *testing.T) {
 	if _, err := st.connect(context.Background(), true); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	if v, err := keyring.Get(secrets.KeychainService, secrets.KeychainAccount(p.Name, p.Host, p.Port)); err != nil || v != "typed" {
+	if v, err := keyring.Get(product.P.KeychainService, secrets.KeychainAccount(p.Name, p.Host, p.Port)); err != nil || v != "typed" {
 		t.Errorf("saved item = %q, %v", v, err)
 	}
 }

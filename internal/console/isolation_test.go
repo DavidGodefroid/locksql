@@ -16,9 +16,9 @@ import (
 	"time"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/fingerprint"
+	"github.com/DavidGodefroid/lockkit/fingerprint"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
-	"github.com/DavidGodefroid/locksql/internal/sysconf"
+	"github.com/DavidGodefroid/lockkit/sysconf"
 )
 
 func fakeIsolation(sys *sysconf.Config, display string) isolationEnv {

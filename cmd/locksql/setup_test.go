@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/sysconf"
+	"github.com/DavidGodefroid/lockkit/sysconf"
 )
 
 // setupFixture is a setup run in a temporary project, with a fake install

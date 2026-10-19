@@ -9,8 +9,9 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/secrets"
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 // stdinIsTerminal reports whether r is an interactive terminal. Tests
@@ -65,7 +66,7 @@ func runForget(e env, args []string) int {
 	// without the port.
 	for _, it := range items {
 		account := secrets.KeychainAccount(p.Name, it.host, it.port)
-		switch err := secrets.KeychainDelete(p.Name, it.host, it.port); {
+		switch err := product.Keychain.Delete(p.Name, it.host, it.port); {
 		case err == nil:
 			fmt.Fprintf(e.stdout, "removed the keychain secret of %s\n", account)
 		case errors.Is(err, secrets.ErrNotFound):

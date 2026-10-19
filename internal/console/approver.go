@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DavidGodefroid/locksql/internal/fingerprint"
+	"github.com/DavidGodefroid/lockkit/fingerprint"
 )
 
 // Decision names what a human is approving.

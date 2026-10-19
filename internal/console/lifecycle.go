@@ -16,14 +16,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/DavidGodefroid/lockkit/secrets"
+	"github.com/DavidGodefroid/lockkit/ui"
 	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
-	"github.com/DavidGodefroid/locksql/internal/secrets"
+	"github.com/DavidGodefroid/locksql/internal/product"
 	"github.com/DavidGodefroid/locksql/internal/tunnel"
-	"github.com/DavidGodefroid/locksql/internal/ui"
 )
 
 // ErrConfig marks usage and configuration errors (exit code 3).
@@ -593,7 +594,7 @@ func (st *starter) connectSecret(ctx context.Context, p config.Profile, open fun
 	var err error
 	fromKeychain := false
 	if keychain {
-		s, legacy, err := secrets.KeychainGet(p.Name, p.Host, p.Port, defaultPort(p.Engine))
+		s, legacy, err := product.Keychain.Get(p.Name, p.Host, p.Port, defaultPort(p.Engine))
 		switch {
 		case err == nil:
 			secret, fromKeychain = s, true
@@ -748,7 +749,7 @@ func (st *starter) offerSaveAs(ctx context.Context, host string, port int, secre
 	if r := st.decide(ctx, Decision{Prompt: prompt, Expected: "y"}); r.Outcome != Approved {
 		return
 	}
-	if err := secrets.KeychainSet(st.profile.Name, host, port, secret); err != nil {
+	if err := product.Keychain.Set(st.profile.Name, host, port, secret); err != nil {
 		st.io.Println("not saved: " + secrets.Sanitize(err, secret))
 		return
 	}

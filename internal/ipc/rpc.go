@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // ProtocolMajor is exchanged in the hello handshake. A client and a console

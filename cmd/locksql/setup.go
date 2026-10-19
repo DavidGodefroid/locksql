@@ -16,6 +16,7 @@ import (
 
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
 	"github.com/DavidGodefroid/locksql/internal/config"
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 // profileSpec is the database profile the setup wizard writes. It never
@@ -109,7 +110,7 @@ func runSetup(e env, args []string) int {
 	e.stdin = lineReader(e)
 	p := e.paint
 
-	fmt.Fprint(e.stdout, p.Banner(version))
+	fmt.Fprint(e.stdout, p.Banner(product.P.Name, product.P.Tagline, version))
 	fmt.Fprintln(e.stdout)
 
 	// 1. The agents of this account.
