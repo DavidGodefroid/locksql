@@ -298,12 +298,7 @@ func TestDefaultProgressIntervalIsUnderTenSeconds(t *testing.T) {
 	if DefaultProgressEvery <= 0 || DefaultProgressEvery >= 10*time.Second {
 		t.Fatalf("DefaultProgressEvery = %v, want in (0, 10s)", DefaultProgressEvery)
 	}
-	if got := (Options{}).progressEvery(); got != DefaultProgressEvery {
-		t.Fatalf("zero ProgressEvery gives %v", got)
-	}
-	if got := (Options{ProgressEvery: time.Minute}).progressEvery(); got != DefaultProgressEvery {
-		t.Fatalf("a 1 min ProgressEvery is not clamped: %v", got)
-	}
+	// Clamping of Options.ProgressEvery: lockkit mcpkit.ProgressInterval.
 }
 
 func TestNoConsoleInProjectHintNamesProject(t *testing.T) {
@@ -589,8 +584,8 @@ func TestExactCellKeepsLargeIntegersExact(t *testing.T) {
 		{"text", "text"},
 		{nil, nil},
 	} {
-		if got := exactCell(c.in); got != c.want {
-			t.Errorf("exactCell(%#v) = %#v, want %#v", c.in, got, c.want)
+		if got := exactRows([][]any{{c.in}})[0][0]; got != c.want {
+			t.Errorf("exactRows(%#v) = %#v, want %#v", c.in, got, c.want)
 		}
 	}
 	if rows := exactRows(nil); rows == nil {

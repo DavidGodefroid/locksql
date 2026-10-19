@@ -1,12 +1,11 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/DavidGodefroid/lockkit/mcpkit"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/mcpserver"
@@ -51,14 +50,9 @@ func runMCP(e env, args []string) int {
 	}
 	ctx, stop := signalContext()
 	defer stop()
-	t := &mcp.IOTransport{Reader: io.NopCloser(e.stdin), Writer: nopWriteCloser{e.stdout}}
-	if err := mcpserver.Serve(ctx, o, t); err != nil && !errors.Is(err, io.EOF) && ctx.Err() == nil {
+	if err := mcpkit.Serve(ctx, mcpserver.New(o), e.stdin, e.stdout); err != nil {
 		fmt.Fprintf(e.stderr, "locksql mcp: %v\n", err)
 		return exitFail
 	}
 	return exitOK
 }
-
-type nopWriteCloser struct{ io.Writer }
-
-func (nopWriteCloser) Close() error { return nil }

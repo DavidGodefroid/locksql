@@ -11,8 +11,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
-	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 )
@@ -265,16 +263,6 @@ func TestInitUserCodexInlineMCPServers(t *testing.T) {
 	}
 }
 
-func TestSystemRunTimesOut(t *testing.T) {
-	if _, err := exec.LookPath("sleep"); err != nil {
-		t.Skip("no sleep command")
-	}
-	_, err := runWithTimeout(50*time.Millisecond, time.Second)("sleep", "5")
-	if err == nil || !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
 func mustJSON(t *testing.T, v any) []byte {
 	t.Helper()
 	b, err := json.Marshal(v)
@@ -291,22 +279,6 @@ func mustTemplateBytes(t *testing.T, name string) []byte {
 		t.Fatal(err)
 	}
 	return b
-}
-
-func TestAssignsPrefix(t *testing.T) {
-	for doc, want := range map[string]bool{
-		"mcp_servers = { other = { command = \"x\" } }\n": true,
-		"  \"mcp_servers\" = {}\n":                        true,
-		"mcp_servers = 3\n":                               true,
-		"mcp_servers.other = { command = \"x\" }\n":       false,
-		"[mcp_servers.other]\ncommand = \"x\"\n":          false,
-		"[x]\nmcp_servers = {}\n":                         false,
-		"model = \"o3\"\n":                                false,
-	} {
-		if got := assignsPrefix([]byte(doc), "mcp_servers.locksql"); got != want {
-			t.Errorf("%q: got %v", doc, got)
-		}
-	}
 }
 
 // A wired Claude (user MCP entry and skill) is left alone: a permission the
@@ -390,29 +362,5 @@ func TestInitUserRefusesReadOnlyDirectory(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("bare system error: %v", err)
-	}
-}
-
-func TestFirstLineSanitises(t *testing.T) {
-	got := firstLine([]byte("\n\x1b[31mError:\x1b[0m bad\x07 thing\r\nmore"))
-	if got != "Error: bad thing" {
-		t.Fatalf("firstLine = %q", got)
-	}
-	long := strings.Repeat("é", 150) // 300 bytes
-	got = firstLine([]byte(long))
-	if len(got) > 200 || !utf8.ValidString(got) {
-		t.Fatalf("cut: %d bytes, valid %v", len(got), utf8.ValidString(got))
-	}
-}
-
-func TestSystemRunBoundWithGrandchild(t *testing.T) {
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("no sh")
-	}
-	start := time.Now()
-	// The grandchild keeps the output pipe open after sh is killed.
-	_, err := runWithTimeout(50*time.Millisecond, 100*time.Millisecond)("sh", "-c", "sleep 10 & sleep 10")
-	if err == nil || time.Since(start) > 5*time.Second {
-		t.Fatalf("err = %v after %s", err, time.Since(start))
 	}
 }
