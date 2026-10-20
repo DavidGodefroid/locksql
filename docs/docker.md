@@ -155,6 +155,48 @@ docker run --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql sta
 `--user locksql`. It warns that `locksql` has no login session: in Docker the
 container takes the place of that session.
 
+## Agent in its own container
+
+When the agent itself runs in a container that cannot reach the Docker
+socket, it cannot start `docker run` for the MCP server: it runs the
+`locksql` binary inside its own container instead, as a client of the
+console container. The two containers share only the socket volume.
+
+The console checks every peer by uid against its own container's accounts,
+where the agent's uid has none: name it at build time.
+
+```sh
+docker build -t locksql --build-arg ALLOWED_UIDS=1000 .
+```
+
+`ALLOWED_UIDS` is a comma-separated list of uids, written to `allowed_uids`
+in the image's `/etc/locksql/system.toml`. It is the uid the kernel reports
+for the agent's process, as the console sees it: the agent container's uid
+when neither container remaps user namespaces.
+
+The agent's image needs what a client host has:
+
+- the `locksql` binary, the same version as the console's;
+- `/etc/locksql/system.toml`, owned by root, mode 0644, with the image's
+  `service_user`, `client_group` and `socket_dir`: without it the client looks
+  for the socket in the user's runtime directory;
+- an account `locksql` with uid 10001: the client refuses a socket served by
+  any uid but `service_user`'s;
+- a group `locksql-clients` with gid 10000 that holds the agent's account:
+  the socket directory is mode 2710 and the socket 0660, group
+  `locksql-clients`.
+
+Start the agent's container with the socket volume and the project at the
+same path as the console's, for example:
+
+```sh
+docker run … -v locksql-run:/run/locksql -v "$PWD:$PWD" -w "$PWD" agent-image
+```
+
+`locksql init claude` then needs no change: the `locksql mcp` it writes in
+`.mcp.json` runs inside the agent's container. Check from there with
+`locksql status`.
+
 ## What Docker does and does not separate
 
 Inside Docker the boundary is the same as on a host: the agent's container
@@ -171,4 +213,5 @@ container), so treat Docker mode like the in-agent approval it improves on:
 it keeps credentials out of the agent's reach and the approval in your
 terminal, but it does not stop an agent determined to go around it. For that
 boundary, either use `sudo locksql install` on the host, or run the agent
-itself in a container with no access to the Docker socket.
+itself in a container with no access to the Docker socket
+([Agent in its own container](#agent-in-its-own-container)).
