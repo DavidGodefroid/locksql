@@ -63,6 +63,9 @@ type doctorEnv struct {
 	groupIDs func(u *user.User) []int
 	// acl reads the POSIX ACL of a path (nil: none, or not read).
 	acl func(path string) []byte
+	// lstat does not follow a final symbolic link; nil skips the checks
+	// that need it.
+	lstat func(string) (os.FileInfo, error)
 	// agents is the account the agents are wired for; nil skips the
 	// wiring check.
 	agents   func() (agentinit.Env, error)
@@ -113,6 +116,7 @@ func realDoctorEnv() doctorEnv {
 		},
 		executable: os.Executable,
 		stat:       os.Stat,
+		lstat:      os.Lstat,
 		ownerOf:    fileOwner,
 		tiocsti:    sysconf.LegacyTIOCSTI,
 		ptrace:     sysconf.PtraceScope,
@@ -266,7 +270,11 @@ func applyRepairs(e env, cmd string, checks []check, yes bool) (changed bool, co
 	script := "set -eu\n" + strings.Join(cmds, "\n") + "\n"
 	fmt.Fprintf(e.stdout, "These repairs run as root:\n%s\n", indent(script))
 	if !yes {
-		if !confirm(e, "Run them now with sudo? [y/N] ") {
+		q := "Run them now with sudo? [y/N] "
+		if e.geteuid() == 0 {
+			q = "Run them now? [y/N] "
+		}
+		if !confirm(e, q) {
 			fmt.Fprintln(e.stdout, "root repairs not made")
 			return changed, code
 		}

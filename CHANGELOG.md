@@ -15,6 +15,21 @@ This file records the changes a user or an agent has to know about.
   lines, approved-policy fingerprints (no re-approval after the upgrade),
   exit codes, paths and wired agent files, each pinned by a golden test.
 
+### Fixed
+
+- **`.locksql/` in Docker.** The console account exists only in the image,
+  so nothing gave it the project's `.locksql/` directory, and an agent
+  running as your uid could replace `pii.toml`. `locksql doctor --fix` now
+  runs as root in the image (`docker run --user 0 … locksql doctor --fix
+  --yes`, see docs/docker.md) without `sudo`, and its hint names the
+  console account by uid, which the host can use.
+- **Root repairs no longer follow symbolic links.** `doctor --fix` and
+  `setup` changed `.locksql/` and its files by path as root; a symbolic
+  link put there by the agent's account would have handed its target to the
+  console account, or made it world-readable. The root script now enters
+  the directory, checks its real path and changes `.`; a `.locksql` that is
+  a link fails the check with no repair.
+
 ## v0.8.0 (2026-10-19)
 
 ### Added
