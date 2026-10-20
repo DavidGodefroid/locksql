@@ -31,22 +31,6 @@ type Rules struct {
 	Modes map[string]string
 }
 
-// Mask modes.
-const (
-	// ModeRedact replaces the whole value: "<redacted>" (the default).
-	ModeRedact = "redact"
-	// ModePartial keeps the first character and the length: "j***(12)".
-	ModePartial = "partial"
-	// ModeEmail keeps the first character and the domain of an address:
-	// "j***@example.com" (other values are masked as partial).
-	ModeEmail = "email"
-)
-
-// ValidMode reports whether m is a mask mode.
-func ValidMode(m string) bool {
-	return m == ModeRedact || m == ModePartial || m == ModeEmail
-}
-
 type ruleEntry struct {
 	Column string `toml:"column"`
 	Mode   string `toml:"mode,omitempty"`

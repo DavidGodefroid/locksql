@@ -7,10 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
+	"github.com/DavidGodefroid/lockkit/sanitize"
+	"github.com/DavidGodefroid/lockkit/ui"
 	"github.com/DavidGodefroid/locksql/internal/config"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
-	"github.com/DavidGodefroid/locksql/internal/ui"
 )
 
 // ANSI colours of the console, which always runs in a terminal.
@@ -221,22 +222,7 @@ func (s *Server) highlight(pl *plan) string {
 // safeText escapes control, C1 and bidirectional formatting characters so
 // that client-supplied text cannot drive or spoof the human's terminal.
 // Newlines and tabs are kept when multiline is set.
-func safeText(s string, multiline bool) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case multiline && (r == '\n' || r == '\t'):
-			b.WriteRune(r)
-		case r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0):
-			fmt.Fprintf(&b, "\\x%02x", r)
-		case r == 0x061c || r == 0x200e || r == 0x200f || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069):
-			fmt.Fprintf(&b, "\\u%04x", r)
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
+func safeText(s string, multiline bool) string { return sanitize.Terminal(s, multiline) }
 
 // escapeControls is safeText for one-line client text.
 func escapeControls(s string) string { return safeText(s, false) }

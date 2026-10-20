@@ -6,23 +6,20 @@
 package console
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net"
 	"os"
-	"sync"
 	"time"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
+	kconsole "github.com/DavidGodefroid/lockkit/console"
+
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/sqlast"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -30,59 +27,24 @@ import (
 const (
 	// The idle timeout and the maximum session length are the profile's
 	// limits.idle_timeout and limits.max_session.
-	ApprovalTimeout = 5 * time.Minute
+	ApprovalTimeout = kconsole.ApprovalTimeout
 	PlanTTL         = 10 * time.Minute
 	// PolicyPoll is how often the config files are checked for changes.
-	PolicyPoll = 2 * time.Second
+	PolicyPoll = kconsole.PolicyPoll
 )
 
-// IO is the console's terminal. Ask and AskSecret discard pending input
-// before prompting, so type-ahead never answers a prompt.
-type IO interface {
-	Println(s string)
-	// Ask prints prompt and reads one line. It returns false when no answer
-	// came within timeout, when ctx ended (Ctrl-C, client gone) or when the
-	// terminal is closed.
-	Ask(ctx context.Context, prompt string, timeout time.Duration) (string, bool)
-	// AskSecret reads a line with echo off.
-	AskSecret(ctx context.Context, prompt string) ([]byte, error)
-}
-
-// Beller is implemented by an IO that can ring the terminal bell, so that
-// a human away from the console notices a prompt waiting for them.
-type Beller interface {
-	Bell()
-}
+// The console's terminal and its optional abilities (lockkit's console).
+type (
+	IO         = kconsole.IO
+	Beller     = kconsole.Beller
+	LineSource = kconsole.LineSource
+	KeySource  = kconsole.KeySource
+	StatusLine = kconsole.StatusLine
+	Sized      = kconsole.Sized
+)
 
 // bell rings io's bell when it has one.
-func bell(io IO) {
-	if b, ok := io.(Beller); ok {
-		b.Bell()
-	}
-}
-
-// LineSource is implemented by an IO that also delivers the lines the human
-// types between requests (console commands such as :review).
-type LineSource interface {
-	Lines() <-chan string
-}
-
-// KeySource is implemented by an IO that reports the control keys pressed
-// in the console: on Keys between prompts, to the handler during one.
-type KeySource interface {
-	Keys() <-chan Key
-	SetKeyHandler(func(Key))
-}
-
-// StatusLine is implemented by an IO that keeps a status row on screen.
-type StatusLine interface {
-	SetStatus(string)
-}
-
-// Sized is implemented by an IO that knows its width in columns.
-type Sized interface {
-	Width() int
-}
+func bell(io IO) { kconsole.Bell(io) }
 
 // Options configure Run.
 type Options struct {
@@ -305,7 +267,7 @@ func (s *Server) audit(rec audit.Record) {
 	if u, ok := s.sess.(interface{ DBUser() string }); ok && u.DBUser() != "" {
 		rec.DBUser = u.DBUser()
 	}
-	if err := s.cfg.Audit.Write(rec); err != nil {
+	if err := s.cfg.Audit.Append(rec); err != nil {
 		s.cfg.IO.Println("audit log write failed: " + err.Error())
 	}
 }
@@ -367,272 +329,20 @@ func (s *Server) Tick() {
 	}
 }
 
-// job is one request handed from a connection to the console goroutine.
-type job struct {
-	ctx  context.Context
-	req  ipc.Request
-	resp chan ipc.Response
-}
-
-// flushWait bounds how long an ending session waits for the last responses
-// (such as the answer to logout) to reach their clients.
-const flushWait = 2 * time.Second
-
 // Serve accepts clients on ln and serves their requests one at a time until
 // ctx ends or the session ends (logout, timeouts, :quit). lines are the
 // console commands typed by the human (nil for none); the control keys
 // come from the IO when it is a KeySource. ln is closed on return, which
-// removes the socket.
+// removes the socket. It is lockkit's request loop.
 func (s *Server) Serve(ctx context.Context, ln net.Listener, lines <-chan string) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var keys <-chan Key
-	if ks, ok := s.cfg.IO.(KeySource); ok {
-		keys = ks.Keys()
-		ks.SetKeyHandler(s.Key)
+	l := kconsole.Loop{
+		IO: s.cfg.IO, Handle: s.Handle, Command: s.Command, Key: s.Key, Tick: s.Tick, Poll: s.CheckPolicy,
+		Ended: func() bool { _, ended := s.Ended(); return ended }, End: s.End,
+		Refresh: s.refreshStatus, Clear: s.clearStatus, PeerAllowed: s.cfg.PeerAllowed,
 	}
-	s.refreshStatus()
-	defer s.clearStatus()
-	jobs := make(chan job)
-	// inflight counts responses handed to connections but not yet written.
-	var wg, inflight sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		s.accept(ctx, ln, jobs, &wg, &inflight)
-	}()
-	defer func() {
-		ln.Close()
-		waitFor(&inflight, flushWait)
-		cancel()
-		wg.Wait()
-	}()
-
-	tick := time.NewTicker(time.Second)
-	defer tick.Stop()
-	lastPoll := time.Now()
-	for {
-		if _, ended := s.Ended(); ended {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			s.End("interrupted")
-			return nil
-		case j := <-jobs:
-			inflight.Add(1)
-			if j.ctx.Err() != nil {
-				j.resp <- errResp(j.req.ID, ipc.CodeDenied, "client gone")
-				continue
-			}
-			j.resp <- s.Handle(j.ctx, j.req)
-		case line, ok := <-lines:
-			if !ok {
-				lines = nil
-				continue
-			}
-			s.Command(ctx, line)
-		case k := <-keys:
-			s.Key(k)
-		case <-tick.C:
-			if time.Since(lastPoll) >= PolicyPoll {
-				lastPoll = time.Now()
-				s.CheckPolicy()
-			}
-			s.Tick()
-		}
-		s.refreshStatus()
-	}
+	return l.Serve(ctx, ln, lines)
 }
 
-// waitFor waits for wg, at most d.
-func waitFor(wg *sync.WaitGroup, d time.Duration) {
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(d):
-	}
-}
+func errResp(id int64, code int, msg string) ipc.Response { return kconsole.ErrResp(id, code, msg) }
 
-func (s *Server) accept(ctx context.Context, ln net.Listener, jobs chan<- job, wg, inflight *sync.WaitGroup) {
-	for {
-		c, err := ln.Accept()
-		if err != nil {
-			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
-				return
-			}
-			// Transient accept errors: back off briefly.
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(100 * time.Millisecond):
-			}
-			continue
-		}
-		cred, err := ipc.PeerCred(c)
-		if err != nil || !s.peerAllowed(cred) {
-			c.Close()
-			continue
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			serveConn(withPeer(ctx, cred), c, jobs, inflight)
-		}()
-	}
-}
-
-// peerAllowed applies the peer check: the configured one, or the console's
-// own account.
-func (s *Server) peerAllowed(c ipc.Cred) bool {
-	if s.cfg.PeerAllowed != nil {
-		return s.cfg.PeerAllowed(c)
-	}
-	return c.UID == os.Getuid()
-}
-
-// maxQueued bounds the requests a client may pipeline behind the one being
-// served.
-const maxQueued = 32
-
-type readResult struct {
-	req ipc.Request
-	err error
-}
-
-// serveConn reads requests from c and hands them to the console goroutine
-// one by one. While a request is being served, the next read doubles as a
-// probe: a closed connection cancels the request's context, which cancels
-// a pending approval prompt. Every response received from the console
-// goroutine is marked done on inflight once written (or dropped).
-func serveConn(ctx context.Context, c net.Conn, jobs chan<- job, inflight *sync.WaitGroup) {
-	defer c.Close()
-	stop := context.AfterFunc(ctx, func() { c.Close() })
-	defer stop()
-	msgs := make(chan readResult, 1)
-	done := make(chan struct{}) // ends the reader when serveConn returns
-	defer close(done)
-	go func() {
-		r := bufio.NewReader(c)
-		for {
-			var req ipc.Request
-			err := ipc.ReadMsg(r, &req)
-			select {
-			case msgs <- readResult{req, err}:
-			case <-done:
-				return
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	var queue []readResult
-	next := func() (readResult, bool) {
-		if len(queue) > 0 {
-			m := queue[0]
-			queue = queue[1:]
-			return m, true
-		}
-		select {
-		case m := <-msgs:
-			return m, true
-		case <-ctx.Done():
-			return readResult{}, false
-		}
-	}
-	gone := false
-	for !gone {
-		m, ok := next()
-		if !ok {
-			return
-		}
-		if m.err != nil {
-			if !errors.Is(m.err, io.EOF) && !errors.Is(m.err, net.ErrClosed) {
-				_ = ipc.WriteMsg(c, errResp(0, ipc.CodeParseError, "invalid message"))
-			}
-			return
-		}
-		jctx, jcancel := context.WithCancel(ctx)
-		j := job{ctx: jctx, req: m.req, resp: make(chan ipc.Response, 1)}
-		// While the job waits for the console (another client's approval
-		// may be pending), keep reading: a client that leaves meanwhile
-		// never gets its statement run.
-	handoff:
-		for {
-			select {
-			case jobs <- j:
-				break handoff
-			case m2 := <-msgs:
-				if m2.err != nil {
-					jcancel()
-					return
-				}
-				if len(queue) >= maxQueued {
-					jcancel()
-					_ = ipc.WriteMsg(c, errResp(m2.req.ID, ipc.CodeInvalidRequest, "too many pipelined requests"))
-					return
-				}
-				queue = append(queue, m2)
-			case <-ctx.Done():
-				jcancel()
-				return
-			}
-		}
-		var resp ipc.Response
-	wait:
-		for {
-			select {
-			case resp = <-j.resp:
-				break wait
-			case m2 := <-msgs:
-				if m2.err != nil {
-					// The client is gone: cancel the request, then still
-					// wait for the console to finish with it.
-					gone = true
-					jcancel()
-					continue
-				}
-				if len(queue) >= maxQueued {
-					// Too many pipelined requests: drop the client once
-					// the console is done with the current one.
-					gone = true
-					jcancel()
-					continue
-				}
-				queue = append(queue, m2)
-			}
-		}
-		jcancel()
-		if gone {
-			inflight.Done()
-			return
-		}
-		err := ipc.WriteMsg(c, resp)
-		if errors.Is(err, ipc.ErrTooLarge) {
-			err = ipc.WriteMsg(c, errResp(resp.ID, ipc.CodeInternal,
-				"result larger than 1 MiB: lower limits.max_output_bytes or select fewer columns"))
-		}
-		inflight.Done()
-		if err != nil {
-			return
-		}
-	}
-}
-
-func errResp(id int64, code int, msg string) ipc.Response {
-	return ipc.Response{JSONRPC: "2.0", ID: id, Error: &ipc.RPCError{Code: code, Message: msg}}
-}
-
-func okResp(id int64, v any) ipc.Response {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return errResp(id, ipc.CodeInternal, fmt.Sprintf("encode result: %v", err))
-	}
-	return ipc.Response{JSONRPC: "2.0", ID: id, Result: b}
-}
+func okResp(id int64, v any) ipc.Response { return kconsole.OKResp(id, v) }

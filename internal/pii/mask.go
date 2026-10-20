@@ -3,26 +3,12 @@ package pii
 import (
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
-	"time"
-	"unicode/utf8"
 
 	"github.com/DavidGodefroid/locksql/internal/engine"
-	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
-
-// maskText is the mask format: first character + "***" + "(length in
-// characters)". An invalid UTF-8 byte counts as one U+FFFD character.
-func maskText(s string) string {
-	first := ""
-	for _, r := range s {
-		first = string(r)
-		break
-	}
-	return first + "***(" + strconv.Itoa(utf8.RuneCountInString(s)) + ")"
-}
 
 // MaskResult masks res in place.
 //
@@ -84,63 +70,6 @@ func NeedsAliasCheck(res engine.Result, origin bool) bool {
 		}
 	}
 	return false
-}
-
-func maskCell(v any) any {
-	switch x := v.(type) {
-	case []byte:
-		return "<masked bytes:" + strconv.Itoa(len(x)) + ">"
-	case string:
-		return maskText(x)
-	case time.Time:
-		return maskText(x.Format(time.RFC3339Nano))
-	default:
-		return maskText(fmt.Sprint(x))
-	}
-}
-
-// Detects reports whether a detector would mask something in s.
-func Detects(s string, ds []Detector) bool {
-	out, ok := detect(s, ds).(string)
-	return ok && out != s
-}
-
-func detect(v any, ds []Detector) any {
-	if len(ds) == 0 {
-		return v
-	}
-	var in string
-	switch x := v.(type) {
-	case string:
-		in = x
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
-		in = fmt.Sprint(x) // drivers use every width (pgx: int4 is int32)
-	default:
-		return v
-	}
-	out := cutForDetection(in)
-	for _, d := range ds {
-		out = d.Mask(out)
-	}
-	if out == in {
-		return v // unchanged: keep the original type
-	}
-	return out
-}
-
-// DetectLimit is how much of a text cell the detectors scan. A longer cell
-// is cut there, and ends with "…", before detection: nothing past the
-// scanned part can reach the output. The renderer cuts cells much earlier
-// (max_cell_chars), so the cut is normally invisible; it bounds the time a
-// huge value can cost. The engines already cut a cell at
-// engine.MaxCellBytes, which is no more.
-const DetectLimit = 64 << 10
-
-func cutForDetection(s string) string {
-	if len(s) <= DetectLimit {
-		return s
-	}
-	return engine.CutAt(s, DetectLimit)
 }
 
 // AliasViolation is the fallback for result columns without an origin: it

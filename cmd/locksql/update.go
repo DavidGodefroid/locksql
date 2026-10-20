@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
 	"cmp"
 	"compress/gzip"
@@ -22,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/DavidGodefroid/lockkit/update"
 )
 
 // ReleaseCertIdentityRegexp is the certificate identity a release's
@@ -318,33 +319,21 @@ func fetchVerified(e env, u updateEnv, dir, tag, target string) (bin, pin string
 // cosignVerify checks the keyless signature of checksums.txt against the
 // release workflow's identity. A missing cosign is a refusal too.
 func cosignVerify(sums, bundle string) error {
-	cosign, err := exec.LookPath("cosign")
-	if err != nil {
+	id := update.Identity{CertIdentityRegexp: ReleaseCertIdentityRegexp, OIDCIssuer: releaseOIDCIssuer}
+	err := update.VerifyFiles(context.Background(), sums, bundle, id, update.Options{})
+	var ve *update.VerifyError
+	switch {
+	case errors.Is(err, update.ErrCosignMissing):
 		return fmt.Errorf("cosign is not installed, and the release's signature must be checked: %s", cosignHint)
-	}
-	out, err := exec.Command(cosign, "verify-blob",
-		"--bundle", bundle,
-		"--certificate-identity-regexp", ReleaseCertIdentityRegexp,
-		"--certificate-oidc-issuer", releaseOIDCIssuer,
-		sums).CombinedOutput()
-	if err != nil {
+	case errors.As(err, &ve):
 		return fmt.Errorf("cosign: the signature of checksums.txt does not verify (%v): %s\nnothing installed; if cosign itself is broken, %s",
-			err, strings.TrimSpace(string(out)), cosignHint)
+			ve.Err, ve.Output, cosignHint)
 	}
-	return nil
+	return err
 }
 
 // checksumFor returns the sha256 checksums.txt lists for name.
-func checksumFor(sums []byte, name string) (string, error) {
-	sc := bufio.NewScanner(bytes.NewReader(sums))
-	for sc.Scan() {
-		f := strings.Fields(sc.Text())
-		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == name {
-			return strings.ToLower(f[0]), nil
-		}
-	}
-	return "", fmt.Errorf("%s is not listed in checksums.txt", name)
-}
+func checksumFor(sums []byte, name string) (string, error) { return update.ChecksumFor(sums, name) }
 
 // extractBinary returns the regular file `locksql` of a .tar.gz.
 func extractBinary(data []byte) ([]byte, error) {

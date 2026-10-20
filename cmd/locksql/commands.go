@@ -11,12 +11,12 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/DavidGodefroid/lockkit/sysconf"
+	"github.com/DavidGodefroid/lockkit/ui"
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
-	"github.com/DavidGodefroid/locksql/internal/sysconf"
-	"github.com/DavidGodefroid/locksql/internal/ui"
 )
 
 // env is what a command reads and writes; tests replace it.

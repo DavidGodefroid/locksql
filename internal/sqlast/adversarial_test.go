@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // Regression tests for bypasses of the PII filter rules and of the

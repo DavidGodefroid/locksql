@@ -12,8 +12,8 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/DavidGodefroid/lockkit/sysconf"
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/sysconf"
 )
 
 // handoffEnv holds what the console handoff reads from the system; tests

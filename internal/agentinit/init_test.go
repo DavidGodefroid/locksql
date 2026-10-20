@@ -13,7 +13,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // sandbox returns a fresh project root and points HOME and the XDG user directories at an empty temporary home, which the test

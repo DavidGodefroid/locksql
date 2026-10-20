@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // maxDepth bounds the nesting of queries and expressions.

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // logOf renders records as audit log lines.

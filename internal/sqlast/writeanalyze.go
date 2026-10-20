@@ -4,8 +4,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // ---- Writes ----

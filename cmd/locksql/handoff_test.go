@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DavidGodefroid/locksql/internal/sysconf"
+	"github.com/DavidGodefroid/lockkit/sysconf"
 )
 
 // fakeHandoff runs as uid, with the helpers in onPath; *ran gets the argv

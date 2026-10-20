@@ -11,12 +11,13 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
+	"github.com/DavidGodefroid/lockkit/fingerprint"
+	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
-	"github.com/DavidGodefroid/locksql/internal/fingerprint"
 	"github.com/DavidGodefroid/locksql/internal/pii"
-	"github.com/DavidGodefroid/locksql/internal/secrets"
+	"github.com/DavidGodefroid/locksql/internal/product"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 )
 
 type columnsSession struct {
@@ -208,7 +209,7 @@ func keychainStarter(t *testing.T, port int) (*starter, *fakeIO, config.Profile)
 	keyring.MockInit()
 	p := uatProfile()
 	p.Engine, p.Credentials, p.Port = fakeEngineName, config.CredentialsKeychain, port
-	if err := keyring.Set(secrets.KeychainService, p.Name+"@"+p.Host, "s3cret"); err != nil {
+	if err := keyring.Set(product.P.KeychainService, p.Name+"@"+p.Host, "s3cret"); err != nil {
 		t.Fatal(err)
 	}
 	oldNext, oldPort := fakeNext, defaultPort
@@ -243,7 +244,7 @@ func TestConnectMigratesLegacyKeychainItem(t *testing.T) {
 	if n := strings.Count(io.output(), want); n != 1 {
 		t.Errorf("migration line shown %d times in %q", n, io.output())
 	}
-	if _, err := keyring.Get(secrets.KeychainService, legacy); !errors.Is(err, keyring.ErrNotFound) {
+	if _, err := keyring.Get(product.P.KeychainService, legacy); !errors.Is(err, keyring.ErrNotFound) {
 		t.Errorf("legacy item kept: %v", err)
 	}
 }
@@ -272,7 +273,7 @@ func TestConnectRemovesLegacyKeychainItemOnOtherPort(t *testing.T) {
 		t.Errorf("migrated on a non-default port: %q", io.output())
 	}
 	for _, account := range []string{p.Name + "@" + p.Host, secrets.KeychainAccount(p.Name, p.Host, p.Port), secrets.KeychainAccount(p.Name, p.Host, 3306)} {
-		if _, err := keyring.Get(secrets.KeychainService, account); !errors.Is(err, keyring.ErrNotFound) {
+		if _, err := keyring.Get(product.P.KeychainService, account); !errors.Is(err, keyring.ErrNotFound) {
 			t.Errorf("%s after a start on another port: %v", account, err)
 		}
 	}
@@ -286,7 +287,7 @@ func TestConnectSavesKeychainSecretOnUpperY(t *testing.T) {
 	if _, err := st.connect(context.Background(), true); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	if v, err := keyring.Get(secrets.KeychainService, secrets.KeychainAccount(p.Name, p.Host, p.Port)); err != nil || v != "typed" {
+	if v, err := keyring.Get(product.P.KeychainService, secrets.KeychainAccount(p.Name, p.Host, p.Port)); err != nil || v != "typed" {
 		t.Errorf("saved item = %q, %v", v, err)
 	}
 }
@@ -313,10 +314,9 @@ func TestHardenRefusal(t *testing.T) {
 func TestConnectEndsOnTooManyNoMatch(t *testing.T) {
 	st, io, _ := keychainStarter(t, 3307)
 	io.secrets = []string{"typed"}
-	io.answers = []string{"y"}
-	v := &fingerprint.Fake{Results: []error{fingerprint.ErrNoMatch}}
-	a := newFingerprintApprover(io, v, "left-index-finger", time.Second)
-	a.(*fingerprintApprover).noMatch = 2 // two misses already, in an earlier decision
+	io.answers = []string{"y", "y", "y"}
+	v := &fingerprint.Fake{Results: []error{fingerprint.ErrNoMatch, fingerprint.ErrNoMatch, fingerprint.ErrNoMatch}}
+	a := twoMisses(newFingerprintApprover(io, v, "left-index-finger", time.Second)) // in earlier decisions
 	st.approver = a
 	sess, err := st.connect(context.Background(), true)
 	if err == nil || err.Error() != "console: fingerprint: three non-matching fingers" {
@@ -340,17 +340,17 @@ func TestStartPolicyChangeLockout(t *testing.T) {
 	if err := config.SaveApproved(state, key, config.NewPolicy(p, []string{"*.*.email"}, nil)); err != nil {
 		t.Fatal(err)
 	}
-	io := &fakeIO{answers: []string{"y"}}
-	v := &fingerprint.Fake{Results: []error{fingerprint.ErrNoMatch}}
-	a := newFingerprintApprover(io, v, "left-index-finger", time.Second)
-	a.(*fingerprintApprover).noMatch = 2
+	io := &fakeIO{answers: []string{"y", "y", "y"}}
+	v := &fingerprint.Fake{Results: []error{fingerprint.ErrNoMatch, fingerprint.ErrNoMatch, fingerprint.ErrNoMatch}}
+	a := twoMisses(newFingerprintApprover(io, v, "left-index-finger", time.Second))
+	before := v.Calls
 	st := &starter{io: io, log: log, profile: p, approver: a}
 	// The mask rule is gone: a loosening, reviewed.
 	if _, _, err := st.startPolicy(context.Background(), state, key, config.NewPolicy(p, nil, nil)); err != nil {
 		t.Fatalf("startPolicy: %v", err)
 	}
-	if v.Calls != 1 {
-		t.Fatalf("Verify calls = %d: the change was not reviewed", v.Calls)
+	if v.Calls != before+1 {
+		t.Fatalf("Verify calls = %d: the change was not reviewed", v.Calls-before)
 	}
 	if err := st.checkLockedOut(); err == nil || !strings.Contains(err.Error(), "three non-matching fingers") {
 		t.Fatalf("checkLockedOut = %v", err)

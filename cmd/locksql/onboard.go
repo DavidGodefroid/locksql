@@ -5,10 +5,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/DavidGodefroid/lockkit/sysconf"
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/sysconf"
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 // sysConfig is the separated-mode setup, nil in same-user mode.
@@ -120,7 +121,7 @@ func projectDirHint(e env) string {
 // which the agents' account cannot see: both sides share a project config
 // instead, and the console serves that project.
 func separatedSteps(e env) string {
-	account := sysconf.DefaultServiceUser
+	account := product.P.Account
 	if sys, err := sysConfig(e); err == nil && sys != nil {
 		account = sys.ServiceUser
 	}
@@ -167,7 +168,7 @@ func runOnboard(e env) int {
 	if separated && service {
 		return runConsole(e, nil)
 	}
-	fmt.Fprint(e.stdout, e.paint.Banner(version))
+	fmt.Fprint(e.stdout, e.paint.Banner(product.P.Name, product.P.Tagline, version))
 	fmt.Fprintln(e.stdout)
 	wireAgents(e)
 	code := exitOK

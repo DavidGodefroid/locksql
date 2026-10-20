@@ -4,23 +4,19 @@
 package config
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
-	"net"
 	"os"
 	"path/filepath"
-	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
-	"github.com/BurntSushi/toml"
+	kconfig "github.com/DavidGodefroid/lockkit/config"
+
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 // Tier is the highest statement class a profile may run.
@@ -143,19 +139,6 @@ type Config struct {
 	Profiles    map[string]Profile
 }
 
-const (
-	projectDir  = ".locksql"
-	configFile  = "config.toml"
-	appDirName  = "locksql"
-	maxNameSize = 64
-)
-
-var profileNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
-
-// secretWords are refused as config key names, or as a "_"/"-" separated
-// part of one, at any depth.
-var secretWords = map[string]bool{"password": true, "passwd": true, "pwd": true, "secret": true, "token": true}
-
 // Load reads the project config (found by walking up from cwd) and the user
 // config (<user config dir>/locksql/config.toml). On a profile name present
 // in both, the project profile wins as a whole.
@@ -165,13 +148,7 @@ func Load(cwd string) (*Config, error) {
 }
 
 // UserConfigPath returns <user config dir>/locksql/config.toml.
-func UserConfigPath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, appDirName, configFile), nil
-}
+func UserConfigPath() (string, error) { return kconfig.UserConfigPath(product.P) }
 
 // LoadFrom is Load with an explicit user config path ("" for none).
 // A missing user config file is not an error.
@@ -187,7 +164,7 @@ func LoadFrom(cwd, userConfigPath string) (*Config, error) {
 		}
 	}
 	if root, ok := FindProjectRoot(cwd); ok {
-		profiles, err := loadFile(filepath.Join(root, projectDir, configFile), root)
+		profiles, err := loadFile(kconfig.ProjectConfigPath(product.P, root), root)
 		if err != nil {
 			return nil, err
 		}
@@ -201,44 +178,16 @@ func LoadFrom(cwd, userConfigPath string) (*Config, error) {
 
 // FindProjectRoot walks up from cwd to the first directory holding
 // .locksql/config.toml.
-func FindProjectRoot(cwd string) (string, bool) {
-	dir, err := filepath.Abs(cwd)
-	if err != nil {
-		return "", false
-	}
-	for {
-		st, err := os.Stat(filepath.Join(dir, projectDir, configFile))
-		if err == nil && st.Mode().IsRegular() {
-			return dir, true
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", false
-		}
-		dir = parent
-	}
-}
+func FindProjectRoot(cwd string) (string, bool) { return kconfig.FindProjectRoot(product.P, cwd) }
 
 // ProjectKey names the project of cwd in socket paths: ProjectHash of the
 // project root, or "user" when cwd is outside any project (profiles from
 // the user config only). The console and its clients must agree on it.
-func ProjectKey(cwd string) string {
-	if root, ok := FindProjectRoot(cwd); ok {
-		return ProjectHash(root)
-	}
-	return "user"
-}
+func ProjectKey(cwd string) string { return kconfig.ProjectKey(product.P, cwd) }
 
 // ProjectHash returns the first 8 hex digits of sha256 of the absolute,
 // cleaned project root.
-func ProjectHash(root string) string {
-	abs, err := filepath.Abs(root)
-	if err != nil {
-		abs = filepath.Clean(root)
-	}
-	sum := sha256.Sum256([]byte(abs))
-	return hex.EncodeToString(sum[:])[:8]
-}
+func ProjectHash(root string) string { return kconfig.ProjectHash(root) }
 
 type rawLimits struct {
 	StatementTimeout  string  `toml:"statement_timeout"`
@@ -295,17 +244,9 @@ func loadFile(path, baseDir string) (map[string]Profile, error) {
 // config values that could be secrets.
 func ParseProfiles(data []byte, name, baseDir string) (map[string]Profile, error) {
 	var raw rawFile
-	md, err := toml.Decode(string(data), &raw)
+	md, err := kconfig.Decode(product.P, data, name, &raw)
 	if err != nil {
-		return nil, sanitizeDecodeError(name, err)
-	}
-	for _, key := range md.Keys() {
-		if secretKey(key) {
-			return nil, fmt.Errorf("config: %s: key %q looks like a secret; locksql never reads secrets from config files (the console asks for them)", name, key.String())
-		}
-	}
-	if und := md.Undecoded(); len(und) > 0 {
-		return nil, fmt.Errorf("config: %s: unknown key %q", name, und[0].String())
+		return nil, err
 	}
 
 	out := make(map[string]Profile, len(raw.Profiles))
@@ -324,80 +265,23 @@ func ParseProfiles(data []byte, name, baseDir string) (map[string]Profile, error
 	return out, nil
 }
 
-func sanitizeDecodeError(path string, err error) error {
-	var pe toml.ParseError
-	if errors.As(err, &pe) {
-		if pe.LastKey != "" && !secretKey(strings.Split(pe.LastKey, ".")) {
-			return fmt.Errorf("config: %s: invalid TOML at line %d (key %q)", path, pe.Position.Line, pe.LastKey)
-		}
-		return fmt.Errorf("config: %s: invalid TOML at line %d", path, pe.Position.Line)
-	}
-	// Type errors from decoding into known keys name the key and the types,
-	// never the value. Secret-looking keys are never decoded.
-	return fmt.Errorf("config: %s: invalid TOML: %s", path, strings.TrimPrefix(err.Error(), "toml: "))
-}
-
-func secretKey(key toml.Key) bool {
-	for _, part := range key {
-		for _, word := range strings.FieldsFunc(strings.ToLower(part), func(r rune) bool { return r == '_' || r == '-' || r == '.' }) {
-			if secretWords[word] {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// embedsPassword reports whether s looks like a DSN carrying a password:
-// user:pw@host, scheme://user:pw@host, or a keyword DSN with password=.
-func embedsPassword(s string) bool {
-	lower := strings.ToLower(s)
-	if strings.Contains(lower, "password=") || strings.Contains(lower, "pwd=") {
-		return true
-	}
-	if i := strings.Index(s, "://"); i >= 0 {
-		s = s[i+3:]
-	}
-	at := strings.LastIndex(s, "@")
-	if at < 0 {
-		return false
-	}
-	return strings.Contains(s[:at], ":")
-}
-
-// approvalWords are answers too common to serve as the name typed to approve
-// a production statement.
-var approvalWords = map[string]bool{"y": true, "yes": true, "n": true, "no": true, "ok": true}
-
-// unsafeRune reports a character that could alter or hide text on a
-// terminal: a control character (C0, DEL, C1), an invalid byte or a format
-// character such as a bidi override.
-func unsafeRune(r rune) bool {
-	return r == utf8.RuneError || unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
-}
-
 func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) (Profile, error) {
-	if len(name) > maxNameSize || !profileNameRe.MatchString(name) {
-		return Profile{}, fmt.Errorf("invalid profile name %q: use letters, digits, '_', '-' or '.', starting with a letter or digit", name)
+	if err := kconfig.CheckProfileName(name, false); err != nil {
+		return Profile{}, err
 	}
 	errf := func(format string, a ...any) error {
 		return fmt.Errorf("profile %q: "+format, append([]any{name}, a...)...)
 	}
 	for _, f := range []struct{ key, val string }{{"host", r.Host}, {"path", r.Path}, {"user", r.User}, {"database", r.Database}, {"tls_ca", r.TLSCA},
 		{"tls_cert", r.TLSCert}, {"tls_key", r.TLSKey}, {"tls_server_name", r.TLSServer}, {"vault_path", r.VaultPath}} {
-		if embedsPassword(f.val) {
-			return Profile{}, errf("%s looks like a DSN with an embedded password; locksql never reads secrets from config files", f.key)
-		}
 		// These values are shown to the human in approval screens and
 		// policy diffs, where terminal escapes could hide a change.
-		if strings.IndexFunc(f.val, unsafeRune) >= 0 {
-			return Profile{}, errf("%s holds a control or formatting character", f.key)
+		if err := kconfig.CheckValue(product.P, f.key, f.val); err != nil {
+			return Profile{}, errf("%v", err)
 		}
 	}
-	if r.Production && (len(name) < 2 || approvalWords[strings.ToLower(name)]) {
-		// Production statements are approved by typing the profile name,
-		// which must not be an everyday answer such as "y".
-		return Profile{}, errf("a production profile needs a name of 2 characters or more that is not y, yes, n, no or ok")
+	if err := kconfig.CheckProfileName(name, r.Production); err != nil {
+		return Profile{}, errf("%v", err)
 	}
 
 	p := Profile{
@@ -443,7 +327,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	if (p.TLSCert == "") != (p.TLSKey == "") {
 		return Profile{}, errf("tls_cert and tls_key go together: set both, or neither")
 	}
-	if p.TLSServerName != "" && !validServerName(p.TLSServerName) {
+	if p.TLSServerName != "" && !kconfig.ValidServerName(p.TLSServerName) {
 		return Profile{}, errf("tls_server_name: want a DNS name or an IP address")
 	}
 	if p.TLS != "" && TLSRank(p.TLS) < 0 {
@@ -577,81 +461,6 @@ func resolveSQLitePath(path, baseDir string) string {
 	return filepath.Join(baseDir, path)
 }
 
-// TLS modes of a network profile, as libpq's sslmode, in increasing
-// strength.
-const (
-	TLSDisable    = "disable"
-	TLSPrefer     = "prefer"
-	TLSRequire    = "require"
-	TLSVerifyCA   = "verify-ca"
-	TLSVerifyFull = "verify-full"
-)
-
-var tlsModes = []string{TLSDisable, TLSPrefer, TLSRequire, TLSVerifyCA, TLSVerifyFull}
-
-// TLSRank orders TLS modes by strength. "" is prefer, the mode of profiles
-// approved before the setting existed; an unknown mode ranks -1.
-func TLSRank(mode string) int {
-	if mode == "" {
-		mode = TLSPrefer
-	}
-	return slices.Index(tlsModes, mode)
-}
-
-// serverNameRe is a DNS name: dot-separated labels of letters, digits and
-// inner hyphens.
-var serverNameRe = regexp.MustCompile(`^(?i)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.?$`)
-
-// validServerName reports a DNS name or an IP literal.
-func validServerName(s string) bool {
-	return len(s) <= 253 && (serverNameRe.MatchString(s) || net.ParseIP(s) != nil)
-}
-
-// TLSVerifiesChain reports a tls mode that verifies the server's certificate
-// chain: verify-ca and verify-full, and require with tls_ca, as libpq.
-func TLSVerifiesChain(mode, ca string) bool {
-	return TLSRank(mode) >= TLSRank(TLSVerifyCA) || (mode == TLSRequire && ca != "")
-}
-
-// IsLoopback reports a host that names this machine: "localhost" or a
-// loopback IP literal. Any other name, even one that resolves to loopback,
-// is remote.
-func IsLoopback(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
-// SSH authentication methods.
-const (
-	SSHAuthKey      = "key"
-	SSHAuthAgent    = "agent"
-	SSHAuthPassword = "password"
-)
-
-// SSHProfile is the bastion a network profile is reached through. Host and
-// Port of the profile are then seen from the bastion. It never holds a
-// secret: a key passphrase or an SSH password follows Credentials.
-type SSHProfile struct {
-	Host        string `json:"host"`
-	Port        int    `json:"port"`
-	User        string `json:"user"`
-	Auth        string `json:"auth"`
-	Key         string `json:"key,omitempty"`
-	Credentials string `json:"credentials"`
-}
-
-type rawSSH struct {
-	Host        string `toml:"host"`
-	Port        int    `toml:"port"`
-	User        string `toml:"user"`
-	Auth        string `toml:"auth"`
-	Key         string `toml:"key"`
-	Credentials string `toml:"credentials"`
-}
-
 func buildSSH(r rawSSH, p Profile, errf func(string, ...any) error) (*SSHProfile, error) {
 	if p.Engine == EngineSQLite {
 		return nil, errf("ssh is not used by sqlite")
@@ -659,49 +468,5 @@ func buildSSH(r rawSSH, p Profile, errf func(string, ...any) error) (*SSHProfile
 	if strings.HasPrefix(p.Host, "/") {
 		return nil, errf("ssh needs a TCP host; forwarding to a Unix socket is not supported")
 	}
-	for _, f := range []struct{ key, val string }{{"ssh.host", r.Host}, {"ssh.user", r.User}, {"ssh.key", r.Key}} {
-		if embedsPassword(f.val) {
-			return nil, errf("%s looks like a DSN with an embedded password; locksql never reads secrets from config files", f.key)
-		}
-		if strings.IndexFunc(f.val, unsafeRune) >= 0 {
-			return nil, errf("%s holds a control or formatting character", f.key)
-		}
-	}
-	switch {
-	case r.Host == "":
-		return nil, errf("ssh.host is required")
-	case r.User == "":
-		return nil, errf("ssh.user is required")
-	case r.Port < 0 || r.Port > 65535:
-		return nil, errf("ssh.port %d out of range", r.Port)
-	}
-	switch r.Auth {
-	case SSHAuthKey:
-		if r.Key == "" {
-			return nil, errf("ssh.key is required with ssh.auth = \"key\"")
-		}
-	case SSHAuthAgent, SSHAuthPassword:
-		if r.Key != "" {
-			return nil, errf("ssh.key is only used with ssh.auth = \"key\"")
-		}
-	default:
-		return nil, errf("ssh.auth must be key, agent or password")
-	}
-	switch r.Credentials {
-	case "", CredentialsAsk, CredentialsKeychain:
-	default:
-		return nil, errf("unknown ssh.credentials mode %q (want ask or keychain)", r.Credentials)
-	}
-	s := &SSHProfile{Host: r.Host, Port: r.Port, User: r.User, Auth: r.Auth, Key: r.Key, Credentials: r.Credentials}
-	if s.Port == 0 {
-		s.Port = DefaultSSHPort
-	}
-	if s.Credentials == "" {
-		s.Credentials = p.Credentials
-		// Vault holds the database login; the bastion's secret is asked.
-		if s.Credentials == "" || s.Credentials == CredentialsVault {
-			s.Credentials = CredentialsAsk
-		}
-	}
-	return s, nil
+	return kconfig.ParseSSH(product.P, r, p.Credentials, errf)
 }

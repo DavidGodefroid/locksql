@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // corpusMaxRows is the max_rows used by every corpus case.

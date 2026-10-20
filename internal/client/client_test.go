@@ -15,12 +15,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DavidGodefroid/lockkit/sysconf"
+
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
-// runtimeDir points the socket paths at a short private temp dir.
+// runtimeDir points the socket paths at a short private temp dir, and the
+// system setup at a missing file (same-user mode), whatever the machine
+// running the tests has installed.
 func runtimeDir(t *testing.T) string {
 	t.Helper()
 	d, err := os.MkdirTemp("/tmp", "lscl")
@@ -29,6 +33,9 @@ func runtimeDir(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(d) })
 	t.Setenv("LOCKSQL_RUNTIME_DIR", d)
+	old := sysconf.Path
+	sysconf.Path = filepath.Join(d, "no-system.toml")
+	t.Cleanup(func() { sysconf.Path = old })
 	return d
 }
 
@@ -318,85 +325,27 @@ func TestHelloProfileMismatch(t *testing.T) {
 	}
 }
 
-// spyConn records every deadline set on the connection.
-type spyConn struct {
-	net.Conn
-	mu        sync.Mutex
-	deadlines []time.Time
-}
-
-func (s *spyConn) record(t time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.deadlines = append(s.deadlines, t)
-}
-func (s *spyConn) SetDeadline(t time.Time) error      { s.record(t); return s.Conn.SetDeadline(t) }
-func (s *spyConn) SetReadDeadline(t time.Time) error  { s.record(t); return s.Conn.SetReadDeadline(t) }
-func (s *spyConn) SetWriteDeadline(t time.Time) error { s.record(t); return s.Conn.SetWriteDeadline(t) }
-
-// TestRunWaitsWithoutClientTimeout checks that query.run carries no
-// client-side timeout: neither the call context nor the connection gets a
-// deadline, so an approval may take as long as the console allows (5 min).
+// query.run carries no client-side timeout: an approval may take as long
+// as the console allows (5 min). lockkit's client tests the transport
+// (TestCallWaitsWithoutClientTimeout); here, the context Run passes on.
 func TestRunWaitsWithoutClientTimeout(t *testing.T) {
 	runtimeDir(t)
 	cwd := t.TempDir()
-	release := make(chan struct{})
 	startFake(t, cwd, "uat", func(req ipc.Request) ipc.Response {
-		<-release // the human takes their time
+		time.Sleep(300 * time.Millisecond) // the human takes their time
 		return result(req.ID, ipc.RunResult{Columns: []string{"n"}, Rows: [][]any{{1}}})
 	})
-
-	var spy *spyConn
-	old := dialUnix
-	dialUnix = func(path string) (net.Conn, error) {
-		c, err := old(path)
-		if err != nil {
-			return nil, err
-		}
-		spy = &spyConn{Conn: c}
-		return spy, nil
-	}
-	t.Cleanup(func() { dialUnix = old })
-
 	c, err := Dial(cwd, "uat")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
-
-	done := make(chan error, 1)
-	var got ipc.RunResult
-	go func() {
-		var err error
-		got, err = c.Run(context.Background(), "abc")
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		t.Fatalf("Run returned before the human answered: %v", err)
-	case <-time.After(300 * time.Millisecond):
+	got, err := c.Run(context.Background(), "abc")
+	if err != nil || len(got.Rows) != 1 {
+		t.Fatalf("rows = %v, %v", got.Rows, err)
 	}
-	close(release)
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not return after the answer")
-	}
-	if len(got.Rows) != 1 {
-		t.Fatalf("rows = %v", got.Rows)
-	}
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-	for _, d := range spy.deadlines {
-		if !d.IsZero() {
-			t.Fatalf("a deadline was set on the call: %v", d)
-		}
-	}
-	if c.lastDeadline != nil {
-		t.Fatalf("the call context carried a deadline: %v", *c.lastDeadline)
+	if c.LastDeadline() != nil {
+		t.Fatalf("the call context carried a deadline: %v", *c.LastDeadline())
 	}
 }
 

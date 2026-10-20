@@ -3,16 +3,13 @@ package console
 import (
 	"context"
 	"fmt"
-	"net"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 )
 
 // fakeEngineName is a test-only engine handing out the session in fakeNext.
@@ -217,30 +214,6 @@ func TestFirstStartAcceptsUpperY(t *testing.T) {
 	st := &starter{io: &fakeIO{answers: []string{"Y"}}, log: log, profile: p}
 	if _, _, err := st.startPolicy(context.Background(), state, config.ApprovedKey(t.TempDir(), "uat"), config.NewPolicy(p, nil, nil)); err != nil {
 		t.Fatalf("Y refused: %v", err)
-	}
-}
-
-// A client that leaves while its request waits for the console (busy with
-// another client's approval) must not have that request served.
-func TestServeConnDropsRequestOfClientGoneBeforeHandoff(t *testing.T) {
-	srv, cli := net.Pipe()
-	jobs := make(chan job)
-	var inflight sync.WaitGroup
-	done := make(chan struct{})
-	go func() {
-		serveConn(context.Background(), srv, jobs, &inflight)
-		close(done)
-	}()
-	if err := ipc.WriteMsg(cli, ipc.Request{JSONRPC: "2.0", ID: 1, Method: ipc.MethodStatus}); err != nil {
-		t.Fatal(err)
-	}
-	cli.Close()
-	// Nobody serves jobs (the console is busy): serveConn must notice the
-	// client left and return without handing the request over.
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("serveConn still waits to hand over the request of a gone client")
 	}
 }
 

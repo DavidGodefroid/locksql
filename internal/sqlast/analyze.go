@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // Source is a base column, as the catalog names it. For PostgreSQL DB is

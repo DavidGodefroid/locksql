@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DavidGodefroid/lockkit/secrets"
+	"github.com/DavidGodefroid/lockkit/sysconf"
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
-	"github.com/DavidGodefroid/locksql/internal/secrets"
-	"github.com/DavidGodefroid/locksql/internal/sysconf"
 )
 
 type fakeInfo struct {

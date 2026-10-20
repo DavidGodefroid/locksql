@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/refusal"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 // writeAudit writes records to the audit log of the state dir of this
@@ -29,7 +29,7 @@ func writeAudit(t *testing.T, recs ...audit.Record) string {
 		t.Fatal(err)
 	}
 	for _, r := range recs {
-		if err := l.Write(r); err != nil {
+		if err := l.Append(r); err != nil {
 			t.Fatal(err)
 		}
 	}

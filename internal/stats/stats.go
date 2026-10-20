@@ -20,10 +20,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
-	"github.com/DavidGodefroid/locksql/internal/refusal"
 	"github.com/DavidGodefroid/locksql/internal/sqlast"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 const (

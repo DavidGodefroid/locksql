@@ -16,18 +16,21 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/DavidGodefroid/locksql/internal/audit"
+	kconsole "github.com/DavidGodefroid/lockkit/console"
+	"github.com/DavidGodefroid/lockkit/secrets"
+	"github.com/DavidGodefroid/lockkit/tunnel"
+	"github.com/DavidGodefroid/lockkit/ui"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
-	"github.com/DavidGodefroid/locksql/internal/secrets"
-	"github.com/DavidGodefroid/locksql/internal/tunnel"
-	"github.com/DavidGodefroid/locksql/internal/ui"
+	"github.com/DavidGodefroid/locksql/internal/product"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 )
 
-// ErrConfig marks usage and configuration errors (exit code 3).
-var ErrConfig = errors.New("configuration error")
+// ErrConfig marks usage and configuration errors (exit code 3). It is
+// lockkit's, which the isolation checks wrap too.
+var ErrConfig = kconsole.ErrConfig
 
 // errPrivilegeAudit marks a reconnection stopped by the privilege audit:
 // the console ends, as it would have at start-up.
@@ -98,7 +101,7 @@ func (st *starter) audit(rec audit.Record) {
 	if st.profile.SSH != nil && rec.SSHHost == "" {
 		rec.SSHHost = st.profile.SSH.Host
 	}
-	if err := st.log.Write(rec); err != nil {
+	if err := st.log.Append(rec); err != nil {
 		st.io.Println("audit log write failed: " + err.Error())
 	}
 }
@@ -409,9 +412,6 @@ func refuseX11Production(iso *isolation, stateDir, key string, p config.Profile)
 	return nil // none yet, or unreadable: startPolicy reports it
 }
 
-// hardenProcess is harden; tests replace it.
-var hardenProcess = harden
-
 // hardenRefusal is the error of a console whose core-dump protection could
 // not be set up (hardenErr) on a production profile, where that protection
 // is part of the credential mitigations; nil otherwise, where the console
@@ -593,7 +593,7 @@ func (st *starter) connectSecret(ctx context.Context, p config.Profile, open fun
 	var err error
 	fromKeychain := false
 	if keychain {
-		s, legacy, err := secrets.KeychainGet(p.Name, p.Host, p.Port, defaultPort(p.Engine))
+		s, legacy, err := product.Keychain.Get(p.Name, p.Host, p.Port, defaultPort(p.Engine))
 		switch {
 		case err == nil:
 			secret, fromKeychain = s, true
@@ -748,7 +748,7 @@ func (st *starter) offerSaveAs(ctx context.Context, host string, port int, secre
 	if r := st.decide(ctx, Decision{Prompt: prompt, Expected: "y"}); r.Outcome != Approved {
 		return
 	}
-	if err := secrets.KeychainSet(st.profile.Name, host, port, secret); err != nil {
+	if err := product.Keychain.Set(st.profile.Name, host, port, secret); err != nil {
 		st.io.Println("not saved: " + secrets.Sanitize(err, secret))
 		return
 	}

@@ -10,9 +10,9 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/DavidGodefroid/lockkit/ui"
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
-	"github.com/DavidGodefroid/locksql/internal/sysconf"
-	"github.com/DavidGodefroid/locksql/internal/ui"
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 // Exit codes shared by every subcommand.
@@ -124,7 +124,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		stdin: os.Stdin, stdout: stdout, stderr: stderr, cwd: cwd,
 		tty:      term.IsTerminal(int(os.Stdin.Fd())),
 		agentEnv: agentinit.SystemEnv,
-		sys:      sysconf.Load,
+		sys:      product.LoadSys,
 		paint:    ui.For(os.Stdout),
 	}, args)
 }
@@ -153,7 +153,7 @@ func runEnv(e env, args []string) int {
 		return exitOK
 	case "help", "-h", "--help":
 		if e.paint.On {
-			fmt.Fprint(stdout, e.paint.Banner(version))
+			fmt.Fprint(stdout, e.paint.Banner(product.P.Name, product.P.Tagline, version))
 			fmt.Fprintln(stdout)
 		}
 		fmt.Fprint(stdout, usage(e.paint))

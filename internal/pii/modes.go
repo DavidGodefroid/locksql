@@ -3,48 +3,10 @@ package pii
 import (
 	"fmt"
 	"strings"
-	"time"
-	"unicode/utf8"
 
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/sqlast"
 )
-
-// Redacted is the cell of a column masked in mode redact.
-const Redacted = "<redacted>"
-
-// MaskValue masks one non-NULL cell in mode.
-func MaskValue(v any, mode string) any {
-	switch mode {
-	case ModeRedact:
-		return Redacted
-	case ModeEmail:
-		if s, ok := v.(string); ok {
-			if at := strings.LastIndexByte(s, '@'); at > 0 && at < len(s)-1 && utf8.ValidString(s) {
-				first, _ := utf8.DecodeRuneInString(s)
-				return string(first) + "***@" + s[at+1:]
-			}
-		}
-	}
-	return maskCell(v)
-}
-
-// CellText is the text of a cell value, as compared and substituted.
-func CellText(v any) string {
-	switch x := v.(type) {
-	case []byte:
-		return string(x)
-	case string:
-		return x
-	case time.Time:
-		return x.Format(time.RFC3339Nano)
-	}
-	return fmt.Sprint(v)
-}
-
-// RedactedRef is a redacted cell that carries a reference to its value,
-// which the console alone keeps.
-func RedactedRef(name string) string { return "<redacted:" + name + ">" }
 
 // MaskOutputs masks res in place following the analysed outputs of its
 // statement: each column whose resolved sources are under a rule is masked

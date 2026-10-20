@@ -10,10 +10,11 @@ import (
 
 	"github.com/zalando/go-keyring"
 
+	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
-	"github.com/DavidGodefroid/locksql/internal/secrets"
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 // vaultEngineName is a test-only engine recording the login it is given.
@@ -119,7 +120,7 @@ func TestConnectVaultReadsAFreshLoginEachTime(t *testing.T) {
 		t.Errorf("output %q", io.output())
 	}
 	for _, port := range []int{3306, 0} {
-		if _, err := keyring.Get(secrets.KeychainService, secrets.KeychainAccount(st.profile.Name, st.profile.Host, port)); !errors.Is(err, keyring.ErrNotFound) {
+		if _, err := keyring.Get(product.P.KeychainService, secrets.KeychainAccount(st.profile.Name, st.profile.Host, port)); !errors.Is(err, keyring.ErrNotFound) {
 			t.Errorf("a Vault login reached the keychain: %v", err)
 		}
 	}
