@@ -8,6 +8,19 @@ This file records the changes a user or an agent has to know about.
 
 ### Changed
 
+- **More statements refused at every tier.** The classifier's denylist
+  now also refuses PostgreSQL notification, logical decoding, replication
+  slot and origin, backup and recovery control and statistics reset or
+  override functions; MariaDB Spider, MySQL keyring, audit log, group
+  replication, version token and locking service functions and more
+  lib_mysqludf_sys names; SQLite `fsdir` and `zipfile`. DDL that reaches the
+  server's filesystem, another server or native code is refused too:
+  `DATA|INDEX DIRECTORY`, `ENGINE=FEDERATED|CONNECT|SPIDER`, `CREATE SERVER`,
+  foreign tables and data wrappers, `CREATE TABLESPACE`, `ADD DATAFILE`,
+  `LANGUAGE C`, `internal` and untrusted languages, `CREATE LANGUAGE` and the
+  SQLite `fsdir`, `zipfile` and `csv` modules. The security model now says
+  the denylist is best-effort above tier `read`, where approval is the
+  control.
 - **Internal: locksql runs on lockkit.** The product-neutral half of
   locksql moved to [lockkit](https://github.com/DavidGodefroid/lockkit),
   shared with the other lock* tools (see CONTRIBUTING.md). No user-visible
