@@ -29,8 +29,13 @@ RUN set -eu; arch=${TARGETARCH:-amd64}; \
     unzip -q /tmp/vault.zip vault -d /out
 
 FROM alpine:3.22 AS console
+# ALLOWED_UIDS: comma-separated uids that may reach the console besides the
+# members of locksql-clients, for an agent in a container of its own whose
+# uid has no account here (docs/docker.md#agent-in-its-own-container).
+ARG ALLOWED_UIDS=""
 # ca-certificates: tls = "verify-full" checks remote servers against them.
-RUN apk add --no-cache ca-certificates \
+RUN case "$ALLOWED_UIDS" in *[!0-9,]*|,*|*,|*,,*) echo "ALLOWED_UIDS: comma-separated uids, got '$ALLOWED_UIDS'" >&2; exit 1;; esac \
+ && apk add --no-cache ca-certificates \
  && addgroup -S -g 10000 locksql-clients \
  && adduser -D -u 10001 -s /bin/sh -g "locksql console" locksql \
  && adduser -D -u 10002 -G locksql-clients -s /bin/sh -g "locksql agent" agent \
@@ -42,6 +47,7 @@ RUN apk add --no-cache ca-certificates \
       'client_group = "locksql-clients"' \
       'socket_dir   = "/run/locksql"' \
       'x11          = "refuse"' > /etc/locksql/system.toml \
+ && if [ -n "$ALLOWED_UIDS" ]; then printf 'allowed_uids = [%s]\n' "$ALLOWED_UIDS" >> /etc/locksql/system.toml; fi \
  && chmod 0644 /etc/locksql/system.toml \
  && install -d -m 2710 -o locksql -g locksql-clients /run/locksql
 COPY --from=build --chown=root:root --chmod=0755 /out/locksql /usr/local/bin/locksql
