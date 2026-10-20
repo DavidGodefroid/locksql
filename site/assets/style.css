@@ -146,6 +146,7 @@ a:hover { color: var(--link-hover); text-decoration-thickness: 2px; }
 .brand {
   display: inline-flex;
   align-items: center;
+  min-height: 44px;
   gap: 0.5rem;
   color: var(--text);
   text-decoration: none;
@@ -167,8 +168,11 @@ a:hover { color: var(--link-hover); text-decoration-thickness: 2px; }
   list-style: none;
 }
 .site-nav li + li { margin-top: 0; }
+/* Tap targets are at least 44px tall, on every page and every width. */
 .site-nav a {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   padding: 0.35rem 0.7rem;
   border-radius: 999px;
   color: var(--muted);
@@ -208,8 +212,10 @@ h3 { font-size: 1.2rem; margin: 1.75rem 0 0.5rem; }
 
 /* Section links (assets/anchors.js) */
 .has-anchor { cursor: pointer; }
+/* Inline padding widens the "#" tap area to 44px without moving the line. */
 .heading-anchor {
-  margin-left: 0.4em;
+  padding: 0.75rem 1.1rem;
+  margin-left: calc(0.4em - 1.1rem);
   color: var(--muted);
   font-weight: 600;
   text-decoration: none;
@@ -342,6 +348,7 @@ blockquote p { margin: 0; }
 .eyebrow a {
   display: inline-flex;
   align-items: center;
+  min-height: 44px;
   gap: 0.6rem;
   padding: 0.25rem 0.85rem 0.25rem 0.3rem;
   border: 1px solid var(--border);
@@ -381,7 +388,9 @@ blockquote p { margin: 0; }
 
 .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 2rem 0 1.5rem; }
 .button {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   padding: 0.7rem 1.3rem;
   border-radius: 999px;
   border: 1px solid var(--border);
@@ -466,7 +475,7 @@ figure.demo figcaption { max-width: 52rem; margin: 1rem auto 0; text-align: cent
   line-height: 1;
 }
 .cards h3 { margin-top: 0; font-size: 1.1rem; }
-.cards p { margin: 0; color: var(--muted); font-size: 0.975rem; }
+.cards p { margin: 0; color: var(--muted); font-size: 1rem; }
 
 /* Tables */
 .table-wrap {
@@ -485,6 +494,8 @@ figure.demo figcaption { max-width: 52rem; margin: 1rem auto 0; text-align: cent
     var(--bg);
 }
 table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+/* Tables scroll in their own box, so an identifier never breaks mid-word. */
+.table-wrap code { white-space: nowrap; }
 caption {
   text-align: left;
   padding: 0.7rem 0.9rem;
@@ -558,18 +569,38 @@ td.no::before { content: "✕"; background: var(--no-bg); }
 .site-footer ul {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem 1.25rem;
+  gap: 0 1.25rem;
   margin: 0 0 0.75rem;
   padding: 0;
   list-style: none;
 }
 .site-footer li + li { margin-top: 0; }
+.site-footer li a { display: inline-flex; align-items: center; min-height: 44px; }
 .site-footer p { margin: 0; }
 
 @media (min-width: 48rem) {
   .site-header { position: sticky; top: 0; }
   .wrap { padding: 0 1.5rem; }
   pre { font-size: 0.9rem; }
+}
+
+/* Phones and small tablets: the brand on one row, the navigation on a second
+   row that scrolls sideways inside its own box (no visible scrollbar, a fade
+   on the right edge hints at more links), so the header stays two rows. */
+@media (max-width: 47.99rem) {
+  .site-header .wrap { row-gap: 0; padding-top: 0.25rem; padding-bottom: 0.25rem; }
+  .site-nav { width: calc(100% + 2rem); margin: 0 -1rem; }
+  .site-nav ul {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 0 2.5rem 0 1rem;
+    scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+  }
+  .site-nav ul::-webkit-scrollbar { display: none; }
+  .site-nav li { flex: none; }
+  .site-nav a { white-space: nowrap; }
 }
 
 @media (max-width: 40rem) {

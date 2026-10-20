@@ -69,3 +69,15 @@
     });
   });
 })();
+
+// On a phone the navigation scrolls sideways: bring the current page's link
+// into view, so a reader on FAQ or Security sees where they are.
+(function () {
+  "use strict";
+  var current = document.querySelector(".site-nav [aria-current=\"page\"]");
+  if (!current) return;
+  var row = current.closest("ul");
+  if (row.scrollWidth <= row.clientWidth) return;
+  var offset = current.getBoundingClientRect().left - row.getBoundingClientRect().left;
+  row.scrollLeft += offset - (row.clientWidth - current.offsetWidth) / 2;
+})();
