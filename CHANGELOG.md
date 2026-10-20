@@ -8,6 +8,17 @@ This file records the changes a user or an agent has to know about.
 
 ### Changed
 
+- **Clear results refused at desktop security level 1.** When the console
+  runs in a desktop terminal of the console account without a fingerprint
+  reader, the agent's account can read its window, so the clear results
+  would reach the agent. `locksql console --show-results` is now a
+  configuration error there (`level 1 does not accept --show-results: the
+  agent's account can read this window`), raised before any prompt or file
+  write, and Ctrl-O or `:results` leave the results masked with `results
+  stay masked at level 1: the agent's account can read this window`
+  (nothing audited), as at level 2. `--auto` and `--allow-unmask` are
+  unchanged. Levels 0 (session shape, Docker) and 2 are unchanged.
+
 - **Internal: locksql runs on lockkit.** The product-neutral half of
   locksql moved to [lockkit](https://github.com/DavidGodefroid/lockkit),
   shared with the other lock* tools (see CONTRIBUTING.md). No user-visible

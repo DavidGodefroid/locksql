@@ -546,7 +546,10 @@ reference (`‹r1.1.2›`); the output caps apply as for the agent. Off by
 default. The console warns when it goes on (in red on production), the
 status row reads `results clear`, every approval screen says `result:
 shown here in clear`, and `locksql status` reports `show results on`. The
-audit log still holds no row data.
+audit log still holds no row data. Unavailable when the console runs in a
+desktop terminal (security levels 1 and 2): the agent's account can read
+that window, so `--show-results` is refused and Ctrl-O leaves the results
+masked.
 
 ## Approval mode (Shift+Tab)
 
