@@ -159,6 +159,7 @@ takes effect after you confirm it in the console.</p>
     
 <p>The profile’s <code>tls</code> setting picks the mode, with libpq’s
 <code>sslmode</code> semantics:</p>
+<div class="table-wrap" role="region" aria-label="TLS modes" tabindex="0">
 <table>
 <caption>TLS modes</caption>
 <thead><tr><th scope="col">Mode</th><th scope="col">Encrypts</th><th scope="col">Verifies chain</th><th scope="col">Verifies host name</th></tr></thead>
@@ -170,6 +171,7 @@ takes effect after you confirm it in the console.</p>
 <tr><td><code>verify-full</code></td><td>yes, else refuse</td><td>yes</td><td>yes (<code>host</code>, or <code>tls_server_name</code>)</td></tr>
 </tbody>
 </table>
+</div>
 <p>The default is <code>verify-full</code>, except <code>prefer</code> when
 <code>host</code> is a Unix socket path or a loopback host (<code>localhost</code>
 or a loopback IP literal). <code>production = true</code> refuses
