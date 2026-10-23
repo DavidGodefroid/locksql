@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -199,16 +200,24 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 
 	// 2. The .locksql directory: the console writes pii.toml there.
 	dir := filepath.Join(root, ".locksql")
+	if d.lstat != nil {
+		if fi, err := d.lstat(dir); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+			add(checkFail, "project .locksql", dir+" is a symbolic link: the console account must own a directory of the project itself",
+				"replace it with a directory holding config.toml and pii.toml", nil)
+			return out
+		}
+	}
 	if fi, err := d.stat(dir); err == nil {
 		uid, _, ok := d.ownerOf(fi)
 		perm := fi.Mode().Perm()
-		fixCmd := fmt.Sprintf("chown %s %s && chmod 0755 %s", svc.name, shellQuote(dir), shellQuote(dir))
 		switch {
 		case !ok:
 		case uid != svc.uid || perm&0o022 != 0 || perm&0o005 != 0o005:
-			add(checkFail, "project .locksql", fmt.Sprintf("%s: %04o, owner uid %d; the console account must own it (it writes pii.toml there) and every account read it", dir, perm, uid),
-				fmt.Sprintf("sudo chown %s %s && sudo chmod 0755 %s", svc.name, shellQuote(dir), shellQuote(dir)),
-				&repair{what: "give " + dir + " to " + svc.name + ", mode 0755", root: fixCmd})
+			// The uid, not the name: in Docker the console account exists
+			// only in the image.
+			add(checkFail, "project .locksql", fmt.Sprintf("%s: %04o, owner uid %d; the console account (%s, uid %d) must own it (it writes pii.toml there) and every account read it", dir, perm, uid, svc.name, svc.uid),
+				fmt.Sprintf("sudo chown %d %s && sudo chmod 0755 %s", svc.uid, shellQuote(dir), shellQuote(dir)),
+				&repair{what: "give " + dir + " to " + svc.name + ", mode 0755", root: giveDirScript(dir, svc.uid)})
 		default:
 			add(checkOK, "project .locksql", fmt.Sprintf("%s %04o, owned by %s", dir, perm, svc.name), "", nil)
 		}
@@ -225,9 +234,40 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 		if uid == me {
 			r.apply = func() error { return os.Chmod(path, 0o644) }
 		} else {
-			r.root = "chmod 0644 " + shellQuote(path)
+			r.root = inDirScript(dir, readableScript(name))
 		}
 		add(checkFail, "project "+name, path+" is not readable by "+svc.name, "chmod 0644 "+shellQuote(path), r)
 	}
 	return out
+}
+
+// giveDirScript is the root script that gives dir to uid, mode 0755.
+func giveDirScript(dir string, uid int) string {
+	return inDirScript(dir, fmt.Sprintf("chown %d . && chmod 0755 .", uid))
+}
+
+// readableScript is the root script that makes name, in the current
+// directory, mode 0644. chmod follows a symbolic link, and a hard link is
+// the same file as its other names: on either it would make readable a file
+// the agent's account linked there, /etc/shadow say. The script refuses
+// both, with a message, and changes nothing. find -links is POSIX, where
+// stat -c %h is GNU only.
+func readableScript(name string) string {
+	q := shellQuote(name)
+	return fmt.Sprintf("if test -L %[1]s || test \"$(find %[1]s -prune -links 1)\" != %[1]s; then echo %[2]s >&2; false; else chmod 0644 %[1]s; fi",
+		q, shellQuote("locksql: "+name+" is a symbolic or hard link: not changed, replace it with a plain file"))
+}
+
+// inDirScript runs cmds as root inside dir, in a subshell. The agent's
+// account may own dir and the directories above it, and swap any of them
+// for a symbolic link between the check and the script: a chown or chmod
+// by path would then change whatever the link names. The script enters dir
+// once and checks that it is the directory at that path, symbolic links
+// resolved, before it changes ".", which no rename can redirect.
+func inDirScript(dir, cmds string) string {
+	real := dir
+	if parent, err := filepath.EvalSymlinks(filepath.Dir(dir)); err == nil {
+		real = filepath.Join(parent, filepath.Base(dir))
+	}
+	return fmt.Sprintf("(cd -P -- %s && test \"$(pwd -P)\" = %s && %s)", shellQuote(dir), shellQuote(real), cmds)
 }

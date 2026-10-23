@@ -52,7 +52,7 @@ func newSetupFixture(t *testing.T, separatedAlready bool, onPath ...string) *set
 	}
 	f.e.root = func(s string) error {
 		f.scripts = append(f.scripts, s)
-		if strings.Contains(s, "chown locksql") {
+		if strings.Contains(s, "chown 900 .") {
 			f.chowned = true
 		}
 		return nil
@@ -121,7 +121,7 @@ func TestSetupInteractive(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.home, ".codex", "config.toml")); err != nil {
 		t.Errorf("codex not wired: %v", err)
 	}
-	if len(f.scripts) != 1 || !strings.Contains(f.scripts[0], "chown locksql '"+filepath.Join(f.root, ".locksql")+"'") {
+	if len(f.scripts) != 1 || !strings.Contains(f.scripts[0], giveDirScript(filepath.Join(f.root, ".locksql"), 900)) {
 		t.Errorf("root scripts %q", f.scripts)
 	}
 	for _, want := range []string{"invalid:", "Wired for your account: codex", "does not exist yet",

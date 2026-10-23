@@ -103,7 +103,8 @@ func TestProjectChecks(t *testing.T) {
 		t.Errorf("setfacl runs %q", ran)
 	}
 	dot := byTitle["project .locksql"]
-	if dot.state != checkFail || dot.repair == nil || dot.repair.root != "chown locksql '/home/alice/proj/.locksql' && chmod 0755 '/home/alice/proj/.locksql'" {
+	if dot.state != checkFail || dot.repair == nil || dot.repair.root != giveDirScript("/home/alice/proj/.locksql", 900) ||
+		!strings.Contains(dot.fix, "sudo chown 900 '/home/alice/proj/.locksql'") {
 		t.Errorf("project .locksql: %+v", dot)
 	}
 	cfg := byTitle["project config.toml"]
@@ -209,4 +210,136 @@ func TestDoctorFix(t *testing.T) {
 		t.Errorf("--yes without --fix: code %d", code)
 	}
 
+}
+
+// A .locksql that is a symbolic link gets no repair: a chown by root would
+// change whatever it names.
+func TestProjectChecksSymlinkedDotDir(t *testing.T) {
+	dir := func(mode fs.FileMode, uid int) ownedInfo {
+		return ownedInfo{fakeInfo{"d", fs.ModeDir | mode}, uid, uid}
+	}
+	files := map[string]ownedInfo{
+		"/":                         dir(0o755, 0),
+		"/home":                     dir(0o755, 0),
+		"/home/alice":               dir(0o755, 1000),
+		"/home/alice/proj":          dir(0o755, 1000),
+		"/home/alice/proj/.locksql": dir(0o755, 1000),
+	}
+	var ran [][]string
+	d := accessDoctor(files, &ran)
+	d.lstat = func(p string) (os.FileInfo, error) {
+		if p == "/home/alice/proj/.locksql" {
+			return ownedInfo{fakeInfo{".locksql", fs.ModeSymlink | 0o777}, 1000, 1000}, nil
+		}
+		return d.stat(p)
+	}
+	svc := svcAccount{name: "locksql", uid: 900, gids: []int{900}}
+	for _, c := range projectChecks(d, "/home/alice/proj", svc, 1000) {
+		if c.title != "project .locksql" {
+			continue
+		}
+		if c.state != checkFail || c.repair != nil || !strings.Contains(c.detail, "symbolic link") {
+			t.Errorf("symlinked .locksql: %+v", c)
+		}
+		return
+	}
+	t.Error("no project .locksql check")
+}
+
+// The root scripts change the directory they entered, never what a
+// symbolic link swapped in at its path names.
+func TestInDirScript(t *testing.T) {
+	sh := func(script string) error {
+		return exec.Command("sh", "-c", "set -eu\n"+script).Run()
+	}
+	mode := func(p string) fs.FileMode {
+		fi, err := os.Lstat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi.Mode().Perm()
+	}
+	root := t.TempDir()
+	dot := root + "/.locksql"
+	if err := os.Mkdir(dot, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dot, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	if err := sh(giveDirScript(dot, os.Getuid())); err != nil {
+		t.Fatal(err)
+	}
+	if got := mode(dot); got != 0o755 {
+		t.Errorf("mode %04o, want 0755", got)
+	}
+	cfg := dot + "/config.toml"
+	if err := os.WriteFile(cfg, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := sh(inDirScript(dot, readableScript("config.toml"))); err != nil {
+		t.Fatal(err)
+	}
+	if got := mode(cfg); got != 0o644 {
+		t.Errorf("config.toml %04o, want 0644", got)
+	}
+
+	// .locksql swapped for a link to another directory.
+	other := t.TempDir()
+	if err := os.Chmod(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(dot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, dot); err != nil {
+		t.Fatal(err)
+	}
+	if err := sh(giveDirScript(dot, os.Getuid())); err == nil {
+		t.Error("script ran through a symbolic link")
+	}
+	if got := mode(other); got != 0o700 {
+		t.Errorf("link target changed to %04o", got)
+	}
+
+	// A file swapped for a link.
+	if err := os.Remove(dot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secret := other + "/secret"
+	if err := os.WriteFile(secret, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, dot+"/pii.toml"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sh(inDirScript(dot, readableScript("pii.toml"))); err == nil {
+		t.Error("chmod ran through a symbolic link")
+	}
+	if got := mode(secret); got != 0o600 {
+		t.Errorf("link target changed to %04o", got)
+	}
+
+	// A file that is a hard link to another name.
+	if err := os.Remove(dot + "/pii.toml"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(secret, dot+"/pii.toml"); err != nil {
+		t.Fatal(err)
+	}
+	var stderr strings.Builder
+	cmd := exec.Command("sh", "-c", "set -eu\n"+inDirScript(dot, readableScript("pii.toml")))
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Error("chmod ran on a hard link")
+	}
+	if !strings.Contains(stderr.String(), "pii.toml is a symbolic or hard link") {
+		t.Errorf("stderr %q", stderr.String())
+	}
+	if got := mode(secret); got != 0o600 {
+		t.Errorf("hard link target changed to %04o", got)
+	}
 }

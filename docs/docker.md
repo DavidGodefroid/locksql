@@ -73,6 +73,21 @@ the container itself, and the wizard knows it:
   not have: use `credentials = "ask"`, or `"vault"` with the image below;
 - a SQLite `path` is relative to the project root, which is mounted.
 
+Then give `.locksql/` to the console account. The console writes
+`pii.toml` there, and a directory your account owns would let the agent
+replace that file, and with it the masking rules. The account exists only in
+the image, so run the repair there, as root:
+
+```sh
+docker run --rm --user 0 -v "$PWD:$PWD" -w "$PWD" locksql doctor --fix --yes
+```
+
+It makes uid 10001 the owner of `.locksql/` (mode 0755) and makes
+`config.toml` readable; `config.toml` stays yours to edit. The checks of the
+console and its profiles fail from this container, which runs no console:
+read the `project` lines. Run it again whenever `.locksql/` is created anew,
+by `locksql init` for example.
+
 ## Run the console
 
 In a terminal you keep in view, from the project directory:
@@ -195,7 +210,9 @@ docker run … -v locksql-run:/run/locksql -v "$PWD:$PWD" -w "$PWD" agent-image
 
 `locksql init claude` then needs no change: the `locksql mcp` it writes in
 `.mcp.json` runs inside the agent's container. Check from there with
-`locksql status`.
+`locksql status`. `locksql doctor` run there also checks the project: a
+`.locksql/` the console account does not own is repaired by the root
+command of [Set up a project](#set-up-a-project).
 
 ## What Docker does and does not separate
 
