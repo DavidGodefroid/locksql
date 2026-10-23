@@ -387,7 +387,8 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 			cipher = fmt.Sprint(r.Rows[0][1])
 		}
 		// mariadb:10.11 images ship without a certificate; MariaDB 11.4
-		// and MySQL 8 generate one at startup.
+		// and MySQL 8 generate one at startup. TestTLS covers every image,
+		// MariaDB 10 included, with a private CA and verify-full.
 		wantTLS := !(m.flavor == engine.FlavorMariaDB && strings.HasPrefix(m.version, "10."))
 		if wantTLS && cipher == "" {
 			t.Errorf("no TLS: %v", r.Rows)
