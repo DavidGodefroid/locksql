@@ -108,7 +108,8 @@ type ServerConfig struct {
 	AllowUnmask bool
 	// ShowResults starts with the clear results on: the result of each
 	// masked run printed in the console, in clear; the client still gets
-	// it masked. Ctrl-O switches them while the console runs.
+	// it masked. Ctrl-O switches them while the console runs. Ignored on
+	// the desktop (Boundary set): levels 1 and 2 keep the results masked.
 	ShowResults bool
 	Version     string
 	// LoadPolicy re-reads the current policy from the config files. Nil
@@ -223,7 +224,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	cfg.Databases = servedDatabases(cfg.Policy.Profile.Database, cfg.Databases)
 	s := &Server{cfg: cfg, approver: cfg.Approver, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, probes: map[int]map[string]bool{}, keys: map[string]bool{}, quantum: cfg.Quantum,
-		auto: cfg.Auto, showResults: cfg.ShowResults, allowUnmask: cfg.AllowUnmask}
+		auto: cfg.Auto, showResults: cfg.ShowResults && cfg.Boundary == "", allowUnmask: cfg.AllowUnmask}
 	if err := s.apply(cfg.Policy); err != nil {
 		return nil, err
 	}

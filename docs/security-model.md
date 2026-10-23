@@ -122,7 +122,7 @@ The transitions:
 |---|---|---|---|---|---|
 | Approval mode | manual → auto | Shift+Tab, `:mode` | none; refused on a production profile (nothing audited) | `mode` / `auto` | the next `query.run` |
 | Approval mode | auto → manual | Shift+Tab, `:mode` | none | `mode` / `manual` | the next `query.run` |
-| Clear results | hidden → shown | Ctrl-O, `:results` | none (red warning on production) | `results` / `shown` | the next run |
+| Clear results | hidden → shown | Ctrl-O, `:results` | none (red warning on production); refused at levels 1 and 2 (nothing audited) | `results` / `shown` | the next run |
 | Clear results | shown → hidden | Ctrl-O, `:results` | none | `results` / `hidden` | the next run |
 | Unmasked output | off → allowed | `:unmask` only, never a single key | `y` to a prompt (anything else, or no answer within 5 minutes, leaves it off, unaudited) | `unmask` / `allowed` | the next `query.plan` |
 | Unmasked output | allowed → off | `:unmask` | none | `unmask` / `off` | at once: an open unmask plan is refused at `query.run` |
@@ -142,6 +142,12 @@ cells: the human is the trusted party and already sees the SQL and holds
 the credentials. `locksql status` only reports it. It is accepted on
 production profiles with a red warning; every approval screen says the
 result will be shown in clear. The audit log still holds no row data.
+They are refused at desktop security levels 1 and 2 (the console runs in a
+desktop terminal of the console account): that window is on the agent's
+desktop, so whatever it prints in clear reaches the agent's account, which
+would hand it the very data masking keeps from it. `--show-results` is then
+a configuration error raised before any prompt or file write, and Ctrl-O or
+`:results` leave the results masked, with a message and no audit record.
 
 **Auto mode** is unavailable on production profiles (the key says so),
 never covers unmasked queries, never overrides REFUSE, ends each

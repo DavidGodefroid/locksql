@@ -815,6 +815,15 @@ approval screen says `result: shown here in clear`, and `locksql status`
 reports `show results on`. The audit log still holds no row data, and
 references and placeholders work as without it.
 
+The clear results are unavailable when the console runs in a desktop
+terminal of the console account (security levels 1 and 2): that window is
+on the agent's desktop, where the agent's account can read it.
+`--show-results` is then refused before any prompt or file write (`level 1
+does not accept --show-results: the agent's account can read this window`),
+and Ctrl-O or `:results` leave the results masked and say so (`results stay
+masked at level 1: the agent's account can read this window`); nothing is
+audited.
+
 The console needs an interactive terminal. At start it:
 
 0. **Checks the isolation** described in [section 2](#2-separate-the-console-from-the-agent):

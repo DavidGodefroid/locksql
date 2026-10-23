@@ -175,6 +175,11 @@ func Run(ctx context.Context, o Options) error {
 	if iso.verifier != nil && (o.Auto || o.AllowUnmask || o.ShowResults) {
 		return fmt.Errorf("%w: level 2 does not accept --auto, --allow-unmask or --show-results", ErrConfig)
 	}
+	// Level 1: the agent's account can read the console window, so the
+	// clear results would reach it. --auto and --allow-unmask stay.
+	if iso.desktop && iso.verifier == nil && o.ShowResults {
+		return fmt.Errorf("%w: level 1 does not accept --show-results: the agent's account can read this window", ErrConfig)
+	}
 	hardenErr := hardenProcess()
 	if hardenErr != nil {
 		o.IO.Println(paint.Warn(red + "could not disable core dumps: " + safeText(hardenErr.Error(), false) + reset))

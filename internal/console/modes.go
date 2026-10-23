@@ -79,6 +79,11 @@ func (s *Server) toggleResults() {
 		s.println(paint.Warn("results stay masked at level 2: the window is on the agent's desktop"))
 		return
 	}
+	if !s.showResults && s.level1() {
+		// Level 1: the agent's account can read this window.
+		s.println(paint.Warn("results stay masked at level 1: the agent's account can read this window"))
+		return
+	}
 	s.showResults = !s.showResults
 	decision := "hidden"
 	if s.showResults {
@@ -158,7 +163,7 @@ func (s *Server) statusLine() string {
 	if n := len(s.plans); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d plan%s open", n, plural(n)))
 	}
-	if s.cfg.Boundary != "" && !s.cfg.Fingerprint {
+	if s.level1() {
 		parts = append(parts, paint.Red("level 1: desktop boundary"))
 	}
 	if s.pending != nil {
@@ -190,3 +195,7 @@ func (s *Server) clearStatus() {
 		st.SetStatus("")
 	}
 }
+
+// level1 reports the desktop shape without a fingerprint reader: the
+// agent's account can read this window.
+func (s *Server) level1() bool { return s.cfg.Boundary != "" && !s.cfg.Fingerprint }

@@ -691,11 +691,28 @@ func TestRunLevel2RefusesWideningFlags(t *testing.T) {
 	}
 }
 
-// Level 1 takes the same flags, and approves by typed answer alone: no
-// finger is ever asked.
+// Level 1 refuses --show-results before any prompt or file write: the
+// agent's account can read the window.
+func TestRunLevel1RefusesShowResults(t *testing.T) {
+	io, state, err := runDesktop(t, func(string) (fingerprint.Verifier, error) { return nil, fingerprint.ErrUnavailable },
+		Options{ShowResults: true})
+	if !errors.Is(err, ErrConfig) || !strings.Contains(err.Error(), "level 1 does not accept --show-results: the agent's account can read this window") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(io.prompts) != 0 {
+		t.Errorf("prompts %q", io.prompts)
+	}
+	entries, rerr := os.ReadDir(state)
+	if rerr != nil || len(entries) != 0 {
+		t.Errorf("state directory touched: %v %v", entries, rerr)
+	}
+}
+
+// Level 1 takes --auto and --allow-unmask, and approves by typed answer
+// alone: no finger is ever asked.
 func TestRunLevel1AcceptsFlagsAndTypes(t *testing.T) {
 	io, _, err := runDesktop(t, func(string) (fingerprint.Verifier, error) { return nil, fingerprint.ErrUnavailable },
-		Options{Auto: true, AllowUnmask: true, ShowResults: true})
+		Options{Auto: true, AllowUnmask: true})
 	if err == nil || strings.Contains(err.Error(), "level 2") {
 		t.Fatalf("err = %v", err)
 	}
