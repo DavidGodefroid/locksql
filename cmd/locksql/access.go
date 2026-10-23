@@ -234,8 +234,7 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 		if uid == me {
 			r.apply = func() error { return os.Chmod(path, 0o644) }
 		} else {
-			// chmod follows a symbolic link: never on one.
-			r.root = inDirScript(dir, fmt.Sprintf("test ! -L %s && chmod 0644 %s", shellQuote(name), shellQuote(name)))
+			r.root = inDirScript(dir, readableScript(name))
 		}
 		add(checkFail, "project "+name, path+" is not readable by "+svc.name, "chmod 0644 "+shellQuote(path), r)
 	}
@@ -245,6 +244,18 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 // giveDirScript is the root script that gives dir to uid, mode 0755.
 func giveDirScript(dir string, uid int) string {
 	return inDirScript(dir, fmt.Sprintf("chown %d . && chmod 0755 .", uid))
+}
+
+// readableScript is the root script that makes name, in the current
+// directory, mode 0644. chmod follows a symbolic link, and a hard link is
+// the same file as its other names: on either it would make readable a file
+// the agent's account linked there, /etc/shadow say. The script refuses
+// both, with a message, and changes nothing. find -links is POSIX, where
+// stat -c %h is GNU only.
+func readableScript(name string) string {
+	q := shellQuote(name)
+	return fmt.Sprintf("if test -L %[1]s || test \"$(find %[1]s -prune -links 1)\" != %[1]s; then echo %[2]s >&2; false; else chmod 0644 %[1]s; fi",
+		q, shellQuote("locksql: "+name+" is a symbolic or hard link: not changed, replace it with a plain file"))
 }
 
 // inDirScript runs cmds as root inside dir, in a subshell. The agent's

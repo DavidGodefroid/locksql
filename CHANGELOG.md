@@ -28,7 +28,9 @@ This file records the changes a user or an agent has to know about.
   link put there by the agent's account would have handed its target to the
   console account, or made it world-readable. The root script now enters
   the directory, checks its real path and changes `.`; a `.locksql` that is
-  a link fails the check with no repair.
+  a link fails the check with no repair. A `config.toml` or `pii.toml`
+  that is a symbolic or hard link is refused, with a message, rather than
+  made readable.
 
 ## v0.8.0 (2026-10-19)
 

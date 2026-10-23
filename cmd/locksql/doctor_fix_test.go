@@ -277,7 +277,7 @@ func TestInDirScript(t *testing.T) {
 	if err := os.WriteFile(cfg, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := sh(inDirScript(dot, "test ! -L 'config.toml' && chmod 0644 'config.toml'")); err != nil {
+	if err := sh(inDirScript(dot, readableScript("config.toml"))); err != nil {
 		t.Fatal(err)
 	}
 	if got := mode(cfg); got != 0o644 {
@@ -316,10 +316,30 @@ func TestInDirScript(t *testing.T) {
 	if err := os.Symlink(secret, dot+"/pii.toml"); err != nil {
 		t.Fatal(err)
 	}
-	if err := sh(inDirScript(dot, "test ! -L 'pii.toml' && chmod 0644 'pii.toml'")); err == nil {
+	if err := sh(inDirScript(dot, readableScript("pii.toml"))); err == nil {
 		t.Error("chmod ran through a symbolic link")
 	}
 	if got := mode(secret); got != 0o600 {
 		t.Errorf("link target changed to %04o", got)
+	}
+
+	// A file that is a hard link to another name.
+	if err := os.Remove(dot + "/pii.toml"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(secret, dot+"/pii.toml"); err != nil {
+		t.Fatal(err)
+	}
+	var stderr strings.Builder
+	cmd := exec.Command("sh", "-c", "set -eu\n"+inDirScript(dot, readableScript("pii.toml")))
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Error("chmod ran on a hard link")
+	}
+	if !strings.Contains(stderr.String(), "pii.toml is a symbolic or hard link") {
+		t.Errorf("stderr %q", stderr.String())
+	}
+	if got := mode(secret); got != 0o600 {
+		t.Errorf("hard link target changed to %04o", got)
 	}
 }
