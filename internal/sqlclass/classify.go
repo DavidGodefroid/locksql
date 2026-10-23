@@ -133,6 +133,12 @@ var forbiddenLeading = map[string]string{
 // Forbidden functions are refused when called (name followed by '('), at any
 // depth, in every class and every dialect: a name harmless in one engine may
 // be a user-defined function or extension in another. Quoted names count too.
+//
+// Reads may call allowlisted functions only (sqlast), so for them this list
+// is a second check. For writes, DDL and admin statements it is the only
+// function check, and a denylist is open-ended: user-defined functions and
+// extensions can be named anything. It is best-effort there; the privilege
+// audit and the human approval are the controls (docs/security-model.md).
 var forbiddenFuncs = newSet(
 	// MySQL/MariaDB: delays and resource abuse.
 	"SLEEP", "BENCHMARK",
@@ -141,8 +147,13 @@ var forbiddenFuncs = newSet(
 	// MySQL/MariaDB: replication waits that block a connection.
 	"MASTER_POS_WAIT", "SOURCE_POS_WAIT", "MASTER_GTID_WAIT", "WAIT_FOR_EXECUTED_GTID_SET",
 	"WAIT_UNTIL_SQL_THREAD_AFTER_GTIDS",
-	// MySQL/MariaDB: file access and well-known command-execution UDFs.
-	"LOAD_FILE", "SYS_EXEC", "SYS_EVAL",
+	// MySQL/MariaDB: file access and well-known command-execution UDFs
+	// (lib_mysqludf_sys), named one by one: SYS_GUID is a MariaDB built-in.
+	"LOAD_FILE", "SYS_EXEC", "SYS_EVAL", "SYS_BINEVAL", "SYS_GET", "SYS_SET", "LIB_MYSQLUDF_SYS_INFO",
+	// MySQL Enterprise: loads a dictionary from a server file.
+	"GEN_DICTIONARY_LOAD",
+	// MySQL: locking service.
+	"SERVICE_GET_READ_LOCKS", "SERVICE_GET_WRITE_LOCKS", "SERVICE_RELEASE_LOCKS",
 	// PostgreSQL: server file access.
 	"PG_READ_FILE", "PG_READ_BINARY_FILE", "PG_STAT_FILE", "LO_IMPORT", "LO_EXPORT",
 	"PG_FILE_WRITE", "PG_FILE_RENAME", "PG_FILE_UNLINK", "PG_LOGDIR_LS",
@@ -161,9 +172,20 @@ var forbiddenFuncs = newSet(
 	"SET_CONFIG",
 	// PostgreSQL: server and backend control.
 	"PG_TERMINATE_BACKEND", "PG_CANCEL_BACKEND", "PG_RELOAD_CONF", "PG_ROTATE_LOGFILE", "PG_PROMOTE",
-	"PG_SWITCH_WAL", "PG_CREATE_RESTORE_POINT",
+	"PG_SWITCH_WAL", "PG_SWITCH_XLOG", "PG_CREATE_RESTORE_POINT", "PG_START_BACKUP", "PG_STOP_BACKUP",
+	"PG_LOG_BACKEND_MEMORY_CONTEXTS", "PG_LOG_STANDBY_SNAPSHOT", "PG_IMPORT_SYSTEM_COLLATIONS", "PG_FILE_SYNC",
+	// PostgreSQL: notifications, seen by every listening session.
+	"PG_NOTIFY",
+	// PostgreSQL: replication slots (pg_replication_* is a prefix below).
+	"PG_CREATE_PHYSICAL_REPLICATION_SLOT", "PG_CREATE_LOGICAL_REPLICATION_SLOT", "PG_DROP_REPLICATION_SLOT",
+	"PG_COPY_PHYSICAL_REPLICATION_SLOT", "PG_COPY_LOGICAL_REPLICATION_SLOT", "PG_SYNC_REPLICATION_SLOTS",
+	// PostgreSQL: statistics resets and overrides, which mislead the EXPLAIN gate.
+	"PG_STAT_STATEMENTS_RESET", "PG_RESTORE_RELATION_STATS", "PG_RESTORE_ATTRIBUTE_STATS",
+	"PG_CLEAR_RELATION_STATS", "PG_CLEAR_ATTRIBUTE_STATS",
 	// SQLite: native code and known escape hatches.
 	"LOAD_EXTENSION", "FTS3_TOKENIZER", "READFILE", "WRITEFILE", "EDIT",
+	// SQLite: directory listing and zip archives on the server's filesystem.
+	"FSDIR", "ZIPFILE", "ZIPFILE_CDS",
 )
 
 // forbiddenFuncPrefixes covers function families.
@@ -176,6 +198,20 @@ var forbiddenFuncPrefixes = []string{
 	"PG_LS_",
 	// PostgreSQL: remote connections (dblink, dblink_exec, dblink_connect, ...).
 	"DBLINK",
+	// PostgreSQL: logical decoding and messages (pg_logical_emit_message,
+	// pg_logical_slot_get_changes, ...), replication slots and origins
+	// (pg_replication_slot_advance, pg_replication_origin_create, ...).
+	"PG_LOGICAL_", "PG_REPLICATION_",
+	// PostgreSQL: backup control (pg_backup_start, pg_backup_stop) and
+	// recovery control (pg_wal_replay_pause, pg_wal_replay_resume, ...).
+	"PG_BACKUP_", "PG_WAL_REPLAY_", "PG_XLOG_REPLAY_",
+	// PostgreSQL: statistics resets (pg_stat_reset, pg_stat_reset_shared, ...).
+	"PG_STAT_RESET",
+	// MariaDB Spider: SQL run on remote servers, table copies, monitors.
+	"SPIDER_",
+	// MySQL: keyring (returns key material), audit log (reads or rewrites
+	// it), group replication and failover control, version tokens (locks).
+	"KEYRING_", "AUDIT_LOG_", "GROUP_REPLICATION_", "ASYNCHRONOUS_CONNECTION_FAILOVER_", "VERSION_TOKENS_",
 }
 
 // sqliteRawTables are SQLite eponymous virtual tables that expose the
@@ -596,9 +632,36 @@ func checkPragma(toks []Token) error {
 	return refusef(refusal.Forbidden, "PRAGMA %.64s is not allowed (only introspection and setting reads are)", name)
 }
 
+// remoteEngines are MySQL/MariaDB storage engines whose tables live on
+// another server or in files outside the data directory.
+var remoteEngines = newSet("FEDERATED", "FEDERATEDX", "CONNECT", "SPIDER")
+
+// sqliteFileModules are SQLite virtual-table modules that read or write
+// files on the server's filesystem.
+var sqliteFileModules = newSet("FSDIR", "ZIPFILE", "CSV", "VSV")
+
+// nativeLanguage reports whether a PostgreSQL function language runs native
+// or unsandboxed code: C, internal, the untrusted PL*U languages
+// (plpython3u, plperlu, pltclu, ...), PL/sh and PL/R.
+func nativeLanguage(name string) bool {
+	return name == "C" || name == "INTERNAL" || name == "PLSH" || name == "PLR" ||
+		strings.HasPrefix(name, "PL") && strings.HasSuffix(name, "U")
+}
+
+// optionValue is the name or the string body a DDL option value t stands
+// for (ENGINE = 'FEDERATED', LANGUAGE 'c').
+func optionValue(t Token) string {
+	if t.Kind == TokString && len(t.Text) >= 2 && (t.Text[0] == '\'' || t.Text[0] == '"') {
+		q := t.Text[:1]
+		return fold(strings.ReplaceAll(t.Text[1:len(t.Text)-1], q+q, q))
+	}
+	return t.Name()
+}
+
 // checkPrivileged applies the DDL and ADMIN rules: no credentials in the
 // statement, no SET of a guarded session setting, no ALTER SYSTEM, no
-// CREATE EXTENSION, no ANALYZE that runs a statement, no VACUUM INTO.
+// CREATE EXTENSION, no ANALYZE that runs a statement, no VACUUM INTO, no
+// DDL reaching the server's filesystem or another server (checkDDLTargets).
 func checkPrivileged(d Dialect, toks []Token) error {
 	first := toks[0].Text
 	second := ""
@@ -633,11 +696,17 @@ func checkPrivileged(d Dialect, toks []Token) error {
 		if second == "SYSTEM" {
 			return refuse(refusal.Forbidden, "ALTER SYSTEM is not allowed (server configuration)")
 		}
+		if err := checkDDLTargets(d, toks); err != nil {
+			return err
+		}
 	case "CREATE":
 		for _, t := range toks[1:] {
 			if t.Kind == TokWord && t.Text == "EXTENSION" {
 				return refuseAt(t, refusal.Forbidden, "CREATE EXTENSION is not allowed (extensions can load native code)")
 			}
+		}
+		if err := checkDDLTargets(d, toks); err != nil {
+			return err
 		}
 	case "ANALYZE":
 		if len(toks) > 1 {
@@ -652,6 +721,74 @@ func checkPrivileged(d Dialect, toks []Token) error {
 		for _, t := range toks[1:] {
 			if t.Kind == TokWord && t.Text == "INTO" {
 				return refuseAt(t, refusal.Forbidden, "VACUUM INTO is not allowed (writes a file)")
+			}
+		}
+	}
+	return nil
+}
+
+// checkDDLTargets refuses CREATE and ALTER statements that reach the
+// server's filesystem, another server or native code: foreign servers and
+// tables, tablespaces and data files, DATA|INDEX DIRECTORY, remote storage
+// engines, C and untrusted function languages, CREATE LANGUAGE and SQLite
+// file modules. Like the function denylist it is best-effort.
+func checkDDLTargets(d Dialect, toks []Token) error {
+	word := func(i int) string {
+		if i < len(toks) && toks[i].Kind == TokWord {
+			return toks[i].Text
+		}
+		return ""
+	}
+	// The object kind: CREATE [OR REPLACE] [TRUSTED|PROCEDURAL|UNDO] <kind>.
+	i := 1
+	if word(i) == "OR" && word(i+1) == "REPLACE" {
+		i += 2
+	}
+	for word(i) == "TRUSTED" || word(i) == "PROCEDURAL" || word(i) == "UNDO" {
+		i++
+	}
+	switch kind := word(i); {
+	case kind == "SERVER", kind == "FOREIGN" && (word(i+1) == "TABLE" || word(i+1) == "DATA"):
+		return refuseAt(toks[i], refusal.Forbidden, "foreign servers and tables are not allowed (they reach another server or the server's files)")
+	case kind == "TABLESPACE" && toks[0].Text == "CREATE":
+		return refuseAt(toks[i], refusal.Forbidden, "CREATE TABLESPACE is not allowed (it names a directory or file on the server)")
+	case kind == "LANGUAGE" && toks[0].Text == "CREATE":
+		return refuseAt(toks[i], refusal.Forbidden, "CREATE LANGUAGE is not allowed (a language handler is native code)")
+	}
+	for k, t := range toks {
+		if t.Kind != TokWord {
+			continue
+		}
+		value := func() (Token, string) { // the value after "t [=]"
+			j := k + 1
+			if j < len(toks) && toks[j].Kind == TokPunct && toks[j].Text == "=" {
+				j++
+			}
+			if j < len(toks) {
+				return toks[j], optionValue(toks[j])
+			}
+			return Token{}, ""
+		}
+		switch t.Text {
+		case "DIRECTORY":
+			if d == MySQL && k > 0 && (word(k-1) == "DATA" || word(k-1) == "INDEX") {
+				return refusef(refusal.Forbidden, "%s DIRECTORY is not allowed (it places files on the server's filesystem)", toks[k-1].Text).At(toks[k-1].Pos, toks[k-1].Text)
+			}
+		case "DATAFILE", "UNDOFILE", "REDOFILE":
+			if d == MySQL && word(k-1) == "ADD" {
+				return refuseAt(t, refusal.Forbidden, "data files are not allowed (they name a file on the server)")
+			}
+		case "ENGINE":
+			if v, name := value(); d == MySQL && remoteEngines.has(name) {
+				return refusef(refusal.Forbidden, "ENGINE=%s is not allowed (its tables reach another server or the server's files)", name).At(v.Pos, TokenText(v))
+			}
+		case "LANGUAGE":
+			if v, name := value(); nativeLanguage(name) {
+				return refusef(refusal.Forbidden, "LANGUAGE %.64s is not allowed (it runs native or unsandboxed code)", name).At(v.Pos, TokenText(v))
+			}
+		case "USING":
+			if v, name := value(); d == SQLite && sqliteFileModules.has(name) {
+				return refusef(refusal.Forbidden, "the %s module is not allowed (it reads or writes files on the server)", strings.ToLower(name)).At(v.Pos, TokenText(v))
 			}
 		}
 	}
