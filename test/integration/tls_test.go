@@ -256,6 +256,12 @@ func testMySQLTLS(t *testing.T, m mysqlTarget, pki testPKI) {
 	}), TLSPassword, nil); err == nil || !strings.Contains(err.Error(), "certificate") {
 		t.Errorf("verify-full with another CA: err = %v", err)
 	}
+	// No tls_ca: the system roots do not hold the private CA.
+	if _, err := tlsConnect(t, with(func(p *config.Profile) {
+		p.TLS, p.TLSServerName = config.TLSVerifyFull, tlsServerName
+	}), TLSPassword, nil); err == nil || !strings.Contains(err.Error(), "certificate") {
+		t.Errorf("verify-full without tls_ca: err = %v", err)
+	}
 	s, err := tlsConnect(t, with(func(p *config.Profile) {
 		p.TLS, p.TLSCA, p.TLSServerName = config.TLSVerifyFull, pki.ca, tlsServerName
 	}), TLSPassword, nil)
@@ -335,6 +341,12 @@ func testPostgresTLS(t *testing.T, version string, pki testPKI) {
 		p.TLS, p.TLSCA, p.TLSServerName = config.TLSVerifyFull, pki.otherCA, tlsServerName
 	}), TLSPassword, nil); err == nil || !strings.Contains(err.Error(), "certificate") {
 		t.Errorf("verify-full with another CA: err = %v", err)
+	}
+	// No tls_ca: the system roots do not hold the private CA.
+	if _, err := tlsConnect(t, with(func(p *config.Profile) {
+		p.TLS, p.TLSServerName = config.TLSVerifyFull, tlsServerName
+	}), TLSPassword, nil); err == nil || !strings.Contains(err.Error(), "certificate") {
+		t.Errorf("verify-full without tls_ca: err = %v", err)
 	}
 	s, err := tlsConnect(t, with(func(p *config.Profile) {
 		p.TLS, p.TLSCA, p.TLSServerName = config.TLSVerifyFull, pki.ca, tlsServerName

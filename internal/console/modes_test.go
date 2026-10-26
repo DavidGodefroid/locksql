@@ -360,16 +360,56 @@ func TestLevel2ShowResultsRefused(t *testing.T) {
 	}
 }
 
-// Level 1 (typed approvals on the desktop) and the session shape toggle
-// freely, as before.
-func TestLevel1TogglesFreely(t *testing.T) {
+// Level 1 (typed approvals on the desktop) toggles the mode freely, but
+// the results stay masked: the agent's account can read the window. Ctrl-O
+// and :results are refused without a prompt or an audit record; hiding
+// stays free.
+func TestLevel1ShowResultsRefused(t *testing.T) {
 	h := newHarness(t, uatProfile(), func(c *ServerConfig) { c.Boundary = "your desktop: the agent can read this window and type into it" })
 	h.s.Key(KeyShiftTab)
-	h.s.Key(KeyCtrlO)
-	if !h.s.autoApprove() || !h.s.showResults || len(h.io.prompts) != 0 {
-		t.Fatalf("auto = %v, results = %v, prompts %q", h.s.autoApprove(), h.s.showResults, h.io.prompts)
+	if !h.s.autoApprove() {
+		t.Fatal("auto mode refused at level 1")
 	}
-	if st := h.io.statusLine(); !strings.Contains(st, "level 1") {
+	h.s.Key(KeyCtrlO)
+	h.s.Command(context.Background(), ":results")
+	if h.s.showResults || len(h.io.prompts) != 0 {
+		t.Fatalf("results = %v, prompts %q", h.s.showResults, h.io.prompts)
+	}
+	if out := h.io.output(); strings.Count(out, "results stay masked at level 1: the agent's account can read this window") != 2 {
+		t.Errorf("refusals:\n%s", out)
+	}
+	if st := h.io.statusLine(); !strings.Contains(st, "level 1") || !strings.Contains(st, "masked") {
 		t.Errorf("status %q", st)
+	}
+	for _, r := range h.auditRecords(t) {
+		if r["event"] == "results" {
+			t.Errorf("refused switch audited: %v", r)
+		}
+	}
+	h.s.showResults = true // as if set before: hiding stays free
+	h.s.Key(KeyCtrlO)
+	if h.s.showResults {
+		t.Error("hiding was refused")
+	}
+}
+
+// A desktop server never starts with the clear results on, whatever its
+// config says.
+func TestDesktopServerIgnoresShowResults(t *testing.T) {
+	h := newHarness(t, uatProfile(), func(c *ServerConfig) {
+		c.Boundary = "your desktop: the agent can read this window and type into it"
+		c.ShowResults = true
+	})
+	if h.s.showResults {
+		t.Fatal("results clear at start on the desktop")
+	}
+}
+
+// The session shape (level 0) toggles the results freely, as before.
+func TestLevel0TogglesResults(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.s.Key(KeyCtrlO)
+	if !h.s.showResults {
+		t.Fatal("results refused at level 0")
 	}
 }

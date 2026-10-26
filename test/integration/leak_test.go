@@ -132,13 +132,19 @@ func assertPlanRefused(t *testing.T, s engine.Session, rules pii.Rules, queries 
 // prompt; it returns the client call.
 func leakServer(t *testing.T, s engine.Session, db string, rules pii.Rules) func(method string, params any) ipc.Response {
 	t.Helper()
+	return consoleServer(t, s, db, rules, config.TierWrite, []string{})
+}
+
+// consoleServer is leakServer at tier, with the value detectors named.
+func consoleServer(t *testing.T, s engine.Session, db string, rules pii.Rules, tier config.Tier, detectors []string) func(method string, params any) ipc.Response {
+	t.Helper()
 	log, err := audit.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	eng := string(s.Flavor())
-	p := config.Profile{Name: "it", Engine: eng, Host: "127.0.0.1", Tier: config.TierWrite, Credentials: config.CredentialsAsk,
-		Limits: config.DefaultLimits(false), Detectors: []string{}}
+	p := config.Profile{Name: "it", Engine: eng, Host: "127.0.0.1", Tier: tier, Credentials: config.CredentialsAsk,
+		Limits: config.DefaultLimits(false), Detectors: detectors}
 	srv, err := console.NewServer(console.ServerConfig{
 		Policy: config.NewPolicy(p, rules.Mask, rules.Allow).WithModes(rules.Modes), RulesPath: filepath.Join(t.TempDir(), pii.RulesFile), Session: nopClose{s},
 		DBUser: "it", Databases: []string{db}, Audit: log, IO: yesIO{t}, Version: "it",

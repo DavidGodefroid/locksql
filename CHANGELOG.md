@@ -8,12 +8,52 @@ This file records the changes a user or an agent has to know about.
 
 ### Changed
 
+- **Clear results refused at desktop security level 1.** When the console
+  runs in a desktop terminal of the console account without a fingerprint
+  reader, the agent's account can read its window, so the clear results
+  would reach the agent. `locksql console --show-results` is now a
+  configuration error there (`level 1 does not accept --show-results: the
+  agent's account can read this window`), raised before any prompt or file
+  write, and Ctrl-O or `:results` leave the results masked with `results
+  stay masked at level 1: the agent's account can read this window`
+  (nothing audited), as at level 2. `--auto` and `--allow-unmask` are
+  unchanged. Levels 0 (session shape, Docker) and 2 are unchanged.
+- **More statements refused at every tier.** The classifier's denylist
+  now also refuses PostgreSQL notification, logical decoding, replication
+  slot and origin, backup and recovery control and statistics reset or
+  override functions; MariaDB Spider, MySQL keyring, audit log, group
+  replication, version token and locking service functions and more
+  lib_mysqludf_sys names; SQLite `fsdir` and `zipfile`. DDL that reaches the
+  server's filesystem, another server or native code is refused too:
+  `DATA|INDEX DIRECTORY`, `ENGINE=FEDERATED|CONNECT|SPIDER`, `CREATE SERVER`,
+  foreign tables and data wrappers, `CREATE TABLESPACE`, `ADD DATAFILE`,
+  `LANGUAGE C`, `internal` and untrusted languages, `CREATE LANGUAGE` and the
+  SQLite `fsdir`, `zipfile` and `csv` modules. The security model now says
+  the denylist is best-effort above tier `read`, where approval is the
+  control.
 - **Internal: locksql runs on lockkit.** The product-neutral half of
   locksql moved to [lockkit](https://github.com/DavidGodefroid/lockkit),
   shared with the other lock* tools (see CONTRIBUTING.md). No user-visible
   change: same commands, flags, messages, config keys, IPC protocol, audit
   lines, approved-policy fingerprints (no re-approval after the upgrade),
   exit codes, paths and wired agent files, each pinned by a golden test.
+
+### Fixed
+
+- **`.locksql/` in Docker.** The console account exists only in the image,
+  so nothing gave it the project's `.locksql/` directory, and an agent
+  running as your uid could replace `pii.toml`. `locksql doctor --fix` now
+  runs as root in the image (`docker run --user 0 … locksql doctor --fix
+  --yes`, see docs/docker.md) without `sudo`, and its hint names the
+  console account by uid, which the host can use.
+- **Root repairs no longer follow symbolic links.** `doctor --fix` and
+  `setup` changed `.locksql/` and its files by path as root; a symbolic
+  link put there by the agent's account would have handed its target to the
+  console account, or made it world-readable. The root script now enters
+  the directory, checks its real path and changes `.`; a `.locksql` that is
+  a link fails the check with no repair. A `config.toml` or `pii.toml`
+  that is a symbolic or hard link is refused, with a message, rather than
+  made readable.
 
 ## v0.8.0 (2026-10-19)
 
