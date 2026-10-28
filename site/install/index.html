@@ -53,7 +53,7 @@
 <h1>Install locksql</h1>
 <div class="prose">
   <p class="lead">locksql runs in Docker: nothing on your machine but Docker and the <code>locksql</code> launcher, a short shell script that runs every command, <code>locksql console</code>, <code>locksql version</code>, <code>locksql mcp</code> and the others, in the locksql image.</p>
-  <p>locksql is a pre-release (<code>v0.8.x</code>). The image holds the separated setup: the console runs as the <code>locksql</code> account (uid 10001) in its own container, the only one that holds the database credentials; the agent’s MCP server runs as <code>agent</code> (uid 10002) in a throwaway container. The two share only the socket volume <code>locksql-run</code>, and the kernel checks every peer on the socket.</p>
+  <p>locksql is a pre-release (<code>v0.9.x</code>). The image holds the separated setup: the console runs as the <code>locksql</code> account (uid 10001) in its own container, the only one that holds the database credentials; the agent’s MCP server runs as <code>agent</code> (uid 10002) in a throwaway container. The two share only the socket volume <code>locksql-run</code>, and the kernel checks every peer on the socket.</p>
 </div>
 
 <section aria-labelledby="build">
@@ -180,7 +180,7 @@ key         = "~/.ssh/id_ed25519"   # in the locksql-home volume, owned by locks
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
       </ul>
-      <p>Pre-release (<code>v0.8.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (<code>v0.9.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
     </div>
   </footer>
 </body>
