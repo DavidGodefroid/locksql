@@ -613,18 +613,25 @@ func holdsPath(arg, dir string) bool {
 	}
 }
 
-// pathsIn returns the absolute paths arg may name: itself, the value of a
-// --flag=value, and the value glued to a short flag (-F/path).
+// pathsIn returns the absolute paths arg may name: every path that starts
+// it or follows one of = : , or a blank (--config=/p, UNIX-CONNECT:/p,
+// /a,/b), the value glued to a short flag (-F/p), and each of these cut at
+// the first comma or blank (UNIX-CONNECT:/p,retry=3).
 func pathsIn(arg string) []string {
 	var out []string
 	add := func(p string) {
 		if filepath.IsAbs(p) {
 			out = append(out, filepath.Clean(p))
 		}
+		if k := strings.IndexAny(p, ", \t"); k > 0 && filepath.IsAbs(p[:k]) {
+			out = append(out, filepath.Clean(p[:k]))
+		}
 	}
 	add(arg)
-	if _, v, ok := strings.Cut(arg, "="); ok {
-		add(v)
+	for i := 1; i < len(arg); i++ {
+		if strings.IndexByte("=:, \t", arg[i-1]) >= 0 {
+			add(arg[i:])
+		}
 	}
 	if len(arg) > 2 && arg[0] == '-' && arg[1] != '-' {
 		add(arg[2:])
