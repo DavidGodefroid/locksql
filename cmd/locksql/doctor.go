@@ -723,9 +723,9 @@ func vaultChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, name string
 		}
 		if len(held) > 0 {
 			add(checkFail, "vault token", "this account holds a Vault token ("+strings.Join(held, ", ")+"), which the agent can use to read the login at "+p.VaultPath,
-				"unset VAULT_TOKEN and run `vault token revoke -self` here; log in to Vault as "+sys.ServiceUser+" instead")
+				"unset VAULT_TOKEN and run `vault token revoke -self` here; the console asks "+sys.ServiceUser+"'s human for the token at start")
 		} else {
-			add(checkOK, "credentials", "read from Vault at "+p.VaultPath+" by "+sys.ServiceUser+" at every connection", "")
+			add(checkOK, "credentials", "read from Vault at "+p.VaultPath+" by "+sys.ServiceUser+" at every connection, with the token asked at start", "")
 		}
 		return out
 	}
@@ -735,6 +735,6 @@ func vaultChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, name string
 			return out
 		}
 	}
-	add(checkOK, "credentials", "read from Vault at "+p.VaultPath+" at every connection", "")
+	add(checkOK, "credentials", "read from Vault at "+p.VaultPath+" at every connection, with the token asked at start", "")
 	return out
 }

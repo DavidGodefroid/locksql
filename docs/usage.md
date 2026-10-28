@@ -269,11 +269,23 @@ vault_path  = "database/creds/reporting-ro"
 
 - The console runs `vault read -format=json -- <vault_path>`. The CLI must
   be in the console's `PATH`, which the image's `vault` target provides,
-  and authenticated: run `vault login` (or set `VAULT_ADDR`, `VAULT_TOKEN`,
-  `VAULT_NAMESPACE`, `VAULT_CACERT`) **as the console account**, never as
-  the agent's ([docker.md](docker.md#credentials-from-vault)).
-  locksql never sees the Vault token: the CLI reads it from its own
-  environment or token helper.
+  with `VAULT_ADDR` (and `VAULT_NAMESPACE`, `VAULT_CACERT` if needed) in
+  the console's environment ([docker.md](docker.md#credentials-from-vault)).
+- At start, before the first Vault read, the console asks
+  `Vault token for <VAULT_ADDR>:` (no echo). No `vault login` is needed, and
+  the console account's `~/.vault-token` and `VAULT_TOKEN` are not used.
+  Get it with `vault login -method=oidc -no-store -token-only`, which
+  prints the token without writing `~/.vault-token` in the agent's
+  account, and do not leave `VAULT_TOKEN` set in that shell.
+  The token goes to the CLI as `VAULT_TOKEN` in the child's environment
+  only: never in its arguments (`/proc/<pid>/cmdline`), on disk, in a log or
+  in the audit trail. It stays in console memory for the session, so
+  reconnects and lease renewals do not ask again, and is wiped when the
+  console ends. When Vault refuses the read, the console says `Vault
+  refused the read` and asks for a token again: Vault answers `permission
+  denied` alike for an expired or revoked token and for a policy that may
+  not read `vault_path`, so enter a valid token whose policy may read it.
+  Three refusals in a row stop the connection.
 - The login is the `username` and `password` fields of the secret's data
   (or of `data.data` for a KV version 2 secret, such as
   `secret/data/reporting`). For a secret holding only a password, set `user`
@@ -291,15 +303,16 @@ vault_path  = "database/creds/reporting-ro"
   when they end.
 - Errors say what to do and never quote the secret:
   - `vault CLI not found`: run the console from the image's `vault` target;
-  - `not authenticated or not allowed`: no token, an expired one, or a
-    policy that may not read the path (`vault login` as the console
-    account);
+  - `not authenticated or not allowed`: an expired or revoked token, or a
+    policy that may not read the path (the console asks for the token
+    again);
   - `invalid path`: nothing at the path, or no secrets engine mounted there;
   - `invalid role`: the database secrets engine has no such role
     (`vault list database/roles`);
   - `server unreachable`: check `VAULT_ADDR` and `VAULT_CACERT`;
   - `unexpected secret format`: the secret has no `password` field.
-  A failure stops the connection; the console does not fall back to asking.
+  Any other failure stops the connection; the console does not fall back
+  to asking for a password.
 - `vault_path` must not start with `-` or `/` nor hold spaces. Changing it,
   or setting `credentials` to `vault`, loosens the policy and waits for your
   approval. `credentials = "vault"` is not used by SQLite, and an `ssh`

@@ -121,16 +121,34 @@ docker build --target vault -t locksql .
 
 The console reads `VAULT_ADDR` (and `VAULT_CACERT`, `VAULT_NAMESPACE`) from
 its environment: add `-e VAULT_ADDR=https://vault.example.com` to its
-`docker run`. Log in once as the console account, with the same volumes; the
-token stays in `locksql-home`, out of the agents' reach:
+`docker run`, nothing else. No `vault login` is needed: at start the
+console asks `Vault token for <VAULT_ADDR>:` in its terminal (no echo, which
+the `-it` of its `docker run` allows) and keeps the token in memory for the
+session, never in `locksql-home` or anywhere on disk:
 
 ```sh
-docker run -it --rm --user locksql -e VAULT_ADDR=https://vault.example.com \
-  -v locksql-home:/home/locksql --entrypoint vault locksql login -method=oidc
+docker run -it --rm --name locksql-console --user locksql \
+  -e VAULT_ADDR=https://vault.example.com \
+  -v "$PWD:$PWD" \
+  -v locksql-run:/run/locksql \
+  -v locksql-home:/home/locksql \
+  locksql console --project "$PWD"
 ```
 
-Log in again when the token expires: the console then reports `not
-authenticated or not allowed`.
+Get the token without storing it, then paste it at the prompt:
+
+```sh
+vault login -method=oidc -no-store -token-only
+```
+
+`-no-store -token-only` prints the token and writes no `~/.vault-token`.
+A plain `vault login` would store the token in your account, where the
+agent runs: the agent could read it and fetch the login from Vault itself,
+bypassing the console (`locksql doctor` fails on it). For the same reason,
+do not leave `VAULT_TOKEN` set in that shell. When Vault refuses a read (`not authenticated or not allowed`: the
+token is expired or revoked, or its policy may not read `vault_path`), the
+console asks for a token again; three refusals in a row stop the
+connection.
 
 ## Wire the agent
 
