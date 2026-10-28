@@ -15,6 +15,13 @@ This file records the changes a user or an agent has to know about.
   segment is still refused. A new wildcard mask rule only tightens; a new
   wildcard allow rule is a loosening the human confirms in `:review`, as
   every added allow rule.
+- **More column names in the startup PII scan.** The scan now proposes
+  `mail`, `e_mail`, `login` (not a date or time column such as
+  `last_login`), `username`, `nickname`, `displayname`, `pseudo` and
+  `handle` for masking, and asks about free-text columns (`notes`,
+  `comment`, `bio`, `remarks`, ...) and coordinates (`lat`, `lng`,
+  `latitude`, `longitude`) as quasi-identifiers (`[y/N]`). `mail_id`,
+  `login_count` and other metadata columns stay out (lockkit#21).
 
 ### Changed
 

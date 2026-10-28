@@ -62,7 +62,7 @@ func TestPIIScanAtEveryStart(t *testing.T) {
 	// The human edits the file meanwhile (a comment and a new allow rule).
 	path := rulesPath
 	b, _ := os.ReadFile(path)
-	if err := os.WriteFile(path, append(b, []byte("\n[[allow]]\ncolumn = \"app.users.nickname\"\n")...), 0o644); err != nil {
+	if err := os.WriteFile(path, append(b, []byte("\n[[allow]]\ncolumn = \"app.users.nick\"\n")...), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -77,7 +77,7 @@ func TestPIIScanAtEveryStart(t *testing.T) {
 
 	// A new PII-looking column appears: it is proposed and added.
 	sess.cols = append(sess.cols, engine.ColumnInfo{DB: "app", Table: "users", Column: "phone_number", Type: "varchar"},
-		engine.ColumnInfo{DB: "app", Table: "users", Column: "nickname", Type: "varchar"})
+		engine.ColumnInfo{DB: "app", Table: "users", Column: "nick", Type: "varchar"})
 	io.answers = []string{"a"}
 	ap, err = st.piiBootstrap(context.Background(), sess, []string{"app"}, rulesPath, state, key, ap)
 	if err != nil {
@@ -93,7 +93,7 @@ func TestPIIScanAtEveryStart(t *testing.T) {
 	if !onDisk.Matches("app", "users", "phone_number") || len(onDisk.Allow) != 1 {
 		t.Errorf("file on disk: %+v", onDisk)
 	}
-	if strings.Contains(io.output(), "nickname") {
+	if strings.Contains(io.output(), "nick") {
 		t.Error("an allowed column was proposed")
 	}
 }
