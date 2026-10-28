@@ -257,7 +257,8 @@ func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan,
 		}
 		return nil, err
 	}
-	if r, err := s.shadowed(ctx, sess, pl.db, an); err != nil || r != nil {
+	pl.shadow = shadowNamesOf(an, parsed)
+	if r, err := s.checkShadows(ctx, sess, pl.db, pl.shadow); err != nil || r != nil {
 		return r, err
 	}
 	pl.an = an
@@ -285,20 +286,21 @@ func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan,
 // Every column of the write is also resolved against the catalog
 // (sqlast.Analyze, PII usage rules off: writePlan applies them): in
 // PostgreSQL, rel.name where rel has no column name calls name(rel).
-// It returns the refusal, if any; an error is the engine's.
-func (s *Server) strictWriteFunctions(ctx context.Context, sess engine.Session, db string, st sqlclass.Statement) (*refusal.Error, error) {
+// It returns the refusal, if any, and the names checkShadows looks up
+// again at run time; an error is the engine's.
+func (s *Server) strictWriteFunctions(ctx context.Context, sess engine.Session, db string, st sqlclass.Statement) (*refusal.Error, *shadowNames, error) {
 	switch {
 	case st.Kind == "call":
-		return refusal.New(refusal.Function, `CALL is not allowed under write_functions = "allowlist" (a stored procedure runs code the classifier cannot see)`), nil
+		return refusal.New(refusal.Function, `CALL is not allowed under write_functions = "allowlist" (a stored procedure runs code the classifier cannot see)`), nil, nil
 	case st.Class != sqlclass.Write:
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err := sqlast.CheckWriteFunctions(s.dialect, st.SQL); err != nil {
-		return refusal.From(err), nil
+		return refusal.From(err), nil, nil
 	}
 	parsed, err := sqlast.ParseWrite(s.dialect, st.SQL)
 	if err != nil {
-		return refusal.From(err), nil
+		return refusal.From(err), nil, nil
 	}
 	env := s.astEnv(ctx, sess, db, true)
 	env.WriteFuncs = true
@@ -306,43 +308,63 @@ func (s *Server) strictWriteFunctions(ctx context.Context, sess engine.Session, 
 	if err != nil {
 		var r *sqlclass.Refusal
 		if errors.As(err, &r) {
-			return r, nil
+			return r, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
-	return s.shadowed(ctx, sess, db, an)
+	sn := shadowNamesOf(an, parsed)
+	r, err := s.checkShadows(ctx, sess, db, sn)
+	return r, sn, err
 }
 
-// shadowed refuses a statement that calls an allowlisted function which a
-// user-defined function also names, on a server that resolves the best
-// match over the search path (engine.FunctionShadows): an overload with a
-// closer argument type would run instead. The k-anonymity counts call
-// COUNT and MIN. Only PostgreSQL resolves calls that way; a PostgreSQL
-// session that cannot look them up (a wrapper that does not pass the
-// lookup on) fails the plan. It returns the refusal, if any; an error is
-// the engine's.
-func (s *Server) shadowed(ctx context.Context, sess engine.Session, db string, an *sqlast.Analysis) (*refusal.Error, error) {
-	if sess.Flavor() != engine.FlavorPostgres {
-		return nil, nil
-	}
-	var names []string
+// shadowNames are the functions and operators a statement calls, lower
+// case, sorted and unique, as checkShadows looks them up.
+type shadowNames struct{ funcs, ops []string }
+
+// shadowNamesOf lists the functions an analysed statement calls (and
+// COUNT and MIN, which its k-anonymity counts call) and its operators.
+func shadowNamesOf(an *sqlast.Analysis, st *sqlast.Statement) *shadowNames {
+	var funcs []string
 	for _, f := range an.Funcs {
-		names = append(names, strings.ToLower(f))
+		funcs = append(funcs, strings.ToLower(f))
 	}
 	if len(an.KChecks) > 0 {
-		names = append(names, "count", "min")
+		funcs = append(funcs, "count", "min")
 	}
-	if len(names) == 0 {
+	slices.Sort(funcs)
+	return &shadowNames{funcs: slices.Compact(funcs), ops: sqlast.Operators(st)}
+}
+
+// checkShadows refuses a statement that calls an allowlisted function, or
+// uses an operator, that a user-defined function or operator outside
+// pg_catalog also names, on a server that resolves the best match over
+// the search path (engine.FunctionShadows): an overload with a closer
+// argument type would run instead. Only PostgreSQL resolves names that
+// way; a PostgreSQL session that cannot look them up (a wrapper that does
+// not pass the lookup on) fails the plan. The plan looks them up, and the
+// run again just before the statement, so that one created in between is
+// caught (what is created during the statement itself is not). It returns
+// the refusal, if any; an error is the engine's.
+func (s *Server) checkShadows(ctx context.Context, sess engine.Session, db string, sn *shadowNames) (*refusal.Error, error) {
+	if sn == nil || sess.Flavor() != engine.FlavorPostgres {
 		return nil, nil
 	}
-	slices.Sort(names)
-	names = slices.Compact(names)
-	hit, err := engine.ShadowedFunctions(ctx, sess, db, names)
+	if len(sn.funcs) > 0 {
+		hit, err := engine.ShadowedFunctions(ctx, sess, db, sn.funcs)
+		if err != nil {
+			return nil, err
+		}
+		if len(hit) > 0 {
+			return refusal.Newf(refusal.Function, "function %s is also defined outside pg_catalog in this database: a user-defined overload could run instead of the built-in, so the call is refused (ask the human to check that function)",
+				strings.Join(hit, ", ")), nil
+		}
+	}
+	hit, err := engine.ShadowedOperators(ctx, sess, db, sn.ops)
 	if err != nil {
 		return nil, err
 	}
 	if len(hit) > 0 {
-		return refusal.Newf(refusal.Function, "function %s is also defined outside pg_catalog in this database: a user-defined overload could run instead of the built-in, so the call is refused (ask the human to check that function)",
+		return refusal.Newf(refusal.Function, "operator %s is also defined outside pg_catalog in this database: a user-defined overload could run instead of the built-in, so the statement is refused (ask the human to check that operator)",
 			strings.Join(hit, ", ")), nil
 	}
 	return nil, nil

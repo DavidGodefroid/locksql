@@ -367,6 +367,30 @@ func TestShadowedFunctionPG(t *testing.T) {
 			if msg != "" || !strings.Contains(fmt.Sprint(rr.Rows), "x") {
 				t.Fatalf("after DROP: %v %q", rr.Rows, msg)
 			}
+
+			// A quoted name is another function in PostgreSQL ("LOWER" is
+			// not lower): refused whatever the catalog holds.
+			psql(`CREATE FUNCTION public."LOWER"(text) RETURNS text LANGUAGE sql AS 'SELECT ''overload''';`)
+			if _, msg := agentRun(t, call, "app", `SELECT "LOWER"('x') AS x LIMIT 1`); msg == "" {
+				t.Fatal(`"LOWER"('x') was planned`)
+			}
+
+			// Operators resolve like functions: public.||(varchar, varchar)
+			// beats pg_catalog.||(text, text).
+			psql(`CREATE FUNCTION public.cat(varchar, varchar) RETURNS text LANGUAGE sql AS 'SELECT ''overload''';
+				CREATE OPERATOR public.|| (LEFTARG = varchar, RIGHTARG = varchar, FUNCTION = public.cat);`)
+			ops, err := fs.ShadowedOperators(context.Background(), "app", []string{"||", "+"})
+			if err != nil || len(ops) != 1 || ops[0] != "||" {
+				t.Fatalf("ShadowedOperators = %v, %v; want [||]", ops, err)
+			}
+			const cq = "SELECT 'a'::varchar || 'b'::varchar AS x LIMIT 1"
+			if _, msg := agentRun(t, call, "app", cq); !strings.Contains(msg, "operator ||") {
+				t.Fatalf("plan of %q: %q, want a refusal naming operator ||", cq, msg)
+			}
+			psql(`DROP OPERATOR public.|| (varchar, varchar);`)
+			if rr, msg := agentRun(t, call, "app", cq); msg != "" || !strings.Contains(fmt.Sprint(rr.Rows), "ab") {
+				t.Fatalf("after DROP OPERATOR: %v %q", rr.Rows, msg)
+			}
 		})
 	}
 }

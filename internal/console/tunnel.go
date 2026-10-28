@@ -148,6 +148,11 @@ func (s *tunneledSession) ShadowedFunctions(ctx context.Context, db string, name
 	return engine.ShadowedFunctions(ctx, s.Session, db, names)
 }
 
+// ShadowedOperators passes the lookup on (engine.FunctionShadows).
+func (s *tunneledSession) ShadowedOperators(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.ShadowedOperators(ctx, s.Session, db, names)
+}
+
 func (s *tunneledSession) Close() error {
 	err := s.Session.Close()
 	if s.closeTunnel != nil {

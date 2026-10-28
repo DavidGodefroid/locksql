@@ -422,3 +422,25 @@ func (s *session) ShadowedFunctions(ctx context.Context, db string, names []stri
 	})
 	return out, err
 }
+
+// ShadowedOperators implements engine.FunctionShadows for operators, which
+// PostgreSQL resolves like functions: public.||(varchar, varchar) beats
+// pg_catalog.||(text, text) for varchar operands. Same rules as
+// ShadowedFunctions.
+func (s *session) ShadowedOperators(ctx context.Context, db string, names []string) ([]string, error) {
+	var out []string
+	err := s.catalog(ctx, db, func(ctx context.Context, c *pgx.Conn) error {
+		rows, err := c.Query(ctx, `SELECT DISTINCT o.oprname::text
+			FROM pg_catalog.pg_operator o JOIN pg_catalog.pg_namespace n ON n.oid = o.oprnamespace
+			WHERE n.nspname <> 'pg_catalog' AND o.oprname = ANY($1::text[])
+			AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend d
+				WHERE d.classid = 'pg_catalog.pg_operator'::regclass AND d.objid = o.oid AND d.deptype = 'e')
+			ORDER BY 1`, names)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	})
+	return out, err
+}

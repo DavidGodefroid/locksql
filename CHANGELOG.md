@@ -27,10 +27,11 @@ This file records the changes a user or an agent has to know about.
   refused.** PostgreSQL picks the best match for an unqualified function
   over every schema of the search path, so a `public.lower(varchar)` runs
   instead of `pg_catalog.lower(text)` for a `varchar` argument. Before a
-  read (and a write under `write_functions = "allowlist"`) runs, the
-  console looks up the functions it calls and refuses it with `E_FUNCTION`
-  when one is also defined outside `pg_catalog`. Functions owned by an
-  extension are not counted.
+  read (and a write under `write_functions = "allowlist"`) is planned, and
+  again just before it runs, the console looks up the functions and
+  operators it uses and refuses it with `E_FUNCTION` when one is also
+  defined outside `pg_catalog`. Those owned by an extension are not
+  counted.
 - **Function names are matched exactly.** A function call must use an
   unquoted name in ASCII letters, and in MySQL no blank between the name and
   `(`, so that the allowlist checks the function the server calls:

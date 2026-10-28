@@ -186,9 +186,12 @@ type Noticer interface {
 // (PostgreSQL): a user-defined function bearing an allowlisted name, with
 // a closer argument type, would run instead of the built-in.
 // ShadowedFunctions returns those of names (lower case) that a function
-// outside the system catalog also bears in database db.
+// outside the system catalog also bears in database db, and
+// ShadowedOperators those of the operator names that an operator outside
+// it also bears: operators resolve the same way.
 type FunctionShadows interface {
 	ShadowedFunctions(ctx context.Context, db string, names []string) ([]string, error)
+	ShadowedOperators(ctx context.Context, db string, names []string) ([]string, error)
 }
 
 // ErrNoFunctionLookup is the error of a session wrapper whose session does
@@ -202,6 +205,15 @@ func ShadowedFunctions(ctx context.Context, s Session, db string, names []string
 		return nil, ErrNoFunctionLookup
 	}
 	return fs.ShadowedFunctions(ctx, db, names)
+}
+
+// ShadowedOperators passes the lookup on to s, for session wrappers.
+func ShadowedOperators(ctx context.Context, s Session, db string, names []string) ([]string, error) {
+	fs, ok := s.(FunctionShadows)
+	if !ok {
+		return nil, ErrNoFunctionLookup
+	}
+	return fs.ShadowedOperators(ctx, db, names)
 }
 
 // DialFunc opens the network connection to the database server. nil is a

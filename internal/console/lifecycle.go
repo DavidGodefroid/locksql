@@ -776,6 +776,11 @@ func (s *vaultSession) ShadowedFunctions(ctx context.Context, db string, names [
 	return engine.ShadowedFunctions(ctx, s.Session, db, names)
 }
 
+// ShadowedOperators passes the lookup on (engine.FunctionShadows).
+func (s *vaultSession) ShadowedOperators(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.ShadowedOperators(ctx, s.Session, db, names)
+}
+
 // Notices passes on the session's transport notices.
 func (s *vaultSession) Notices() []string {
 	if n, ok := s.Session.(engine.Noticer); ok {

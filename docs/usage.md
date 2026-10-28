@@ -757,9 +757,12 @@ locksql doctor   [--profile P]
   argument type is a closer match. Before each read, and each write under
   `write_functions = "allowlist"`, the console looks up the functions the
   statement calls (and `count` and `min`, which its k-anonymity counts
-  call) and refuses it when one is also defined outside `pg_catalog`
-  (`E_FUNCTION`, `also defined outside pg_catalog`). Functions an extension
-  owns (`citext` overloads `lower`, `replace`, ...) are not counted.
+  call) and the operators it uses (with `=`, `<>`, `<`, `>`, `<=` and `>=`,
+  which joins, sorts and `IN` use implicitly), and refuses it when one is
+  also defined outside `pg_catalog` (`E_FUNCTION`, `also defined outside
+  pg_catalog`). The lookup runs again just before an approved statement
+  runs. Functions and operators an extension owns (`citext` overloads
+  `lower`, `replace`, ...) are not counted.
 - Every output column is traced to its source columns, so an alias, a CTE or
   a subquery does not hide a PII column: `SELECT e FROM (SELECT email AS e
   FROM users) t LIMIT 5` is masked like `email`.
