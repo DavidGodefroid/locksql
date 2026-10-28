@@ -161,10 +161,12 @@ masking by position could hit the wrong column. Then, per column:
 - as a second line of defence, a column whose engine-reported origin
   (`OriginColumns`, when the driver reports one) matches a rule is masked
   even if the analysis did not mask it;
-- every other text or integer cell goes through the value detectors
-  (`detectors.go`: email, IBAN and card with their checksums, Belgian,
-  French, Dutch and US national numbers, phone numbers), which mask what
-  they find inside the text.
+- every other text or integer cell, and every integral float (`|f| <
+  1e19`, a PostgreSQL `float4`/`float8`), goes through the value detectors
+  (lockkit's `pii` package: email with Unicode local parts and domains,
+  IBAN and card with their checksums, Belgian, French, Dutch and US
+  national numbers, phone numbers, typographic spaces and full-width
+  digits), which mask what they find inside the text.
 
 A `redact` cell of a plain column whose every source is under a rule
 (`referenceable`) gets a reference (`<redacted:r1.2.3>`) to its value,
@@ -175,7 +177,15 @@ with it without the counts.
 
 ## The rules and where they come from
 
-Rules live in `.locksql/pii.toml` (`pii.Rules`): `[[mask]]` patterns
+Rules live in named rule sets (`pii.Rules`), one file per set:
+`pii/<set>.toml` next to the config (`pii.SetPath`). A profile's set is its
+`pii_rules` key, by default its own name in lower case
+(`config.RuleSetOf`); the console resolves it once at start
+(`console.resolveRuleSet`) and stores it in the approved policy
+(`Profile.PIIRules`), so `config.Diff` reports a switch of set as a
+loosening. The legacy single `pii.toml` is moved once to the set `default`
+(`pii.MigrateLegacy`), and the profiles approved before keep that set until
+they name one. A set file holds `[[mask]]` patterns
 `db.table.column` (any segment may be `*`) with an optional mode, and
 `[[allow]]` patterns that beat every mask. At every start the console
 scans the schema and proposes rules for columns whose names look personal

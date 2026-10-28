@@ -272,6 +272,23 @@ func TestEmptyDetectorsKept(t *testing.T) {
 	}
 }
 
+// Every detector name the lockkit pii package knows can be enabled,
+// including the opt-in phone_loose (issue #17).
+func TestOptInDetectorsAccepted(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, ".locksql", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(p), 0o700)
+	all := `["email","phone","phone_loose","iban","card","be_niss","fr_nir","nl_bsn","us_ssn"]`
+	_ = os.WriteFile(p, []byte("[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\ndetectors="+all+"\n"), 0o600)
+	cfg, err := LoadFrom(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := cfg.Profiles["a"].Detectors; len(d) != 9 {
+		t.Errorf("detectors = %v", d)
+	}
+}
+
 func TestTier(t *testing.T) {
 	for _, s := range []string{"read", "write", "ddl", "admin"} {
 		tier, err := ParseTier(s)
