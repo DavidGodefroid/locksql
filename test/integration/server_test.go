@@ -321,7 +321,7 @@ func TestDetectorsUnicodeAndFloatPG(t *testing.T) {
 				t.Fatal(msg)
 			}
 			all := fmt.Sprint(rr.Rows) + rr.Text
-			for _, leak := range []string{"4111111111111111", "4.111111111111111e+15", "dupont", "exämple", "7034", "34 56"} {
+			for _, leak := range []string{"4111111111111111", "4.111111111111111e+15", "dupont", "exämple", "7034", "12\u202f34\u202f56", "34\u202f56"} {
 				if strings.Contains(all, leak) {
 					t.Errorf("agent got %q: %.400s", leak, all)
 				}
