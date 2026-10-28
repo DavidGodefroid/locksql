@@ -126,13 +126,16 @@ func TestShadowedFunctionsFailClosed(t *testing.T) {
 	}
 }
 
-// The session wrappers (SSH tunnel, Vault login) pass the lookup on.
+// The session wrappers (SSH tunnel, proxy_command, Vault login) pass the
+// lookup on.
 func TestShadowedFunctionsThroughWrappers(t *testing.T) {
 	inner := &shadowSession{fakeSession: &fakeSession{}, shadowed: []string{"lower"}}
 	for name, s := range map[string]engine.Session{
-		"tunnel": &tunneledSession{Session: inner},
-		"vault":  &vaultSession{Session: inner},
-		"both":   &vaultSession{Session: &tunneledSession{Session: inner}},
+		"tunnel":      &tunneledSession{Session: inner},
+		"vault":       &vaultSession{Session: inner},
+		"both":        &vaultSession{Session: &tunneledSession{Session: inner}},
+		"proxy":       &proxiedSession{Session: inner},
+		"vault+proxy": &vaultSession{Session: &proxiedSession{Session: inner}},
 	} {
 		fs, ok := s.(engine.FunctionShadows)
 		if !ok {
@@ -149,6 +152,9 @@ func TestShadowedFunctionsThroughWrappers(t *testing.T) {
 	}
 	if _, err := (&tunneledSession{Session: &fakeSession{}}).ShadowedFunctions(context.Background(), "app", []string{"lower"}); err == nil {
 		t.Error("a wrapper over a session without the lookup answered")
+	}
+	if _, err := (&proxiedSession{Session: &fakeSession{}}).ShadowedOperators(context.Background(), "app", []string{"+"}); err == nil {
+		t.Error("a proxy wrapper over a session without the lookup answered")
 	}
 }
 
