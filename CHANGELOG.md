@@ -20,7 +20,6 @@ This file records the changes a user or an agent has to know about.
   The default stays `"denylist"`; turning the allowlist off is a policy
   loosening confirmed in the console, and existing approved policies keep
   their fingerprint.
-
 - **Databases that publish no port** (#35). A profile can set
   `proxy_command`, an argv whose stdin and stdout carry each database
   connection, as OpenSSH's `ProxyCommand`: `docker exec`, `podman exec`,
