@@ -387,11 +387,6 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", p.SQL, refusal.Newf(refusal.Tier,
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
 	}
-	if s.profile.WriteFunctions == config.WriteFunctionsAllowlist {
-		if r := strictWriteFunctions(s.dialect, st); r != nil {
-			return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", p.SQL, shifted(r, base))
-		}
-	}
 	if st.Class != sqlclass.Read && sqlast.HasPlaceholder(s.dialect, st.SQL) {
 		// A write is never analysed for placeholders: it would run with
 		// the literal text '${...}'.
@@ -400,6 +395,15 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	sess, r := s.session(ctx, req.ID)
 	if r != nil {
 		return *r
+	}
+	if s.profile.WriteFunctions == config.WriteFunctionsAllowlist {
+		r, err := s.strictWriteFunctions(ctx, sess, db, st)
+		if err != nil {
+			return s.failed(req.ID, "plan", err)
+		}
+		if r != nil {
+			return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", p.SQL, shifted(r, base))
+		}
 	}
 	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String(), src: p.SQL, base: base}
 	if !p.Unmask && st.Class != sqlclass.Read {

@@ -88,9 +88,9 @@ func TestWriteFunctionsRefused(t *testing.T) {
 		{pg, "INSERT INTO t (a) VALUES (pg_catalog.lower('x'))", "pg_catalog.lower"},
 		{pg, "INSERT INTO t (a) VALUES (public.lower('x'))", "public.lower"},
 		{my, "INSERT INTO t (a) VALUES (db.f(1))", "db.f"},
-		// Casing and spacing do not matter.
-		{pg, "INSERT INTO t (a) VALUES (My_Func (1))", "my_func"},
-		{my, "INSERT INTO t (a) VALUES (MY_FUNC\n(1))", "my_func"},
+		// Casing does not matter.
+		{pg, "INSERT INTO t (a) VALUES (My_Func(1))", "my_func"},
+		{my, "INSERT INTO t (a) VALUES (MY_FUNC(1))", "my_func"},
 		// Functions harmless in a read but not on the write list.
 		{pg, "INSERT INTO t (a) VALUES (setval('s', 1))", "setval"},
 		{pg, "INSERT INTO t (a) VALUES (current_setting('x'))", "current_setting"},
@@ -135,6 +135,13 @@ func TestWriteFunctionsSpellings(t *testing.T) {
 		{pg, "INSERT INTO t (a) VALUES (lower(ſqrt(4)))"},
 		{my, "UPDATE t SET a = ſqrt(4)"},
 		{pg, "INSERT INTO t (a) VALUES (ｌower('x'))"},
+		// A blank before '(': MySQL then calls the stored function of
+		// that name, not the built-in.
+		{my, "INSERT INTO t (a) VALUES (lower ('x'))"},
+		{my, "UPDATE t SET a = upper\n('x')"},
+		{pg, "INSERT INTO t (a) VALUES (lower\t('x'))"},
+		{lite, "INSERT INTO t (a) VALUES (lower ('x'))"},
+		{pg, "INSERT INTO t (a) VALUES (My_Func (1))"},
 	}
 	for _, c := range cases {
 		err := CheckWriteFunctions(c.d, c.sql)
@@ -166,5 +173,48 @@ func TestWriteFunctionsUnparsed(t *testing.T) {
 		if !strings.Contains(err.Error()+" "+r.Hint, "write_functions") {
 			t.Errorf("%s %q: %v (hint %q), want it to name write_functions", c.d, c.sql, err, r.Hint)
 		}
+	}
+}
+
+// With WriteFuncs, the write analysis accepts the write built-ins, and it
+// resolves every column against the catalog: PostgreSQL reads rel.name,
+// when rel has no column name, as the call name(rel) (attribute notation).
+func TestWriteFunctionsAnalysis(t *testing.T) {
+	env := testEnv(false)
+	env.WriteFuncs = true
+	for _, sql := range []string{
+		"UPDATE users SET status = gen_random_uuid()::text WHERE id = 1",
+		"UPDATE users SET status = lower(status) WHERE users.id = 1",
+	} {
+		st, err := ParseWrite(sqlclass.Postgres, sql)
+		if err == nil {
+			_, err = Analyze(st, env)
+		}
+		if err != nil {
+			t.Errorf("%q: %v", sql, err)
+		}
+	}
+	for _, sql := range []string{
+		"UPDATE users SET status = users.evil WHERE id = 1",
+		"UPDATE users u SET status = 'x' WHERE u.evil",
+		"DELETE FROM users WHERE users.evil IS NULL",
+		"INSERT INTO users (id) SELECT o.evil FROM orders o",
+	} {
+		st, err := ParseWrite(sqlclass.Postgres, sql)
+		if err == nil {
+			_, err = Analyze(st, env)
+		}
+		var r *sqlclass.Refusal
+		if !errors.As(err, &r) {
+			t.Errorf("%q: got %v, want a refusal", sql, err)
+		}
+	}
+	env.WriteFuncs = false
+	st, err := ParseWrite(sqlclass.Postgres, "UPDATE users SET status = gen_random_uuid()::text WHERE id = 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Analyze(st, env); err == nil {
+		t.Error("gen_random_uuid accepted without WriteFuncs")
 	}
 }

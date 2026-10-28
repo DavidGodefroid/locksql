@@ -14,7 +14,9 @@ This file records the changes a user or an agent has to know about.
   allowlisted (plus key generators such as `gen_random_uuid`, `nextval`,
   `UUID`, `SYS_GUID`, `randomblob`), or the write is refused with
   `E_FUNCTION`. Schema-qualified calls, calls through quoted or non-ASCII
-  names, `CALL`, `MERGE` and writes the parser does not read are refused.
+  names or with a blank before `(`, `CALL`, `MERGE` and writes the parser
+  does not read are refused, and every column the write names is resolved
+  against the catalog (PostgreSQL attribute notation `t.f` calls `f(t)`).
   The default stays `"denylist"`; turning the allowlist off is a policy
   loosening confirmed in the console, and existing approved policies keep
   their fingerprint.

@@ -1240,16 +1240,23 @@ With `"allowlist"`:
   `nextval`; MySQL/MariaDB `UUID`, `UUID_SHORT`, `UUID_TO_BIN`,
   `BIN_TO_UUID`, `SYS_GUID`; SQLite `randomblob`. `setval`,
   `LAST_INSERT_ID(n)` and session or catalog functions are refused;
-- schema-qualified calls (`cron.schedule(...)`, `pg_catalog.lower(...)`) and
+- schema-qualified calls (`cron.schedule(...)`, `pg_catalog.lower(...)`),
   calls through a quoted name or a name with non-ASCII letters
-  (PostgreSQL `"LOWER"(x)` is not `lower`) are refused;
+  (PostgreSQL `"LOWER"(x)` is not `lower`) and calls with a blank before
+  `(` (MySQL `lower (x)` calls a stored function named `lower`) are refused;
+- every column the write names must exist: PostgreSQL reads `t.name`, when
+  `t` has no column `name`, as the call `name(t)`;
 - a write the parser does not read is refused, since its calls cannot be
   listed: `MERGE`, multi-table MySQL writes, table functions in `FROM`;
 - `CALL` is refused (a stored procedure runs code the classifier cannot
   see).
 
-The refusal code is `E_FUNCTION`. DDL is not covered: a DDL tier can create
-functions, triggers and column defaults. Changing `"allowlist"` back to
+The refusal code is `E_FUNCTION` (`E_UNKNOWN_NAME` for a column that does
+not exist). DDL is not covered: a DDL tier can create functions, triggers
+and column defaults. Code the schema already holds still runs: triggers,
+column defaults, domain constraints, and a function created under an
+allowlisted name with a closer argument type or earlier in `search_path`;
+the privilege audit is the control there. Changing `"allowlist"` back to
 `"denylist"` is a policy loosening and waits for `:review`.
 
 ### Placeholders and cell references

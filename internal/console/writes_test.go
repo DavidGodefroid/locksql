@@ -94,6 +94,8 @@ func TestWriteFunctionsAllowlist(t *testing.T) {
 		"DELETE FROM users WHERE id = `lower`(1)",
 		"UPDATE users u, orders o SET u.note = o.total WHERE o.user_id = u.id",
 		"CALL refresh_totals()",
+		"UPDATE users SET note = lower (note) WHERE id = 1",
+		"UPDATE users SET note = users.nosuch WHERE id = 1",
 	} {
 		for _, unmask := range []bool{false, true} {
 			wantCode(t, h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q, Unmask: unmask}), ipc.CodeRefused)

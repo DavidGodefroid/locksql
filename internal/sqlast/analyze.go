@@ -83,6 +83,9 @@ type Env struct {
 	// the value of a referenced cell. ok is false when the console does not
 	// know it (yet, for a typed name).
 	Value func(kind ValueKind, name string) (value string, ok bool)
+	// WriteFuncs also allows the write built-ins (write_functions =
+	// "allowlist", see CheckWriteFunctions).
+	WriteFuncs bool
 }
 
 // Output is one result column.
@@ -1274,7 +1277,7 @@ func piiNames(p Prov) string {
 
 // call is the provenance of a function call.
 func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
-	if !funcAllowed(an.d, f.Name) {
+	if !funcAllowed(an.d, f.Name) && !(an.env.WriteFuncs && writeFuncs[an.d][f.Name]) {
 		return Prov{}, refusef(refusal.Function, "function %s is not in the allowlist", strings.ToLower(f.Name))
 	}
 	if err := an.checkSizeArgs(f); err != nil {

@@ -28,8 +28,14 @@ const strictHint = `write_functions = "allowlist" checks every function a write 
 // Schema-qualified calls are refused, as are calls through a quoted name
 // or a name with non-ASCII letters, which the classifier folds but the
 // engine may resolve to another function (PostgreSQL "LOWER" is not
-// lower). A statement the write parser does not read (MERGE, multi-table
-// writes, CALL, ...) is refused: its calls cannot be listed.
+// lower), and calls with a blank before '(' (MySQL then calls the stored
+// function of that name). A statement the write parser does not read
+// (MERGE, multi-table writes, CALL, ...) is refused: its calls cannot be
+// listed.
+//
+// The check needs no catalog. PostgreSQL also reads rel.name, when rel has
+// no column name, as the call name(rel): the console resolves every column
+// of the write against the catalog too (Analyze with Env.WriteFuncs).
 func CheckWriteFunctions(d sqlclass.Dialect, sql string) error {
 	st, err := ParseWrite(d, sql)
 	if err != nil {
@@ -52,6 +58,8 @@ func CheckWriteFunctions(d sqlclass.Dialect, sql string) error {
 		switch {
 		case strings.ContainsAny(written, "\"`[") || !ascii(written):
 			bad = refuse(refusal.Function, "function calls through a quoted name or a name with non-ASCII letters are not allowed in a write under write_functions = \"allowlist\"").At(f.Sp.Pos, "")
+		case strings.ContainsAny(written, " \t\n\v\f\r"):
+			bad = refusef(refusal.Function, "%.64s: no blank is allowed between a function name and '(' in a write under write_functions = \"allowlist\" (MySQL then calls the stored function of that name)", strings.ToLower(f.Name)).At(f.Sp.Pos, "")
 		case !funcAllowed(d, f.Name) && !writeFuncs[d][f.Name]:
 			bad = refusef(refusal.Function, "function %.64s is not in the allowlist (write_functions = \"allowlist\")", strings.ToLower(f.Name)).At(f.Sp.Pos, "")
 		}

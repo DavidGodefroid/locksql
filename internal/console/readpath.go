@@ -278,14 +278,35 @@ func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan,
 // call allowlisted functions only (sqlast.CheckWriteFunctions), and CALL,
 // which runs a stored procedure the classifier cannot see, is refused.
 // DDL is not covered: a DDL tier can create functions and triggers.
-func strictWriteFunctions(d sqlclass.Dialect, st sqlclass.Statement) error {
+//
+// Every column of the write is also resolved against the catalog
+// (sqlast.Analyze, PII usage rules off: writePlan applies them): in
+// PostgreSQL, rel.name where rel has no column name calls name(rel).
+// It returns the refusal, if any; an error is the engine's.
+func (s *Server) strictWriteFunctions(ctx context.Context, sess engine.Session, db string, st sqlclass.Statement) (*refusal.Error, error) {
 	switch {
-	case st.Class == sqlclass.Write:
-		return sqlast.CheckWriteFunctions(d, st.SQL)
 	case st.Kind == "call":
-		return refusal.New(refusal.Function, `CALL is not allowed under write_functions = "allowlist" (a stored procedure runs code the classifier cannot see)`)
+		return refusal.New(refusal.Function, `CALL is not allowed under write_functions = "allowlist" (a stored procedure runs code the classifier cannot see)`), nil
+	case st.Class != sqlclass.Write:
+		return nil, nil
 	}
-	return nil
+	if err := sqlast.CheckWriteFunctions(s.dialect, st.SQL); err != nil {
+		return refusal.From(err), nil
+	}
+	parsed, err := sqlast.ParseWrite(s.dialect, st.SQL)
+	if err != nil {
+		return refusal.From(err), nil
+	}
+	env := s.astEnv(ctx, sess, db, true)
+	env.WriteFuncs = true
+	if _, err := sqlast.Analyze(parsed, env); err != nil {
+		var r *sqlclass.Refusal
+		if errors.As(err, &r) {
+			return r, nil
+		}
+		return nil, err
+	}
+	return nil, nil
 }
 
 // writePlan checks a write before it runs. While mask rules exist, a
