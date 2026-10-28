@@ -135,10 +135,10 @@ func newCanaryDetector(c canarySeed) canaryDetector {
 	return d
 }
 
-// planIDField is a plan id in an answer: random hex the console draws, which
-// holds no row data but spells the hex of a 4-letter canary piece about
-// once in fifty runs of the suite.
-var planIDField = regexp.MustCompile(`"plan_id":\s*"[0-9a-f]*"`)
+// planIDField is a plan id in an answer: 16 random hex digits the console
+// draws, which hold no row data but spell the hex of a 4-letter canary piece
+// about once in fifty runs of the suite. Any other value is searched.
+var planIDField = regexp.MustCompile(`"plan_id":\s*"[0-9a-f]{16}"`)
 
 // find returns the first canary material in text, or "". Plan ids are left
 // out of the search.
@@ -569,11 +569,16 @@ func TestCanaryDetector(t *testing.T) {
 	// (run 40671137362: plan_id b62f676766b78ff5 held 76766b78) is no leak,
 	// while the same hex anywhere else still is.
 	piece := hex.EncodeToString([]byte(strings.ToLower(id[0:4])))
-	if n := d.find(`{"plan_id":"b6` + piece + `ff5a1","verdict":"WARN"}`); n != "" {
+	if n := d.find(`{"plan_id":"b62f` + piece + `8ff5","verdict":"WARN"}`); n != "" {
 		t.Errorf("false positive %q in a plan id", n)
 	}
 	if d.find(`{"plan_id":"0123456789abcdef","summary":"`+piece+`"}`) == "" {
 		t.Errorf("missed %q next to a plan id", piece)
+	}
+	// Only a real plan id, 16 hex digits, is left out: a longer value is
+	// searched.
+	if d.find(`{"plan_id":"0123456789abcdef`+piece+`"}`) == "" {
+		t.Errorf("missed %q in a plan_id longer than 16 hex digits", piece)
 	}
 	// A plan answer echoes its statement: no statement may hold a run of
 	// the alphabet.
