@@ -121,7 +121,7 @@ docker build --target vault -t locksql .
 
 The console reads `VAULT_ADDR` (and `VAULT_CACERT`, `VAULT_NAMESPACE`) from
 its environment: add `-e VAULT_ADDR=https://vault.example.com` to its
-`docker run`, nothing else. No `vault login` is needed: at start the
+`docker run`, nothing else. The console account needs no `vault login`: at start the
 console asks `Vault token for <VAULT_ADDR>:` in its terminal (no echo, which
 the `-it` of its `docker run` allows) and keeps the token in memory for the
 session, never in `locksql-home` or anywhere on disk:
