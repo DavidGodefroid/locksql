@@ -8,6 +8,16 @@ This file records the changes a user or an agent has to know about.
 
 ### Changed
 
+- **Docker is the only documented deployment.** The README Quick start and
+  Install, `docs/usage.md` and the site now describe only the Docker setup:
+  build the image, `locksql init`, `locksql profile add`, `locksql doctor
+  --fix` as root in the image, wire the agent with `docker run ... locksql
+  mcp`, run the console container. `docs/docker.md` is the setup guide, and
+  for the stronger boundary it recommends running the agent in its own
+  container without the Docker socket. The install script, packages,
+  `locksql install`, `locksql setup`, `locksql update`, the desktop and
+  session setups and WSL2 are no longer documented or supported; their code
+  is unchanged.
 - **Clear results refused at desktop security level 1.** When the console
   runs in a desktop terminal of the console account without a fingerprint
   reader, the agent's account can read its window, so the clear results

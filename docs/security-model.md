@@ -15,17 +15,16 @@ weaknesses as described in [SECURITY.md](../SECURITY.md).
   commands and the MCP server.
 - **Other local users** are not trusted.
 
-locksql supports Linux and macOS only; on Windows it runs inside WSL2, a
-Linux system, where the agent must run too for the boundary below to hold
-(see [Windows (WSL2)](usage.md#windows-wsl2)). Where the agent runs depends
-on the mode:
+locksql runs in Linux containers, the documented setup being Docker
+([docker.md](docker.md)); the binary refuses to run on native Windows.
+Where the agent runs depends on the mode:
 
 | Mode | Console runs as | Agent runs as | Boundary |
 |---|---|---|---|
-| Separated (`sudo locksql install`, `/etc/locksql/system.toml`) | the `locksql` account, in its own login session | its own account, member of `locksql-clients` | the kernel: separate uids, peer credentials on the socket, a root-owned binary and system file |
+| Separated (the Docker image, `/etc/locksql/system.toml`) | the `locksql` account (uid 10001), in its own container | `agent` (uid 10002), member of `locksql-clients`, in another container sharing only the socket volume | the kernel: separate uids, peer credentials on the socket, a root-owned binary and system file |
 
 Separation is mandatory. Without `system.toml` the console refuses to start
-and names `locksql doctor` and `sudo locksql install`; `doctor` reports
+and names `locksql doctor`; `doctor` reports
 same-user mode as a failure. Same-user threats (an agent reading the
 console's terminal, typing into it through TIOCSTI, attaching with ptrace or
 reading the keychain session) are therefore excluded, not mitigated by a
@@ -33,7 +32,9 @@ warning.
 
 The agent's account is assumed to have no password-less `sudo`
 (`locksql doctor` fails otherwise) and no other way to become `locksql` or
-root.
+root. Access to the Docker daemon is such a way: an agent that can run
+`docker` commands can attach to the console's container
+([What Docker does and does not separate](docker.md#what-docker-does-and-does-not-separate)).
 
 ## Principles
 

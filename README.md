@@ -71,8 +71,7 @@ In-agent approval is a convenience; a separate approval process is a boundary.
 <td width="50%" valign="top">
 
 **🔑 One key holder**<br>
-Credentials are typed at console start, read from the OS keychain or fetched
-from HashiCorp Vault. Never in argv, env, files, logs, the socket or error
+Credentials are typed at console start or fetched from HashiCorp Vault. Never in argv, env, files, logs, the socket or error
 messages.
 
 </td>
@@ -111,8 +110,8 @@ are refused before they run.
 <td valign="top">
 
 **🛡️ OS separation**<br>
-`locksql install` runs the console under its own account; the kernel checks
-every peer on the socket.
+The console runs under its own account in its own container; the kernel
+checks every peer on the socket.
 
 </td>
 </tr>
@@ -147,50 +146,51 @@ itself, checks the bastion's host key and listens on no local port.
 
 ## Quick start
 
-A first approved query in three commands (CI runs this path on a fresh
-Ubuntu VM and in fresh Ubuntu and Fedora containers):
+locksql runs in Docker: nothing to install but Docker. A first approved
+query, from your project directory:
 
 ```sh
-# 1. Install (see Install below for packages, checksums and signatures)
-curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh
+# 1. Build the image
+docker build -t locksql https://github.com/DavidGodefroid/locksql.git
 
-# 2. In your project: the console account, your agents, a database profile
-locksql setup
+# 2. In your project: Claude Code's files, a database profile, then give
+#    .locksql/ to the console account (as root, inside the image)
+docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:$PWD" -w "$PWD" locksql init claude
+docker run -it --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:$PWD" -w "$PWD" locksql profile add
+docker run --rm --user 0 -v "$PWD:$PWD" -w "$PWD" locksql doctor --fix --yes
 
-# 3. In a session of the locksql account (switch user, or a text console
-#    with Ctrl-Alt-F3), start the console it printed and keep it open
-locksql console --project DIR
+# 3. Point the agent's MCP server at the image
+claude mcp remove --scope project locksql
+claude mcp add --scope project locksql -- \
+  sh -c 'exec docker run -i --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql mcp'
+
+# 4. In a terminal you keep in view, start the console
+docker run -it --rm --name locksql-console --user locksql \
+  -v "$PWD:$PWD" -v locksql-run:/run/locksql -v locksql-home:/home/locksql \
+  locksql console --project "$PWD"
 ```
 
-Then ask your agent, anywhere in the project: "how many orders were placed
+Then ask your agent, in the project: "how many orders were placed
 yesterday?". Each query waits for your `y` in the console.
 
-`locksql setup` wires every installed agent (Claude Code, Codex, Gemini CLI,
-Cursor) for your account, creates the `locksql` console account with
-`sudo` once you confirm, asks for the database profile (engine, host, user,
-where the password comes from: typed, the console account's keychain or
-Vault; never the password itself) and writes it to the project's `.locksql/config.toml`,
-gives the console account access to the project, and prints the command of
-step 3. Log out and in again after the first setup: your account joins the
-`locksql-clients` group. On macOS, setup prints the root commands for an
-administrator to run, then you run setup again.
+The console runs as the `locksql` account (uid 10001) in its own container,
+the only one that holds the database credentials. The agent's MCP server runs
+as `agent` (uid 10002) in a throwaway container. The two share only the
+socket volume `locksql-run`, and the kernel checks every peer on the socket.
 
-The console runs in the `locksql` account's own session, never in a
-terminal of your account, where the agents run and could read what you
-type. Run from your account, `locksql console` therefore prints the
-command for that session instead of starting. When your agents run under
-an account of their own, `locksql console` from yours opens the console as
-`locksql` through `sudo -u`, `machinectl shell` or `su -l`.
-
-`locksql doctor` checks the setup from either account, and
-`locksql doctor --fix` repairs what it safely can (permissions, the socket
-directory, the project's access, the agents' wiring). Bare `locksql`
-re-wires agents installed since; in the service account it starts the
-console. The details are in [docs/usage.md](docs/usage.md).
+`init claude` writes `.mcp.json` with `locksql mcp`, which is not on your
+machine: step 3 replaces that entry with the `docker run` above (Codex,
+Gemini CLI and Cursor take the same command). `profile add` asks for the
+engine, host, TLS and where the password comes from (typed at console start,
+or Vault), never for the password itself. Inside a container `localhost` is
+the container: a database on your machine is `host.docker.internal` (on
+Linux, add `--add-host=host.docker.internal:host-gateway` to the console's
+`docker run`). The details, Vault, and an agent that itself runs in a
+container are in [docs/docker.md](docs/docker.md).
 
 ## How it works
 
-Two processes in two terminals. Only the console holds the key.
+Two processes in two containers. Only the console holds the key.
 
 ```mermaid
 sequenceDiagram
@@ -245,10 +245,10 @@ sequenceDiagram
 <summary>Process layout</summary>
 
 ```
- Your terminal                                    Agent side
+ Console container (your terminal)                Agent's container
  ┌───────────────────────────────────┐            ┌──────────────────────────────┐
- │ locksql console --profile dev     │  local     │ locksql mcp   (stdio MCP)    │◄── AI agent
- │  credentials (ask | OS keychain)  │  socket    │ locksql plan|run|status|pii  │◄── AI via shell
+ │ locksql console --profile dev     │ socket     │ locksql mcp   (stdio MCP)    │◄── AI agent
+ │  credentials (ask | Vault)        │ volume     │ locksql plan|run|status|pii  │◄── AI via shell
  │  policy · classifier · EXPLAIN    │◄──────────►│ no secrets, no DB connection │
  │  approval prompt · masking · audit│  JSON-RPC  └──────────────────────────────┘
  └─────────────────┬─────────────────┘
@@ -271,26 +271,29 @@ Full walkthrough: [docs/usage.md](docs/usage.md).
 | `sqlite` | 3 (pure Go, in-process) | `mode=ro` + `query_only` | interrupt on deadline | `EXPLAIN QUERY PLAN` + `sqlite_stat1` (run `ANALYZE` once, or every full scan is a WARN of unknown size) |
 
 All engines are pure Go: the binary is built with `CGO_ENABLED=0`. locksql
-supports Linux and macOS, on amd64 and arm64. On Windows it runs inside
-WSL2 ([guide](docs/usage.md#windows-wsl2)); native Windows is not supported.
+runs in Linux containers, on amd64 and arm64, wherever Docker runs
+([docs/docker.md](docs/docker.md)).
 
 ## Safety model
 
 The console is the enforcement point. Skills, rules and MCP tool descriptions
 only guide the agent; the console's checks are the guarantee.
 
-- **One key holder.** Credentials are typed at console start (no echo), read
-  from the OS keychain, or fetched from HashiCorp Vault with the `vault` CLI
+- **One key holder.** Credentials are typed at console start (no echo), or
+  fetched from HashiCorp Vault with the `vault` CLI
   at every connection (`credentials = "vault"`, suited to the database
   secrets engine's per-user, short-lived logins). They never appear in argv,
   environment, files, logs, the socket protocol or error messages. The
   console disables core dumps. `credentials_ttl` makes it ask again after a
   set time; a Vault lease is renewed with a fresh login before it ends.
-- **OS separation.** `locksql install` creates a `locksql` console account
-  and a `locksql-clients` group: the console runs as that account in its own
-  login session, the agent's account only reaches its socket, and the kernel
-  checks every peer. The console refuses to start without this setup, since
-  an agent in the console's own account could read or type into its terminal.
+- **OS separation.** The image holds a `locksql` console account and a
+  `locksql-clients` group: the console runs as that account in its own
+  container, the agent's MCP server runs as `agent`, a member of the group, in
+  another, and the two share only the socket volume. The kernel checks every
+  peer. The console refuses to start without this setup, since an agent in
+  the console's own account could read or type into its terminal. Whoever can
+  run `docker` commands can still reach the console's container: see
+  [what Docker does and does not separate](docs/docker.md#what-docker-does-and-does-not-separate).
 - **Human approval.** Every statement is shown and approved in the console
   terminal; no socket method can approve. On a production profile you type the
   profile name, not `y`. Pending keystrokes are flushed before each prompt, so
@@ -451,7 +454,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `path` | required for sqlite | relative to the project root; the file is never created |
 | `user` | asked at start | with `credentials = "vault"`: the secret's `username`; set it only for a secret without one |
 | `database` | none | the only database served (and scanned for PII); empty: every database the account can see, chosen per query with `--db` |
-| `credentials` | `ask` | `keychain` offers to save the secret after the first successful login; `locksql forget --profile P` removes it. `vault` reads the login from `vault_path` at every connection |
+| `credentials` | `ask` | `keychain` (not in a container) offers to save the secret after the first successful login; `locksql forget --profile P` removes it. `vault` reads the login from `vault_path` at every connection |
 | `vault_path` | required with `credentials = "vault"` | the Vault path read with `vault read`, such as `database/creds/<role>` or `secret/data/<name>`; any change is a loosening |
 | `credentials_ttl` | none | a duration of at least `1m` (`"20m"`, `"1h"`): the connection is closed and the secret asked again once it is that old |
 | `tier` | `read` | highest statement class allowed |
@@ -571,12 +574,13 @@ deliberately narrow:
 
 ## Limitations
 
-- **The console runs only in a separate account.** `locksql setup` (or
-  `sudo locksql install`) sets it up; `locksql console` refuses to start
-  without it and names `locksql doctor`. Starting it takes a session of
-  that account (switch user, or a text console), since the agent's account
-  can read its own terminals. Run `locksql doctor` to see what your machine
-  allows.
+- **The console runs only in a separate account.** The image sets it up;
+  `locksql console` refuses to start without it and names `locksql doctor`.
+  Docker does not separate the console from your own account: whoever can
+  run `docker` commands, an agent in your shell included, can attach to the
+  console's container. Run the agent in a container of its own, without the
+  Docker socket, for that boundary
+  ([docs/docker.md](docs/docker.md#agent-in-its-own-container)).
   Malware running as the console account, or as root, is out of scope.
 - **k-anonymity is a decision aid, not a guarantee.** A count under `k` warns
   you before you approve; it refuses nothing, and in auto mode the statement
@@ -615,8 +619,8 @@ deliberately narrow:
 
 | | |
 |---|---|
+| 🐳 [docs/docker.md](docs/docker.md) | setting up: the console and the agent's MCP server in Docker, with nothing installed |
 | 📘 [docs/usage.md](docs/usage.md) | console, client commands, MCP server, agent integration |
-| 🐳 [docs/docker.md](docs/docker.md) | running the console and the agent's MCP server in Docker, with nothing installed |
 | 🛡️ [docs/security-model.md](docs/security-model.md) | threat model and mitigations, and an upstream recommendation (PII encrypted at rest with a blind index) |
 | 🔍 [docs/pii-analysis.md](docs/pii-analysis.md) | how the PII analysis works: parser, provenance, usage rules, k-anonymity counts, masking (for contributors) |
 | 🏁 [docs/1.0.md](docs/1.0.md) | the 1.0 criteria and the versioning policy from 1.0 |
@@ -625,90 +629,25 @@ deliberately narrow:
 
 ## Install
 
-Every release ships a static binary for Linux and macOS (amd64, arm64),
-Linux packages, a `checksums.txt` and its cosign signature. No Go toolchain is
-needed.
-
-**Script (Linux, macOS).** Downloads the archive for your OS and architecture,
-checks it against `checksums.txt` (and the signature when `cosign` is on
-PATH), then installs `/usr/local/bin/locksql`, with `sudo` if needed:
-
-```sh
-curl -fsSLO https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh
-less install.sh                     # read it first
-sh install.sh                       # LOCKSQL_VERSION=v0.8.0 to pin a version
-```
-
-`LOCKSQL_INSTALL_DIR=~/.local/bin` installs without `sudo`, but the binary is
-then owned by your account and `locksql doctor` warns: in separated mode, the
-console must run a binary the agent cannot replace (`sudo locksql install`
-copies it to `/usr/local/bin`).
-
-**Upgrade.** Run `locksql update` from your own account, without `sudo`: it
-replaces `/usr/local/bin/locksql` with the latest release (`--version vX.Y.Z`
-for another) once the release's cosign signature, its checksum and the new
-binary's version check out, and asks for `sudo` only for that copy. It needs
-`cosign` on PATH and a binary installed as above, owned by root; packages
-upgrade with their package manager. Restart the console afterwards. See
-[docs/usage.md](docs/usage.md#locksql-update).
-`locksql console` and `locksql doctor` print on stderr when a newer release
-exists (`locksql vX available (you run vY): locksql update`, or the package
-or download instructions for other installs). They check at most once a day,
-with a single GET of `https://github.com/DavidGodefroid/locksql/releases/latest`
-(no added header or identifier, 2 s timeout), cached in
-`$XDG_CACHE_HOME/locksql/update-check`; a failure prints nothing.
-`LOCKSQL_NO_UPDATE_CHECK=1` turns it off. `locksql mcp` and the other
-commands never check.
-
-**Debian, Ubuntu, Fedora, RHEL, Alpine.** Packages install
-`/usr/bin/locksql`, owned by root. Copy-paste, the latest version and your
-architecture are detected:
-
-```sh
-V=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/DavidGodefroid/locksql/releases/latest); V=${V##*/v}
-A=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
-U=https://github.com/DavidGodefroid/locksql/releases/download/v$V/locksql_${V}_linux_$A
-
-# Debian, Ubuntu
-curl -fsSLO $U.deb && sudo apt install ./locksql_${V}_linux_$A.deb
-# Fedora, RHEL
-sudo dnf install $U.rpm
-# Alpine
-curl -fsSLO $U.apk && sudo apk add --allow-untrusted ./locksql_${V}_linux_$A.apk
-```
-
-To upgrade, run the same lines again; to remove, `sudo apt remove locksql`
-(or `dnf remove`, `apk del`).
-
-**By hand.** Download `locksql_<version>_<os>_<arch>.tar.gz`, `checksums.txt`
-and `checksums.txt.sigstore.json`, then:
-
-```sh
-cosign verify-blob --bundle checksums.txt.sigstore.json \
-  --certificate-identity-regexp '^https://github.com/DavidGodefroid/locksql/' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  checksums.txt
-sha256sum --ignore-missing -c checksums.txt   # macOS: shasum -a 256 --ignore-missing -c checksums.txt
-tar -xzf locksql_<version>_<os>_<arch>.tar.gz locksql
-sudo install -m 0755 locksql /usr/local/bin/locksql
-```
-
-**From source.** `go install github.com/DavidGodefroid/locksql/cmd/locksql@latest`
-(Go 1.26 or later), then `sudo locksql install --trust-binary`.
-
-**Docker.** Nothing to install but Docker: the image holds the separated
-setup, the console runs in one container and the agent's MCP server in
-another. Read what Docker does and does not separate first:
-[docs/docker.md](docs/docker.md).
+locksql is built and run as a Docker image. The image holds the separated
+setup: the console runs as `locksql` in one container, the agent's MCP server
+as `agent` in another. Build it straight from the repository:
 
 ```sh
 docker build -t locksql https://github.com/DavidGodefroid/locksql.git
 docker build --target vault -t locksql https://github.com/DavidGodefroid/locksql.git   # with the vault CLI
 ```
 
-`locksql profile add` then writes a first database profile from its
-questions. [lea](https://github.com/DavidGodefroid/lea) does all of it in
-`lea init` and links a `locksql` command that opens the console.
+`--build-arg VERSION=v0.8.0` sets the version that `locksql version` prints.
+To upgrade, build again and restart the console. Read what Docker does and
+does not separate before you rely on it:
+[docs/docker.md](docs/docker.md#what-docker-does-and-does-not-separate).
+
+Other deployment modes (a host install, packages, desktop and session
+setups) still exist in the code but are no longer documented or supported.
+
+[lea](https://github.com/DavidGodefroid/lea) does all of it in `lea init`
+and links a `locksql` command that opens the console.
 
 ## Build
 
