@@ -569,8 +569,8 @@ func checkProxyCommand(argv []string, p Profile, baseDir string, errf func(strin
 }
 
 // pathDelims end the text before a path inside an argument
-// (--config=/p, UNIX-CONNECT:/p, a,b, "p", @p) and a path component.
-const pathDelims = "/\\=:,; \t'\"@"
+// (--config=/p, UNIX-CONNECT:/p, a,b, "p", @p, a&&p) and a path component.
+const pathDelims = "/\\=:,; \t\n'\"@&|<>(){}!"
 
 // pathStarts returns the parts of arg that may start a path: arg itself,
 // what follows each of pathDelims, and the value glued to a short flag (-Fp).
@@ -591,7 +591,7 @@ func pathStarts(arg string) []string {
 // command's directory, it could reach the project.
 func climbs(arg string) bool {
 	for _, p := range pathStarts(arg) {
-		if p == ".." || (strings.HasPrefix(p, "..") && strings.IndexByte(pathDelims+"&|<>()\n", p[2]) >= 0) {
+		if p == ".." || (strings.HasPrefix(p, "..") && strings.IndexByte(pathDelims, p[2]) >= 0) {
 			return true
 		}
 	}
@@ -600,7 +600,7 @@ func climbs(arg string) bool {
 
 // expandsHome reports whether arg holds a form the command may expand to a
 // path locksql does not see: ~user, ~+ or ~-, ssh's %-tokens (%d the home,
-// %u the user, ...), $VAR, ${VAR}, $(...) or `...`. A ~ alone or before a
+// %u the user, ...), $VAR, ${VAR}, $1, $(...) or `...`. A ~ alone or before a
 // separator is the console account's home, which namesPathIn checks.
 func expandsHome(arg string) bool {
 	if strings.ContainsRune(arg, '`') {
@@ -610,7 +610,7 @@ func expandsHome(arg string) bool {
 		c := arg[i+1]
 		switch arg[i] {
 		case '$':
-			if c == '{' || c == '(' || c == '_' || unicode.IsLetter(rune(c)) {
+			if c != ' ' && c != '\t' {
 				return true
 			}
 		case '%':

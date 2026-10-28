@@ -611,6 +611,9 @@ func TestProxyCommand(t *testing.T) {
 		"command subst":     {head + "proxy_command=[\"sh\", \"-c\", \"cat $(pwd)/x\"]\n", "expands"},
 		"backtick":          {head + "proxy_command=[\"sh\", \"-c\", \"cat `pwd`/x\"]\n", "expands"},
 		"tilde plus":        {head + "proxy_command=[\"sh\", \"-c\", \"cat ~+/x\"]\n", "expands"},
+		"tilde after op":    {head + "proxy_command=[\"sh\", \"-c\", \"true&&~+/x\"]\n", "expands"},
+		"dot dot after op":  {head + "proxy_command=[\"sh\", \"-c\", \"cd x&&..\"]\n", "climbs"},
+		"positional":        {head + "proxy_command=[\"sh\", \"-c\", \"cat $1\"]\n", "expands"},
 		"env braces":        {head + "proxy_command=[\"ssh\", \"-oIdentityFile=${XDG_CONFIG_HOME}/k\", \"h\"]\n", "expands"},
 	} {
 		if _, err := parse(c.body); err == nil || !strings.Contains(err.Error(), c.err) {
