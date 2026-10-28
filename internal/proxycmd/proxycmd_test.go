@@ -64,8 +64,9 @@ func helper(mode string) {
 			fmt.Println(err)
 			return
 		}
-		fmt.Println(child.Process.Pid)
+		// stderr first: the test closes as soon as it reads the pid.
 		fmt.Fprintln(os.Stderr, "orphaned")
+		fmt.Println(child.Process.Pid)
 		time.Sleep(time.Hour)
 	case "tty":
 		// A command run by the console must not reach its terminal.
