@@ -289,8 +289,10 @@ func TestUpdateRefusesOtherChannels(t *testing.T) {
 
 	f := newUpdFixture(t, "0.8.0")
 	f.exe = "/usr/bin/locksql"
-	f.run(t, false, "", "--yes").want(t, exitFail, "installed by a package", "sudo apt install ./locksql_${V}_linux_",
-		"sudo dnf install ", "sudo apk add --allow-untrusted ")
+	f.run(t, false, "", "--yes").want(t, exitFail, "installed by a package", "F=locksql_${V}_linux_",
+		"checksums.txt.sigstore.json", "cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '"+
+			ReleaseCertIdentityRegexp+"' --certificate-oidc-issuer "+releaseOIDCIssuer+" checksums.txt",
+		"| sha256sum -c -", "sudo apt install \"./$F\"", "sudo dnf install \"./$F\"", "sudo apk add --allow-untrusted \"./$F\"")
 	f.wantNoRoot(t)
 
 	f = newUpdFixture(t, "0.8.0")

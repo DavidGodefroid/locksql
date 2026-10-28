@@ -59,6 +59,39 @@ To contribute one:
 - Reports are linked here with the reviewer's name (or anonymously if you
   prefer) and the fixes they led to.
 
+## Verifying a release
+
+Each release's `checksums.txt` covers its archives and Linux packages, and is
+signed keylessly by `.github/workflows/release.yml` run for the release's tag.
+Check the signature against that workflow and a version tag, not any
+workflow of the repository, then the file you downloaded against
+`checksums.txt`:
+
+```sh
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/DavidGodefroid/locksql/\.github/workflows/release\.yml@refs/tags/v[0-9]' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+sha256sum -c --ignore-missing checksums.txt
+```
+
+`scripts/install.sh` and `locksql update` run the same check and refuse to
+install without cosign (`LOCKSQL_SKIP_COSIGN=1` is the script's explicit
+way past it). `locksql install` prints the sha256 of the binary it copies
+beside its prompt, and its root script checks the copy against it.
+
+The actions the workflows run are pinned to full commit SHAs, and the
+release job pins the versions of GoReleaser, cosign and syft.
+
+Release tags are annotated, not yet signed (`v0.1.0` to `v0.8.1`). From
+the first signed tag on, its key is published on the maintainer's GitHub
+profile (<https://github.com/DavidGodefroid.gpg>, or the SSH signing keys),
+and a tag can be checked before you build from it:
+
+```sh
+git verify-tag vX.Y.Z
+```
+
 ## Supported versions
 
 Only the latest release receives security fixes.
