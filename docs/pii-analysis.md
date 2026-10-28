@@ -176,7 +176,8 @@ with it without the counts.
 ## The rules and where they come from
 
 Rules live in `.locksql/pii.toml` (`pii.Rules`): `[[mask]]` patterns
-`db.table.column` (any segment may be `*`) with an optional mode, and
+`db.table.column` (any segment may be `*`, or a name with a leading or
+trailing `*` such as `*email*`) with an optional mode, and
 `[[allow]]` patterns that beat every mask. At every start the console
 scans the schema and proposes rules for columns whose names look personal
 (`detect.go`: tokens in English, French, Dutch, German and Spanish), and

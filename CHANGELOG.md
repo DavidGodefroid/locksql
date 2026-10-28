@@ -6,6 +6,16 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
+### Added
+
+- **Wildcards inside a PII rule segment.** A `*` may now start or end a
+  segment of a `db.table.column` rule, so `*.*.*email*` covers
+  `contact_email`, `email_backup` and `Email`, and `app.user*.phone` covers
+  every table whose name starts with `user`. A `*` anywhere else in a
+  segment is still refused. A new wildcard mask rule only tightens; a new
+  wildcard allow rule is a loosening the human confirms in `:review`, as
+  every added allow rule.
+
 ### Changed
 
 - **Clear results refused at desktop security level 1.** When the console
