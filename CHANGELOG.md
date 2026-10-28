@@ -31,6 +31,11 @@ This file records the changes a user or an agent has to know about.
   console looks up the functions it calls and refuses it with `E_FUNCTION`
   when one is also defined outside `pg_catalog`. Functions owned by an
   extension are not counted.
+- **Function names are matched exactly.** A function call must use an
+  unquoted name in ASCII letters, and in MySQL no blank between the name and
+  `(`, so that the allowlist checks the function the server calls:
+  `"lower"(x)`, `` `lower`(x) ``, non-ASCII spellings and MySQL `lower (x)`
+  are now refused with `E_FUNCTION`. Write `lower(x)`.
 - **PII rules in named sets, one per profile by default.** PII rules no
   longer live in one `pii.toml` shared by every profile of a scope: each
   profile uses the set named by its new `pii_rules` key, by default its own

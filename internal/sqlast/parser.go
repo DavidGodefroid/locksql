@@ -1497,6 +1497,9 @@ func (p *parser) primary() (Expr, error) {
 		return nil, p.unexpected()
 	}
 	// A word.
+	if err := p.checkCallName(start, false); err != nil {
+		return nil, err
+	}
 	w := t.Text
 	next, hasNext := p.tok(1)
 	adjacentString := hasNext && next.Kind == sqlclass.TokString && next.Pos == t.End
@@ -1510,6 +1513,9 @@ func (p *parser) primary() (Expr, error) {
 	case w == "CASE":
 		return p.caseExpr()
 	case w == "CAST" && p.punct(1, "("):
+		if err := p.checkCallName(start, true); err != nil {
+			return nil, err
+		}
 		p.i += 2
 		x, err := p.expr()
 		if err != nil {
@@ -1527,6 +1533,9 @@ func (p *parser) primary() (Expr, error) {
 		}
 		return &Cast{X: x, Type: typ, Sp: p.span(start)}, nil
 	case w == "CONVERT" && p.punct(1, "(") && p.d == sqlclass.MySQL:
+		if err := p.checkCallName(start, true); err != nil {
+			return nil, err
+		}
 		p.i += 2
 		x, err := p.expr()
 		if err != nil {
@@ -1547,6 +1556,9 @@ func (p *parser) primary() (Expr, error) {
 		}
 		return &Cast{X: x, Type: typ, Sp: p.span(start)}, nil
 	case w == "EXTRACT" && p.punct(1, "("):
+		if err := p.checkCallName(start, true); err != nil {
+			return nil, err
+		}
 		p.i += 2
 		if _, ok := p.ident(true); !ok {
 			if ft, ok := p.tok(0); ok && ft.Kind == sqlclass.TokString {
@@ -1612,6 +1624,9 @@ func (p *parser) primary() (Expr, error) {
 	case w == "ROW" || w == "ARRAY":
 		return nil, refusef(refusal.UnsupportedSyntax, "%s constructors are not supported", w)
 	case reserved[w] && p.punct(1, "("):
+		if err := p.checkCallName(start, true); err != nil {
+			return nil, err
+		}
 		// MOD(a, b), LEFT(s, n), IF(c, a, b), ...: the function allowlist
 		// decides.
 		p.i++
@@ -1752,7 +1767,37 @@ func (p *parser) nameExpr() (Expr, error) {
 		}
 		return &ColumnRef{Parts: parts, Sp: p.span(start)}, nil
 	}
+	for k := start; k < p.i; k++ {
+		if p.toks[k].Kind == sqlclass.TokQuotedIdent {
+			return nil, refuse(refusal.Function, "quoted function names are not allowed: write the function name unquoted")
+		}
+	}
+	if err := p.checkCallName(p.i-1, true); err != nil {
+		return nil, err
+	}
 	return p.call(start, strings.Join(parts, "."))
+}
+
+// checkCallName refuses a word at toks[k] followed by '(' that the engine
+// may resolve to another function than the folded name the allowlist
+// checks: a word with non-ASCII letters (ſqrt folds to SQRT, the engine
+// keeps ſqrt), and with blank set (the word is a function name, not a
+// keyword such as EXISTS), in MySQL a word separated from '(' by a blank
+// (the server may then look for a stored function of that name).
+func (p *parser) checkCallName(k int, blank bool) error {
+	if k+1 >= len(p.toks) || p.toks[k].Kind != sqlclass.TokWord || p.toks[k+1].Kind != sqlclass.TokPunct || p.toks[k+1].Text != "(" {
+		return nil
+	}
+	t := p.toks[k]
+	for i := t.Pos; i < t.End; i++ {
+		if p.src[i] >= 0x80 {
+			return refuse(refusal.Function, "function names with non-ASCII letters are not allowed")
+		}
+	}
+	if blank && p.d == sqlclass.MySQL && p.toks[k+1].Pos != t.End {
+		return refusef(refusal.Function, "%s: no blank is allowed between a function name and '(' in MySQL", strings.ToLower(t.Text))
+	}
+	return nil
 }
 
 func (p *parser) call(start int, name string) (Expr, error) {
