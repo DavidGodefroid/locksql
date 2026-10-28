@@ -428,6 +428,11 @@ first use, refusing a changed key). `host` is then the database as seen from
 the bastion; keep `tls = "verify-full"` unless the database runs on the
 bastion itself. See
 [Reaching a remote server through SSH](docs/usage.md#reaching-a-remote-server-through-ssh).
+A database that publishes no port (an internal Docker network, a server
+bound to its container's loopback) is reached with `proxy_command`, an argv
+whose stdin and stdout carry the connection, such as
+`["docker", "exec", "-i", "shop-db", "socat", "-", "TCP:127.0.0.1:3306"]`;
+see [Databases that publish no port](docs/usage.md#databases-that-publish-no-port).
 
 ```toml
 [profiles.prod]
@@ -477,6 +482,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `ssh.auth` | required | `key`, `agent` (`SSH_AUTH_SOCK` of the console) or `password` |
 | `ssh.key` | required with `auth = "key"` | private key of the console account, mode 0600 |
 | `ssh.credentials` | the profile's `credentials` (`ask` when that is `vault`) | `ask` or `keychain` for the passphrase or SSH password; `locksql forget --profile P` removes it too |
+| `proxy_command` | none | argv run without a shell, as the console account, once per connection; its stdin and stdout carry it (`docker exec`, `kubectl exec`, `ssh ... socat`). Not with `ssh`, sqlite or a Unix socket `host`; any change is a loosening |
 
 </details>
 

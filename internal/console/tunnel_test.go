@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/DavidGodefroid/lockkit/tunnel"
+	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 )
 
@@ -81,5 +82,38 @@ func TestRetryKeychainSSHSecret(t *testing.T) {
 		if got := retryKeychainSSHSecret(c.err, c.used); got != c.ok {
 			t.Errorf("err=%v used=%v: %v", c.err, c.used, got)
 		}
+	}
+}
+
+func TestProxiedSessionNotices(t *testing.T) {
+	inner := &noticeSession{notices: []string{"the connection is NOT encrypted (tls = \"prefer\")"}}
+	s := &proxiedSession{Session: inner, program: "kubectl", dbHost: "db.internal"}
+	got := strings.Join(s.Notices(), "\n")
+	if !strings.Contains(got, "through proxy_command kubectl") || !strings.Contains(got, "to db.internal") || strings.Contains(got, "ssh tunnel") {
+		t.Errorf("notices = %q", got)
+	}
+	// The database listens on loopback where the command runs.
+	s.dbHost = "127.0.0.1"
+	if n := s.Notices(); len(n) != 0 {
+		t.Errorf("loopback database: notices = %q", n)
+	}
+}
+
+func TestDescribePolicyShowsProxyCommand(t *testing.T) {
+	p := uatProfile()
+	p.ProxyCommand = []string{"docker", "exec", "-i", "my db", "nc", "127.0.0.1", "3306"}
+	got := strings.Join(describePolicy(config.NewPolicy(p, nil, nil)), "\n")
+	if !strings.Contains(got, `proxy_command: "docker" "exec" "-i" "my db" "nc" "127.0.0.1" "3306"`) {
+		t.Errorf("policy:\n%s", got)
+	}
+}
+
+func TestProxyStderrInConnectError(t *testing.T) {
+	err := withProxyStderr(errors.New("handshake: EOF"), "Error: No such container: db")
+	if !strings.Contains(err.Error(), "handshake: EOF") || !strings.Contains(err.Error(), "proxy_command stderr: Error: No such container: db") {
+		t.Errorf("err = %v", err)
+	}
+	if e := errors.New("x"); withProxyStderr(e, "") != e {
+		t.Error("an empty stderr changed the error")
 	}
 }

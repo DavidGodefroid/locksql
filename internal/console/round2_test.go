@@ -71,7 +71,7 @@ func TestPIIAddWhilePending(t *testing.T) {
 	}
 }
 
-// An adopted change of the transport (tls, tls_ca, the ssh table) ends the
+// An adopted change of the transport (tls, tls_ca, the ssh table, proxy_command) ends the
 // session as a host change does: the open connection keeps the old one.
 func TestAdoptTransportChangeEndsSession(t *testing.T) {
 	bastion := &config.SSHProfile{Host: "bastion", Port: 22, User: "ops", Auth: config.SSHAuthAgent, Credentials: config.CredentialsAsk}
@@ -88,6 +88,11 @@ func TestAdoptTransportChangeEndsSession(t *testing.T) {
 		{"ssh removed", func(p *config.Profile) { p.SSH = bastion }, func(p *config.Profile) { p.SSH = nil }, true},
 		{"ssh host", func(p *config.Profile) { p.SSH = bastion }, func(p *config.Profile) { s := *bastion; s.Host = "other"; p.SSH = &s }, true},
 		{"ssh same", func(p *config.Profile) { p.SSH = bastion }, func(p *config.Profile) { s := *bastion; p.SSH = &s }, false},
+		{"proxy added", nil, func(p *config.Profile) {
+			p.ProxyCommand = []string{"docker", "exec", "-i", "db", "nc", "127.0.0.1", "3306"}
+		}, true},
+		{"proxy changed", func(p *config.Profile) { p.ProxyCommand = []string{"nc", "db", "3306"} }, func(p *config.Profile) { p.ProxyCommand = []string{"nc", "db2", "3306"} }, true},
+		{"proxy same", func(p *config.Profile) { p.ProxyCommand = []string{"nc", "db", "3306"} }, func(p *config.Profile) { p.ProxyCommand = []string{"nc", "db", "3306"} }, false},
 		{"limits", nil, func(p *config.Profile) { p.Limits.MaxRows *= 2 }, false},
 	}
 	for _, c := range cases {
