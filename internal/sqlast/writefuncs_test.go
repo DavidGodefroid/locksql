@@ -34,6 +34,8 @@ func TestWriteFunctionsAccepted(t *testing.T) {
 		{my, "UPDATE t SET a = date_add(now(), INTERVAL 1 DAY) WHERE id = 1"},
 		{my, "INSERT INTO t SET a = concat('a', 'b')"},
 		{my, "INSERT INTO t (a) VALUES (1) ON DUPLICATE KEY UPDATE a = greatest(a, 2)"},
+		{my, "INSERT INTO t (a, b) VALUES (1, 2) ON DUPLICATE KEY UPDATE b = VALUES(b)"},
+		{my, "INSERT INTO t (a, b) VALUES (1, 2) ON DUPLICATE KEY UPDATE b = values(b) + 1"},
 		{my, "REPLACE INTO t (a) VALUES (lower('x'))"},
 		{lite, "INSERT INTO t (a) VALUES (strftime('%s', 'now'))"},
 		{lite, "REPLACE INTO t (a) VALUES (json_extract('{}', '$.a'))"},
@@ -82,6 +84,8 @@ func TestWriteFunctionsRefused(t *testing.T) {
 		{pg, "UPDATE t SET a = CAST(my_func(a) AS TEXT)", "my_func"},
 		{my, "INSERT INTO t (a) VALUES (1) ON DUPLICATE KEY UPDATE a = my_func(a)", "my_func"},
 		{my, "INSERT INTO t SET a = my_func(1)", "my_func"},
+		{my, "INSERT INTO t (a) VALUES (1) ON DUPLICATE KEY UPDATE a = VALUES(my_func(a))", "values"},
+		{my, "INSERT INTO t (a) VALUES (1) ON DUPLICATE KEY UPDATE a = VALUES(a) + my_func(1)", "my_func"},
 		{lite, "INSERT INTO t (a) VALUES (my_func(1))", "my_func"},
 		// Schema-qualified calls, even of an allowlisted name.
 		{pg, "INSERT INTO t SELECT cron.schedule('* * * * *', 'DELETE FROM t')", "cron.schedule"},

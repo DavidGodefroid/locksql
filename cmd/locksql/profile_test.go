@@ -29,7 +29,7 @@ func TestProfileAddInContainer(t *testing.T) {
 		p.Credentials != config.CredentialsVault || p.VaultPath != "secret/data/uat" {
 		t.Fatalf("profile %+v", p)
 	}
-	for _, want := range []string{"[host.docker.internal]", "a container has no keychain", "vault login"} {
+	for _, want := range []string{"[host.docker.internal]", "a container has no keychain", "asks for the Vault token"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}

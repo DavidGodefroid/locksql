@@ -340,7 +340,7 @@ func kconfigDecode(data []byte, into any) (any, error) {
 // a key added to Profile must be placed on purpose, else an import would
 // drop it on the other machine.
 func TestEveryProfileKeyIsPlaced(t *testing.T) {
-	notShared := map[string]bool{"name": true, "path": true, "user": true, "tls_ca": true, "tls_cert": true, "tls_key": true}
+	notShared := map[string]bool{"name": true, "path": true, "user": true, "tls_ca": true, "tls_cert": true, "tls_key": true, "proxy_command": true}
 	shared := map[string]bool{}
 	st := reflect.TypeOf(SharedProfile{})
 	for i := 0; i < st.NumField(); i++ {
@@ -352,5 +352,61 @@ func TestEveryProfileKeyIsPlaced(t *testing.T) {
 		if !shared[k] && !notShared[k] {
 			t.Errorf("profile key %q is neither shared nor excluded", k)
 		}
+	}
+}
+
+// proxy_command is a command of this machine: never exported, never taken
+// from a shared file, nor from --local; an import keeps the local one, and
+// skips a profile that needs one and has none.
+func TestProxyCommandStaysLocal(t *testing.T) {
+	src := mustParse(t, `[profiles.k8s]
+engine = "postgres"
+host = "db"
+proxy_command = ["kubectl", "exec", "-i", "db-0", "--", "nc", "localhost", "5432"]
+`)
+	sp, err := ExportProfile(src["k8s"], "k8s", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b bytes.Buffer
+	_ = EncodeShare(&b, Share{Format: ShareFormat, Profiles: map[string]SharedProfile{"k8s": sp}})
+	if strings.Contains(b.String(), "kubectl") || !strings.Contains(strings.Join(sp.NeedsLocal, ","), "proxy_command") {
+		t.Fatalf("export:\n%s", b.String())
+	}
+	s, err := DecodeShare(b.Bytes())
+	if err != nil {
+		t.Fatalf("needs_local proxy_command refused: %v", err)
+	}
+	// A command in the shared file is refused.
+	bad := strings.Replace(b.String(), `"engine": "postgres",`, `"engine": "postgres", "proxy_command": ["sh", "-c", "id"],`, 1)
+	if _, err := DecodeShare([]byte(bad)); err == nil {
+		t.Error("proxy_command in a shared file accepted")
+	}
+
+	// No local command: skipped.
+	f, _ := ParseConfigFile(nil, "config.toml", "/b")
+	skipped, err := f.Import(s, ImportOptions{})
+	if err != nil || len(skipped) != 1 || !strings.Contains(skipped[0].Reason, "proxy_command") {
+		t.Fatalf("skipped %+v, err %v", skipped, err)
+	}
+	// --local cannot give a command.
+	if _, err := f.Import(s, ImportOptions{Local: map[string]map[string]string{"k8s": {"proxy_command": "sh"}}}); err == nil {
+		t.Error("--local proxy_command accepted")
+	}
+	// The local command is kept.
+	f, err = ParseConfigFile([]byte(`[profiles.k8s]
+engine = "postgres"
+host = "old"
+proxy_command = ["docker", "exec", "-i", "pg", "nc", "localhost", "5432"]
+`), "config.toml", "/b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipped, err := f.Import(s, ImportOptions{}); err != nil || len(skipped) != 0 {
+		t.Fatalf("skipped %+v, err %v", skipped, err)
+	}
+	got := mustParse(t, string(f.TOML("")))["k8s"]
+	if strings.Join(got.ProxyCommand, " ") != "docker exec -i pg nc localhost 5432" || got.Host != "db" {
+		t.Errorf("k8s = %+v", got)
 	}
 }

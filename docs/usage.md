@@ -230,7 +230,9 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   30 s; after 3 missed answers the tunnel closes and the next query
   reconnects (asking again for any secret not in the keychain).
 - `~/.ssh/config`, `ProxyJump` chains and forwarding to a Unix socket on the
-  bastion are not supported: the profile is the only input.
+  bastion are not supported: the profile is the only input. For a socket,
+  or a database that publishes no port, see
+  [Databases that publish no port](#databases-that-publish-no-port).
 - The SSH leg is encrypted and the bastion verified; the leg from the bastion
   to the database is protected only by `tls` ([TLS to the database](#tls-to-the-database)), whose default is
   decided on `host` as seen from the bastion (`127.0.0.1` gives `prefer`, a
@@ -247,6 +249,118 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   fingerprint), and a key trusted on first use as
   `"decision":"hostkey-added"`. `locksql doctor` shows the bastion and
   reports a key file others can read.
+
+### Databases that publish no port
+
+A database in a container often publishes no port: it sits on an internal
+Docker or Podman network (the default of platforms such as Coolify), and may
+listen only on `127.0.0.1` inside its container. Do not publish the port
+(`-p 3306:3306`) to reach it; one of these recipes does, from the most
+direct to the most general.
+
+**Bastion plus container address.** When the Docker host is your bastion and
+the server listens on the container's network address, an `ssh` table
+whose `host` is the container's IP works as for any other host. Container
+names do not resolve on the host and container IPs change on restart, so
+give the container a fixed address on a user-defined network
+(`docker network create --subnet ...` and `--ip`).
+
+**`proxy_command`.** For a server bound to loopback inside its container, a
+socket, or anything only `docker exec`, `podman exec`, `kubectl exec` or
+`nsenter` can reach, the profile names a command whose stdin and stdout
+carry the connection, as OpenSSH's `ProxyCommand`:
+
+```toml
+[profiles.shop]
+engine = "mariadb"
+host   = "127.0.0.1"   # where the command connects, inside the container
+port   = 3306
+user   = "reporting"
+proxy_command = ["docker", "exec", "-i", "shop-db", "socat", "-", "TCP:127.0.0.1:3306"]
+```
+
+Other commands, each an argv list:
+
+```toml
+# On a remote Docker host, through ssh (key or agent, no prompt):
+proxy_command = ["ssh", "-o", "BatchMode=yes", "deploy@docker-host",
+                 "docker", "exec", "-i", "shop-db", "socat", "-", "TCP:127.0.0.1:3306"]
+# A Unix socket on a remote host (a bind-mounted socket directory):
+proxy_command = ["ssh", "-o", "BatchMode=yes", "deploy@docker-host",
+                 "socat", "-", "UNIX-CONNECT:/srv/shop/run/mysqld.sock"]
+# Kubernetes:
+proxy_command = ["kubectl", "exec", "-i", "-n", "shop", "shop-db-0", "--",
+                 "socat", "-", "TCP:127.0.0.1:5432"]
+```
+
+- The command runs once per database connection (the console opens a
+  control connection beside the main one, and PostgreSQL a cancel
+  connection), and ends with it. `socat` or `nc` must exist where the last
+  step runs; many database images ship neither, so install it in the image,
+  or copy a static relay into the container.
+- It runs **without a shell** (no quoting, no `$VAR`, no `~`), as the console
+  account, in a session of its own with no terminal: it can neither read
+  what you type into the console nor prompt there, so `ssh` must
+  authenticate with an agent or a key without passphrase, and know the host
+  key already (`BatchMode=yes` makes it fail instead of waiting). Its
+  environment keeps only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`,
+  `LC_ALL`, `LC_CTYPE`, `TMPDIR`, `TZ`, `SSH_AUTH_SOCK`, `XDG_RUNTIME_DIR`,
+  `XDG_CONFIG_HOME`, `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`,
+  `CONTAINER_HOST`, `CONTAINERS_CONF` and `KUBECONFIG` (and what Windows
+  needs to start a program); `PGPASSWORD`, `MYSQL_PWD`, `VAULT_TOKEN` and the
+  like never reach it.
+- The program is an absolute path or a bare name looked up in `PATH`; a
+  relative path is refused, and so is any argument naming a path inside the
+  project, wherever it appears in the argument (`-F/srv/app/x`,
+  `--config=/srv/app/x`, `UNIX-CONNECT:/srv/app/s`, `~/app/x`), directly or
+  through a symbolic link, and whatever its case on macOS and Windows: the
+  agent could rewrite that file after your approval. The command runs in an
+  empty directory of its own, private to the console account and removed
+  when it ends, so a relative argument names nothing; a `..` component,
+  `~user`, `~+`, ssh's `%`-tokens (`%d`, `%u`, ...), `$VAR`, `${VAR}`,
+  `$(...)` and backticks, which the command would expand where locksql
+  cannot check them, are refused. These checks read each argument as text
+  that may hold paths; they do not interpret a shell script (`sh -c '...'`)
+  or the command `ssh` hands to the remote shell. Read those yourself
+  before approving them. Arguments are checked
+  like other values: no control characters, no embedded password, nothing
+  that reads as a secret (`--password=`, `MYSQL_PWD=`, `--token`, mysql's
+  `-pSECRET`); the database password is asked as usual and sent over the
+  connection, never to the command.
+- When the connection fails, what the command wrote to its stderr ends the
+  error (`proxy_command stderr: Error: No such container: shop-db`), on one
+  line, without control characters, at most 512 bytes.
+- `host` and `port` say where the command connects; `tls` follows them as
+  for a direct connection (`127.0.0.1` gives `prefer`, a remote name
+  `verify-full`, and `production = true` needs `require` or stronger unless
+  `host` is loopback). The command carries the stream from the console to
+  where it runs (encrypted by `ssh`, local for `docker exec` on this host,
+  TLS to the Kubernetes API); beyond, only `tls` protects it, and the
+  console warns `reached through proxy_command <program>; NOT encrypted (or
+  not verified) from where it runs to <host>: ...` unless `host` is
+  loopback.
+- `proxy_command` excludes an `ssh` table (run `ssh` inside it instead), a
+  Unix socket `host` and sqlite. The argv is part of the approved policy:
+  adding, removing or changing it loosens the policy and waits for your
+  approval, which shows it quoted
+  (`proxy_command: "docker" "exec" "-i" "shop-db" ...`), and an approved
+  change ends the running session.
+
+**`proxy_command` in Docker.** The console image is a minimal Alpine with
+no `ssh`, `docker`, `kubectl`, `socat` or `nc`, and the command runs in the
+console's container: none of the recipes above work with the image as
+built. Build an image of your own on top of it with the client the recipe
+needs, and run the console from it ([docker.md, Databases that publish no
+port](docker.md#databases-that-publish-no-port)). `socat` or `nc` is only
+needed where the last step runs (the database's container or the remote
+host), never in the console's image. `locksql doctor` does not look for the
+program in the console's container; check it there yourself.
+
+**Socket directory on the host.** A local MariaDB/MySQL whose socket
+directory is bind-mounted on the console's host is reached with
+`host = "/path/to/mysqld.sock"`, as any local socket. Forwarding a socket
+through the built-in `ssh` table is not supported; use the `socat
+UNIX-CONNECT` recipe above.
 
 ### Credentials from HashiCorp Vault
 
@@ -269,11 +383,23 @@ vault_path  = "database/creds/reporting-ro"
 
 - The console runs `vault read -format=json -- <vault_path>`. The CLI must
   be in the console's `PATH`, which the image's `vault` target provides,
-  and authenticated: run `vault login` (or set `VAULT_ADDR`, `VAULT_TOKEN`,
-  `VAULT_NAMESPACE`, `VAULT_CACERT`) **as the console account**, never as
-  the agent's ([docker.md](docker.md#credentials-from-vault)).
-  locksql never sees the Vault token: the CLI reads it from its own
-  environment or token helper.
+  with `VAULT_ADDR` (and `VAULT_NAMESPACE`, `VAULT_CACERT` if needed) in
+  the console's environment ([docker.md](docker.md#credentials-from-vault)).
+- At start, before the first Vault read, the console asks
+  `Vault token for <VAULT_ADDR>:` (no echo). No `vault login` is needed, and
+  the console account's `~/.vault-token` and `VAULT_TOKEN` are not used.
+  Get it with `vault login -method=oidc -no-store -token-only`, which
+  prints the token without writing `~/.vault-token` in the agent's
+  account, and do not leave `VAULT_TOKEN` set in that shell.
+  The token goes to the CLI as `VAULT_TOKEN` in the child's environment
+  only: never in its arguments (`/proc/<pid>/cmdline`), on disk, in a log or
+  in the audit trail. It stays in console memory for the session, so
+  reconnects and lease renewals do not ask again, and is wiped when the
+  console ends. When Vault refuses the read, the console says `Vault
+  refused the read` and asks for a token again: Vault answers `permission
+  denied` alike for an expired or revoked token and for a policy that may
+  not read `vault_path`, so enter a valid token whose policy may read it.
+  Three refusals in a row stop the connection.
 - The login is the `username` and `password` fields of the secret's data
   (or of `data.data` for a KV version 2 secret, such as
   `secret/data/reporting`). For a secret holding only a password, set `user`
@@ -291,15 +417,16 @@ vault_path  = "database/creds/reporting-ro"
   when they end.
 - Errors say what to do and never quote the secret:
   - `vault CLI not found`: run the console from the image's `vault` target;
-  - `not authenticated or not allowed`: no token, an expired one, or a
-    policy that may not read the path (`vault login` as the console
-    account);
+  - `not authenticated or not allowed`: an expired or revoked token, or a
+    policy that may not read the path (the console asks for the token
+    again);
   - `invalid path`: nothing at the path, or no secrets engine mounted there;
   - `invalid role`: the database secrets engine has no such role
     (`vault list database/roles`);
   - `server unreachable`: check `VAULT_ADDR` and `VAULT_CACERT`;
   - `unexpected secret format`: the secret has no `password` field.
-  A failure stops the connection; the console does not fall back to asking.
+  Any other failure stops the connection; the console does not fall back
+  to asking for a password.
 - `vault_path` must not start with `-` or `/` nor hold spaces. Changing it,
   or setting `credentials` to `vault`, loosens the policy and waits for your
   approval. `credentials = "vault"` is not used by SQLite, and an `ssh`
@@ -636,7 +763,7 @@ importer keeps the same sets. `--output` writes the file with mode 0600.
 
 | Exported | Never exported |
 |---|---|
-| `engine`, `host`, `port`, `database`, `credentials`, `vault_path`, `credentials_ttl`, `tls`, `tls_server_name`, `tier`, `production`, `detectors`, `pii_rules`, `write_functions`, every `limits.*`, `ssh.host`, `ssh.port`, `ssh.user`, `ssh.auth`, `ssh.credentials`; `user` with `--include-user` | secrets (a value that looks like one fails the whole export), `tls_ca`, `tls_cert`, `tls_key`, `ssh.key` (named in `needs_local`), SQLite and Unix-socket profiles (skipped with a warning), `/etc/locksql/system.toml`, approved policies, the audit log, stats, `known_hosts`, console flags |
+| `engine`, `host`, `port`, `database`, `credentials`, `vault_path`, `credentials_ttl`, `tls`, `tls_server_name`, `tier`, `production`, `detectors`, `pii_rules`, `write_functions`, every `limits.*`, `ssh.host`, `ssh.port`, `ssh.user`, `ssh.auth`, `ssh.credentials`; `user` with `--include-user` | secrets (a value that looks like one fails the whole export), `tls_ca`, `tls_cert`, `tls_key`, `ssh.key` (named in `needs_local`), `proxy_command` (named in `needs_local`; a command line is never taken from a shared file nor from `--local`: the import keeps the one of your config, or skips the profile), SQLite and Unix-socket profiles (skipped with a warning), `/etc/locksql/system.toml`, approved policies, the audit log, stats, `known_hosts`, console flags |
 
 `locksql config import FILE|- [--project] [--profile NAME]... [--replace]
 [--dry-run] [--yes] [--allow-loosen] [--local NAME.KEY=VALUE]...`:
@@ -779,7 +906,9 @@ locksql doctor   [--profile P]
 - The parser is fail-closed: syntax it does not know is refused. Functions
   must be in the allowlist (`internal/sqlast/funcs.go`: common string,
   numeric, date and JSON functions, aggregates and window functions;
-  schema-qualified functions are refused). `REPEAT`, `LPAD`, `RPAD`, `SPACE`
+  schema-qualified functions are refused). A function name is written
+  unquoted, in ASCII letters, and in MySQL directly followed by `(`:
+  `"lower"(x)`, `` `lower`(x) `` and `lower (x)` (MySQL) are refused. `REPEAT`, `LPAD`, `RPAD`, `SPACE`
   and `ZEROBLOB` take a literal length of at most 65 536, and only literals
   and columns as arguments, except the string `LPAD` and `RPAD` pad, which
   may be any expression that calls none of these functions
@@ -798,6 +927,17 @@ locksql doctor   [--profile P]
   `performance_schema`, `sys`, SQLite internals) are refused, and so are `pg_stat_statements` and
   `pg_stat_activity` while mask rules exist (they hold the text of past
   statements). Every table and column must resolve against the catalog.
+- On PostgreSQL, a function outside `pg_catalog` that bears an allowlisted
+  name (`public.lower(varchar)`) would run instead of the built-in when its
+  argument type is a closer match. Before each read, and each write under
+  `write_functions = "allowlist"`, the console looks up the functions the
+  statement calls (and `count` and `min`, which its k-anonymity counts
+  call) and the operators it uses (with `=`, `<>`, `<`, `>`, `<=` and `>=`,
+  which joins, sorts and `IN` use implicitly), and refuses it when one is
+  also defined outside `pg_catalog` (`E_FUNCTION`, `also defined outside
+  pg_catalog`). The lookup runs again just before an approved statement
+  runs. Functions and operators an extension owns (`citext` overloads
+  `lower`, `replace`, ...) are not counted.
 - Every output column is traced to its source columns, so an alias, a CTE or
   a subquery does not hide a PII column: `SELECT e FROM (SELECT email AS e
   FROM users) t LIMIT 5` is masked like `email`.
@@ -873,7 +1013,8 @@ With `"allowlist"`:
   `RETURNING`), must be on the read allowlist of the dialect or one of the
   key generators: PostgreSQL `gen_random_uuid`, `uuidv4`, `uuidv7`,
   `nextval`; MySQL/MariaDB `UUID`, `UUID_SHORT`, `UUID_TO_BIN`,
-  `BIN_TO_UUID`, `SYS_GUID`; SQLite `randomblob`. `setval`,
+  `BIN_TO_UUID`, `SYS_GUID`, and `VALUES(col)` in `ON DUPLICATE KEY UPDATE`;
+  SQLite `randomblob`. `setval`,
   `LAST_INSERT_ID(n)` and session or catalog functions are refused;
 - schema-qualified calls (`cron.schedule(...)`, `pg_catalog.lower(...)`),
   calls through a quoted name or a name with non-ASCII letters
@@ -889,9 +1030,9 @@ With `"allowlist"`:
 The refusal code is `E_FUNCTION` (`E_UNKNOWN_NAME` for a column that does
 not exist). DDL is not covered: a DDL tier can create functions, triggers
 and column defaults. Code the schema already holds still runs: triggers,
-column defaults, domain constraints, and a function created under an
-allowlisted name with a closer argument type or earlier in `search_path`;
-the privilege audit is the control there. Changing `"allowlist"` back to
+column defaults and domain constraints; the privilege audit is the control
+there. On PostgreSQL, a call to an allowlisted function that a function
+outside `pg_catalog` also names is refused (see below). Changing `"allowlist"` back to
 `"denylist"` is a policy loosening and waits for `:review`.
 
 ### Placeholders and cell references

@@ -17,11 +17,26 @@ This file records the changes a user or an agent has to know about.
   without `--allow-loosen` (the console still asks at its next start),
   keeps `*.bak` backups and writes a `config_import` audit record. See
   docs/usage.md, "Share a configuration with your team".
+- **Wildcards inside a PII rule segment.** A `*` may now start or end a
+  segment of a `db.table.column` rule, so `*.*.*email*` covers
+  `contact_email`, `email_backup` and `Email`, and `app.user*.phone` covers
+  every table whose name starts with `user`. A `*` anywhere else in a
+  segment is still refused. A new wildcard mask rule only tightens; a new
+  wildcard allow rule is a loosening the human confirms in `:review`, as
+  every added allow rule.
+- **More column names in the startup PII scan.** The scan now proposes
+  `mail`, `e_mail`, `login` (not a date or time column such as
+  `last_login`), `username`, `nickname`, `displayname`, `pseudo` and
+  `handle` for masking, and asks about free-text columns (`notes`,
+  `comment`, `bio`, `remarks`, ...) and coordinates (`lat`, `lng`,
+  `latitude`, `longitude`) as quasi-identifiers (`[y/N]`). `mail_id`,
+  `login_count` and other metadata columns stay out (lockkit#21, v0.2.1).
 - **`write_functions = "allowlist"`.** An opt-in profile setting that
   applies the read function allowlist to writes: every function an
   `INSERT`, `REPLACE`, `UPDATE` or `DELETE` calls, at any depth, must be
   allowlisted (plus key generators such as `gen_random_uuid`, `nextval`,
-  `UUID`, `SYS_GUID`, `randomblob`), or the write is refused with
+  `UUID`, `SYS_GUID`, `randomblob`, MySQL `VALUES(col)` in `ON DUPLICATE
+  KEY UPDATE`), or the write is refused with
   `E_FUNCTION`. Schema-qualified calls, calls through quoted or non-ASCII
   names or with a blank before `(`, `CALL`, `MERGE` and writes the parser
   does not read are refused, and every column the write names is resolved
@@ -29,9 +44,51 @@ This file records the changes a user or an agent has to know about.
   The default stays `"denylist"`; turning the allowlist off is a policy
   loosening confirmed in the console, and existing approved policies keep
   their fingerprint.
+- **Databases that publish no port** (#35). A profile can set
+  `proxy_command`, an argv whose stdin and stdout carry each database
+  connection, as OpenSSH's `ProxyCommand`: `docker exec`, `podman exec`,
+  `kubectl exec`, or `ssh ... socat` to a server bound to its container's
+  loopback or to a Unix socket on a remote host. It runs without a shell, as
+  the console account, in an empty private directory, without a terminal and with a scrubbed
+  environment, and may not name a file inside the project (symbolic links
+  resolved, case folded on macOS and Windows) nor carry a secret
+  (`--password=`, `MYSQL_PWD=`, mysql's `-pSECRET`); closing the connection
+  ends the command and every process it started (a process group, a job
+  object on Windows). The argv is part of the approved policy (any change
+  loosens it), its stderr ends a connection error, and `locksql doctor`
+  checks the program. `docs/usage.md` gains "Databases that publish no
+  port" with the recipes; `docs/docker.md` shows how to add the client a
+  recipe needs to the console's image, which ships none, and why not to
+  mount the Docker socket there.
 
 ### Changed
 
+- **Function names are matched exactly.** A function call must use an
+  unquoted name in ASCII letters, and in MySQL no blank between the name and
+  `(`, so that the allowlist checks the function the server calls:
+  `"lower"(x)`, `` `lower`(x) ``, non-ASCII spellings and MySQL `lower (x)`
+  are now refused with `E_FUNCTION`. Write `lower(x)`.
+- **Release supply chain pinned.** `scripts/install.sh` checks the cosign
+  signature of `checksums.txt` against the release workflow run for a
+  version tag (`^https://github\.com/DavidGodefroid/locksql/\.github/workflows/release\.yml@refs/tags/v[0-9]`,
+  as `locksql update` does), instead of any workflow or ref of the
+  repository, and now requires cosign: without it the script stops, and
+  `LOCKSQL_SKIP_COSIGN=1` installs without the signature check (the former
+  `LOCKSQL_REQUIRE_COSIGN` is gone). `locksql install` prints the sha256 of
+  the binary it copies beside its prompt, and its root script checks its
+  copy against it for every source, not only with `--trust-binary`.
+  `locksql update`'s package instructions check the signature and checksum
+  before `apt`, `dnf` or `apk`, and stop at the first failed step. The
+  workflows' actions are pinned to commit SHAs, and the release job pins GoReleaser, cosign and syft.
+- **PostgreSQL: allowlisted functions overloaded in the database are
+  refused.** PostgreSQL picks the best match for an unqualified function
+  over every schema of the search path, so a `public.lower(varchar)` runs
+  instead of `pg_catalog.lower(text)` for a `varchar` argument. Before a
+  read (and a write under `write_functions = "allowlist"`) is planned, and
+  again just before it runs, the console looks up the functions and
+  operators it uses and refuses it with `E_FUNCTION` when one is also
+  defined outside `pg_catalog`. Those owned by an extension are not
+  counted.
 - **PII rules in named sets, one per profile by default.** PII rules no
   longer live in one `pii.toml` shared by every profile of a scope: each
   profile uses the set named by its new `pii_rules` key, by default its own
@@ -44,6 +101,10 @@ This file records the changes a user or an agent has to know about.
   `pii/default.toml` (the set `default`), with a one-time notice; profiles
   approved before keep using it until they get a `pii_rules` key, and any
   new profile starts with its own, empty set.
+  The console warns at start when a profile without `pii_rules` shares
+  its set by accident (names that differ only by case, a name another
+  profile uses as its `pii_rules`, or a profile named `default`). Two
+  consoles starting together no longer fail on the migration.
 - **Docker is the only documented deployment.** The README Quick start and
   Install, `docs/usage.md` and the site now describe only the Docker setup:
   build the image, `locksql init`, `locksql profile add`, `locksql doctor
@@ -54,6 +115,17 @@ This file records the changes a user or an agent has to know about.
   `locksql install`, `locksql setup`, `locksql update`, the desktop and
   session setups and WSL2 are no longer documented or supported; their code
   is unchanged.
+- **Vault token asked at start (#51).** With `credentials = "vault"` the
+  console asks `Vault token for <VAULT_ADDR>:` (no echo) before the first
+  Vault read, instead of relying on a `vault login` of the console account
+  and its `~/.vault-token`. The token is passed to the `vault` CLI as
+  `VAULT_TOKEN` in the child's environment only (never argv, disk, logs or
+  the audit trail), kept in memory for the session so reconnects and lease
+  renewals do not ask again, and wiped when the console ends. When Vault
+  refuses a read (an expired or revoked token, or a policy that may not
+  read `vault_path`: Vault does not tell which), the console says `Vault
+  refused the read` and asks for a token again, mid-session too; three
+  refusals in a row stop the connection. Needs lockkit v0.2.0.
 - **Clear results refused at desktop security level 1.** When the console
   runs in a desktop terminal of the console account without a fingerprint
   reader, the agent's account can read its window, so the clear results

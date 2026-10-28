@@ -34,16 +34,28 @@ func TestDetectorsUnicodeAndFloats(t *testing.T) {
 	const nbsp, nnbsp = "\u00a0", "\u202f"
 	defaults := config.DefaultDetectors()
 
+	// Each of these leaked on lockkit v0.1.0 (before lockkit#19).
 	leaks := map[string]string{
-		"josé@example.com":                                          "josé",
-		"müller.hans@exämple.de":                                    "exämple",
-		"josé.dupont@example.com":                                   "dupont",
 		"tel +32" + nbsp + "475" + nbsp + "12 34 56":                "12 34 56",
 		"tel 0475" + nnbsp + "12" + nnbsp + "34" + nnbsp + "56":     "56",
 		"card 4111" + nbsp + "1111" + nbsp + "1111" + nbsp + "1111": "1111",
 		"iban BE68" + nbsp + "5390" + nbsp + "0754" + nbsp + "7034": "7034",
 	}
 	for in, secret := range leaks {
+		got, _ := maskCells(t, defaults, in)[0].(string)
+		if got == in || strings.Contains(got, secret) {
+			t.Errorf("default detectors: %q -> %q, %q still visible", in, got, secret)
+		}
+	}
+
+	// Unicode e-mail addresses were already masked on lockkit v0.1.0;
+	// kept as regression guards.
+	for in, secret := range map[string]string{
+		"josé@example.com":          "josé",
+		"müller.hans@exämple.de":    "exämple",
+		"josé.dupont@example.com":   "dupont",
+		"write to renée@exämple.fr": "renée",
+	} {
 		got, _ := maskCells(t, defaults, in)[0].(string)
 		if got == in || strings.Contains(got, secret) {
 			t.Errorf("default detectors: %q -> %q, %q still visible", in, got, secret)

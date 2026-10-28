@@ -22,7 +22,8 @@ import (
 const RulesFile = ".locksql/pii.toml"
 
 // Rules are the column rules. Each pattern is "db.table.column", where any
-// segment may be '*'. For PostgreSQL the db segment is the schema. Matching
+// segment may be '*' (any name) or a name with a leading or trailing '*'
+// ("*email*" matches contact_email and email2). For PostgreSQL the db segment is the schema. Matching
 // ignores case. An Allow pattern beats every Mask pattern.
 type Rules struct {
 	Mask  []string
@@ -95,6 +96,7 @@ func SaveRules(root string, r Rules) error {
 func SaveRulesFile(path string, r Rules) error {
 	var b bytes.Buffer
 	b.WriteString("# locksql PII column rules: \"db.table.column\", '*' matches any segment.\n")
+	b.WriteString("# A '*' prefix or suffix inside a segment matches any run: \"*.*.*email*\" covers contact_email.\n")
 	b.WriteString("# [[mask]] masks whole cells; [[allow]] is an exception that is never masked.\n")
 	b.WriteString("# mode = \"redact\" (default: <redacted>), \"partial\" (j***(12)) or \"email\" (j***@example.com).\n")
 	write := func(kind string, patterns []string) {
@@ -295,10 +297,31 @@ func anyMatch(patterns []string, seg [3]string) bool {
 
 func lastSeg(p string) string { return p[strings.LastIndexByte(p, '.')+1:] }
 
+// splitSeg cuts a pattern segment into its literal part and whether a '*'
+// precedes or follows it. A lone '*' is an empty literal with both.
+func splitSeg(pat string) (lit string, pre, suf bool) {
+	lit, pre = strings.CutPrefix(pat, "*")
+	lit, suf = strings.CutSuffix(lit, "*")
+	return lit, pre, suf || pat == "*"
+}
+
 // segMatch compares a pattern segment with a name the way the SQL lexer
 // folds identifiers (see fold), so that the alias check and the masking
-// agree on which names are equal.
-func segMatch(pat, name string) bool { return pat == "*" || fold(pat) == fold(name) }
+// agree on which names are equal. A leading or trailing '*' matches any
+// run of characters, the empty one included.
+func segMatch(pat, name string) bool {
+	lit, pre, suf := splitSeg(pat)
+	l, n := fold(lit), fold(name)
+	switch {
+	case pre && suf:
+		return strings.Contains(n, l)
+	case pre:
+		return strings.HasSuffix(n, l)
+	case suf:
+		return strings.HasPrefix(n, l)
+	}
+	return l == n
+}
 
 // looseSegMatch is segMatch where a non-ASCII character of the pattern
 // matches any one character of the name.
@@ -306,12 +329,32 @@ func looseSegMatch(pat, name string) bool {
 	if segMatch(pat, name) {
 		return true
 	}
-	pr, nr := []rune(fold(pat)), []rune(fold(name))
-	if len(pr) != len(nr) {
+	lit, pre, suf := splitSeg(pat)
+	pr, nr := []rune(fold(lit)), []rune(fold(name))
+	last := len(nr) - len(pr) // last offset where the literal fits
+	if last < 0 || !pre && !suf && last != 0 {
 		return false
 	}
-	for i := range pr {
-		if pr[i] != nr[i] && pr[i] < utf8.RuneSelf {
+	first := 0
+	switch {
+	case pre && !suf:
+		first = last
+	case suf && !pre:
+		last = 0
+	}
+	for off := first; off <= last; off++ {
+		if looseAt(pr, nr[off:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// looseAt reports whether name starts with pat, a non-ASCII character of
+// pat matching any one character.
+func looseAt(pat, name []rune) bool {
+	for i := range pat {
+		if pat[i] != name[i] && pat[i] < utf8.RuneSelf {
 			return false
 		}
 	}
@@ -328,17 +371,19 @@ func isASCII(s string) bool {
 }
 
 // parsePattern validates "db.table.column": three non-empty segments, each
-// '*' or a name without '*', '.', quotes, blanks, control characters or
-// format characters (bidi controls, zero-width marks). Patterns are shown to
-// the human in review diffs, where such characters could hide text.
+// '*' or a name without '.', quotes, blanks, control characters or format
+// characters (bidi controls, zero-width marks), with at most one leading
+// and one trailing '*'. Patterns are shown to the human in review diffs,
+// where such characters could hide text.
 func parsePattern(p string) (string, error) {
 	segs := strings.Split(p, ".")
 	if len(segs) != 3 {
 		return "", fmt.Errorf("pii rule %q: want db.table.column ('*' allowed per segment)", p)
 	}
 	for _, s := range segs {
-		if s == "" || (s != "*" && strings.ContainsAny(s, "*\"'`")) || strings.IndexFunc(s, unsafeRune) >= 0 {
-			return "", fmt.Errorf("pii rule %q: each segment is '*' or a plain name", p)
+		lit, _, _ := splitSeg(s)
+		if s == "" || (s != "*" && (lit == "" || strings.ContainsAny(lit, "*\"'`"))) || strings.IndexFunc(s, unsafeRune) >= 0 {
+			return "", fmt.Errorf("pii rule %q: each segment is '*' or a plain name, optionally with a leading or trailing '*'", p)
 		}
 	}
 	return p, nil

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -98,6 +99,12 @@ type SharedSSH struct {
 // listed in needs_local, given on import with --local NAME.KEY=VALUE.
 var LocalKeys = []string{"tls_ca", "tls_cert", "tls_key", "ssh.key"}
 
+// HandLocalKeys are local keys that only the importer's own config file
+// may set: proxy_command is a command line, which neither a shared file
+// nor --local may bring. An import keeps the local value, or skips the
+// profile.
+var HandLocalKeys = []string{"proxy_command"}
+
 // IsLocalKey reports whether key is one of LocalKeys.
 func IsLocalKey(key string) bool {
 	for _, k := range LocalKeys {
@@ -144,6 +151,9 @@ func ExportProfile(p Profile, set string, includeUser bool) (SharedProfile, erro
 		if f.val != "" {
 			s.NeedsLocal = append(s.NeedsLocal, f.key)
 		}
+	}
+	if len(p.ProxyCommand) > 0 {
+		s.NeedsLocal = append(s.NeedsLocal, "proxy_command")
 	}
 	if p.SSH != nil {
 		s.SSH = &SharedSSH{Host: p.SSH.Host, Port: p.SSH.Port, User: p.SSH.User, Auth: p.SSH.Auth, Credentials: p.SSH.Credentials}
@@ -246,7 +256,7 @@ func DecodeShare(data []byte) (*Share, error) {
 			return nil, fmt.Errorf("config import: profile %q: invalid pii_rules", name)
 		}
 		for _, k := range p.NeedsLocal {
-			if !IsLocalKey(k) {
+			if !IsLocalKey(k) && !slices.Contains(HandLocalKeys, k) {
 				return nil, fmt.Errorf("config import: profile %q: needs_local names %q, which is not a local key (%s)", name, k, strings.Join(LocalKeys, ", "))
 			}
 		}
@@ -381,6 +391,9 @@ func (f *ConfigFile) Import(s *Share, o ImportOptions) ([]Skipped, error) {
 		if r.User == "" && had {
 			r.User = old.User
 		}
+		if had {
+			r.ProxyCmd = old.ProxyCmd
+		}
 		var missing []string
 		for _, k := range sp.NeedsLocal {
 			if localValue(r, k) == "" {
@@ -388,7 +401,11 @@ func (f *ConfigFile) Import(s *Share, o ImportOptions) ([]Skipped, error) {
 			}
 		}
 		if len(missing) > 0 {
-			skipped = append(skipped, Skipped{name, "needs " + strings.Join(missing, ", ") + " of this machine: give --local " + name + "." + missing[0] + "=..."})
+			how := "give --local " + name + "." + missing[0] + "=..."
+			if slices.Contains(HandLocalKeys, missing[0]) {
+				how = "add " + missing[0] + " to the profile in your config file first"
+			}
+			skipped = append(skipped, Skipped{name, "needs " + strings.Join(missing, ", ") + " of this machine: " + how})
 			if had && o.Replace {
 				next[name] = old
 			}
@@ -412,6 +429,8 @@ func localValue(r rawProfile, key string) string {
 		if r.SSH != nil {
 			return r.SSH.Key
 		}
+	case "proxy_command":
+		return strings.Join(r.ProxyCmd, " ")
 	}
 	return ""
 }
@@ -486,6 +505,13 @@ func (f *ConfigFile) TOML(header string) []byte {
 				q[i] = tomlQuote(d)
 			}
 			fmt.Fprintf(&b, "detectors = [%s]\n", strings.Join(q, ", "))
+		}
+		if r.ProxyCmd != nil {
+			q := make([]string, len(r.ProxyCmd))
+			for i, a := range r.ProxyCmd {
+				q[i] = tomlQuote(a)
+			}
+			fmt.Fprintf(&b, "proxy_command = [%s]\n", strings.Join(q, ", "))
 		}
 		if r.PIIRules != nil {
 			fmt.Fprintf(&b, "pii_rules = %s\n", tomlQuote(*r.PIIRules))

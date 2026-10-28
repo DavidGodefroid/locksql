@@ -121,16 +121,95 @@ docker build --target vault -t locksql .
 
 The console reads `VAULT_ADDR` (and `VAULT_CACERT`, `VAULT_NAMESPACE`) from
 its environment: add `-e VAULT_ADDR=https://vault.example.com` to its
-`docker run`. Log in once as the console account, with the same volumes; the
-token stays in `locksql-home`, out of the agents' reach:
+`docker run`, nothing else. No `vault login` is needed: at start the
+console asks `Vault token for <VAULT_ADDR>:` in its terminal (no echo, which
+the `-it` of its `docker run` allows) and keeps the token in memory for the
+session, never in `locksql-home` or anywhere on disk:
 
 ```sh
-docker run -it --rm --user locksql -e VAULT_ADDR=https://vault.example.com \
-  -v locksql-home:/home/locksql --entrypoint vault locksql login -method=oidc
+docker run -it --rm --name locksql-console --user locksql \
+  -e VAULT_ADDR=https://vault.example.com \
+  -v "$PWD:$PWD" \
+  -v locksql-run:/run/locksql \
+  -v locksql-home:/home/locksql \
+  locksql console --project "$PWD"
 ```
 
-Log in again when the token expires: the console then reports `not
-authenticated or not allowed`.
+Get the token without storing it, then paste it at the prompt:
+
+```sh
+vault login -method=oidc -no-store -token-only
+```
+
+`-no-store -token-only` prints the token and writes no `~/.vault-token`.
+A plain `vault login` would store the token in your account, where the
+agent runs: the agent could read it and fetch the login from Vault itself,
+bypassing the console (`locksql doctor` fails on it). For the same reason,
+do not leave `VAULT_TOKEN` set in that shell. When Vault refuses a read (`not authenticated or not allowed`: the
+token is expired or revoked, or its policy may not read `vault_path`), the
+console asks for a token again; three refusals in a row stop the
+connection.
+
+## Databases that publish no port
+
+A profile with `proxy_command`
+([usage.md](usage.md#databases-that-publish-no-port)) runs its command in the
+console's container, as the `locksql` account. The image has none of the
+clients the recipes use (`ssh`, `docker`, `kubectl`), so a profile using one
+fails with `proxy_command: exec: "ssh": executable file not found in $PATH`.
+Build an image of your own on top of it, with only the client you need:
+
+```dockerfile
+# Dockerfile.proxy
+FROM locksql
+USER root
+RUN apk add --no-cache openssh-client
+USER agent
+```
+
+```sh
+docker build -t locksql -f Dockerfile.proxy .   # after docker build -t locksql .
+docker run --rm --entrypoint ssh locksql -V     # the client is there
+```
+
+Tagging it `locksql` again keeps the commands of this guide unchanged. Add
+`docker-cli` for a `docker exec` reached through `DOCKER_HOST=ssh://...`;
+for `kubectl`, copy a release binary checked against its published SHA-256,
+as the `Dockerfile` does for `vault`, and keep the kubeconfig in
+`locksql-home`. Pass `DOCKER_HOST`, `DOCKER_CONTEXT` or `KUBECONFIG` with
+`-e` on the console's `docker run`; the command inherits them.
+
+**Prefer `ssh` to the Docker host**, even when it is the machine the console
+runs on (`deploy@host.docker.internal`, with
+`--add-host=host.docker.internal:host-gateway` on Linux). The command runs
+without a terminal, so `ssh` needs a key without passphrase and the host key
+already known. Create both in `locksql-home`, as the console account, and
+check the fingerprint `ssh-keyscan` prints against the host's own
+(`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` there):
+
+```sh
+docker run -it --rm --user locksql -v locksql-home:/home/locksql \
+  --add-host=host.docker.internal:host-gateway --entrypoint sh locksql -c '
+    mkdir -p -m 0700 ~/.ssh &&
+    ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/id_ed25519 &&
+    ssh-keyscan -t ed25519 host.docker.internal >> ~/.ssh/known_hosts &&
+    ssh-keygen -lf ~/.ssh/known_hosts && cat ~/.ssh/id_ed25519.pub'
+```
+
+Authorize that public key for a dedicated account on the host, and limit it
+to the one relay it needs (`command="docker exec -i shop-db socat -
+TCP:127.0.0.1:3306",restrict` in its `authorized_keys`): an account that may
+run `docker` is root on that host.
+
+**Do not mount the Docker socket into the console's container** unless you
+accept what follows. With `-v /var/run/docker.sock:/var/run/docker.sock` (and
+`--group-add` the socket's group, since the console does not run as root),
+`docker exec` works from the console's container, but **the console's
+container becomes root on the host**: any process in it, the console or the
+command it runs, can start a privileged container that mounts the host's `/`.
+The agent's container does not get the socket; anything that takes over the
+console, or a `proxy_command` you approve without reading it, does. The
+`ssh` route above confines the same need to one relay command.
 
 ## Wire the agent
 

@@ -163,6 +163,14 @@ type nopClose struct{ engine.Session }
 
 func (nopClose) Close() error { return nil }
 
+func (s nopClose) ShadowedFunctions(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.ShadowedFunctions(ctx, s.Session, db, names)
+}
+
+func (s nopClose) ShadowedOperators(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.ShadowedOperators(ctx, s.Session, db, names)
+}
+
 // leakQueries are the adversarial review round 2 and 3 cases, written
 // against the seeds (big.email under a rule, small(id, label)). Write cases
 // change no data, or only rows they insert themselves; they need a write
