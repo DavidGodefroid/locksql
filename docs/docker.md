@@ -55,7 +55,7 @@ runs each command with the account it needs:
 
 | Command | Runs as | Volumes |
 |---|---|---|
-| `console` | `locksql`, in a container named `locksql-console`, with `--add-host=host.docker.internal:host-gateway` and no log driver | `locksql-run`, `locksql-home` |
+| `console` | `locksql`, in a container named `locksql-console`, confined (no capability, no privilege gain, read-only root with a small `/tmp`, at most 256 processes and 1 GB), with `--add-host=host.docker.internal:host-gateway` and no log driver | `locksql-run`, `locksql-home` |
 | `stats`, `forget` | `locksql` | `locksql-home` |
 | `init`, `config` | you (your uid and gid), with your home mounted: they write the agents' files and your user config; a `config` file must be under the project or your home | |
 | `profile` | you, with `HOME=/tmp` | |
@@ -73,6 +73,8 @@ The launcher reads:
   ([Credentials from Vault](#credentials-from-vault));
 - `LOCKSQL_DOCKER_ARGS`: more `docker run` arguments, split on spaces, for
   example `LOCKSQL_DOCKER_ARGS="--network shop" locksql console`;
+- `LOCKSQL_READONLY_PROJECT=1`: the console mounts the project read-only,
+  but for `.locksql/`, for a project your agents write;
 - `VAULT_ADDR`, `VAULT_NAMESPACE`: passed to the console.
 
 ### Your own build

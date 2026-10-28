@@ -27,7 +27,7 @@ terminals, else `-i`.
 
 | Subcommand | Account | Extra | Why |
 |---|---|---|---|
-| `console` | `locksql` (uid 10001) | `--name locksql-console`, `--log-driver none`, `--add-host=host.docker.internal:host-gateway`, `-e VAULT_ADDR -e VAULT_NAMESPACE`, volumes `locksql-run` and `locksql-home`, `--project PROJECT` unless given | the only holder of credentials; no log driver so `docker logs` keeps no screen; a stopped container of the same name is removed first |
+| `console` | `locksql` (uid 10001) | `--name locksql-console`, `--log-driver none`, `--cap-drop ALL`, `--security-opt no-new-privileges`, `--read-only` with a 64 MB `/tmp` tmpfs, `--pids-limit 256`, `--memory 1g`, `--add-host=host.docker.internal:host-gateway`, `-e VAULT_ADDR -e VAULT_NAMESPACE`, volumes `locksql-run` and `locksql-home`, `--project PROJECT` unless given | the only holder of credentials; no log driver so `docker logs` keeps no screen; a stopped container of the same name is removed first |
 | `stats`, `forget` | `locksql` | volume `locksql-home` | they read the console account's state |
 | `init`, `config` | you (`id -u`:`id -g`) | `-e HOME=$HOME -v $HOME:$HOME` | they write your agents' files and your user config, owned by you |
 | `profile` | you | `-e HOME=/tmp` | it writes `.locksql/config.toml`, yours to edit |
@@ -67,6 +67,9 @@ launcher runs `registry:X.Y.Z`. A launcher run from a clone
 - `LOCKSQL_VAULT=1`: the `-vault` image;
 - `LOCKSQL_DOCKER_ARGS`: extra `docker run` arguments, split on spaces
   (`--network NAME`, `-e DOCKER_HOST=...`).
+- `LOCKSQL_READONLY_PROJECT=1`: the console mounts the project read-only and
+  only `.locksql/` writable (which must be a directory, not a link), for a
+  project your agents write; lea sets it.
 
 ## Install and update
 

@@ -166,16 +166,46 @@ func TestLauncherConsole(t *testing.T) {
 		{"--name", "locksql-console"}, {"--log-driver", "none"}, {"--user", "locksql"},
 		{"--add-host=host.docker.internal:host-gateway"}, {"-e", "VAULT_ADDR"}, {"-e", "VAULT_NAMESPACE"},
 		{"-v", "locksql-run:/run/locksql"}, {"-v", "locksql-home:/home/locksql"},
+		{"--cap-drop", "ALL"}, {"--security-opt", "no-new-privileges"}, {"--read-only"},
+		{"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m"}, {"--pids-limit", "256"}, {"--memory", "1g"},
 	} {
 		if !hasSeq(run, seq...) {
 			t.Errorf("console run lacks %q:\n%q", seq, run)
 		}
+	}
+	if hasSeq(run, "-v", f.project+":"+f.project+":ro") {
+		t.Errorf("project read-only without LOCKSQL_READONLY_PROJECT: %q", run)
 	}
 	if got, want := strings.Join(imageArgs(run, "locksql"), " "), "locksql console --project "+f.project+" --profile uat"; got != want {
 		t.Errorf("image and command %q, want %q", got, want)
 	}
 	if hasSeq(run, "-it") {
 		t.Errorf("a terminal without one: %q", run)
+	}
+}
+
+// LOCKSQL_READONLY_PROJECT=1: the console mounts the project read-only and
+// only .locksql/ writable; a .locksql that is not a directory stops it.
+func TestLauncherConsoleReadOnlyProject(t *testing.T) {
+	f := newLauncherFixture(t)
+	out, calls, err := f.run(t, f.project, []string{"LOCKSQL_READONLY_PROJECT=1"}, "console")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	run := lastRun(t, calls)
+	dir := filepath.Join(f.project, ".locksql")
+	if !hasSeq(run, "-v", f.project+":"+f.project+":ro") || !hasSeq(run, "-v", dir+":"+dir) {
+		t.Errorf("%q", run)
+	}
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), dir); err != nil {
+		t.Fatal(err)
+	}
+	out, calls, err = f.run(t, f.project, []string{"LOCKSQL_READONLY_PROJECT=1"}, "console")
+	if err == nil || !strings.Contains(out, "is not a directory") || len(calls) != 0 {
+		t.Errorf("symlinked .locksql: %v, calls %q\n%s", err, calls, out)
 	}
 }
 
