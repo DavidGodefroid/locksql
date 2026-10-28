@@ -12,7 +12,8 @@ This file records the changes a user or an agent has to know about.
   applies the read function allowlist to writes: every function an
   `INSERT`, `REPLACE`, `UPDATE` or `DELETE` calls, at any depth, must be
   allowlisted (plus key generators such as `gen_random_uuid`, `nextval`,
-  `UUID`, `SYS_GUID`, `randomblob`), or the write is refused with
+  `UUID`, `SYS_GUID`, `randomblob`, MySQL `VALUES(col)` in `ON DUPLICATE
+  KEY UPDATE`), or the write is refused with
   `E_FUNCTION`. Schema-qualified calls, calls through quoted or non-ASCII
   names or with a blank before `(`, `CALL`, `MERGE` and writes the parser
   does not read are refused, and every column the write names is resolved

@@ -1277,7 +1277,7 @@ func piiNames(p Prov) string {
 
 // call is the provenance of a function call.
 func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
-	if !funcAllowed(an.d, f.Name) && !(an.env.WriteFuncs && writeFuncs[an.d][f.Name]) {
+	if !funcAllowed(an.d, f.Name) && !(an.env.WriteFuncs && writeFuncAllowed(an.d, f)) {
 		return Prov{}, refusef(refusal.Function, "function %s is not in the allowlist", strings.ToLower(f.Name))
 	}
 	if err := an.checkSizeArgs(f); err != nil {

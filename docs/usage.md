@@ -825,7 +825,8 @@ With `"allowlist"`:
   `RETURNING`), must be on the read allowlist of the dialect or one of the
   key generators: PostgreSQL `gen_random_uuid`, `uuidv4`, `uuidv7`,
   `nextval`; MySQL/MariaDB `UUID`, `UUID_SHORT`, `UUID_TO_BIN`,
-  `BIN_TO_UUID`, `SYS_GUID`; SQLite `randomblob`. `setval`,
+  `BIN_TO_UUID`, `SYS_GUID`, and `VALUES(col)` in `ON DUPLICATE KEY UPDATE`;
+  SQLite `randomblob`. `setval`,
   `LAST_INSERT_ID(n)` and session or catalog functions are refused;
 - schema-qualified calls (`cron.schedule(...)`, `pg_catalog.lower(...)`),
   calls through a quoted name or a name with non-ASCII letters
