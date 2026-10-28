@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -198,7 +199,9 @@ func TestRunsInEmptyDir(t *testing.T) {
 	if home, err := os.UserHomeDir(); err == nil && dir == home {
 		t.Errorf("working directory = %q, the home", dir)
 	}
-	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm()&0o077 != 0 {
+	// Windows reports no Unix permission bits; MkdirTemp's directory there
+	// inherits the user's temporary directory's ACL.
+	if fi, err := os.Stat(dir); err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0) {
 		t.Errorf("working directory %q: %v, %v", dir, fi, err)
 	}
 	c.Close()

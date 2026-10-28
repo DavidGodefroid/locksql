@@ -719,7 +719,7 @@ func pathsIn(arg string) []string {
 	var out []string
 	add := func(p string) {
 		out = append(out, filepath.Clean(p))
-		if k := strings.IndexAny(p, strings.Trim(pathDelims, `/\\`)); k > 0 && filepath.IsAbs(p[:k]) {
+		if k := strings.IndexAny(p, strings.Trim(pathDelims, "/\\")); k > 0 && filepath.IsAbs(p[:k]) {
 			out = append(out, filepath.Clean(p[:k]))
 		}
 	}
