@@ -162,8 +162,9 @@ The release chain is pinned end to end:
 - `release.yml` pins the GoReleaser, cosign and syft versions and does not
   use `check-latest`;
 - the cosign identity is the release workflow run for a version tag, the
-  same in `scripts/install.sh`, `locksql update` and `.goreleaser.yaml`
-  (`ReleaseCertIdentityRegexp`, checked by `installsh_test.go`).
+  same in `scripts/install.sh`, the launcher `scripts/locksql` and `.goreleaser.yaml`
+  (`ReleaseCertIdentityRegexp`, checked by `installsh_test.go` and
+  `launcher_test.go`).
 
 Tags are created by the maintainer only (the `protect release tags` ruleset
 restricts creating, moving and deleting `v*` tags; `protect main` requires a

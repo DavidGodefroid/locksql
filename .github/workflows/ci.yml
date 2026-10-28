@@ -105,6 +105,21 @@ jobs:
         run: |
           docker run --rm -v locksql-run:/run/locksql locksql doctor
           docker run --rm --user locksql -v locksql-run:/run/locksql -v locksql-home:/home/locksql locksql doctor
+      - name: the launcher runs every command in the image
+        run: |
+          set -x
+          sh scripts/locksql version | grep -x 'locksql launcher dev (image locksql)'
+          mkdir -p "$RUNNER_TEMP/proj" && cd "$RUNNER_TEMP/proj"
+          sh "$GITHUB_WORKSPACE/scripts/locksql" init claude
+          grep -Eq '"command": ?"locksql"' .mcp.json
+          test "$(stat -c %u .mcp.json)" = "$(id -u)"
+          sh "$GITHUB_WORKSPACE/scripts/locksql" profile add --profile local --engine sqlite --path app.db
+          sh "$GITHUB_WORKSPACE/scripts/locksql" doctor --fix --yes
+          test "$(stat -c %u .locksql)" = 10001
+          code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" status --profile local || code=$?
+          test "$code" = 2 # no console is running
+          code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" install 2>err || code=$?
+          test "$code" = 1 && grep -q 'runs in Docker' err
       - name: docker build --target vault
         run: |
           docker build --target vault -t locksql:vault .

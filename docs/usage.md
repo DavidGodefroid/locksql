@@ -5,28 +5,23 @@ running the console, and what the agent can do through the CLI and the MCP
 server. locksql runs in Docker: [docker.md](docker.md) is the setup guide,
 and the [README](../README.md) has the configuration reference.
 
-Commands are written as `locksql <command>` for short. In Docker they run
-through the image: the client commands (`status`, `tables`, `plan`, `run`,
-`doctor`, ...) as the agent,
-
-```sh
-docker run --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql status
-```
-
-and the console as the console account ([section 2](#2-start-the-console)).
+`locksql` is the launcher ([docker.md](docker.md#install)): every command
+runs in the image, with the account it needs. The client commands
+(`status`, `tables`, `plan`, `run`, `doctor`, ...) run as the agent, the
+console as the console account ([section 2](#2-start-the-console)),
+`init` and `profile` as you ([what runs where](docker.md#what-runs-where)).
 
 ## 1. Set up
 
-[docker.md](docker.md) sets up a project: build the image, `locksql init`
+[docker.md](docker.md) sets up a project: install the launcher, `locksql init`
 for the agent's files, `locksql profile add` for a database profile,
-`locksql doctor --fix` as root for the console account's access, then wire
-the agent and start the console.
+`locksql doctor --fix` (as root, in the image) for the console account's
+access, then start the console.
 
 ### `locksql profile add`
 
 ```sh
-docker run -it --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:$PWD" -w "$PWD" \
-  locksql profile add [--project DIR] [--profile NAME --engine E (--path FILE | --host H [--port N]
+locksql profile add [--project DIR] [--profile NAME --engine E (--path FILE | --host H [--port N]
                       [--user U] [--database D] [--tls MODE]
                       [--credentials ask|vault [--vault-path P]])]
 ```
@@ -55,20 +50,16 @@ root, else the current directory, or `--project`.
 
 ### Agent wiring
 
-The agent starts the MCP server as a throwaway container of the image, as
-`agent`, with the project and the socket volume mounted: the command is
-`sh` and its arguments run `docker run -i ... locksql mcp`. `sh -c` expands
-`$PWD`, the directory the agent runs in: start the agent at the project
-root. `locksql init <agent>` writes the agent's instructions (skill, rules,
-`AGENTS.md` or `GEMINI.md` section) and an MCP entry `locksql mcp`, which is
-not on your machine: replace that entry with the command below.
+`locksql init <agent>` writes the agent's instructions (skill, rules,
+`AGENTS.md` or `GEMINI.md` section) and an MCP entry `locksql mcp`. That is
+the launcher: the agent starts the MCP server in a throwaway container of
+the image, as `agent`, with the project and the socket volume mounted. Start
+the agent at the project root, or below it.
 
-Claude Code, for the project (`.mcp.json`):
+Claude Code, for every project instead of one (`~/.claude.json`):
 
 ```sh
-claude mcp remove --scope project locksql
-claude mcp add --scope project locksql -- \
-  sh -c 'exec docker run -i --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql mcp'
+claude mcp add --scope user locksql -- locksql mcp
 ```
 
 Codex, in `~/.codex/config.toml` (`tool_timeout_sec` covers the console's
@@ -76,30 +67,31 @@ Codex, in `~/.codex/config.toml` (`tool_timeout_sec` covers the console's
 
 ```toml
 [mcp_servers.locksql]
-command = "sh"
-args = ["-c", "exec docker run -i --rm -v \"$PWD:$PWD\" -w \"$PWD\" -v locksql-run:/run/locksql locksql mcp"]
+command = "locksql"
+args = ["mcp"]
 tool_timeout_sec = 600
 ```
 
 Gemini CLI, in `.gemini/settings.json` (`timeout` is in milliseconds), and
 Cursor, in `.cursor/mcp.json` (without `timeout`), under `mcpServers` next to
-any other server, in place of the entry `init` wrote:
+any other server:
 
 ```json
 {
   "mcpServers": {
     "locksql": {
-      "command": "sh",
-      "args": ["-c", "exec docker run -i --rm -v \"$PWD:$PWD\" -w \"$PWD\" -v locksql-run:/run/locksql locksql mcp"],
+      "command": "locksql",
+      "args": ["mcp"],
       "timeout": 600000
     }
   }
 }
 ```
 
-An agent that itself runs in a container, with the `locksql` binary inside,
-keeps `locksql mcp` as written by `init`
-([docker.md](docker.md#agent-in-its-own-container)).
+An entry an earlier version had you write, `sh -c 'exec docker run -i ...
+locksql mcp'`, keeps working; `locksql mcp` replaces it. An agent that itself
+runs in a container, with the `locksql` binary inside, keeps `locksql mcp`
+too ([docker.md](docker.md#agent-in-its-own-container)).
 
 Instructions written by an earlier version describe `tok_` token values,
 which no longer exist (mask mode `hash` is gone). Existing instructions are
@@ -113,8 +105,7 @@ again.
 For a team that commits its database list with the repository:
 
 ```sh
-docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:$PWD" -w "$PWD" \
-  locksql init claude          # or codex, cursor, gemini; several at once is fine
+locksql init claude          # or codex, cursor, gemini; several at once is fine
 ```
 
 `init` writes project files only, at the project root (the directory holding
@@ -443,14 +434,15 @@ vault_path  = "database/creds/reporting-ro"
 locksql doctor [--profile P] [--fix [--yes]]
 ```
 
-Run it from either container: as `agent` (the default user of the image),
-it checks what the agent's side sees; as the console account, what the
-console sees:
+`locksql doctor` runs as `agent` and checks what the agent's side sees.
+What the console sees, from the console account, takes a `docker run` of the
+image ([docker.md](docker.md#wire-the-agent)):
 
 ```sh
-docker run --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql doctor
+locksql doctor
 docker run --rm --user locksql -v "$PWD:$PWD" -w "$PWD" \
-  -v locksql-run:/run/locksql -v locksql-home:/home/locksql locksql doctor
+  -v locksql-run:/run/locksql -v locksql-home:/home/locksql \
+  ghcr.io/davidgodefroid/locksql:X.Y.Z doctor
 ```
 
 Each check prints ✓ (ok), ▲ (warning) or ✗ (failed), with a remediation
@@ -483,11 +475,11 @@ console account's login session.
 one (`repaired: ...` or `not repaired: ...`) and runs the checks again. The
 repairs are small and idempotent; a second run finds nothing to do. The one a
 Docker setup needs is the project's: the console account, which exists only
-in the image, must own `.locksql/` and read the configs. Run it there, as
-root, from the project directory:
+in the image, must own `.locksql/` and read the configs. The launcher runs
+`doctor --fix` there, as root, from the project directory:
 
 ```sh
-docker run --rm --user 0 -v "$PWD:$PWD" -w "$PWD" locksql doctor --fix --yes
+locksql doctor --fix --yes
 ```
 
 | Check | Repair |
@@ -505,16 +497,15 @@ container, which runs no console: read the `project` lines.
 In a terminal you keep in view, from the project directory:
 
 ```sh
-docker run -it --rm --name locksql-console --user locksql \
-  -v "$PWD:$PWD" -v locksql-run:/run/locksql -v locksql-home:/home/locksql \
-  locksql console --project "$PWD" [--profile dev] [--auto] [--allow-unmask] [--show-results]
+locksql console [--profile dev] [--auto] [--allow-unmask] [--show-results]
 ```
 
 Without `--profile` the console uses the only profile, or asks which one when
 there are several. [docker.md](docker.md#run-the-console) has the volumes,
 Vault and the networks a database needs.
 
-`--project` names the project directory (default: the current directory);
+`--project` names the project directory (default: the launcher's project,
+the nearest directory up that holds `.locksql/`);
 the console and the agent must agree on it, since it selects the socket. A
 console on a project prints `serving agents in <root>`.
 
@@ -757,11 +748,11 @@ The approved policy is stored outside the repository, in
 `locksql stats` counts the refusals in the audit log: by
 [refusal code](#refusal-codes), then by code and the token the check stopped
 at (`LIKE`, `FOR`, a function name, ...), most frequent first. It reads
-the local file and nothing else. Run it as the account that runs the console,
-with its volume, or point it at a copy of the log:
+the local file and nothing else. The launcher runs it as the account that runs the
+console, with its volume; `--log` points it at a copy of the log in the
+project:
 
 ```sh
-docker run --rm --user locksql -v locksql-home:/home/locksql locksql stats [--log PATH] [--top N]
 locksql stats [--log PATH] [--top N]        # text, for you
 locksql stats --export > refusals.json      # anonymised, to attach to an issue
 ```

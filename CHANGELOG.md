@@ -6,6 +6,37 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
+### Changed
+
+- **One `locksql` command, backed by Docker.** `scripts/install.sh` now
+  installs the `locksql` launcher, a shell script, instead of a binary:
+  every command, `locksql console`, `locksql version`, `locksql mcp` and the
+  others, runs in the release image `ghcr.io/davidgodefroid/locksql:X.Y.Z`
+  (`-vault` with the vault CLI, `LOCKSQL_VAULT=1`), with the account and the
+  volumes it needs (console as `locksql`, `init`/`profile` as you,
+  `doctor --fix` as root, the rest as `agent`). The `locksql mcp` that
+  `locksql init` writes now works as is: the `claude mcp add ... sh -c
+  'exec docker run ...'` step is gone (such entries keep working).
+  `locksql version` prints the launcher's and the image's versions;
+  `locksql update` replaces the launcher (signature and checksum checked)
+  and pulls the image. `LOCKSQL_IMAGE` runs an image of your own,
+  `LOCKSQL_DOCKER_ARGS` adds `docker run` arguments. The release publishes
+  the image, signed with cosign, and no longer the `.deb`, `.rpm` and `.apk`
+  packages of the binary; the archives keep the binary, for an agent that
+  runs in a container of its own, and now hold the launcher.
+
+### Removed
+
+- **The host install.** The binary refuses `locksql install`,
+  `locksql setup` and its own `locksql update` ("locksql runs in Docker"),
+  and bare `locksql` prints the help instead of leading to the host setup.
+  Migrating from a host install: run the new `install.sh`, which replaces
+  the binary with the launcher; what `sudo locksql install` created (the
+  `locksql` account and `locksql-clients` group, `/etc/locksql/`, the socket
+  directory and `/etc/tmpfiles.d/locksql.conf`) stays until you remove it
+  ([docs/docker.md](docs/docker.md#migrating-from-a-host-install)). The
+  code goes in a later release.
+
 ### Added
 
 - **Wildcards inside a PII rule segment.** A `*` may now start or end a

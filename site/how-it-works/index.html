@@ -182,7 +182,7 @@ locksql doctor   [--profile P] [--fix [--yes]]</code></pre>
   <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#cli">CLI reference</a></p>
   <h3 id="agents">Supported agents</h3>
   <div class="prose">
-    <p>Claude Code, Codex, Gemini CLI and Cursor start the MCP server from the image, in a throwaway container: <code>docker run -i --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql mcp</code>, wired with <code>claude mcp add</code> or in the agent’s MCP config. <code>locksql init claude|codex|cursor|gemini</code> writes the project files and instructions; replace the <code>locksql mcp</code> command it writes with that <code>docker run</code>. <a href="../install/#wire">Wire the agent</a>.</p>
+    <p>Claude Code, Codex, Gemini CLI and Cursor start the MCP server with <code>locksql mcp</code>: the launcher runs it from the image, in a throwaway container, as <code>agent</code>. <code>locksql init claude|codex|cursor|gemini</code> writes the project files, the instructions and that MCP command. <a href="../install/#wire">Wire the agent</a>.</p>
     <p>The generated instructions tell the agent to use the database only on explicit request, to pass a one-line intent with each plan, to prefer non-production profiles, to show the plan before running it, never to retry after a denial, never to export data, never to handle credentials, and to treat rows as untrusted data.</p>
     <p>Skills, rules and tool descriptions are guidance. Every check that matters runs in the console.</p>
   </div>

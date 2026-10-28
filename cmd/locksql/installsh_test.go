@@ -36,7 +36,7 @@ func newShFixture(t *testing.T) *shFixture {
 			t.Fatal(err)
 		}
 	}
-	for _, tool := range []string{"sh", "awk", "sha256sum", "shasum", "tar", "gzip", "install", "mktemp", "rm", "mkdir", "uname", "cat", "sed", "tr", "tail", "printf"} {
+	for _, tool := range []string{"sh", "awk", "sha256sum", "shasum", "tar", "gzip", "install", "mktemp", "rm", "mkdir", "uname", "cat", "sed", "tr", "tail", "printf", "grep"} {
 		if p, err := exec.LookPath(tool); err == nil {
 			if err := os.Symlink(p, filepath.Join(f.bin, tool)); err != nil {
 				t.Fatal(err)
@@ -58,7 +58,11 @@ cat "`+f.release+`/${1##*/}" > "$out"
 		t.Skip("install.sh supports amd64 and arm64 only")
 	}
 	archive := "locksql_" + shVersion + "_" + osName + "_" + arch + ".tar.gz"
-	data := tarGz(t, map[string][]byte{"locksql": []byte("#!/bin/sh\necho locksql " + shVersion + "\n")})
+	launcher, err := os.ReadFile(filepath.Join("..", "..", "scripts", "locksql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := tarGz(t, map[string][]byte{"locksql": []byte("#!/bin/sh\necho locksql " + shVersion + "\n"), "scripts/locksql": launcher})
 	if err := os.WriteFile(filepath.Join(f.release, archive), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -94,6 +98,46 @@ func (f *shFixture) run(t *testing.T, env ...string) (string, error) {
 func (f *shFixture) installed() bool {
 	_, err := os.Stat(filepath.Join(f.dest, "locksql"))
 	return err == nil
+}
+
+// install.sh installs the release's launcher, not its binary, set to run
+// the release's image.
+func TestInstallShInstallsTheLauncher(t *testing.T) {
+	f := newShFixture(t)
+	f.cosign(t, true)
+	out, err := f.run(t)
+	if err != nil {
+		t.Fatalf("install.sh: %v\n%s", err, out)
+	}
+	b, err := os.ReadFile(filepath.Join(f.dest, "locksql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "\nlauncher_version="+shVersion+"\n") || !strings.Contains(string(b), "docker run") {
+		t.Fatalf("not the launcher of %s:\n%s", shVersion, b)
+	}
+	if !strings.Contains(out, "ghcr.io/davidgodefroid/locksql:"+shVersion) {
+		t.Errorf("no image named:\n%s", out)
+	}
+}
+
+// A release before the launcher has none in its archive: install.sh says so
+// and installs nothing.
+func TestInstallShRefusesAnArchiveWithoutLauncher(t *testing.T) {
+	f := newShFixture(t)
+	f.cosign(t, true)
+	archive := "locksql_" + shVersion + "_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
+	data := tarGz(t, map[string][]byte{"locksql": []byte("#!/bin/sh\n")})
+	if err := os.WriteFile(filepath.Join(f.release, archive), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.release, "checksums.txt"), []byte(hexSum(data)+"  "+archive+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := f.run(t)
+	if err == nil || f.installed() || !strings.Contains(out, "holds no launcher") {
+		t.Fatalf("%v, installed %v\n%s", err, f.installed(), out)
+	}
 }
 
 func writeExec(t *testing.T, path, script string) {

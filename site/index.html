@@ -148,27 +148,22 @@
 
 <section aria-labelledby="quick-start">
   <h2 id="quick-start">Quick start</h2>
-  <p class="prose">locksql runs in Docker: nothing to install but Docker. A first approved query, from your project directory:</p>
-  <pre tabindex="0" class="term"><code># 1. Build the image (nothing else to install)
-docker build -t locksql https://github.com/DavidGodefroid/locksql.git
+  <p class="prose">locksql runs in Docker: nothing on your machine but Docker and the <code>locksql</code> launcher. A first approved query, from your project directory:</p>
+  <pre tabindex="0" class="term"><code># 1. Install the launcher (it runs every locksql command in Docker)
+V=vX.Y.Z
+curl -fsSLO "https://raw.githubusercontent.com/DavidGodefroid/locksql/$V/scripts/install.sh"
+less install.sh && LOCKSQL_VERSION=$V sh install.sh
 
-# 2. In your project: Claude Code's files, a database profile, then give
-#    .locksql/ to the console account (as root, inside the image)
-docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:$PWD" -w "$PWD" locksql init claude
-docker run -it --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:$PWD" -w "$PWD" locksql profile add
-docker run --rm --user 0 -v "$PWD:$PWD" -w "$PWD" locksql doctor --fix --yes
+# 2. In your project: Claude Code's files (its MCP server is `locksql mcp`),
+#    a database profile, then give .locksql/ to the console account
+locksql init claude
+locksql profile add
+locksql doctor --fix --yes
 
-# 3. Point the agent's MCP server at the image
-claude mcp remove --scope project locksql
-claude mcp add --scope project locksql -- \
-  sh -c 'exec docker run -i --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql mcp'
-
-# 4. In a terminal you keep in view, start the console
-docker run -it --rm --name locksql-console --user locksql \
-  -v "$PWD:$PWD" -v locksql-run:/run/locksql -v locksql-home:/home/locksql \
-  locksql console --project "$PWD"</code></pre>
+# 3. In a terminal you keep in view, start the console
+locksql console</code></pre>
   <p class="prose">Then ask your agent, in the project: “how many orders were placed yesterday?”. Each query waits for your <code>y</code> in the console.</p>
-  <p class="prose"><code>init claude</code> writes <code>.mcp.json</code> with <code>locksql mcp</code>, which is not on your machine: step 3 replaces that entry with the <code>docker run</code> above. A database on your machine is <code>host.docker.internal</code> (on Linux, add <code>--add-host=host.docker.internal:host-gateway</code> to the console’s <code>docker run</code>), and <code>credentials = "keychain"</code> is not available in a container: use <code>ask</code> or <code>vault</code>.</p>
+  <p class="prose">Every command runs in the image, with the account it needs: the console as <code>locksql</code> in its own container, the agent’s MCP server as <code>agent</code> in a throwaway one. A database on your machine is <code>host.docker.internal</code>, and <code>credentials = "keychain"</code> is not available in a container: use <code>ask</code> or <code>vault</code>.</p>
   <p><a href="install/">The full Docker setup</a></p>
 </section>
 

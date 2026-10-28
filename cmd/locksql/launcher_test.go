@@ -1,0 +1,374 @@
+//go:build unix
+
+package main
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// launcherFixture runs scripts/locksql, the host launcher, with a fake
+// docker that records each call, one argument per line, a call ending with
+// "--". PATH holds only the tools the launcher needs.
+type launcherFixture struct {
+	root, bin, project, calls, script string
+	env                               []string
+}
+
+func newLauncherFixture(t *testing.T) *launcherFixture {
+	t.Helper()
+	root := t.TempDir()
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	f := &launcherFixture{
+		root:    root,
+		bin:     filepath.Join(root, "bin"),
+		project: filepath.Join(root, "project"),
+		calls:   filepath.Join(root, "calls"),
+	}
+	for _, d := range []string{f.bin, filepath.Join(f.project, ".locksql"), filepath.Join(f.project, "sub")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tool := range []string{"sh", "dirname", "id", "cat", "printf", "awk", "sha256sum", "shasum", "tar", "gzip", "install", "mktemp", "rm", "uname", "sed", "tr", "tail", "grep"} {
+		if p, err := exec.LookPath(tool); err == nil {
+			if err := os.Symlink(p, filepath.Join(f.bin, tool)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// docker inspect prints DOCKER_INSPECT; docker run ... version prints
+	// the image's version.
+	f.fakeDocker(t)
+	launcher, err := os.ReadFile(filepath.Join("..", "..", "scripts", "locksql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.script = filepath.Join(root, "locksql")
+	writeExec(t, f.script, string(launcher))
+	f.env = []string{"PATH=" + f.bin, "HOME=" + filepath.Join(root, "home")}
+	return f
+}
+
+func (f *launcherFixture) fakeDocker(t *testing.T) {
+	writeExec(t, filepath.Join(f.bin, "docker"), `#!/bin/sh
+for a in "$@"; do printf '%s\n' "$a"; done >> '`+f.calls+`'
+echo -- >> '`+f.calls+`'
+case "$1" in
+inspect) printf '%s\n' "${DOCKER_INSPECT:-}" ;;
+run) for a in "$@"; do [ "$a" = version ] && echo "locksql 9.9.9"; done ;;
+esac
+exit 0
+`)
+}
+
+// setVersion makes the launcher one a release installed.
+func (f *launcherFixture) setVersion(t *testing.T, v string) {
+	t.Helper()
+	b, err := os.ReadFile(f.script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := strings.Replace(string(b), "\nlauncher_version=dev\n", "\nlauncher_version="+v+"\n", 1)
+	writeExec(t, f.script, s)
+}
+
+// run runs the launcher with args from dir, and returns its output and the
+// docker calls, each a list of arguments.
+func (f *launcherFixture) run(t *testing.T, dir string, env []string, args ...string) (string, [][]string, error) {
+	t.Helper()
+	_ = os.Remove(f.calls)
+	cmd := exec.Command(filepath.Join(f.bin, "sh"), append([]string{f.script}, args...)...)
+	cmd.Dir = dir
+	cmd.Env = append(append([]string{}, f.env...), env...)
+	out, err := cmd.CombinedOutput()
+	var calls [][]string
+	b, _ := os.ReadFile(f.calls)
+	var cur []string
+	for _, l := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
+		if l == "--" {
+			calls = append(calls, cur)
+			cur = nil
+		} else if l != "" {
+			cur = append(cur, l)
+		}
+	}
+	return string(out), calls, err
+}
+
+// lastRun is the last `docker run` call.
+func lastRun(t *testing.T, calls [][]string) []string {
+	t.Helper()
+	for i := len(calls) - 1; i >= 0; i-- {
+		if len(calls[i]) > 0 && calls[i][0] == "run" {
+			return calls[i]
+		}
+	}
+	t.Fatalf("no docker run in %q", calls)
+	return nil
+}
+
+// hasSeq reports whether args hold seq, in order and adjacent.
+func hasSeq(args []string, seq ...string) bool {
+	for i := 0; i+len(seq) <= len(args); i++ {
+		ok := true
+		for j, s := range seq {
+			if args[i+j] != s {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+// imageArgs are the arguments from the image on: the image and its command
+// (the account locksql of --user is not the image locksql).
+func imageArgs(args []string, image string) []string {
+	for i, a := range args {
+		if a == image && (i == 0 || args[i-1] != "--user") {
+			return args[i:]
+		}
+	}
+	return nil
+}
+
+// The console runs as the console account, in its named container, with
+// the socket and home volumes, on the project found up from here.
+func TestLauncherConsole(t *testing.T) {
+	f := newLauncherFixture(t)
+	out, calls, err := f.run(t, filepath.Join(f.project, "sub"), nil, "console", "--profile", "uat")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	run := lastRun(t, calls)
+	for _, seq := range [][]string{
+		{"run", "--rm", "-v", f.project + ":" + f.project, "-w", filepath.Join(f.project, "sub")},
+		{"--name", "locksql-console"}, {"--log-driver", "none"}, {"--user", "locksql"},
+		{"--add-host=host.docker.internal:host-gateway"}, {"-e", "VAULT_ADDR"}, {"-e", "VAULT_NAMESPACE"},
+		{"-v", "locksql-run:/run/locksql"}, {"-v", "locksql-home:/home/locksql"},
+	} {
+		if !hasSeq(run, seq...) {
+			t.Errorf("console run lacks %q:\n%q", seq, run)
+		}
+	}
+	if got, want := strings.Join(imageArgs(run, "locksql"), " "), "locksql console --project "+f.project+" --profile uat"; got != want {
+		t.Errorf("image and command %q, want %q", got, want)
+	}
+	if hasSeq(run, "-it") {
+		t.Errorf("a terminal without one: %q", run)
+	}
+}
+
+// --project given is kept, not doubled; a stopped console of the same name
+// is removed first.
+func TestLauncherConsoleProjectAndStaleContainer(t *testing.T) {
+	f := newLauncherFixture(t)
+	out, calls, err := f.run(t, f.root, []string{"DOCKER_INSPECT=false"}, "console", "--project=/elsewhere")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := strings.Join(imageArgs(lastRun(t, calls), "locksql"), " "); got != "locksql console --project=/elsewhere" {
+		t.Errorf("command %q", got)
+	}
+	removed := false
+	for _, c := range calls {
+		if hasSeq(c, "rm", "locksql-console") {
+			removed = true
+		}
+	}
+	if !removed {
+		t.Errorf("stopped console not removed: %q", calls)
+	}
+}
+
+// Each command runs with the account and the volumes it needs.
+func TestLauncherAccountsPerCommand(t *testing.T) {
+	f := newLauncherFixture(t)
+	me := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
+	home := filepath.Join(f.root, "home")
+	for _, tc := range []struct {
+		args       []string
+		want, deny [][]string
+	}{
+		{[]string{"mcp"}, [][]string{{"-i"}, {"-v", "locksql-run:/run/locksql"}}, [][]string{{"-it"}, {"--user"}, {"-v", "locksql-home:/home/locksql"}}},
+		{[]string{"status", "--json"}, [][]string{{"-v", "locksql-run:/run/locksql"}}, [][]string{{"--user"}, {"-v", "locksql-home:/home/locksql"}}},
+		{[]string{"plan", "--profile", "p", "SELECT 1"}, [][]string{{"-v", "locksql-run:/run/locksql"}}, [][]string{{"--user"}}},
+		{[]string{"doctor"}, [][]string{{"-v", "locksql-run:/run/locksql"}}, [][]string{{"--user"}}},
+		{[]string{"doctor", "--fix", "--yes"}, [][]string{{"--user", "0"}}, [][]string{{"-v", "locksql-run:/run/locksql"}}},
+		{[]string{"init", "claude"}, [][]string{{"--user", me}, {"-e", "HOME=" + home}, {"-v", home + ":" + home}}, [][]string{{"-v", "locksql-run:/run/locksql"}}},
+		{[]string{"profile", "add"}, [][]string{{"--user", me}, {"-e", "HOME=/tmp"}}, [][]string{{"-v", "locksql-run:/run/locksql"}}},
+		{[]string{"stats", "--top", "3"}, [][]string{{"--user", "locksql"}, {"-v", "locksql-home:/home/locksql"}}, [][]string{{"-v", "locksql-run:/run/locksql"}}},
+		{[]string{"forget", "--profile", "p"}, [][]string{{"--user", "locksql"}, {"-v", "locksql-home:/home/locksql"}}, nil},
+		{nil, [][]string{{"-v", "locksql-run:/run/locksql"}}, [][]string{{"--user"}}},
+	} {
+		out, calls, err := f.run(t, f.project, nil, tc.args...)
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", tc.args, err, out)
+		}
+		run := lastRun(t, calls)
+		for _, seq := range tc.want {
+			if !hasSeq(run, seq...) {
+				t.Errorf("%v: lacks %q:\n%q", tc.args, seq, run)
+			}
+		}
+		for _, seq := range tc.deny {
+			if hasSeq(run, seq...) {
+				t.Errorf("%v: has %q:\n%q", tc.args, seq, run)
+			}
+		}
+		if got, want := strings.Join(imageArgs(run, "locksql")[1:], " "), strings.Join(tc.args, " "); got != want {
+			t.Errorf("%v: command %q", tc.args, got)
+		}
+		if !hasSeq(run, "-v", f.project+":"+f.project) {
+			t.Errorf("%v: project not mounted: %q", tc.args, run)
+		}
+	}
+}
+
+// Outside any project the directory itself is mounted.
+func TestLauncherOutsideAProject(t *testing.T) {
+	f := newLauncherFixture(t)
+	dir := filepath.Join(f.root, "bin")
+	_, calls, err := f.run(t, dir, nil, "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run := lastRun(t, calls); !hasSeq(run, "-v", dir+":"+dir, "-w", dir) {
+		t.Errorf("%q", run)
+	}
+}
+
+// The image: a release's launcher runs its own version from the registry,
+// with the vault variant on request; LOCKSQL_IMAGE overrides it.
+func TestLauncherImage(t *testing.T) {
+	f := newLauncherFixture(t)
+	f.setVersion(t, "1.2.3")
+	for _, tc := range []struct {
+		env  []string
+		want string
+	}{
+		{nil, "ghcr.io/davidgodefroid/locksql:1.2.3"},
+		{[]string{"LOCKSQL_VAULT=1"}, "ghcr.io/davidgodefroid/locksql:1.2.3-vault"},
+		{[]string{"LOCKSQL_IMAGE=my/locksql:x"}, "my/locksql:x"},
+	} {
+		_, calls, err := f.run(t, f.project, tc.env, "status")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if imageArgs(lastRun(t, calls), tc.want) == nil {
+			t.Errorf("%v: image %q not run: %q", tc.env, tc.want, lastRun(t, calls))
+		}
+	}
+}
+
+// version prints the launcher's version and its image's.
+func TestLauncherVersion(t *testing.T) {
+	f := newLauncherFixture(t)
+	f.setVersion(t, "1.2.3")
+	out, calls, err := f.run(t, f.project, nil, "version")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "locksql launcher 1.2.3 (image ghcr.io/davidgodefroid/locksql:1.2.3)") || !strings.Contains(out, "locksql 9.9.9") {
+		t.Errorf("output:\n%s", out)
+	}
+	if got := imageArgs(lastRun(t, calls), "ghcr.io/davidgodefroid/locksql:1.2.3"); len(got) != 2 || got[1] != "version" {
+		t.Errorf("run %q", lastRun(t, calls))
+	}
+}
+
+// LOCKSQL_DOCKER_ARGS go before the image, split on spaces.
+func TestLauncherExtraDockerArgs(t *testing.T) {
+	f := newLauncherFixture(t)
+	_, calls, err := f.run(t, f.project, []string{"LOCKSQL_DOCKER_ARGS=--network shop"}, "console")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := lastRun(t, calls)
+	if !hasSeq(run, "--network", "shop") || len(imageArgs(run, "shop")) <= len(imageArgs(run, "locksql")) {
+		t.Errorf("%q", run)
+	}
+}
+
+func TestLauncherWithoutDocker(t *testing.T) {
+	f := newLauncherFixture(t)
+	if err := os.Remove(filepath.Join(f.bin, "docker")); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"status"}, {"console"}} {
+		out, _, err := f.run(t, f.project, nil, args...)
+		if err == nil || !strings.Contains(out, "docker is required") {
+			t.Errorf("%v: %v\n%s", args, err, out)
+		}
+	}
+}
+
+// update replaces the launcher with a release's, after the signature and
+// checksum checks, then pulls that release's image.
+func TestLauncherUpdate(t *testing.T) {
+	f := newLauncherFixture(t)
+	f.setVersion(t, "0.9.0")
+	rel := newShFixture(t)
+	rel.cosign(t, true)
+	for _, tool := range []string{"curl", "cosign"} {
+		if err := os.Symlink(filepath.Join(rel.bin, tool), filepath.Join(f.bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, calls, err := f.run(t, f.project, nil, "update", "v"+shVersion)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	b, _ := os.ReadFile(f.script)
+	if !strings.Contains(string(b), "\nlauncher_version="+shVersion+"\n") {
+		t.Fatalf("launcher not replaced:\n%s", out)
+	}
+	if len(calls) != 1 || !hasSeq(calls[0], "pull", "ghcr.io/davidgodefroid/locksql:"+shVersion) {
+		t.Errorf("calls %q", calls)
+	}
+	args, _ := os.ReadFile(rel.cosignArgs)
+	if !strings.Contains(string(args), ReleaseCertIdentityRegexp) {
+		t.Errorf("cosign args %s", args)
+	}
+}
+
+func TestLauncherUpdateRefusesABadSignature(t *testing.T) {
+	f := newLauncherFixture(t)
+	f.setVersion(t, "0.9.0")
+	rel := newShFixture(t)
+	rel.cosign(t, false)
+	for _, tool := range []string{"curl", "cosign"} {
+		if err := os.Symlink(filepath.Join(rel.bin, tool), filepath.Join(f.bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, calls, err := f.run(t, f.project, nil, "update", "v"+shVersion)
+	if err == nil || !strings.Contains(out, "does not verify") || len(calls) != 0 {
+		t.Fatalf("%v, calls %q\n%s", err, calls, out)
+	}
+	b, _ := os.ReadFile(f.script)
+	if !strings.Contains(string(b), "\nlauncher_version=0.9.0\n") {
+		t.Fatal("launcher replaced")
+	}
+}
+
+// The launcher pins the identity locksql update checked.
+func TestLauncherPinsTheReleaseIdentity(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "scripts", "locksql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "identity='"+ReleaseCertIdentityRegexp+"'") {
+		t.Error("scripts/locksql does not pin", ReleaseCertIdentityRegexp)
+	}
+}

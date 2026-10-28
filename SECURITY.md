@@ -75,10 +75,17 @@ cosign verify-blob --bundle checksums.txt.sigstore.json \
 sha256sum -c --ignore-missing checksums.txt
 ```
 
-`scripts/install.sh` and `locksql update` run the same check and refuse to
-install without cosign (`LOCKSQL_SKIP_COSIGN=1` is the script's explicit
-way past it). `locksql install` prints the sha256 of the binary it copies
-beside its prompt, and its root script checks the copy against it.
+`scripts/install.sh` and the launcher's `locksql update` run the same check
+and refuse to install without cosign (`LOCKSQL_SKIP_COSIGN=1` is their
+explicit way past it). The release image,
+`ghcr.io/davidgodefroid/locksql:X.Y.Z` (and `-vault`), is signed with cosign
+by the same workflow:
+
+```sh
+cosign verify ghcr.io/davidgodefroid/locksql:X.Y.Z \
+  --certificate-identity-regexp '^https://github\.com/DavidGodefroid/locksql/\.github/workflows/release\.yml@refs/tags/v[0-9]' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
 
 The actions the workflows run are pinned to full commit SHAs, and the
 release job pins the versions of GoReleaser, cosign and syft.

@@ -52,36 +52,39 @@
 
 <h1>Install locksql</h1>
 <div class="prose">
-  <p class="lead">locksql is built and run as a Docker image: nothing to install but Docker. No Go toolchain is needed; the image’s build stage holds it.</p>
+  <p class="lead">locksql runs in Docker: nothing on your machine but Docker and the <code>locksql</code> launcher, a short shell script that runs every command, <code>locksql console</code>, <code>locksql version</code>, <code>locksql mcp</code> and the others, in the locksql image.</p>
   <p>locksql is a pre-release (<code>v0.8.x</code>). The image holds the separated setup: the console runs as the <code>locksql</code> account (uid 10001) in its own container, the only one that holds the database credentials; the agent’s MCP server runs as <code>agent</code> (uid 10002) in a throwaway container. The two share only the socket volume <code>locksql-run</code>, and the kernel checks every peer on the socket.</p>
-  <p>Other deployment modes (a host install, packages, desktop and session setups) still exist in the code but are no longer documented or supported.</p>
 </div>
 
 <section aria-labelledby="build">
-  <h2 id="build">Build the image</h2>
-  <p class="prose">Straight from the repository, or with <code>docker build -t locksql .</code> from a clone:</p>
-  <pre tabindex="0"><code>docker build -t locksql https://github.com/DavidGodefroid/locksql.git</code></pre>
-  <p class="prose">For <code>credentials = "vault"</code>, build the <code>vault</code> target instead: it adds the vault CLI (some 550 MB), which the default image leaves out.</p>
-  <pre tabindex="0"><code>docker build --target vault -t locksql https://github.com/DavidGodefroid/locksql.git</code></pre>
-  <p class="prose"><code>--build-arg VERSION=v0.8.0</code> sets the version that <code>locksql version</code> prints. To upgrade, build again and restart the console.</p>
+  <h2 id="build">Install the launcher</h2>
+  <p class="prose">Download the install script from the release you install, read it, then run it with that release:</p>
+  <pre tabindex="0"><code>V=vX.Y.Z
+curl -fsSLO "https://raw.githubusercontent.com/DavidGodefroid/locksql/$V/scripts/install.sh"
+less install.sh
+LOCKSQL_VERSION=$V sh install.sh</code></pre>
+  <div class="prose">
+    <p>It checks the release’s cosign signature and checksum and installs the launcher as <code>/usr/local/bin/locksql</code>. The launcher runs the image of its own release, <code>ghcr.io/davidgodefroid/locksql:X.Y.Z</code>, which Docker pulls on first use. Linux and macOS (Docker Desktop); on Windows, install it in WSL 2 with Docker Desktop.</p>
+    <p><code>locksql version</code> prints the launcher’s version and its image’s; <code>locksql update</code> installs the latest release’s launcher and pulls its image. For <code>credentials = "vault"</code>, <code>LOCKSQL_VAULT=1</code> selects the image with the vault CLI (some 550 MB more). <code>LOCKSQL_IMAGE</code> runs an image of your own, such as <code>docker build -t locksql .</code> from a clone.</p>
+  </div>
 </section>
 
 <section aria-labelledby="project">
   <h2 id="project">Set up a project</h2>
-  <p class="prose">Mount the project at its own path (<code>-v "$PWD:$PWD" -w "$PWD"</code>): the socket name is derived from the project path, so the console and the agent must see the same one. In the project directory, write Claude Code’s files, add a database profile, then give <code>.locksql/</code> to the console account:</p>
-  <pre tabindex="0"><code>docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:$PWD" -w "$PWD" locksql init claude
-docker run -it --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:$PWD" -w "$PWD" locksql profile add
-docker run --rm --user 0 -v "$PWD:$PWD" -w "$PWD" locksql doctor --fix --yes</code></pre>
+  <p class="prose">The launcher mounts the project at its own path and runs each command with the account it needs. In the project directory, write Claude Code’s files, add a database profile, then give <code>.locksql/</code> to the console account:</p>
+  <pre tabindex="0"><code>locksql init claude
+locksql profile add
+locksql doctor --fix --yes</code></pre>
   <div class="prose">
-    <p><code>--user</code> and <code>HOME</code> make the files yours. <code>init</code> writes <code>.locksql/config.toml</code> with a commented example profile, and <code>.mcp.json</code> with <code>locksql mcp</code> as the MCP command, which is not on your machine: <a href="#wire">wire the agent</a> replaces that entry.</p>
+    <p><code>init</code> and <code>profile</code> run as you, so the files are yours. <code>init</code> writes <code>.locksql/config.toml</code> with a commented example profile, and <code>.mcp.json</code> with <code>locksql mcp</code> as the MCP command: the launcher (<a href="#wire">wire the agent</a>).</p>
     <p><code>profile add</code> asks for the engine, host, port, TLS and where the password comes from (typed at console start, or Vault), never for the password itself, and appends the profile to <code>.locksql/config.toml</code>. <code>--engine</code> and its flags skip the questions (<code>locksql profile add --engine postgres --host db.internal --credentials vault --vault-path database/creds/ro</code>). Inside a container <code>localhost</code> is the container itself, and the wizard knows it:</p>
     <ul>
-      <li>a database on your machine is <code>host = "host.docker.internal"</code> (on Linux, add <code>--add-host=host.docker.internal:host-gateway</code> to the console’s <code>docker run</code>). That is not a loopback host, so <code>tls</code> defaults to <code>verify-full</code>: set <code>tls = "disable"</code> or <code>"prefer"</code> for a local server without TLS;</li>
-      <li>a database in another container is reached by its name on a shared network (<code>--network NAME</code> on the console’s <code>docker run</code>);</li>
+      <li>a database on your machine is <code>host = "host.docker.internal"</code>, which the launcher maps to your machine. That is not a loopback host, so <code>tls</code> defaults to <code>verify-full</code>: set <code>tls = "disable"</code> or <code>"prefer"</code> for a local server without TLS;</li>
+      <li>a database in another container is reached by its name on a shared network (<code>LOCKSQL_DOCKER_ARGS="--network NAME" locksql console</code>);</li>
       <li><code>credentials = "keychain"</code> is not available in a container, which has no OS keychain: use <code>ask</code>, or <code>vault</code> with the <code>vault</code> image;</li>
       <li>a SQLite <code>path</code> is relative to the project root, which is mounted.</li>
     </ul>
-    <p>The last command runs as root inside the image, where the console account exists. The console writes <code>pii.toml</code> in <code>.locksql/</code>, and a directory your account owns would let the agent replace that file, and with it the masking rules: <code>doctor --fix</code> makes uid 10001 the owner of <code>.locksql/</code> (mode <code>0755</code>) and keeps <code>config.toml</code> readable and yours to edit. Its checks of the console and its profiles fail from this container, which runs no console: read the <code>project</code> lines. Run it again whenever <code>.locksql/</code> is created anew.</p>
+    <p><code>doctor --fix</code> runs as root inside the image, where the console account exists. The console writes <code>pii.toml</code> in <code>.locksql/</code>, and a directory your account owns would let the agent replace that file, and with it the masking rules: <code>doctor --fix</code> makes uid 10001 the owner of <code>.locksql/</code> (mode <code>0755</code>) and keeps <code>config.toml</code> readable and yours to edit. Its checks of the console and its profiles fail from this container, which runs no console: read the <code>project</code> lines. Run it again whenever <code>.locksql/</code> is created anew.</p>
   </div>
 
   <h3 id="profiles">Describe your databases</h3>
@@ -133,26 +136,22 @@ key         = "~/.ssh/id_ed25519"   # in the locksql-home volume, owned by locks
 
 <section aria-labelledby="wire">
   <h2 id="wire">Wire the agent</h2>
-  <p class="prose">The agent starts the MCP server in a throwaway container, as <code>agent</code>, with the socket volume and the project mounted. <code>sh -c</code> expands <code>$PWD</code>, the directory the agent runs in, so start the agent at the project root. For Claude Code, replace the entry <code>init</code> wrote:</p>
-  <pre tabindex="0"><code>claude mcp remove --scope project locksql
-claude mcp add --scope project locksql -- \
-  sh -c 'exec docker run -i --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql mcp'</code></pre>
+  <p class="prose"><code>init claude</code> already did: the MCP command it writes, <code>locksql mcp</code>, is the launcher, which starts the MCP server in a throwaway container, as <code>agent</code>, with the socket volume and the project mounted. Start the agent at the project root, or below it. For every project instead:</p>
+  <pre tabindex="0"><code>claude mcp add --scope user locksql -- locksql mcp</code></pre>
   <div class="prose">
-    <p><code>--scope user</code> instead wires it for every project. Codex, Gemini CLI and Cursor take the same command (<code>sh</code>) and arguments in their MCP config; keep their <code>tool_timeout_sec</code> or <code>timeout</code>, since the console waits up to 5 minutes for an approval. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#agent-wiring">Agent wiring in the usage guide</a>.</p>
-    <p>The client commands run the same way, for example <code>docker run --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql status</code>.</p>
+    <p>Codex, Gemini CLI and Cursor take the same command (<code>locksql</code>, argument <code>mcp</code>) in their MCP config; keep their <code>tool_timeout_sec</code> or <code>timeout</code>, since the console waits up to 5 minutes for an approval. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#agent-wiring">Agent wiring in the usage guide</a>.</p>
+    <p>The client commands run the same way, for example <code>locksql status</code>.</p>
   </div>
 </section>
 
 <section aria-labelledby="console">
   <h2 id="console">Start the console</h2>
   <p class="prose">In a terminal you keep in view, from the project directory:</p>
-  <pre tabindex="0"><code>docker run -it --rm --name locksql-console --user locksql \
-  -v "$PWD:$PWD" -v locksql-run:/run/locksql -v locksql-home:/home/locksql \
-  locksql console --project "$PWD"</code></pre>
+  <pre tabindex="0"><code>locksql console</code></pre>
   <div class="prose">
     <p>Then ask your agent, in the project: “how many orders were placed yesterday?”. Each query waits for your <code>y</code> in the console.</p>
-    <p>Add <code>--profile P</code>, <code>--show-results</code>, <code>--auto</code> or <code>--allow-unmask</code> after <code>console</code>. The <code>locksql-home</code> volume keeps the console account’s state from one run to the next: the approved policy, the audit log and <code>~/.ssh/known_hosts</code> for an <code>ssh</code> profile.</p>
-    <p>With <code>credentials = "vault"</code>, add <code>-e VAULT_ADDR=https://vault.example.com</code> to the console’s <code>docker run</code>. No <code>vault login</code> is needed: at start the console asks for the Vault token in its terminal (no echo) and keeps it in memory for the session, never on disk. When Vault refuses a read (expired or revoked token, or a policy that may not read the path), it asks again.</p>
+    <p>Add <code>--profile P</code>, <code>--show-results</code>, <code>--auto</code> or <code>--allow-unmask</code>. The console runs as the <code>locksql</code> account in its own container, <code>locksql-console</code>. The <code>locksql-home</code> volume keeps the console account’s state from one run to the next: the approved policy, the audit log and <code>~/.ssh/known_hosts</code> for an <code>ssh</code> profile.</p>
+    <p>With <code>credentials = "vault"</code>, run <code>LOCKSQL_VAULT=1 VAULT_ADDR=https://vault.example.com locksql console</code>. No <code>vault login</code> is needed: at start the console asks for the Vault token in its terminal (no echo) and keeps it in memory for the session, never on disk. When Vault refuses a read (expired or revoked token, or a policy that may not read the path), it asks again.</p>
   </div>
   <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/docker.md">Running locksql in Docker, the full guide</a></p>
 </section>
@@ -161,7 +160,7 @@ claude mcp add --scope project locksql -- \
   <h2 id="separation">What Docker does and does not separate</h2>
   <div class="prose">
     <p>The agent’s container holds no credential, has no database connection and reaches the console only through the socket; a process that is neither the console account nor in <code>locksql-clients</code> is refused.</p>
-    <p>Your own account is another matter. Whoever can run <code>docker</code> commands can attach to the console and type an approval, exec into it and read its memory, or open the <code>locksql-home</code> volume, and an agent that runs shell commands in your account usually can: the MCP server above is itself a <code>docker run</code>. This setup keeps the credentials out of the agent’s reach and the approval in your terminal, but it does not stop an agent determined to go around it. The stronger boundary is to run the agent itself in its own container, without access to the Docker socket, and to build the console’s image with <code>--build-arg ALLOWED_UIDS=</code> set to the agent’s uid. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/docker.md#agent-in-its-own-container">Agent in its own container</a>.</p>
+    <p>Your own account is another matter. Whoever can run <code>docker</code> commands can attach to the console and type an approval, exec into it and read its memory, or open the <code>locksql-home</code> volume, and an agent that runs shell commands in your account usually can: the launcher it runs for the MCP server is itself a <code>docker run</code>. This setup keeps the credentials out of the agent’s reach and the approval in your terminal, but it does not stop an agent determined to go around it. The stronger boundary is to run the agent itself in its own container, without access to the Docker socket, and to build the console’s image with <code>--build-arg ALLOWED_UIDS=</code> set to the agent’s uid (run it with <code>LOCKSQL_IMAGE</code>). <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/docker.md#agent-in-its-own-container">Agent in its own container</a>.</p>
   </div>
 </section>
 
