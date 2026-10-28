@@ -41,6 +41,15 @@ This file records the changes a user or an agent has to know about.
   `locksql update`'s package instructions check the signature and checksum
   before `apt`, `dnf` or `apk`, and stop at the first failed step. The
   workflows' actions are pinned to commit SHAs, and the release job pins GoReleaser, cosign and syft.
+- **PostgreSQL: allowlisted functions overloaded in the database are
+  refused.** PostgreSQL picks the best match for an unqualified function
+  over every schema of the search path, so a `public.lower(varchar)` runs
+  instead of `pg_catalog.lower(text)` for a `varchar` argument. Before a
+  read (and a write under `write_functions = "allowlist"`) is planned, and
+  again just before it runs, the console looks up the functions and
+  operators it uses and refuses it with `E_FUNCTION` when one is also
+  defined outside `pg_catalog`. Those owned by an extension are not
+  counted.
 - **PII rules in named sets, one per profile by default.** PII rules no
   longer live in one `pii.toml` shared by every profile of a scope: each
   profile uses the set named by its new `pii_rules` key, by default its own

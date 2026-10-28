@@ -157,6 +157,9 @@ type plan struct {
 	// it of the statement the checks read: refusals point into src.
 	src  string
 	base int
+	// shadow are the functions and operators checkShadows looks up again
+	// just before the run (nil: none to check).
+	shadow *shadowNames
 }
 
 // Server serves client requests one at a time against one session. It is
