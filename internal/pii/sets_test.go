@@ -86,3 +86,28 @@ func TestSetExists(t *testing.T) {
 		t.Fatal("saved set does not exist")
 	}
 }
+
+// A pii directory that is a symbolic link is refused: set files would be
+// read and written where it points.
+func TestSetsDirLinkRefused(t *testing.T) {
+	dir := t.TempDir()
+	if err := CheckSetsDir(dir); err != nil {
+		t.Fatalf("missing dir: %v", err)
+	}
+	elsewhere := t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(dir, SetsDir)); err != nil {
+		t.Skip("no symbolic links:", err)
+	}
+	if err := CheckSetsDir(dir); err == nil {
+		t.Fatal("linked pii directory accepted")
+	}
+	if err := os.WriteFile(filepath.Join(dir, LegacyFile), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := MigrateLegacy(dir); err == nil {
+		t.Fatal("migrated through a linked pii directory")
+	}
+	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
+		t.Fatalf("written through the link: %v", entries)
+	}
+}

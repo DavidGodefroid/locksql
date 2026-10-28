@@ -216,3 +216,14 @@ func TestRuleSetSwitchLoosens(t *testing.T) {
 		t.Errorf("approval screen does not name the set:\n%s", strings.Join(describePolicy(after), "\n"))
 	}
 }
+
+func TestResolveRuleSetRefusesLinkedDir(t *testing.T) {
+	root, dir := setsProject(t)
+	if err := os.Symlink(t.TempDir(), filepath.Join(dir, pii.SetsDir)); err != nil {
+		t.Skip("no symbolic links:", err)
+	}
+	cfg, _ := config.LoadFrom(root, "")
+	if _, _, err := resolveRuleSet(dir, cfg.Profiles["billing"], nil); err == nil {
+		t.Fatal("linked pii directory accepted")
+	}
+}

@@ -30,6 +30,23 @@ func SetPath(dir, set string) (string, error) {
 	return filepath.Join(dir, SetsDir, set+".toml"), nil
 }
 
+// CheckSetsDir refuses a pii directory in dir that is not a directory of
+// its own (a symbolic link, a file): set files would be read and written
+// wherever it points. A missing directory is fine.
+func CheckSetsDir(dir string) error {
+	p := filepath.Join(dir, SetsDir)
+	st, err := os.Lstat(p)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("pii: %w", err)
+	case !st.IsDir():
+		return fmt.Errorf("pii: %s is not a directory (a symbolic link?): replace it with a directory holding the rule sets", p)
+	}
+	return nil
+}
+
 // SetExists reports whether the rule set named set has a file in dir.
 func SetExists(dir, set string) bool {
 	p, err := SetPath(dir, set)
@@ -45,6 +62,9 @@ func SetExists(dir, set string) bool {
 // from and to, both "" when nothing moved. A pii.toml that is not a
 // regular file is refused rather than followed.
 func MigrateLegacy(dir string) (from, to string, err error) {
+	if err := CheckSetsDir(dir); err != nil {
+		return "", "", err
+	}
 	legacy := filepath.Join(dir, LegacyFile)
 	st, err := os.Lstat(legacy)
 	if errors.Is(err, fs.ErrNotExist) {

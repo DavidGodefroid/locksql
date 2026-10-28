@@ -121,6 +121,9 @@ func rulesDirFor(projectRoot, userConfigPath string) string {
 // pii.toml) while that set exists; any other profile gets its own set,
 // named after it. approved is nil when nothing was approved yet.
 func resolveRuleSet(dir string, p config.Profile, approved *config.Policy) (string, string, error) {
+	if err := pii.CheckSetsDir(dir); err != nil {
+		return "", "", err
+	}
 	set := config.RuleSetOf(p)
 	if p.PIIRules == "" && approved != nil && pii.SetExists(dir, pii.DefaultSet) {
 		if a := approved.Profile.PIIRules; a == "" || a == pii.DefaultSet {
