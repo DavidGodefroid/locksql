@@ -657,6 +657,9 @@ func TestNamesPathIn(t *testing.T) {
 		"link into the project":  {into, project, true},
 		"option to a link":       {"--config=" + into, project, true},
 		"socat address":          {"UNIX-CONNECT:" + into, project, true},
+		"dot component":          {filepath.Join(root, ".") + "/./project/x", project, true},
+		"dot dot component":      {filepath.Join(outside, "..", "project", "x"), project, true},
+		"doubled separator":      {root + "//project//x", project, true},
 		"socat address options":  {"UNIX-CONNECT:" + into + ",retry=3", project, true},
 		"list of paths":          {"/usr/bin," + into, project, true},
 		"outside":                {filepath.Join(outside, "x"), project, false},
@@ -665,6 +668,15 @@ func TestNamesPathIn(t *testing.T) {
 	} {
 		if got := namesPathIn(c.arg, c.dir); got != c.want {
 			t.Errorf("%s: namesPathIn(%q, %q) = %v", name, c.arg, c.dir, got)
+		}
+	}
+	// ssh and others expand ~ themselves, in the console account's home.
+	home, err := os.UserHomeDir()
+	if err == nil && filepath.IsAbs(home) {
+		for _, arg := range []string{"~/x", "-i~/.ssh/k", "IdentityFile=~/.ssh/k"} {
+			if !namesPathIn(arg, home) {
+				t.Errorf("%q: the home is not seen", arg)
+			}
 		}
 	}
 	defer func(f bool) { foldCase = f }(foldCase)

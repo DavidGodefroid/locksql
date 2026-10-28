@@ -90,13 +90,21 @@ func (p *Proxy) Dial(ctx context.Context, network, addr string) (net.Conn, error
 	}
 	cmd := exec.Command(p.argv[0], p.argv[1:]...)
 	cmd.Env = scrubEnv(os.Environ())
-	// Not the console's working directory, the project, where a relative
-	// argument would name a file the agent can write.
-	if home, err := os.UserHomeDir(); err == nil {
-		cmd.Dir = home
-	} else {
-		cmd.Dir = os.TempDir()
+	// Neither the console's working directory, the project, where a
+	// relative argument would name a file the agent can write, nor the home,
+	// which may hold the project: an empty directory of the command's own,
+	// private to the console account, removed when it ends.
+	dir, err := os.MkdirTemp("", "locksql-proxy-")
+	if err != nil {
+		return nil, fmt.Errorf("proxy_command: %w", err)
 	}
+	cmd.Dir = dir
+	ok := false
+	defer func() {
+		if !ok {
+			os.RemoveAll(dir)
+		}
+	}()
 	// Wait gives up on the pipes WaitDelay after the command ended, when a
 	// process the command started outside its group still holds them.
 	cmd.WaitDelay = waitDelay
@@ -127,6 +135,7 @@ func (p *Proxy) Dial(ctx context.Context, network, addr string) (net.Conn, error
 			stdin.Close()
 			kill()
 			cmd.Wait()
+			os.RemoveAll(dir)
 			if s := sanitize(tail.String()); s != "" {
 				p.mu.Lock()
 				p.stderr = s
@@ -135,6 +144,7 @@ func (p *Proxy) Dial(ctx context.Context, network, addr string) (net.Conn, error
 			bridge.Close()
 		})
 	}
+	ok = true
 	go func() { io.Copy(stdin, bridge); end() }()
 	go func() { io.Copy(bridge, stdout); end() }()
 	return &conn{Conn: driver, remote: cmdAddr(p.argv[0])}, nil

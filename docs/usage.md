@@ -311,12 +311,15 @@ proxy_command = ["kubectl", "exec", "-i", "-n", "shop", "shop-db-0", "--",
   like never reach it.
 - The program is an absolute path or a bare name looked up in `PATH`; a
   relative path is refused, and so is any argument naming a path inside the
-  project, alone or after a flag (`-F/srv/app/x`, `--config=/srv/app/x`):
-  the agent could rewrite that file after your approval. The command runs
-  in the console account's home, not in the project. Arguments
-  are checked like other values: no control characters, no embedded
-  password, nothing that reads as a secret (`--password=`, `MYSQL_PWD=`,
-  `--token`); the database password is asked as usual and sent over the
+  project, wherever it appears in the argument (`-F/srv/app/x`,
+  `--config=/srv/app/x`, `UNIX-CONNECT:/srv/app/s`, `~/app/x`), directly or
+  through a symbolic link, and whatever its case on macOS and Windows: the
+  agent could rewrite that file after your approval. The command runs in an
+  empty directory of its own, private to the console account and removed
+  when it ends, so a relative argument names nothing. Arguments are checked
+  like other values: no control characters, no embedded password, nothing
+  that reads as a secret (`--password=`, `MYSQL_PWD=`, `--token`, mysql's
+  `-pSECRET`); the database password is asked as usual and sent over the
   connection, never to the command.
 - When the connection fails, what the command wrote to its stderr ends the
   error (`proxy_command stderr: Error: No such container: shop-db`), on one

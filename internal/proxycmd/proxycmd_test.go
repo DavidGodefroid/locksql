@@ -180,22 +180,37 @@ func TestDialCanceled(t *testing.T) {
 }
 
 // The command does not run in the console's working directory, the project,
-// where a relative argument would name a file the agent can write.
-func TestRunsInHome(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip(err)
-	}
+// nor in its home, which may hold the project: a relative argument names a
+// file in an empty directory of its own, removed when the command ends.
+func TestRunsInEmptyDir(t *testing.T) {
 	c := dial(t, New(helperArgv("pwd")))
 	c.SetReadDeadline(time.Now().Add(10 * time.Second))
 	line, err := bufio.NewReader(c).ReadString('\n')
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := filepath.EvalSymlinks(home)
-	got, _ := filepath.EvalSymlinks(strings.TrimSpace(line))
-	if got != want {
-		t.Errorf("working directory = %q, want %q", got, want)
+	dir := strings.TrimSpace(line)
+	for _, d := range []string{"", "."} {
+		if p, _ := filepath.Abs(d); p == dir {
+			t.Errorf("working directory = %q, the console's", dir)
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && dir == home {
+		t.Errorf("working directory = %q, the home", dir)
+	}
+	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm()&0o077 != 0 {
+		t.Errorf("working directory %q: %v, %v", dir, fi, err)
+	}
+	c.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%q is still there after Close", dir)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

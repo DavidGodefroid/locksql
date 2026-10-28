@@ -529,9 +529,9 @@ func shortPassword(a string, mysql bool) bool {
 // for a project config), which the agent can write to after the approval,
 // must hold no part of the command: the program must be an absolute path or
 // a name looked up in PATH, and no argument may name a path inside baseDir,
-// alone or after a flag (-F/proj/x, --config=/proj/x). The command runs in
-// the console account's home, so a relative argument does not resolve
-// there either.
+// wherever it appears in the argument (-F/proj/x, --config=/proj/x). The
+// command runs in an empty directory of its own, so a relative argument
+// does not resolve there either.
 func checkProxyCommand(argv []string, p Profile, baseDir string, errf func(string, ...any) error) error {
 	switch {
 	case p.Engine == EngineSQLite:
@@ -580,6 +580,7 @@ func namesPathIn(arg, dir string) bool {
 	}
 	args := []string{arg}
 	for _, p := range pathsIn(arg) {
+		args = append(args, p)
 		if r := resolve(p); r != p {
 			args = append(args, r)
 		}
@@ -613,28 +614,29 @@ func holdsPath(arg, dir string) bool {
 	}
 }
 
-// pathsIn returns the absolute paths arg may name: every path that starts
-// it or follows one of = : , or a blank (--config=/p, UNIX-CONNECT:/p,
-// /a,/b), the value glued to a short flag (-F/p), and each of these cut at
-// the first comma or blank (UNIX-CONNECT:/p,retry=3).
+// pathsIn returns the absolute paths arg may name, cleaned: from every
+// place in arg where an absolute path starts (--config=/p, -F/p,
+// UNIX-CONNECT:/p, "/p", @/p) or where ~ stands for the console account's
+// home, which ssh and others expand themselves; each also cut at the first
+// character that ends a path in an option (UNIX-CONNECT:/p,retry=3).
 func pathsIn(arg string) []string {
+	home, _ := os.UserHomeDir()
 	var out []string
 	add := func(p string) {
-		if filepath.IsAbs(p) {
-			out = append(out, filepath.Clean(p))
-		}
-		if k := strings.IndexAny(p, ", \t"); k > 0 && filepath.IsAbs(p[:k]) {
+		out = append(out, filepath.Clean(p))
+		if k := strings.IndexAny(p, ",;: \t'\""); k > 0 && filepath.IsAbs(p[:k]) {
 			out = append(out, filepath.Clean(p[:k]))
 		}
 	}
-	add(arg)
-	for i := 1; i < len(arg); i++ {
-		if strings.IndexByte("=:, \t", arg[i-1]) >= 0 {
-			add(arg[i:])
+	for i := range len(arg) {
+		rest := arg[i:]
+		if filepath.IsAbs(rest) {
+			add(rest)
 		}
-	}
-	if len(arg) > 2 && arg[0] == '-' && arg[1] != '-' {
-		add(arg[2:])
+		if after, ok := strings.CutPrefix(rest, "~"); ok && filepath.IsAbs(home) &&
+			(after == "" || after[0] == '/' || after[0] == filepath.Separator) {
+			add(home + after)
+		}
 	}
 	return out
 }

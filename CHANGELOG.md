@@ -26,7 +26,7 @@ This file records the changes a user or an agent has to know about.
   connection, as OpenSSH's `ProxyCommand`: `docker exec`, `podman exec`,
   `kubectl exec`, or `ssh ... socat` to a server bound to its container's
   loopback or to a Unix socket on a remote host. It runs without a shell, as
-  the console account, in its home, without a terminal and with a scrubbed
+  the console account, in an empty private directory, without a terminal and with a scrubbed
   environment, and may not name a file inside the project (symbolic links
   resolved, case folded on macOS and Windows) nor carry a secret
   (`--password=`, `MYSQL_PWD=`, mysql's `-pSECRET`); closing the connection
