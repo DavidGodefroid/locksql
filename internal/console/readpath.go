@@ -317,10 +317,12 @@ func (s *Server) strictWriteFunctions(ctx context.Context, sess engine.Session, 
 // user-defined function also names, on a server that resolves the best
 // match over the search path (engine.FunctionShadows): an overload with a
 // closer argument type would run instead. The k-anonymity counts call
-// COUNT and MIN. It returns the refusal, if any; an error is the engine's.
+// COUNT and MIN. Only PostgreSQL resolves calls that way; a PostgreSQL
+// session that cannot look them up (a wrapper that does not pass the
+// lookup on) fails the plan. It returns the refusal, if any; an error is
+// the engine's.
 func (s *Server) shadowed(ctx context.Context, sess engine.Session, db string, an *sqlast.Analysis) (*refusal.Error, error) {
-	fs, ok := sess.(engine.FunctionShadows)
-	if !ok {
+	if sess.Flavor() != engine.FlavorPostgres {
 		return nil, nil
 	}
 	var names []string
@@ -335,7 +337,7 @@ func (s *Server) shadowed(ctx context.Context, sess engine.Session, db string, a
 	}
 	slices.Sort(names)
 	names = slices.Compact(names)
-	hit, err := fs.ShadowedFunctions(ctx, db, names)
+	hit, err := engine.ShadowedFunctions(ctx, sess, db, names)
 	if err != nil {
 		return nil, err
 	}

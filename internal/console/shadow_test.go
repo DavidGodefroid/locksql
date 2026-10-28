@@ -22,6 +22,8 @@ type shadowSession struct {
 	asked    [][]string
 }
 
+func (s *shadowSession) Flavor() engine.Flavor { return engine.FlavorPostgres }
+
 func (s *shadowSession) ShadowedFunctions(_ context.Context, _ string, names []string) ([]string, error) {
 	s.asked = append(s.asked, slices.Clone(names))
 	if s.err != nil {
@@ -90,3 +92,42 @@ func TestShadowedFunctionsError(t *testing.T) {
 }
 
 var _ engine.FunctionShadows = (*shadowSession)(nil)
+
+// pgSession is a PostgreSQL session that cannot look up function
+// definitions: the check fails closed.
+type pgSession struct{ *fakeSession }
+
+func (pgSession) Flavor() engine.Flavor { return engine.FlavorPostgres }
+
+func TestShadowedFunctionsFailClosed(t *testing.T) {
+	h := newHarness(t, uatProfile(), func(c *ServerConfig) { c.Session = pgSession{c.Session.(*fakeSession)} })
+	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT lower(note) AS n FROM users LIMIT 1"})
+	if resp.Error == nil {
+		t.Fatal("a PostgreSQL session without the function lookup planned a call")
+	}
+	if h.sess.runCount() != 0 {
+		t.Fatal("ran")
+	}
+}
+
+// The session wrappers (SSH tunnel, Vault login) pass the lookup on.
+func TestShadowedFunctionsThroughWrappers(t *testing.T) {
+	inner := &shadowSession{fakeSession: &fakeSession{}, shadowed: []string{"lower"}}
+	for name, s := range map[string]engine.Session{
+		"tunnel": &tunneledSession{Session: inner},
+		"vault":  &vaultSession{Session: inner},
+		"both":   &vaultSession{Session: &tunneledSession{Session: inner}},
+	} {
+		fs, ok := s.(engine.FunctionShadows)
+		if !ok {
+			t.Errorf("%s: no engine.FunctionShadows", name)
+			continue
+		}
+		if got, err := fs.ShadowedFunctions(context.Background(), "app", []string{"lower", "upper"}); err != nil || !slices.Equal(got, []string{"lower"}) {
+			t.Errorf("%s: %v, %v", name, got, err)
+		}
+	}
+	if _, err := (&tunneledSession{Session: &fakeSession{}}).ShadowedFunctions(context.Background(), "app", []string{"lower"}); err == nil {
+		t.Error("a wrapper over a session without the lookup answered")
+	}
+}
