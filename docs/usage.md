@@ -386,7 +386,8 @@ vault_path  = "database/creds/reporting-ro"
   with `VAULT_ADDR` (and `VAULT_NAMESPACE`, `VAULT_CACERT` if needed) in
   the console's environment ([docker.md](docker.md#credentials-from-vault)).
 - At start, before the first Vault read, the console asks
-  `Vault token for <VAULT_ADDR>:` (no echo). No `vault login` is needed, and
+  `Vault token for <VAULT_ADDR>:` (no echo). The console account needs no
+  `vault login`, and
   the console account's `~/.vault-token` and `VAULT_TOKEN` are not used.
   Get it with `vault login -method=oidc -no-store -token-only`, which
   prints the token without writing `~/.vault-token` in the agent's

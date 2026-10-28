@@ -152,7 +152,12 @@ claude mcp add --scope project locksql -- \
   <div class="prose">
     <p>Then ask your agent, in the project: “how many orders were placed yesterday?”. Each query waits for your <code>y</code> in the console.</p>
     <p>Add <code>--profile P</code>, <code>--show-results</code>, <code>--auto</code> or <code>--allow-unmask</code> after <code>console</code>. The <code>locksql-home</code> volume keeps the console account’s state from one run to the next: the approved policy, the audit log and <code>~/.ssh/known_hosts</code> for an <code>ssh</code> profile.</p>
-    <p>With <code>credentials = "vault"</code>, add <code>-e VAULT_ADDR=https://vault.example.com</code> to the console’s <code>docker run</code>. No <code>vault login</code> is needed: at start the console asks for the Vault token in its terminal (no echo) and keeps it in memory for the session, never on disk. When Vault refuses a read (expired or revoked token, or a policy that may not read the path), it asks again.</p>
+    <p>With <code>credentials = "vault"</code>, add <code>-e VAULT_ADDR=https://vault.example.com</code> to the console’s <code>docker run</code>. The console account needs no <code>vault login</code>: at start the console asks for the Vault token in its terminal (no echo) and keeps it in memory for the session, never on disk. When Vault refuses a read (expired or revoked token, or a policy that may not read the path), it asks again.</p>
+    <p>Get the token without storing it in your account, where the agent runs, then paste it at the prompt:</p>
+  </div>
+  <pre tabindex="0"><code>vault login -method=oidc -no-store -token-only</code></pre>
+  <div class="prose">
+    <p>A plain <code>vault login</code> would write <code>~/.vault-token</code>, which the agent could read; do not leave <code>VAULT_TOKEN</code> set in that shell either.</p>
   </div>
   <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/docker.md">Running locksql in Docker, the full guide</a></p>
 </section>
