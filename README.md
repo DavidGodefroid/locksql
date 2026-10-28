@@ -457,6 +457,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `tier` | `read` | highest statement class allowed |
 | `production` | `false` | stricter limits, typed approval, auto mode unavailable |
 | `detectors` | `email`, `phone`, `iban`, `card` | also `be_niss`, `fr_nir`, `nl_bsn`, `us_ssn`; `[]` disables them |
+| `pii_rules` | the profile name, in lower case | the PII rule set, `pii/<set>.toml`; 1 to 64 lower-case letters, digits, `_`, `-` or `.`; profiles on isomorphic databases share a set by naming it; any change is a loosening |
 | `limits.statement_timeout` | 30s (production 10s) | |
 | `limits.explain_rows_warn` | 100 000 (production 20 000) | |
 | `limits.explain_rows_refuse` | 1 000 000 (production 200 000) | |
@@ -477,9 +478,34 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 
 ### PII rules
 
-PII column rules live in `.locksql/pii.toml` inside a project, and in
-`<user config dir>/locksql/pii.toml` (`~/.config/locksql/pii.toml` on Linux)
-elsewhere:
+PII column rules live in named rule sets, one file per set: `pii/<set>.toml`
+next to the config, so `.locksql/pii/<set>.toml` inside a project and
+`<user config dir>/locksql/pii/<set>.toml` (`~/.config/locksql/pii/` on
+Linux) elsewhere. Each profile uses the set named by its `pii_rules` key,
+by default its own name, so a profile never sees the rules of an unrelated
+database. Profiles that point at isomorphic databases share a set on
+purpose:
+
+```toml
+[profiles.shop-dev]
+pii_rules = "shop"
+[profiles.shop-prod]
+pii_rules = "shop"        # rules added from either console reach both
+production = true
+[profiles.billing]        # no pii_rules: the set "billing", its own
+```
+
+`locksql pii` and `:pii` act on the set of the profile in use, and the
+approval screen shows the set next to the profile. `pii_rules` is read at
+start; pointing a profile at another set is a loosening, approved again at
+the next start.
+
+The single `pii.toml` of earlier versions becomes the set `default` at the
+first start (moved to `pii/default.toml`, with a one-time notice). The
+profiles approved before keep using it until they get a `pii_rules` key;
+any other profile uses its own set.
+
+A set file:
 
 ```toml
 [[mask]]

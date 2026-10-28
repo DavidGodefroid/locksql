@@ -8,6 +8,18 @@ This file records the changes a user or an agent has to know about.
 
 ### Changed
 
+- **PII rules in named sets, one per profile by default.** PII rules no
+  longer live in one `pii.toml` shared by every profile of a scope: each
+  profile uses the set named by its new `pii_rules` key, by default its own
+  name, kept in `pii/<set>.toml` next to the config. Profiles on unrelated
+  servers no longer see each other's rules (an `[[allow]]` or a wildcard
+  rule written for one product no longer reaches another); profiles on
+  isomorphic databases (dev, uat, prod) share rules by naming the same set.
+  Changing `pii_rules` is a loosening, approved again at the next start.
+  Upgrading: at the first start the existing `pii.toml` is moved to
+  `pii/default.toml` (the set `default`), with a one-time notice; profiles
+  approved before keep using it until they get a `pii_rules` key, and any
+  new profile starts with its own, empty set.
 - **Clear results refused at desktop security level 1.** When the console
   runs in a desktop terminal of the console account without a fingerprint
   reader, the agent's account can read its window, so the clear results

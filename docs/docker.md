@@ -74,7 +74,7 @@ the container itself, and the wizard knows it:
 - a SQLite `path` is relative to the project root, which is mounted.
 
 Then give `.locksql/` to the console account. The console writes
-`pii.toml` there, and a directory your account owns would let the agent
+the PII rule sets there (`pii/<set>.toml`), and a directory your account owns would let the agent
 replace that file, and with it the masking rules. The account exists only in
 the image, so run the repair there, as root:
 

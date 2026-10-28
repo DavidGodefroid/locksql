@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -129,6 +130,28 @@ type Profile struct {
 	// VaultPath is the Vault path read for the login when Credentials is
 	// "vault", such as "database/creds/app-readonly".
 	VaultPath string `json:"vault_path,omitempty"`
+	// PIIRules names the PII rule set of the profile: the file
+	// pii/<set>.toml next to the config. The config holds the pii_rules
+	// key, "" when it is not set; the console stores the set it resolved
+	// (RuleSetOf, or the migrated default set) in the policy it approves.
+	PIIRules string `json:"pii_rules,omitempty"`
+}
+
+// ruleSetRe is a valid PII rule set name: it becomes a file name, so no
+// path separator, no leading dot, and lower case so that two names never
+// meet in one file on a case-insensitive file system.
+var ruleSetRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
+
+// ValidRuleSet reports whether s may name a PII rule set.
+func ValidRuleSet(s string) bool { return ruleSetRe.MatchString(s) }
+
+// RuleSetOf is the PII rule set of p from its config: pii_rules, or the
+// profile name in lower case. Sharing a set is opt-in.
+func RuleSetOf(p Profile) string {
+	if p.PIIRules != "" {
+		return p.PIIRules
+	}
+	return strings.ToLower(p.Name)
 }
 
 // Config is the merged set of profiles visible from a working directory.
@@ -224,6 +247,8 @@ type rawProfile struct {
 	// CredentialsTTL is a duration ("20m", "1h").
 	CredentialsTTL string `toml:"credentials_ttl"`
 	VaultPath      string `toml:"vault_path"`
+	// PIIRules is nil when the key is absent: "" is refused.
+	PIIRules *string `toml:"pii_rules"`
 }
 
 type rawFile struct {
@@ -283,12 +308,18 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	if err := kconfig.CheckProfileName(name, r.Production); err != nil {
 		return Profile{}, errf("%v", err)
 	}
+	var ruleSet string
+	if r.PIIRules != nil {
+		if ruleSet = *r.PIIRules; !ValidRuleSet(ruleSet) {
+			return Profile{}, errf("pii_rules: want 1 to 64 lower-case letters, digits, '_', '-' or '.', starting with a letter or digit")
+		}
+	}
 
 	p := Profile{
 		Name: name, Engine: r.Engine, Host: r.Host, Path: r.Path, Port: r.Port,
 		User: r.User, Database: r.Database, Credentials: r.Credentials, VaultPath: r.VaultPath,
 		TLS: r.TLS, TLSCA: r.TLSCA, TLSCert: r.TLSCert, TLSKey: r.TLSKey, TLSServerName: r.TLSServer,
-		Production: r.Production, Detectors: r.Detectors,
+		Production: r.Production, Detectors: r.Detectors, PIIRules: ruleSet,
 		Limits: Limits{
 			ExplainRowsWarn: r.Limits.ExplainRowsWarn, ExplainRowsRefuse: r.Limits.ExplainRowsRefuse,
 			MaxRows: r.Limits.MaxRows, MaxCellChars: r.Limits.MaxCellChars, MaxOutputBytes: r.Limits.MaxOutputBytes,

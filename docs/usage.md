@@ -241,8 +241,8 @@ runs, the agent is told the exact
 `locksql console --profile P --project <root>` command. Outside any project
 it is told `locksql console --profile P --project DIR`, DIR being the
 project's directory, and `locksql doctor`. Both
-`.locksql/config.toml` and `.locksql/pii.toml` hold no secret and are meant
-to be committed.
+`.locksql/config.toml` and the rule sets in `.locksql/pii/` hold no secret
+and are meant to be committed.
 
 ### Reaching a remote server through SSH
 
@@ -450,17 +450,19 @@ the agent's project directory. The profiles come from that project's
 writes a commented example). A user config is seen by one account only, so it
 cannot hold the profiles.
 
-The console also writes `.locksql/pii.toml`: at its first start (the PII
-proposal), when you accept a rule and when a client adds one. It writes a
-temporary `.locksql/.pii-*.toml` and renames it over the file, so the console
-account needs write access to the `<project>/.locksql/` directory itself, not
-only to `pii.toml`. Give it the directory and keep both files readable by
+The console also writes the PII rule sets, `.locksql/pii/<set>.toml`: at
+the first start of a set (the PII proposal), when you accept a rule and when
+a client adds one, and it moves a legacy `.locksql/pii.toml` to
+`pii/default.toml` once. It creates `.locksql/pii/`, writes a temporary
+`.pii-*.toml` and renames it over the file, so the console account needs
+write access to the `<project>/.locksql/` directory itself, not only to the
+files. Give it the directory and keep both files readable by
 both accounts:
 
 ```sh
 sudo chown locksql <project>/.locksql
 sudo chmod 0755 <project>/.locksql
-chmod 0644 <project>/.locksql/config.toml   # pii.toml is written 0644
+chmod 0644 <project>/.locksql/config.toml   # rule sets are written 0644
 ```
 
 `locksql setup` and `locksql doctor --fix` make these changes, and give the
@@ -857,9 +859,10 @@ The console needs an interactive terminal. At start it:
 6. **Scans the schema for PII** at every start: columns whose names or types
    look like personal data, and that no mask or allow rule names yet, are
    listed by table. Accept all (`a`), review one by one (`r`) or skip (`s`).
-   On the first start the result is written to `.locksql/pii.toml` inside a
-   project, or `<user config dir>/locksql/pii.toml` outside one (even when
-   empty); later, accepted rules are added to the file as it is on disk, so
+   On the first start of a rule set the result is written to the profile's
+   set, `.locksql/pii/<set>.toml` inside a project, or
+   `<user config dir>/locksql/pii/<set>.toml` outside one (even when empty;
+   the set is `pii_rules`, by default the profile name); later, accepted rules are added to the file as it is on disk, so
    unconfirmed edits there are neither lost nor applied. Outside a project, a
    `<current dir>/.locksql/pii.toml` from an earlier version is no longer
    read: the console says so once while the new file does not exist; copy it
@@ -1429,8 +1432,8 @@ finds the project's consoles.
 | Path | Content |
 |---|---|
 | `.locksql/config.toml` | project profiles (no secrets) |
-| `.locksql/pii.toml` | PII column rules (project) |
-| `<user config dir>/locksql/pii.toml` | PII column rules outside a project |
+| `.locksql/pii/<set>.toml` | PII rule sets (project); a legacy `pii.toml` is moved to `pii/default.toml` |
+| `<user config dir>/locksql/pii/<set>.toml` | PII rule sets outside a project |
 | `<user config dir>/locksql/config.toml` | personal profiles |
 | `<user state dir>/locksql/approved/*.json` | last approved policies |
 | `<user state dir>/locksql/audit.log` | JSONL audit log, mode 0600 (`O_APPEND`, no hash chain: `chattr +a` for more); the records of a client request name the requester (`peer_uid`, `peer_pid`, `peer_user`); an approval is written before the run, a `run` record after it |
