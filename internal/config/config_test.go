@@ -272,6 +272,23 @@ func TestEmptyDetectorsKept(t *testing.T) {
 	}
 }
 
+// Every detector name the lockkit pii package knows can be enabled,
+// including the opt-in phone_loose (issue #17).
+func TestOptInDetectorsAccepted(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, ".locksql", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(p), 0o700)
+	all := `["email","phone","phone_loose","iban","card","be_niss","fr_nir","nl_bsn","us_ssn"]`
+	_ = os.WriteFile(p, []byte("[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\ndetectors="+all+"\n"), 0o600)
+	cfg, err := LoadFrom(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := cfg.Profiles["a"].Detectors; len(d) != 9 {
+		t.Errorf("detectors = %v", d)
+	}
+}
+
 func TestTier(t *testing.T) {
 	for _, s := range []string{"read", "write", "ddl", "admin"} {
 		tier, err := ParseTier(s)
@@ -497,5 +514,28 @@ func TestVaultCredentials(t *testing.T) {
 	}
 	if p.SSH.Credentials != CredentialsAsk {
 		t.Errorf("ssh.credentials = %q, want ask", p.SSH.Credentials)
+	}
+}
+
+func TestWriteFunctions(t *testing.T) {
+	parse := func(body string) (Profile, error) {
+		ps, err := ParseProfiles([]byte("[profiles.p]\nengine=\"sqlite\"\npath=\"x.db\"\n"+body), "t.toml", t.TempDir())
+		return ps["p"], err
+	}
+	for body, want := range map[string]string{
+		"":                                "",
+		"write_functions=\"denylist\"\n":  "",
+		"write_functions=\"allowlist\"\n": WriteFunctionsAllowlist,
+	} {
+		p, err := parse(body)
+		if err != nil {
+			t.Fatalf("%q: %v", body, err)
+		}
+		if p.WriteFunctions != want {
+			t.Errorf("%q: write_functions = %q, want %q", body, p.WriteFunctions, want)
+		}
+	}
+	if _, err := parse("write_functions=\"strict\"\n"); err == nil || !strings.Contains(err.Error(), "want denylist or allowlist") {
+		t.Errorf("unknown mode: err = %v", err)
 	}
 }

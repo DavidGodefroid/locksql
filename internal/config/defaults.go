@@ -26,7 +26,7 @@ func DefaultPort(engine string) int { return defaultPorts[engine] }
 
 // knownDetectors lists the value detectors a profile may enable.
 var knownDetectors = map[string]bool{
-	"email": true, "phone": true, "iban": true, "card": true,
+	"email": true, "phone": true, "phone_loose": true, "iban": true, "card": true,
 	"be_niss": true, "fr_nir": true, "nl_bsn": true, "us_ssn": true,
 }
 
