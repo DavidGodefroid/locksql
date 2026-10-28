@@ -176,7 +176,10 @@ jobs:
             exit 0
           fi
           test "$code" = 0
-          test "$(stat -c '%U:%G %a' /usr/local/bin/locksql)" = "root:root 755"
+          # install.sh uses sudo only when /usr/local/bin is not writable,
+          # which on the runner it is: the launcher is then the runner's.
+          test "$(stat -c %a /usr/local/bin/locksql)" = 755
+          case "$(stat -c %u /usr/local/bin/locksql)" in 0 | "$(id -u)") ;; *) exit 1 ;; esac
           grep -q '^image_digest=sha256:' /usr/local/bin/locksql
           locksql version | tee version.txt
           grep -q "^locksql launcher ${tag#v} (image ghcr.io/davidgodefroid/locksql@sha256:" version.txt
