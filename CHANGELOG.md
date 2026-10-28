@@ -4,7 +4,7 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## Unreleased
+## v0.9.0 (2026-10-28)
 
 ### Changed
 
@@ -25,6 +25,16 @@ This file records the changes a user or an agent has to know about.
   the image, signed with cosign, and no longer the `.deb`, `.rpm` and `.apk`
   packages of the binary; the archives keep the binary, for an agent that
   runs in a container of its own, and now hold the launcher.
+- **The launcher's console is confined and per project.** It runs with no
+  capability, no privilege gain, a read-only root with a small `/tmp`, at
+  most 256 processes and 1 GB, in a container of its own per project
+  (`locksql-console-<n>`, `LOCKSQL_CONSOLE_NAME` to name it). An explicit
+  `--project DIR` of `console` or `profile` is the project mounted.
+  `LOCKSQL_READONLY_PROJECT=1` mounts the project read-only but for
+  `.locksql/`, which on Linux the console checks by device and inode
+  against what the launcher checked (lea runs its console this way).
+  `VAULT_CACERT` reaches the console with its file. Release signatures
+  (archive and images) are bound to the exact tag installed.
 
 ### Removed
 
