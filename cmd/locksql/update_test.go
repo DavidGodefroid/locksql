@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -289,9 +290,15 @@ func TestUpdateRefusesOtherChannels(t *testing.T) {
 
 	f := newUpdFixture(t, "0.8.0")
 	f.exe = "/usr/bin/locksql"
-	f.run(t, false, "", "--yes").want(t, exitFail, "installed by a package", "sudo apt install ./locksql_${V}_linux_",
-		"sudo dnf install ", "sudo apk add --allow-untrusted ")
+	f.run(t, false, "", "--yes").want(t, exitFail, "installed by a package", "F=locksql_${V}_linux_",
+		"checksums.txt.sigstore.json", "cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '"+
+			ReleaseCertIdentityRegexp+"' --certificate-oidc-issuer "+releaseOIDCIssuer+" checksums.txt",
+		"|| exit 1; done) &&", "checksums.txt &&\n", "awk -v f=\"$F\" '$2 == f { n++; print } END { exit !n }' checksums.txt >\"$F.sha256\" && sha256sum -c \"$F.sha256\" &&\n", "echo \"verified: $F\"",
+		"sudo apt install \"./$F\"", "sudo dnf install \"./$F\"", "sudo apk add --allow-untrusted \"./$F\"")
 	f.wantNoRoot(t)
+	if strings.Contains(packageHint("/usr/bin/locksql"), "grep ") {
+		t.Error("the package hint matches checksums.txt with grep (a regular expression), not the exact name")
+	}
 
 	f = newUpdFixture(t, "0.8.0")
 	f.exe = "/home/agent/go/bin/locksql"
@@ -378,4 +385,60 @@ func TestUpdateRejectsAnInvalidVersion(t *testing.T) {
 	f.run(t, false, "", "--yes", "--version", "latest").want(t, exitFail, `invalid version "latest"`)
 	f.wantNoRoot(t)
 	f.run(t, false, "", "extra").want(t, exitUsage, "usage: locksql update")
+}
+
+// The verification steps of the package hint stop at the first failure:
+// a failed download, signature or checksum never prints "verified".
+func TestPackageHintStopsOnFailure(t *testing.T) {
+	if _, err := exec.LookPath("sha256sum"); err != nil {
+		t.Skip("sha256sum is not installed")
+	}
+	hint := packageHint("/usr/bin/locksql")
+	start := strings.Index(hint, "  F=")
+	end := strings.Index(hint, "\nthen")
+	if start < 0 || end < start {
+		t.Fatalf("no verification block in %q", hint)
+	}
+	script := "V=0.9.0 P=deb\n" + hint[start:end] + "\n"
+	pkg := "locksql_0.9.0_linux_" + runtime.GOARCH + ".deb"
+	for name, c := range map[string]struct {
+		curl, cosign string
+		sum          string // checksums.txt line for pkg; "" for none
+		want         bool
+	}{
+		"ok":           {"0", "0", "good", true},
+		"cosign fails": {"0", "1", "good", false},
+		"curl fails":   {"1", "0", "good", false},
+		"bad checksum": {"0", "0", "bad", false},
+		"not listed":   {"0", "0", "", false},
+	} {
+		dir, bin := t.TempDir(), t.TempDir()
+		data := []byte("package")
+		if err := os.WriteFile(filepath.Join(dir, pkg), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sum := fmt.Sprintf("%x", sha256.Sum256(data))
+		if c.sum == "bad" {
+			sum = strings.Repeat("0", 64)
+		}
+		lines := "1111111111111111111111111111111111111111111111111111111111111111  x" + pkg + "\n"
+		if c.sum != "" {
+			lines += sum + "  " + pkg + "\n"
+		}
+		if err := os.WriteFile(filepath.Join(dir, "checksums.txt"), []byte(lines), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for tool, code := range map[string]string{"curl": c.curl, "cosign": c.cosign} {
+			if err := os.WriteFile(filepath.Join(bin, tool), []byte("#!/bin/sh\nexit "+code+"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cmd := exec.Command("sh", "-c", script)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+		out, _ := cmd.CombinedOutput()
+		if got := strings.Contains(string(out), "verified: "+pkg); got != c.want {
+			t.Errorf("%s: verified = %v, want %v; output:\n%s", name, got, c.want, out)
+		}
+	}
 }
