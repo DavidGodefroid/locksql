@@ -55,7 +55,7 @@ runs each command with the account it needs:
 
 | Command | Runs as | Volumes |
 |---|---|---|
-| `console` | `locksql`, in a container named `locksql-console`, confined (no capability, no privilege gain, read-only root with a small `/tmp`, at most 256 processes and 1 GB), with `--add-host=host.docker.internal:host-gateway` and no log driver | `locksql-run`, `locksql-home` |
+| `console` | `locksql`, in a container of its own (`locksql-console-<n>`, one per project; `LOCKSQL_CONSOLE_NAME` names it), confined (no capability, no privilege gain, read-only root with a small `/tmp`, at most 256 processes and 1 GB), with `--add-host=host.docker.internal:host-gateway` and no log driver | `locksql-run`, `locksql-home` |
 | `stats`, `forget` | `locksql` | `locksql-home` |
 | `init`, `config` | you (your uid and gid), with your home mounted: they write the agents' files and your user config; a `config` file must be under the project or your home | |
 | `profile` | you, with `HOME=/tmp` | |
@@ -75,7 +75,13 @@ The launcher reads:
   example `LOCKSQL_DOCKER_ARGS="--network shop" locksql console`;
 - `LOCKSQL_READONLY_PROJECT=1`: the console mounts the project read-only,
   but for `.locksql/`, for a project your agents write;
-- `VAULT_ADDR`, `VAULT_NAMESPACE`: passed to the console.
+- `LOCKSQL_CONSOLE_NAME`: the console's container name (default
+  `locksql-console-<n>`, from the project path);
+- `VAULT_ADDR`, `VAULT_NAMESPACE`, `VAULT_CACERT`: passed to the console.
+
+A path holding `:` (the project, your home) cannot be mounted: the launcher
+refuses it. On macOS, `doctor --fix` (a `chown` through Docker Desktop's
+file sharing) is untested.
 
 ### Your own build
 
@@ -187,8 +193,9 @@ echo) and keeps the token in memory for the session, never in
 LOCKSQL_VAULT=1 VAULT_ADDR=https://vault.example.com locksql console
 ```
 
-A `VAULT_CACERT` is a file the container must see: put it in the project and
-pass it with `LOCKSQL_DOCKER_ARGS="-e VAULT_CACERT=$PWD/vault-ca.pem"`.
+`VAULT_CACERT` (a CA bundle for Vault's certificate) is passed too, its file
+mounted read-only at its own path: it must be readable by the console
+account (uid 10001), mode 0644 for example.
 
 Get the token without storing it, then paste it at the prompt:
 

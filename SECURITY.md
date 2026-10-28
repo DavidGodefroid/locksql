@@ -61,15 +61,16 @@ To contribute one:
 
 ## Verifying a release
 
-Each release's `checksums.txt` covers its archives and Linux packages, and is
+Each release's `checksums.txt` covers its archives, and is
 signed keylessly by `.github/workflows/release.yml` run for the release's tag.
-Check the signature against that workflow and a version tag, not any
-workflow of the repository, then the file you downloaded against
-`checksums.txt`:
+Check the signature against that workflow run for the tag you install, not
+any workflow or tag of the repository (a tag moved to an older release's
+signed files would pass a looser check), then the file you downloaded
+against `checksums.txt`:
 
 ```sh
 cosign verify-blob --bundle checksums.txt.sigstore.json \
-  --certificate-identity-regexp '^https://github\.com/DavidGodefroid/locksql/\.github/workflows/release\.yml@refs/tags/v[0-9]' \
+  --certificate-identity 'https://github.com/DavidGodefroid/locksql/.github/workflows/release.yml@refs/tags/vX.Y.Z' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums.txt
 sha256sum -c --ignore-missing checksums.txt
@@ -84,7 +85,7 @@ its digest into the launcher, which runs it by that digest. By hand:
 
 ```sh
 cosign verify ghcr.io/davidgodefroid/locksql:X.Y.Z \
-  --certificate-identity-regexp '^https://github\.com/DavidGodefroid/locksql/\.github/workflows/release\.yml@refs/tags/v[0-9]' \
+  --certificate-identity 'https://github.com/DavidGodefroid/locksql/.github/workflows/release.yml@refs/tags/vX.Y.Z' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 

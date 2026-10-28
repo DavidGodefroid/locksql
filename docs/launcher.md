@@ -27,7 +27,7 @@ terminals, else `-i`.
 
 | Subcommand | Account | Extra | Why |
 |---|---|---|---|
-| `console` | `locksql` (uid 10001) | `--name locksql-console`, `--log-driver none`, `--cap-drop ALL`, `--security-opt no-new-privileges`, `--read-only` with a 64 MB `/tmp` tmpfs, `--pids-limit 256`, `--memory 1g`, `--add-host=host.docker.internal:host-gateway`, `-e VAULT_ADDR -e VAULT_NAMESPACE`, volumes `locksql-run` and `locksql-home`, `--project PROJECT` unless given | the only holder of credentials; no log driver so `docker logs` keeps no screen; a stopped container of the same name is removed first |
+| `console` | `locksql` (uid 10001) | `--name locksql-console-<cksum of PROJECT>` (one console per project; `LOCKSQL_CONSOLE_NAME` overrides it), `--log-driver none`, `--cap-drop ALL`, `--security-opt no-new-privileges`, `--read-only` with a 64 MB `/tmp` tmpfs, `--pids-limit 256`, `--memory 1g`, `--add-host=host.docker.internal:host-gateway`, `-e VAULT_ADDR -e VAULT_NAMESPACE`, `VAULT_CACERT`'s file mounted read-only at its own path, volumes `locksql-run` and `locksql-home`, `--project PROJECT` unless given | the only holder of credentials; no log driver so `docker logs` keeps no screen; a stopped container of the same name is removed first |
 | `stats`, `forget` | `locksql` | volume `locksql-home` | they read the console account's state |
 | `init`, `config` | you (`id -u`:`id -g`) | `-e HOME=$HOME -v $HOME:$HOME` | they write your agents' files and your user config, owned by you |
 | `profile` | you | `-e HOME=/tmp` | it writes `.locksql/config.toml`, yours to edit |
@@ -76,14 +76,18 @@ launcher runs `registry:X.Y.Z`. A launcher run from a clone
 `scripts/install.sh` (read it, then run it with `LOCKSQL_VERSION`) and
 `locksql update [vX.Y.Z]` do the same steps:
 
-1. download the release archive for this OS and architecture,
+1. refuse anything but a release tag (`vX.Y.Z[-pre]`): it goes into URLs
+   and into the launcher's text;
+2. download the release archive for this OS and architecture,
    `checksums.txt` and its sigstore bundle;
-2. `cosign verify-blob` the bundle against the release workflow identity,
+3. `cosign verify-blob` the bundle against the release workflow run for
+   that exact tag (`--certificate-identity .../release.yml@refs/tags/vX.Y.Z`),
    then check the archive's sha256;
-3. `cosign verify` both images and take their digests;
-4. extract `scripts/locksql`, write the version and digests into it, and
+4. `cosign verify` both images against the same identity and take their
+   digests, which must differ;
+5. extract `scripts/locksql`, write the version and digests into it, and
    install it root-owned (with `sudo` when the directory is not writable);
-5. `update` then runs `docker pull` of the pinned image.
+6. `update` then runs `docker pull` of the pinned image.
 
 Any failed check stops before the launcher is replaced. cosign is required
 (`LOCKSQL_SKIP_COSIGN=1` is the explicit way past it).
@@ -92,10 +96,24 @@ Any failed check stops before the launcher is replaced. cosign is required
 
 - Linux: Docker Engine; `host.docker.internal` comes from the
   `host-gateway` mapping the launcher adds.
-- macOS: Docker Desktop; same launcher.
+- macOS: Docker Desktop; same launcher. Untested so far: `doctor --fix`
+  giving `.locksql/` to uid 10001 (a `chown` through Docker Desktop's file
+  sharing).
 - Windows: no native build. Install the launcher in WSL 2 with Docker
   Desktop's WSL integration and run it there; the Windows binary refuses
   every command but `version` and `help`, pointing there.
+
+## Paths
+
+A project path, `$HOME` (for `init`, `config`) or a `VAULT_CACERT` path
+holding `:` is refused: docker `-v` separates on it. `LOCKSQL_DOCKER_ARGS`
+is split on spaces and never globbed. With `LOCKSQL_READONLY_PROJECT=1`,
+`.locksql/` must be a directory whose physical path is itself; the launcher
+checks it twice, the second time right before `docker run`, but cannot
+close the instant between that check and Docker's own mount: an agent that
+can replace `.locksql` in that instant could redirect the console's
+writable mount. lea closes it by mounting `.locksql` read-only in its
+agents' containers.
 
 ## Former host install
 

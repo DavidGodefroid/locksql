@@ -184,6 +184,16 @@ func TestInstallShSkipCosignLeavesNoDigest(t *testing.T) {
 	}
 }
 
+// LOCKSQL_VERSION takes only a version tag.
+func TestInstallShRefusesABadVersion(t *testing.T) {
+	f := newShFixture(t)
+	f.cosign(t, true)
+	out, err := f.run(t, "LOCKSQL_VERSION=v1.2.3;id")
+	if err == nil || f.installed() || !strings.Contains(out, "invalid version") {
+		t.Fatalf("%v, installed %v\n%s", err, f.installed(), out)
+	}
+}
+
 // A release before the launcher has none in its archive: install.sh says so
 // and installs nothing.
 func TestInstallShRefusesAnArchiveWithoutLauncher(t *testing.T) {
@@ -227,7 +237,7 @@ func TestInstallShChecksTheReleaseWorkflowIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"verify-blob\n", "--certificate-identity-regexp\n" + ReleaseCertIdentityRegexp + "\n",
+	for _, want := range []string{"verify-blob\n", "--certificate-identity\nhttps://github.com/DavidGodefroid/locksql/.github/workflows/release.yml@refs/tags/v" + shVersion + "\n",
 		"--certificate-oidc-issuer\n" + releaseOIDCIssuer + "\n"} {
 		if !strings.Contains(string(args), want) {
 			t.Errorf("cosign args lack %q:\n%s", want, args)

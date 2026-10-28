@@ -3,8 +3,8 @@
 # `locksql` on the host by scripts/install.sh, runs every command in the
 # image, each with the account and the volumes it needs (docs/docker.md):
 #
-#   console          as the console account (locksql), in a container named
-#                    locksql-console, confined (no capability, read-only
+#   console          as the console account (locksql), in a container of its
+#                    own per project (locksql-console-<n>), confined (no capability, read-only
 #                    root, bounded processes and memory), with the socket
 #                    and home volumes
 #   stats, forget    as the console account, with its home volume
@@ -28,7 +28,9 @@
 #                        (e.g. --network shop)
 #   LOCKSQL_READONLY_PROJECT=1  the console mounts the project read-only,
 #                        but for .locksql/ (a project your agents write)
-#   VAULT_ADDR, VAULT_NAMESPACE  passed to the console
+#   LOCKSQL_CONSOLE_NAME the console's container name
+#   VAULT_ADDR, VAULT_NAMESPACE, VAULT_CACERT  passed to the console (the
+#                        file of VAULT_CACERT mounted read-only)
 set -eu
 
 # scripts/install.sh and locksql update write the release version here,
@@ -83,8 +85,29 @@ if [ -t 0 ] && [ -t 1 ]; then tty=-it; fi
 # its command). LOCKSQL_DOCKER_ARGS go before ARGS.
 docker_run() {
 	command -v docker >/dev/null 2>&1 || die "docker is required: locksql runs in Docker (docs/docker.md)"
+	mountable "$project"
+	mountable "$here"
+	# LOCKSQL_DOCKER_ARGS is split on spaces, never globbed.
+	set -f
 	# shellcheck disable=SC2086 # LOCKSQL_DOCKER_ARGS is split on purpose
 	exec docker run --rm -v "$project:$project${project_mode:-}" -w "$here" ${LOCKSQL_DOCKER_ARGS:-} "$@"
+}
+
+# mountable PATH: PATH can be a docker -v source and target, which ":"
+# separates.
+mountable() {
+	case "$1" in
+	*:*) die "$1 holds a \":\", which docker -v cannot mount: move or rename it" ;;
+	esac
+}
+
+# check_locksql_dir: $locksql_dir is a directory of its own, no symbolic
+# link on its path (its physical path is itself).
+check_locksql_dir() {
+	if [ -L "$locksql_dir" ] || [ ! -d "$locksql_dir" ] ||
+		[ "$(cd "$locksql_dir" 2>/dev/null && pwd -P)" != "$locksql_dir" ]; then
+		die "$locksql_dir is not a directory: the console writes there"
+	fi
 }
 
 # has_flag FLAG ARGS...: whether ARGS hold FLAG or FLAG=...
@@ -97,16 +120,18 @@ has_flag() {
 	return 1
 }
 
-# The release workflow run for a version tag, as scripts/install.sh checks it.
-identity='^https://github\.com/DavidGodefroid/locksql/\.github/workflows/release\.yml@refs/tags/v[0-9]'
+# check_tag TAG: TAG is a release tag (it goes into URLs and into the
+# launcher's text).
+check_tag() {
+	printf '%s\n' "$1" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' ||
+		die "invalid version $1: a release tag, vX.Y.Z"
+}
 
 # verified_digest TAG: the digest of the release image registry:TAG, once
 # cosign verifies its signature by the release workflow; empty when it does
 # not verify.
 verified_digest() {
-	# The exact release tag: an older release's signed image, retagged as
-	# this one, does not verify.
-	cosign verify --certificate-identity "https://github.com/$repo/.github/workflows/release.yml@refs/tags/v$version" \
+	cosign verify --certificate-identity "$identity" \
 		--certificate-oidc-issuer https://token.actions.githubusercontent.com \
 		"$registry:$1" 2>/dev/null |
 		sed -n 's/.*"docker-manifest-digest":"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' | sed -n 1p
@@ -116,6 +141,9 @@ verified_digest() {
 # signature of checksums.txt and the archive's checksum checked, as
 # scripts/install.sh does), then pull that release's image.
 update() {
+	if [ -n "${1:-}" ]; then
+		case "$1" in v*) check_tag "$1" ;; *) check_tag "v$1" ;; esac
+	fi
 	if command -v curl >/dev/null 2>&1; then
 		fetch() { curl -fsSL -o "$2" "$1"; }
 		latest() { curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest"; }
@@ -146,7 +174,12 @@ update() {
 		esac
 	fi
 	case "$tag" in v*) ;; *) tag="v$tag" ;; esac
+	check_tag "$tag"
 	version="${tag#v}"
+	# The release workflow run for this very tag, as scripts/install.sh
+	# checks it: a tag moved to an older release's signed files (archive or
+	# image) does not verify.
+	identity="https://github.com/$repo/.github/workflows/release.yml@refs/tags/$tag"
 	if [ "$version" = "$launcher_version" ]; then
 		say "the launcher is already $tag"
 	else
@@ -162,7 +195,7 @@ update() {
 			fetch "$base/checksums.txt.sigstore.json" "$tmp/checksums.txt.sigstore.json" ||
 				die "download failed: checksums.txt.sigstore.json"
 			cosign verify-blob --bundle "$tmp/checksums.txt.sigstore.json" \
-				--certificate-identity-regexp "$identity" \
+				--certificate-identity "$identity" \
 				--certificate-oidc-issuer https://token.actions.githubusercontent.com \
 				"$tmp/checksums.txt" >/dev/null 2>&1 || die "cosign: signature of checksums.txt does not verify"
 			say "cosign: checksums.txt signature verified"
@@ -233,17 +266,27 @@ console)
 	# LOCKSQL_READONLY_PROJECT=1: the console reads the project and writes
 	# only .locksql/ (its PII rules), for a project your agents write. A bind
 	# mount follows a symbolic link, so .locksql must be a directory.
+	# Checked again right before docker run: what is left is the instant
+	# between that check and docker's own mount.
 	locksql_dir=
 	if [ "${LOCKSQL_READONLY_PROJECT:-0}" = 1 ]; then
-		if [ -L "$project/.locksql" ] || [ ! -d "$project/.locksql" ]; then
-			die "$project/.locksql is not a directory: the console writes there"
-		fi
-		project_mode=:ro
 		locksql_dir="$project/.locksql"
+		check_locksql_dir
+		project_mode=:ro
 	fi
+	# VAULT_CACERT: the file the vault CLI checks Vault's certificate
+	# against, mounted read-only at its own path.
+	cacert=
+	if [ -n "${VAULT_CACERT:-}" ]; then
+		case "$VAULT_CACERT" in /*) cacert=$VAULT_CACERT ;; *) cacert="$here/$VAULT_CACERT" ;; esac
+		[ -f "$cacert" ] || die "VAULT_CACERT: no file $cacert"
+		mountable "$cacert"
+	fi
+	# One console container per project, so that two can run.
+	name="${LOCKSQL_CONSOLE_NAME:-locksql-console-$(printf '%s' "$project" | cksum | awk '{ print $1 }')}"
 	# A console that ended without --rm keeps the name: a stopped one is only in the way.
-	if [ "$(docker inspect -f '{{.State.Running}}' locksql-console 2>/dev/null)" = false ]; then
-		docker rm locksql-console >/dev/null
+	if [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" = false ]; then
+		docker rm "$name" >/dev/null
 	fi
 	# No log driver: with a terminal, docker's json-file log would keep every
 	# screen of the console (results you chose to show) for anyone who runs
@@ -251,12 +294,15 @@ console)
 	# wizard offers it. The console holds the credentials: no capability, no
 	# privilege gain, a read-only root with a small /tmp, bounded processes
 	# and memory.
-	set -- --name locksql-console --log-driver none --user locksql \
+	set -- --name "$name" --log-driver none --user locksql \
 		--cap-drop ALL --security-opt no-new-privileges --read-only \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m --pids-limit 256 --memory 1g \
 		--add-host=host.docker.internal:host-gateway -e VAULT_ADDR -e VAULT_NAMESPACE \
 		-v locksql-run:/run/locksql -v locksql-home:/home/locksql \
-		${locksql_dir:+-v} ${locksql_dir:+"$locksql_dir:$locksql_dir"} "$image" console "$@"
+		${locksql_dir:+-v} ${locksql_dir:+"$locksql_dir:$locksql_dir"} \
+		${cacert:+-v} ${cacert:+"$cacert:$cacert:ro"} ${cacert:+-e} ${cacert:+"VAULT_CACERT=$cacert"} \
+		"$image" console "$@"
+	[ -z "$locksql_dir" ] || check_locksql_dir
 	docker_run "$tty" "$@"
 	;;
 stats | forget)
@@ -265,6 +311,7 @@ stats | forget)
 init | config)
 	# init also writes the agents' own files in your home (~/.codex, ...);
 	# config exports and imports your user config there.
+	mountable "$HOME"
 	docker_run "$tty" --user "$(id -u):$(id -g)" -e HOME="$HOME" -v "$HOME:$HOME" "$image" "$@"
 	;;
 profile)

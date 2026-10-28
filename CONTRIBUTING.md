@@ -161,10 +161,10 @@ The release chain is pinned end to end:
   `TestWorkflowActionsArePinnedBySHA` fails on a tag or a missing version;
 - `release.yml` pins the GoReleaser, cosign and syft versions and does not
   use `check-latest`;
-- the cosign identity is the release workflow run for a version tag, the
-  same in `scripts/install.sh`, the launcher `scripts/locksql` and `.goreleaser.yaml`
-  (`ReleaseCertIdentityRegexp`, checked by `installsh_test.go` and
-  `launcher_test.go`).
+- the cosign identity is the release workflow run for the exact tag
+  installed in `scripts/install.sh` and the launcher `scripts/locksql`
+  (`TestScriptsPinTheExactReleaseTag`), and for a version tag in
+  `.goreleaser.yaml`'s comment (`ReleaseCertIdentityRegexp`).
 
 Tags are created by the maintainer only (the `protect release tags` ruleset
 restricts creating, moving and deleting `v*` tags; `protect main` requires a
