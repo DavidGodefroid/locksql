@@ -6,6 +6,21 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
+### Added
+
+- **`write_functions = "allowlist"`.** An opt-in profile setting that
+  applies the read function allowlist to writes: every function an
+  `INSERT`, `REPLACE`, `UPDATE` or `DELETE` calls, at any depth, must be
+  allowlisted (plus key generators such as `gen_random_uuid`, `nextval`,
+  `UUID`, `SYS_GUID`, `randomblob`), or the write is refused with
+  `E_FUNCTION`. Schema-qualified calls, calls through quoted or non-ASCII
+  names or with a blank before `(`, `CALL`, `MERGE` and writes the parser
+  does not read are refused, and every column the write names is resolved
+  against the catalog (PostgreSQL attribute notation `t.f` calls `f(t)`).
+  The default stays `"denylist"`; turning the allowlist off is a policy
+  loosening confirmed in the console, and existing approved policies keep
+  their fingerprint.
+
 ### Changed
 
 - **Release supply chain pinned.** `scripts/install.sh` checks the cosign
@@ -18,7 +33,7 @@ This file records the changes a user or an agent has to know about.
   the binary it copies beside its prompt, and its root script checks its
   copy against it for every source, not only with `--trust-binary`.
   `locksql update`'s package instructions check the signature and checksum
-  before `apt`, `dnf` or `apk`. The workflows' actions are pinned to commit
+  before `apt`, `dnf` or `apk`, and stop at the first failed step. The workflows' actions are pinned to commit
   SHAs, and the release job pins GoReleaser, cosign and syft.
 - **Docker is the only documented deployment.** The README Quick start and
   Install, `docs/usage.md` and the site now describe only the Docker setup:
@@ -62,6 +77,15 @@ This file records the changes a user or an agent has to know about.
 
 ### Fixed
 
+- **Value detectors (#17).** Unicode e-mail addresses
+  (`müller.hans@exämple.de`) are masked whole; phone, IBAN, card and
+  national-id values grouped with U+00A0, U+202F or U+2009, or written
+  with full-width digits, are masked; integral `float4`/`float8` cells go
+  through the detectors like integers. A new opt-in detector,
+  `phone_loose`, masks national numbers without a trunk 0
+  (`(415) 555-2671`, `612 345 678`); the default `phone` rule is unchanged
+  and now documented next to the `detectors` setting. Detectors only mask
+  more than before (lockkit v0.2.0).
 - **`.locksql/` in Docker.** The console account exists only in the image,
   so nothing gave it the project's `.locksql/` directory, and an agent
   running as your uid could replace `pii.toml`. `locksql doctor --fix` now
