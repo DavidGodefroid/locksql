@@ -149,7 +149,7 @@ func TestInstallShInstallsTheLauncher(t *testing.T) {
 		}
 	}
 	args, _ := os.ReadFile(f.cosignArgs)
-	for _, want := range []string{"verify\n", "ghcr.io/davidgodefroid/locksql:" + shVersion + "\n", "ghcr.io/davidgodefroid/locksql:" + shVersion + "-vault\n", "--certificate-identity-regexp\n" + ReleaseCertIdentityRegexp + "\n"} {
+	for _, want := range []string{"verify\n", "ghcr.io/davidgodefroid/locksql:" + shVersion + "\n", "ghcr.io/davidgodefroid/locksql:" + shVersion + "-vault\n", "--certificate-identity\nhttps://github.com/DavidGodefroid/locksql/.github/workflows/release.yml@refs/tags/v" + shVersion + "\n"} {
 		if !strings.Contains(string(args), want) {
 			t.Errorf("cosign args lack %q:\n%s", want, args)
 		}

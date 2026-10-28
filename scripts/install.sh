@@ -103,7 +103,9 @@ tar -xzf "$tmp/$archive" -C "$tmp" scripts/locksql 2>/dev/null ||
 # cosign signatures verify (the release workflow, as for checksums.txt).
 registry="ghcr.io/davidgodefroid/locksql"
 verified_digest() {
-	cosign verify --certificate-identity-regexp "$identity" \
+	# The exact release tag: an older release's signed image, retagged as
+	# this one, does not verify.
+	cosign verify --certificate-identity "https://github.com/$repo/.github/workflows/release.yml@refs/tags/v$version" \
 		--certificate-oidc-issuer https://token.actions.githubusercontent.com \
 		"$registry:$1" 2>/dev/null |
 		sed -n 's/.*"docker-manifest-digest":"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' | sed -n 1p
@@ -112,7 +114,7 @@ digest= vdigest=
 if command -v cosign >/dev/null 2>&1; then
 	digest="$(verified_digest "$version")"
 	vdigest="$(verified_digest "$version-vault")"
-	[ -n "$digest" ] && [ -n "$vdigest" ] ||
+	[ -n "$digest" ] && [ -n "$vdigest" ] && [ "$digest" != "$vdigest" ] ||
 		die "cosign: the signature of $registry:$version (and -vault) does not verify, or the image is not published yet"
 	say "cosign: image $registry:$version verified ($digest)"
 else

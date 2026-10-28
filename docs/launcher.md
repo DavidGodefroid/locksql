@@ -52,8 +52,10 @@ vault_image_digest=sha256:...  # ...:X.Y.Z-vault
 ```
 
 The digests come from `cosign verify` of the two images against the release
-workflow identity (the same one as for `checksums.txt`), so the launcher
-runs `registry@sha256:...`, never a tag that could move. With
+workflow run for that exact tag
+(`.../release.yml@refs/tags/vX.Y.Z`: an older release's signed image, retagged,
+does not verify), and must differ; the launcher then runs
+`registry@sha256:...`, never a tag that could move. With
 `LOCKSQL_SKIP_COSIGN=1` nothing is verified: the digests stay empty and the
 launcher runs `registry:X.Y.Z`. A launcher run from a clone
 (`launcher_version=dev`) runs the local image `locksql`.
