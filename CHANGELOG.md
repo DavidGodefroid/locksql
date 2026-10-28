@@ -24,6 +24,11 @@ This file records the changes a user or an agent has to know about.
 
 ### Changed
 
+- **Function names are matched exactly.** A function call must use an
+  unquoted name in ASCII letters, and in MySQL no blank between the name and
+  `(`, so that the allowlist checks the function the server calls:
+  `"lower"(x)`, `` `lower`(x) ``, non-ASCII spellings and MySQL `lower (x)`
+  are now refused with `E_FUNCTION`. Write `lower(x)`.
 - **Release supply chain pinned.** `scripts/install.sh` checks the cosign
   signature of `checksums.txt` against the release workflow run for a
   version tag (`^https://github\.com/DavidGodefroid/locksql/\.github/workflows/release\.yml@refs/tags/v[0-9]`,
