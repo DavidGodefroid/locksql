@@ -1,18 +1,23 @@
 #!/bin/sh
 # Installs a released locksql binary on Linux or macOS, without Go.
 #
-#   curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh
+# Download it from the tag you install, read it, then run it with that tag:
 #
-# Better: download it, read it, then run it.
+#   V=vX.Y.Z
+#   curl -fsSLO "https://raw.githubusercontent.com/DavidGodefroid/locksql/$V/scripts/install.sh"
+#   less install.sh
+#   LOCKSQL_VERSION=$V sh install.sh
 #
 # Environment:
-#   LOCKSQL_VERSION      tag to install (default: the latest release), e.g. v0.1.0
+#   LOCKSQL_VERSION      tag to install (default: the latest release), e.g. v0.8.1
 #   LOCKSQL_INSTALL_DIR  target directory (default: /usr/local/bin, via sudo if needed)
-#   LOCKSQL_REQUIRE_COSIGN=1  fail instead of warning when cosign is not on PATH
+#   LOCKSQL_SKIP_COSIGN=1  install without cosign: the signature is then NOT checked
 #
-# The archive is checked against checksums.txt; when cosign is available, the
-# keyless signature of checksums.txt is checked too. This script only places
-# the binary: `sudo locksql install` sets up separated mode afterwards.
+# cosign is required: the keyless signature of checksums.txt must come from
+# this repository's release workflow run for a version tag, and the archive is
+# checked against checksums.txt. The checksum alone only detects corruption,
+# since it comes from the same release. This script only places the binary:
+# `sudo locksql install` sets up separated mode afterwards.
 set -eu
 
 repo="DavidGodefroid/locksql"
@@ -64,18 +69,20 @@ say "downloading $archive ($tag)"
 fetch "$base/$archive" "$tmp/$archive" || die "download failed: $base/$archive"
 fetch "$base/checksums.txt" "$tmp/checksums.txt" || die "download failed: checksums.txt"
 
+# The release workflow run for a version tag, as locksql update checks it.
+identity='^https://github\.com/DavidGodefroid/locksql/\.github/workflows/release\.yml@refs/tags/v[0-9]'
 if command -v cosign >/dev/null 2>&1; then
 	fetch "$base/checksums.txt.sigstore.json" "$tmp/checksums.txt.sigstore.json" ||
 		die "download failed: checksums.txt.sigstore.json"
 	cosign verify-blob --bundle "$tmp/checksums.txt.sigstore.json" \
-		--certificate-identity-regexp "^https://github.com/$repo/" \
+		--certificate-identity-regexp "$identity" \
 		--certificate-oidc-issuer https://token.actions.githubusercontent.com \
 		"$tmp/checksums.txt" >/dev/null 2>&1 || die "cosign: signature of checksums.txt does not verify"
 	say "cosign: checksums.txt signature verified"
-elif [ "${LOCKSQL_REQUIRE_COSIGN:-0}" = 1 ]; then
-	die "cosign not found and LOCKSQL_REQUIRE_COSIGN=1"
+elif [ "${LOCKSQL_SKIP_COSIGN:-0}" = 1 ]; then
+	say "WARNING: LOCKSQL_SKIP_COSIGN=1: the signature of checksums.txt is NOT checked; the checksum only detects corruption"
 else
-	say "cosign not found: checking the checksum only, not its signature"
+	die "cosign is required to check the release's signature (https://docs.sigstore.dev/cosign/system_config/installation/); LOCKSQL_SKIP_COSIGN=1 installs without it"
 fi
 
 want="$(awk -v f="$archive" '$2 == f { print $1 }' "$tmp/checksums.txt")"
