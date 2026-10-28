@@ -434,7 +434,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		p.SSH = s
 	}
 	if r.ProxyCmd != nil {
-		if err := checkProxyCommand(r.ProxyCmd, p, errf); err != nil {
+		if err := checkProxyCommand(r.ProxyCmd, p, baseDir, errf); err != nil {
 			return Profile{}, err
 		}
 		p.ProxyCommand = r.ProxyCmd
@@ -490,10 +490,14 @@ func buildSSH(r rawSSH, p Profile, errf func(string, ...any) error) (*SSHProfile
 // (--token x).
 var secretArg = regexp.MustCompile(`(?i)(passw(or)?d|pwd|secret|token)([_-]?[a-z]*)?(=|$)`)
 
-// checkProxyCommand validates a proxy_command argv. The program must be an
-// absolute path or a name looked up in PATH: a relative path would resolve
-// in the project, which the agent can write to after the approval.
-func checkProxyCommand(argv []string, p Profile, errf func(string, ...any) error) error {
+// checkProxyCommand validates a proxy_command argv. The project (baseDir
+// for a project config), which the agent can write to after the approval,
+// must hold no part of the command: the program must be an absolute path or
+// a name looked up in PATH, and no argument may name a path inside baseDir,
+// alone or after a flag (-F/proj/x, --config=/proj/x). The command runs in
+// the console account's home, so a relative argument does not resolve
+// there either.
+func checkProxyCommand(argv []string, p Profile, baseDir string, errf func(string, ...any) error) error {
 	switch {
 	case p.Engine == EngineSQLite:
 		return errf("proxy_command is not used by sqlite")
@@ -514,8 +518,30 @@ func checkProxyCommand(argv []string, p Profile, errf func(string, ...any) error
 		if secretArg.MatchString(a) {
 			return errf("%s looks like a secret; %s never reads secrets from config files", key, product.P.Name)
 		}
+		if namesPathIn(a, baseDir) {
+			return errf("%s is inside the project %s, which the agent can rewrite after the approval; install it elsewhere", key, baseDir)
+		}
 	}
 	return nil
+}
+
+// namesPathIn reports whether arg holds dir, or a path below it, as a
+// whole path component.
+func namesPathIn(arg, dir string) bool {
+	if dir == "" || !filepath.IsAbs(dir) {
+		return false
+	}
+	dir = filepath.Clean(dir)
+	for rest := arg; ; {
+		i := strings.Index(rest, dir)
+		if i < 0 {
+			return false
+		}
+		rest = rest[i+len(dir):]
+		if rest == "" || rest[0] == filepath.Separator || rest[0] == '/' {
+			return true
+		}
+	}
 }
 
 // ProxyString renders a proxy_command argv for the approval screens, each

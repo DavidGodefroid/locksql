@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,9 @@ func helper(mode string) {
 	case "fail":
 		fmt.Fprint(os.Stderr, strings.Repeat("x", 4096)+"\nconnect: \x1b[2Jrefused\n")
 		os.Exit(1)
+	case "pwd":
+		wd, _ := os.Getwd()
+		fmt.Println(wd)
 	case "pid":
 		fmt.Println(os.Getpid())
 		time.Sleep(time.Hour)
@@ -148,5 +152,25 @@ func TestDialCanceled(t *testing.T) {
 	cancel()
 	if _, err := New(helperArgv("echo")).Dial(ctx, "tcp", "db:1"); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// The command does not run in the console's working directory, the project,
+// where a relative argument would name a file the agent can write.
+func TestRunsInHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip(err)
+	}
+	c := dial(t, New(helperArgv("pwd")))
+	c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	line, err := bufio.NewReader(c).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := filepath.EvalSymlinks(home)
+	got, _ := filepath.EvalSymlinks(strings.TrimSpace(line))
+	if got != want {
+		t.Errorf("working directory = %q, want %q", got, want)
 	}
 }

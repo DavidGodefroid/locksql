@@ -394,8 +394,10 @@ proxy_command = ["kubectl", "exec", "-i", "-n", "shop", "shop-db-0", "--",
   needs to start a program); `PGPASSWORD`, `MYSQL_PWD`, `VAULT_TOKEN` and the
   like never reach it.
 - The program is an absolute path or a bare name looked up in `PATH`; a
-  relative path is refused, and `locksql doctor` fails a program inside the
-  project, where the agent could rewrite it after your approval. Arguments
+  relative path is refused, and so is any argument naming a path inside the
+  project, alone or after a flag (`-F/srv/app/x`, `--config=/srv/app/x`):
+  the agent could rewrite that file after your approval. The command runs
+  in the console account's home, not in the project. Arguments
   are checked like other values: no control characters, no embedded
   password, nothing that reads as a secret (`--password=`, `MYSQL_PWD=`,
   `--token`); the database password is asked as usual and sent over the

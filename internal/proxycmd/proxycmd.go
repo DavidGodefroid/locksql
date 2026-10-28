@@ -86,6 +86,13 @@ func (p *Proxy) Dial(ctx context.Context, network, addr string) (net.Conn, error
 	}
 	cmd := exec.Command(p.argv[0], p.argv[1:]...)
 	cmd.Env = scrubEnv(os.Environ())
+	// Not the console's working directory, the project, where a relative
+	// argument would name a file the agent can write.
+	if home, err := os.UserHomeDir(); err == nil {
+		cmd.Dir = home
+	} else {
+		cmd.Dir = os.TempDir()
+	}
 	detach(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

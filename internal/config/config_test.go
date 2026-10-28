@@ -523,6 +523,24 @@ func TestProxyCommand(t *testing.T) {
 		t.Errorf("absolute program: %v", err)
 	}
 	ssh := "[profiles.p.ssh]\nhost=\"b\"\nuser=\"u\"\nauth=\"agent\"\n"
+	// The project, which the agent can write to after the approval, holds
+	// no part of the command.
+	project := t.TempDir()
+	for name, argv := range map[string]string{
+		"program":  fmt.Sprintf("[%q]", filepath.Join(project, "bin", "proxy")),
+		"argument": fmt.Sprintf("[\"sh\", %q]", filepath.Join(project, "proxy.sh")),
+		"flag":     fmt.Sprintf("[\"ssh\", %q, \"host\"]", "-F"+filepath.Join(project, "ssh_config")),
+		"option":   fmt.Sprintf("[\"ssh\", %q, \"host\"]", "--config="+filepath.Join(project, "ssh_config")),
+		"root":     fmt.Sprintf("[\"sh\", %q]", project),
+	} {
+		_, err := ParseProfiles([]byte("[profiles.p]\n"+head+"proxy_command="+argv+"\n"), "t.toml", project)
+		if err == nil || !strings.Contains(err.Error(), "inside the project") {
+			t.Errorf("%s in the project: err = %v", name, err)
+		}
+	}
+	if _, err := ParseProfiles([]byte("[profiles.p]\n"+head+"proxy_command=[\"sh\", \"/usr/local/bin/proxy.sh\"]\n"), "t.toml", project); err != nil {
+		t.Errorf("a program outside the project: %v", err)
+	}
 	for name, c := range map[string]struct{ body, err string }{
 		"empty":         {head + "proxy_command=[]\n", "proxy_command needs"},
 		"empty program": {head + "proxy_command=[\"\", \"x\"]\n", "proxy_command needs"},

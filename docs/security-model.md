@@ -287,8 +287,9 @@ it append-only for the console account too.
   read the console's keystrokes or prompt there), with an environment
   reduced to an allowlist that keeps no secret variable; the database
   password goes over the connection, never to the command. A relative
-  program path is refused, and `locksql doctor` fails a program inside the
-  project, which the agent could rewrite after the approval. The command's
+  program path is refused, as is any argument naming a path inside the
+  project (which the agent could rewrite after the approval), and the
+  command runs in the console account's home rather than the project. The command's
   stderr is shown on a failed connection as one sanitized line of at most
   512 bytes. `tls` applies beyond the command's end as for a direct
   connection. Out of scope: what the command itself trusts (its own

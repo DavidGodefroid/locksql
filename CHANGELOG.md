@@ -13,7 +13,8 @@ This file records the changes a user or an agent has to know about.
   connection, as OpenSSH's `ProxyCommand`: `docker exec`, `podman exec`,
   `kubectl exec`, or `ssh ... socat` to a server bound to its container's
   loopback or to a Unix socket on a remote host. It runs without a shell, as
-  the console account, without a terminal and with a scrubbed environment;
+  the console account, in its home, without a terminal and with a scrubbed
+  environment, and may not name a file inside the project;
   the argv is part of the approved policy (any change loosens it), its
   stderr ends a connection error, and `locksql doctor` checks the program.
   `docs/usage.md` gains "Databases that publish no port" with the recipes.
