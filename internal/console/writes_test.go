@@ -78,3 +78,39 @@ func TestWriteReturningNoRows(t *testing.T) {
 	var rr ipc.RunResult
 	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
 }
+
+// write_functions = "allowlist" (issue #60): a write may call allowlisted
+// functions only, masked or not, and CALL is refused; the default keeps
+// the denylist alone.
+func TestWriteFunctionsAllowlist(t *testing.T) {
+	p := uatProfile()
+	p.Tier = config.TierAdmin
+	p.WriteFunctions = config.WriteFunctionsAllowlist
+	h := newHarness(t, p, skip)
+	h.s.allowUnmask = true
+	for _, q := range []string{
+		"UPDATE users SET note = myfunc(id) WHERE id = 1",
+		"INSERT INTO orders (id, user_id, total) VALUES (1, 1, shop.price(1))",
+		"DELETE FROM users WHERE id = `lower`(1)",
+		"UPDATE users u, orders o SET u.note = o.total WHERE o.user_id = u.id",
+		"CALL refresh_totals()",
+		"UPDATE users SET note = lower (note) WHERE id = 1",
+		"UPDATE users SET note = users.nosuch WHERE id = 1",
+	} {
+		for _, unmask := range []bool{false, true} {
+			wantCode(t, h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q, Unmask: unmask}), ipc.CodeRefused)
+		}
+	}
+	if h.sess.runCount() != 0 {
+		t.Fatal("a refused statement ran")
+	}
+	h.plan(t, "UPDATE users SET note = concat(lower(note), UUID()) WHERE id = abs(-1)", false)
+}
+
+func TestWriteFunctionsDefaultDenylist(t *testing.T) {
+	p := uatProfile()
+	p.Tier = config.TierAdmin
+	h := newHarness(t, p, skip)
+	h.plan(t, "UPDATE users SET note = myfunc(id) WHERE id = 1", false)
+	h.plan(t, "CALL refresh_totals()", false)
+}

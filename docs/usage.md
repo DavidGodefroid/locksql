@@ -609,7 +609,8 @@ The console watches the config and PII files while it runs.
   host, port, engine, user or database, a weaker `tls` or any change of `tls_ca`,
   `tls_cert`, `tls_key` or `tls_server_name`,
   any change of the `ssh` table (except `ssh.credentials` set to `ask`),
-  `ask → keychain` or `vault`, any change of `vault_path`, a removed mask rule or detector, a mask mode
+  `ask → keychain` or `vault`, any change of `vault_path`,
+  `write_functions = "allowlist" → "denylist"`, a removed mask rule or detector, a mask mode
   changed to anything but `redact`, a new allow rule) waits for you. Plans are
   refused with `policy_pending` until you run `:review` and answer
   `Apply these changes? [y/N]`.
@@ -801,6 +802,47 @@ PII columns (columns under a mask rule) may be used as follows:
   value the agent chose. An `INSERT` without a column list must name its
   columns (or store only `NULL`/`DEFAULT`); an `INSERT` into a masked column
   from a query is refused. Writing other columns is unaffected.
+
+#### Functions in writes (`write_functions`)
+
+Reads may call allowlisted functions only. Writes, DDL and admin statements
+are checked against a denylist, which is best-effort: a user-defined
+function or an extension (`cron.schedule` from pg_cron runs SQL later) can
+be named anything. A profile can apply the allowlist to writes too:
+
+```toml
+[profiles.prod]
+# ...
+write_functions = "allowlist"   # default "denylist"
+```
+
+With `"allowlist"`:
+
+- every function an `INSERT`, `REPLACE`, `UPDATE` or `DELETE` calls, at any
+  depth (`VALUES`, `SET`, `WHERE`, subqueries, CTEs, `ON CONFLICT`,
+  `RETURNING`), must be on the read allowlist of the dialect or one of the
+  key generators: PostgreSQL `gen_random_uuid`, `uuidv4`, `uuidv7`,
+  `nextval`; MySQL/MariaDB `UUID`, `UUID_SHORT`, `UUID_TO_BIN`,
+  `BIN_TO_UUID`, `SYS_GUID`; SQLite `randomblob`. `setval`,
+  `LAST_INSERT_ID(n)` and session or catalog functions are refused;
+- schema-qualified calls (`cron.schedule(...)`, `pg_catalog.lower(...)`),
+  calls through a quoted name or a name with non-ASCII letters
+  (PostgreSQL `"LOWER"(x)` is not `lower`) and calls with a blank before
+  `(` (MySQL `lower (x)` calls a stored function named `lower`) are refused;
+- every column the write names must exist: PostgreSQL reads `t.name`, when
+  `t` has no column `name`, as the call `name(t)`;
+- a write the parser does not read is refused, since its calls cannot be
+  listed: `MERGE`, multi-table MySQL writes, table functions in `FROM`;
+- `CALL` is refused (a stored procedure runs code the classifier cannot
+  see).
+
+The refusal code is `E_FUNCTION` (`E_UNKNOWN_NAME` for a column that does
+not exist). DDL is not covered: a DDL tier can create functions, triggers
+and column defaults. Code the schema already holds still runs: triggers,
+column defaults, domain constraints, and a function created under an
+allowlisted name with a closer argument type or earlier in `search_path`;
+the privilege audit is the control there. Changing `"allowlist"` back to
+`"denylist"` is a policy loosening and waits for `:review`.
 
 ### Placeholders and cell references
 
