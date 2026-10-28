@@ -293,7 +293,7 @@ func TestUpdateRefusesOtherChannels(t *testing.T) {
 	f.run(t, false, "", "--yes").want(t, exitFail, "installed by a package", "F=locksql_${V}_linux_",
 		"checksums.txt.sigstore.json", "cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '"+
 			ReleaseCertIdentityRegexp+"' --certificate-oidc-issuer "+releaseOIDCIssuer+" checksums.txt",
-		"|| exit 1; done) &&", "checksums.txt &&\n", "awk -v f=\"$F\" '$2 == f' checksums.txt | sha256sum -c - &&\n", "echo \"verified: $F\"",
+		"|| exit 1; done) &&", "checksums.txt &&\n", "awk -v f=\"$F\" '$2 == f { n++; print } END { exit !n }' checksums.txt >\"$F.sha256\" && sha256sum -c \"$F.sha256\" &&\n", "echo \"verified: $F\"",
 		"sudo apt install \"./$F\"", "sudo dnf install \"./$F\"", "sudo apk add --allow-untrusted \"./$F\"")
 	f.wantNoRoot(t)
 	if strings.Contains(packageHint("/usr/bin/locksql"), "grep ") {
@@ -390,9 +390,6 @@ func TestUpdateRejectsAnInvalidVersion(t *testing.T) {
 // The verification steps of the package hint stop at the first failure:
 // a failed download, signature or checksum never prints "verified".
 func TestPackageHintStopsOnFailure(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX shell")
-	}
 	if _, err := exec.LookPath("sha256sum"); err != nil {
 		t.Skip("sha256sum is not installed")
 	}

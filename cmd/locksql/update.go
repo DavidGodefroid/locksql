@@ -220,7 +220,7 @@ Download the package, checksums.txt and its signature, check both, then install.
   F=locksql_${V}_linux_%[3]s.$P
   (for f in "$F" checksums.txt checksums.txt.sigstore.json; do curl -fsSLO "%[2]s/download/v$V/$f" || exit 1; done) &&
   cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '%[4]s' --certificate-oidc-issuer %[5]s checksums.txt &&
-  awk -v f="$F" '$2 == f' checksums.txt | sha256sum -c - &&
+  awk -v f="$F" '$2 == f { n++; print } END { exit !n }' checksums.txt >"$F.sha256" && sha256sum -c "$F.sha256" &&
   echo "verified: $F"
 then, only after "verified: <package>":
   Debian, Ubuntu:  sudo apt install "./$F"
