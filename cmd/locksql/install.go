@@ -105,22 +105,16 @@ func doInstall(e env, o installOpts) (code int, ran bool) {
 		fmt.Fprintln(e.stderr, "locksql install:", err)
 		return exitFail, false
 	}
-	// pin is the sha256 the root script checks its copy against: with
-	// --trust-binary, the binary could change between this check and the
-	// script's copy.
-	pin := ""
-	if o.trustBinary {
-		if pin, err = fileSum(bin); err != nil {
-			fmt.Fprintln(e.stderr, "locksql install:", err)
-			return exitFail, false
-		}
-		fmt.Fprintf(e.stdout, "--trust-binary: copying %s (sha256 %s, checked again before it is installed)\n\n", bin, pin)
-	} else if msg, err := installSourceRefusal(bin); err != nil {
+	pin, sum, msg, err := installSource(bin, o.trustBinary)
+	if err != nil {
 		fmt.Fprintln(e.stderr, "locksql install:", err)
 		return exitFail, false
 	} else if msg != "" {
 		fmt.Fprint(e.stderr, msg)
 		return exitFail, false
+	}
+	if o.trustBinary {
+		fmt.Fprintf(e.stdout, "--trust-binary: copying %s (sha256 %s, checked again before it is installed)\n\n", bin, sum)
 	}
 	script := linuxInstallScript(bin, o.client, o.svc, o.group, pin)
 	if runtime.GOOS == "darwin" {
@@ -149,7 +143,7 @@ These commands run as root:
 			fmt.Fprintln(e.stderr, "locksql install: confirm in a terminal, or run with --print or --yes")
 			return exitUsage, false
 		}
-		if !confirm(e, "Run them now with sudo? [y/N] ") {
+		if !confirm(e, fmt.Sprintf("binary: %s\nsha256: %s\nRun them now with sudo? [y/N] ", bin, sum)) {
 			fmt.Fprintln(e.stdout, "nothing done")
 			return exitOK, false
 		}
@@ -228,6 +222,28 @@ or pass --trust-binary to copy this one (sha256 %s).
 `, bin, owner, sum), nil
 }
 
+// installSource checks bin, the binary install copies, and returns its
+// sha256 (sum, shown to the human) and the pin the root script checks its
+// copy against, or the refusal to print. Without trust, bin must be owned
+// by root and writable by root alone; it is pinned all the same, since root
+// reads it after the prompt, from a directory another account may be able
+// to change. The pin is empty when bin already is the installed binary,
+// which the script does not copy.
+func installSource(bin string, trust bool) (pin, sum, refusal string, err error) {
+	if !trust {
+		if refusal, err = installSourceRefusal(bin); err != nil || refusal != "" {
+			return "", "", refusal, err
+		}
+	}
+	if sum, err = fileSum(bin); err != nil {
+		return "", "", "", err
+	}
+	if trust || bin != installedBinary {
+		pin = sum
+	}
+	return pin, sum, "", nil
+}
+
 // fileSum is the hex sha256 of the file at path.
 func fileSum(path string) (string, error) {
 	f, err := os.Open(path)
@@ -262,8 +278,8 @@ x11          = "refuse"
 // temporary file and checks it against the sha256 pin (sumCmd checks a
 // "<sha256>  <path>" line on stdin), aborting before any change on a
 // mismatch with a message prefixed by cmd ("locksql install"); src is the
-// file to install. Without a pin, bin itself is the source: install refused
-// it unless root owns it and alone may write it.
+// file to install. Without a pin, bin itself is the source: install pins
+// every binary it copies, so that is the installed binary, not copied.
 func pinnedSource(cmd, bin, pin, sumCmd string) (prefix, src string) {
 	if pin == "" {
 		return "", shellQuote(bin)
