@@ -317,8 +317,12 @@ proxy_command = ["kubectl", "exec", "-i", "-n", "shop", "shop-db-0", "--",
   agent could rewrite that file after your approval. The command runs in an
   empty directory of its own, private to the console account and removed
   when it ends, so a relative argument names nothing; a `..` component,
-  `~user`, ssh's `%d` and `$VAR` or `${VAR}`, which the command would
-  expand where locksql cannot check them, are refused. Arguments are checked
+  `~user`, `~+`, ssh's `%`-tokens (`%d`, `%u`, ...), `$VAR`, `${VAR}`,
+  `$(...)` and backticks, which the command would expand where locksql
+  cannot check them, are refused. These checks read each argument as text
+  that may hold paths; they do not interpret a shell script (`sh -c '...'`)
+  or the command `ssh` hands to the remote shell. Read those yourself
+  before approving them. Arguments are checked
   like other values: no control characters, no embedded password, nothing
   that reads as a secret (`--password=`, `MYSQL_PWD=`, `--token`, mysql's
   `-pSECRET`); the database password is asked as usual and sent over the

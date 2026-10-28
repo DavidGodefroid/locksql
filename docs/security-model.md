@@ -295,7 +295,10 @@ it append-only for the console account too.
   project (which the agent could rewrite after the approval), wherever it
   appears in the argument, through a symbolic link or `~`, and the command
   runs in an empty private directory of its own rather than the project or
-  the home that may hold it. The command's
+  the home that may hold it; `..`, `~user`, ssh `%`-tokens, `$VAR` and
+  command substitutions are refused. A shell script inside the argv
+  (`sh -c`, the remote command of `ssh`) is not interpreted: the human
+  reads it at approval. The command's
   stderr is shown on a failed connection as one sanitized line of at most
   512 bytes. `tls` applies beyond the command's end as for a direct
   connection. Out of scope: what the command itself trusts (its own

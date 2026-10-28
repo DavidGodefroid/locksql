@@ -559,7 +559,7 @@ func checkProxyCommand(argv []string, p Profile, baseDir string, errf func(strin
 			return errf("%s climbs out of the command's directory with ..; give an absolute path", key)
 		}
 		if expandsHome(a) {
-			return errf("%s holds ~user, %%d or a $variable, which the command expands where %s cannot check it; write the path out", key, product.P.Name)
+			return errf("%s holds ~user, a %%-token, a $variable or a command substitution, which the command expands where %s cannot check it; write the path out", key, product.P.Name)
 		}
 		if namesPathIn(a, baseDir) {
 			return errf("%s is inside the project %s, which the agent can rewrite after the approval; install it elsewhere", key, baseDir)
@@ -591,7 +591,7 @@ func pathStarts(arg string) []string {
 // command's directory, it could reach the project.
 func climbs(arg string) bool {
 	for _, p := range pathStarts(arg) {
-		if p == ".." || (strings.HasPrefix(p, "..") && strings.IndexByte(`/\`, p[2]) >= 0) {
+		if p == ".." || (strings.HasPrefix(p, "..") && strings.IndexByte(pathDelims+"&|<>()\n", p[2]) >= 0) {
 			return true
 		}
 	}
@@ -599,20 +599,28 @@ func climbs(arg string) bool {
 }
 
 // expandsHome reports whether arg holds a form the command may expand to a
-// directory locksql does not see: ~user, ssh's %d (the home) and $VAR or
-// ${VAR}. A ~ alone or before a separator is the console account's home,
-// which namesPathIn checks.
+// path locksql does not see: ~user, ~+ or ~-, ssh's %-tokens (%d the home,
+// %u the user, ...), $VAR, ${VAR}, $(...) or `...`. A ~ alone or before a
+// separator is the console account's home, which namesPathIn checks.
 func expandsHome(arg string) bool {
-	if strings.Contains(arg, "%d") {
+	if strings.ContainsRune(arg, '`') {
 		return true
 	}
 	for i := 0; i+1 < len(arg); i++ {
-		if c := arg[i+1]; arg[i] == '$' && (c == '{' || c == '_' || unicode.IsLetter(rune(c))) {
-			return true
+		c := arg[i+1]
+		switch arg[i] {
+		case '$':
+			if c == '{' || c == '(' || c == '_' || unicode.IsLetter(rune(c)) {
+				return true
+			}
+		case '%':
+			if unicode.IsLetter(rune(c)) {
+				return true
+			}
 		}
 	}
 	for _, p := range pathStarts(arg) {
-		if len(p) > 1 && p[0] == '~' && (p[1] == '_' || unicode.IsLetter(rune(p[1])) || unicode.IsDigit(rune(p[1]))) {
+		if len(p) > 1 && p[0] == '~' && (p[1] == '_' || p[1] == '+' || p[1] == '-' || unicode.IsLetter(rune(p[1])) || unicode.IsDigit(rune(p[1]))) {
 			return true
 		}
 	}
