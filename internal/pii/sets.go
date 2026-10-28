@@ -83,8 +83,15 @@ func MigrateLegacy(dir string) (from, to string, err error) {
 	if err := os.MkdirAll(filepath.Dir(def), 0o755); err != nil {
 		return "", "", dirError(filepath.Dir(def), err)
 	}
-	if err := os.Rename(legacy, def); err != nil {
+	if err := rename(legacy, def); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			// Another console starting at the same time moved it first.
+			return "", "", nil
+		}
 		return "", "", fmt.Errorf("pii: moving %s to %s: %w", legacy, def, err)
 	}
 	return legacy, def, nil
 }
+
+// rename is os.Rename; tests replace it.
+var rename = os.Rename
