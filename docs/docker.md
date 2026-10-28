@@ -135,9 +135,17 @@ docker run -it --rm --name locksql-console --user locksql \
   locksql console --project "$PWD"
 ```
 
-Get the token from your Vault login on your own machine (for example
-`vault print token` after `vault login -method=oidc`) and paste it at the
-prompt. When Vault refuses a read (`not authenticated or not allowed`: the
+Get the token without storing it, then paste it at the prompt:
+
+```sh
+vault login -method=oidc -no-store -token-only
+```
+
+`-no-store -token-only` prints the token and writes no `~/.vault-token`.
+A plain `vault login` would store the token in your account, where the
+agent runs: the agent could read it and fetch the login from Vault itself,
+bypassing the console (`locksql doctor` fails on it). For the same reason,
+do not leave `VAULT_TOKEN` set in that shell. When Vault refuses a read (`not authenticated or not allowed`: the
 token is expired or revoked, or its policy may not read `vault_path`), the
 console asks for a token again; three refusals in a row stop the
 connection.

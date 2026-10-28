@@ -274,6 +274,9 @@ vault_path  = "database/creds/reporting-ro"
 - At start, before the first Vault read, the console asks
   `Vault token for <VAULT_ADDR>:` (no echo). No `vault login` is needed, and
   the console account's `~/.vault-token` and `VAULT_TOKEN` are not used.
+  Get it with `vault login -method=oidc -no-store -token-only`, which
+  prints the token without writing `~/.vault-token` in the agent's
+  account, and do not leave `VAULT_TOKEN` set in that shell.
   The token goes to the CLI as `VAULT_TOKEN` in the child's environment
   only: never in its arguments (`/proc/<pid>/cmdline`), on disk, in a log or
   in the audit trail. It stays in console memory for the session, so
