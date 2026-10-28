@@ -19,6 +19,11 @@ import (
 // sessionOptional are the optional interfaces of package engine that the
 // console finds on a session by a type assertion. A wrapper that embeds
 // engine.Session hides them unless it passes each on.
+//
+// The console's own optional interfaces, DBUser and CredentialsExpire,
+// are not here: only vaultSession has them, and it is the outermost
+// wrapper (connect wraps it last). Passing them through other wrappers
+// would change what a session without them reports.
 var sessionOptional = []reflect.Type{
 	reflect.TypeFor[engine.Noticer](),
 	reflect.TypeFor[engine.FunctionShadows](),
@@ -40,6 +45,13 @@ func wrapperGaps(t *testing.T, src map[string]string) map[string][]string {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// The name the file gives package engine, alias included.
+		pkg := "engine"
+		for _, im := range f.Imports {
+			if strings.Trim(im.Path.Value, `"`) == "github.com/DavidGodefroid/locksql/internal/engine" && im.Name != nil {
+				pkg = im.Name.Name
+			}
+		}
 		for _, d := range f.Decls {
 			switch d := d.(type) {
 			case *ast.GenDecl:
@@ -53,8 +65,12 @@ func wrapperGaps(t *testing.T, src map[string]string) map[string][]string {
 						continue
 					}
 					for _, fl := range st.Fields.List {
-						if sel, ok := fl.Type.(*ast.SelectorExpr); ok && len(fl.Names) == 0 && sel.Sel.Name == "Session" {
-							if id, ok := sel.X.(*ast.Ident); ok && id.Name == "engine" {
+						ft := fl.Type
+						if star, ok := ft.(*ast.StarExpr); ok {
+							ft = star.X
+						}
+						if sel, ok := ft.(*ast.SelectorExpr); ok && len(fl.Names) == 0 && sel.Sel.Name == "Session" {
+							if id, ok := sel.X.(*ast.Ident); ok && id.Name == pkg {
 								wrappers[ts.Name.Name] = true
 							}
 						}
@@ -164,9 +180,14 @@ type halfWrap struct {
 }
 func (s halfWrap) Notices() []string { return nil }
 type notWrap struct{ s engine.Session }
+`, "y.go": `package console
+import eng "github.com/DavidGodefroid/locksql/internal/engine"
+type aliasWrap struct{ *eng.Session }
+func (s *aliasWrap) Notices() []string { return nil }
 `}
 	gaps := wrapperGaps(t, src)
-	if len(gaps) != 1 || !slices.Equal(gaps["halfWrap"], []string{"FunctionShadows.ShadowedFunctions", "FunctionShadows.ShadowedOperators"}) {
+	want := []string{"FunctionShadows.ShadowedFunctions", "FunctionShadows.ShadowedOperators"}
+	if len(gaps) != 2 || !slices.Equal(gaps["halfWrap"], want) || !slices.Equal(gaps["aliasWrap"], want) {
 		t.Fatalf("gaps = %v", gaps)
 	}
 }
