@@ -40,6 +40,18 @@ This file records the changes a user or an agent has to know about.
 
 ### Changed
 
+- **Release supply chain pinned.** `scripts/install.sh` checks the cosign
+  signature of `checksums.txt` against the release workflow run for a
+  version tag (`^https://github\.com/DavidGodefroid/locksql/\.github/workflows/release\.yml@refs/tags/v[0-9]`,
+  as `locksql update` does), instead of any workflow or ref of the
+  repository, and now requires cosign: without it the script stops, and
+  `LOCKSQL_SKIP_COSIGN=1` installs without the signature check (the former
+  `LOCKSQL_REQUIRE_COSIGN` is gone). `locksql install` prints the sha256 of
+  the binary it copies beside its prompt, and its root script checks its
+  copy against it for every source, not only with `--trust-binary`.
+  `locksql update`'s package instructions check the signature and checksum
+  before `apt`, `dnf` or `apk`, and stop at the first failed step. The
+  workflows' actions are pinned to commit SHAs, and the release job pins GoReleaser, cosign and syft.
 - **PII rules in named sets, one per profile by default.** PII rules no
   longer live in one `pii.toml` shared by every profile of a scope: each
   profile uses the set named by its new `pii_rules` key, by default its own
