@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -508,6 +509,22 @@ func buildSSH(r rawSSH, p Profile, errf func(string, ...any) error) (*SSHProfile
 // (--token x).
 var secretArg = regexp.MustCompile(`(?i)(passw(or)?d|pwd|secret|token)([_-]?[a-z]*)?(=|$)`)
 
+// mysqlClient matches the programs whose -pSECRET is a password: the MySQL
+// and MariaDB clients and tools (mysql, mysqldump, mariadb-admin, ...).
+var mysqlClient = regexp.MustCompile(`(?i)^(mysql|mariadb)[a-z_-]*(\.exe)?$`)
+
+// shortPassword reports whether a is a password glued to -p, mysql style
+// (-pSECRET, -p=SECRET). -p is also ssh's and nc's port, so a number there is
+// a secret only once a MySQL client has appeared in the argv; a lone -p, which
+// prompts, carries none.
+func shortPassword(a string, mysql bool) bool {
+	v, ok := strings.CutPrefix(a, "-p")
+	if !ok || v == "" {
+		return false
+	}
+	return mysql || strings.Trim(v, "0123456789") != ""
+}
+
 // checkProxyCommand validates a proxy_command argv. The project (baseDir
 // for a project config), which the agent can write to after the approval,
 // must hold no part of the command: the program must be an absolute path or
@@ -528,12 +545,14 @@ func checkProxyCommand(argv []string, p Profile, baseDir string, errf func(strin
 	case !filepath.IsAbs(argv[0]) && strings.ContainsAny(argv[0], `/\`):
 		return errf("proxy_command: the program must be an absolute path or a bare program name looked up in PATH")
 	}
+	mysql := false
 	for i, a := range argv {
 		key := fmt.Sprintf("proxy_command[%d]", i)
 		if err := kconfig.CheckValue(product.P, key, a); err != nil {
 			return errf("%v", err)
 		}
-		if secretArg.MatchString(a) {
+		mysql = mysql || mysqlClient.MatchString(filepath.Base(filepath.FromSlash(a)))
+		if secretArg.MatchString(a) || shortPassword(a, mysql) {
 			return errf("%s looks like a secret; %s never reads secrets from config files", key, product.P.Name)
 		}
 		if namesPathIn(a, baseDir) {
@@ -543,13 +562,45 @@ func checkProxyCommand(argv []string, p Profile, baseDir string, errf func(strin
 	return nil
 }
 
+// foldCase is set where file names are case-insensitive by default, as on
+// macOS and Windows, so that /Project names /project.
+var foldCase = runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+
 // namesPathIn reports whether arg holds dir, or a path below it, as a
-// whole path component.
+// whole path component. Symbolic links are resolved on both sides: a dir
+// reached through a link, and an argument that is, or lies below, a link
+// into dir, both count.
 func namesPathIn(arg, dir string) bool {
 	if dir == "" || !filepath.IsAbs(dir) {
 		return false
 	}
-	dir = filepath.Clean(dir)
+	dirs := []string{filepath.Clean(dir)}
+	if r := resolve(dirs[0]); r != dirs[0] {
+		dirs = append(dirs, r)
+	}
+	args := []string{arg}
+	for _, p := range pathsIn(arg) {
+		if r := resolve(p); r != p {
+			args = append(args, r)
+		}
+	}
+	for _, a := range args {
+		for _, d := range dirs {
+			if holdsPath(a, d) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// holdsPath reports whether arg holds dir, or a path below it, as a whole
+// path component, folding case where foldCase says so.
+func holdsPath(arg, dir string) bool {
+	arg = filepath.FromSlash(arg)
+	if foldCase {
+		arg, dir = strings.ToLower(arg), strings.ToLower(dir)
+	}
 	for rest := arg; ; {
 		i := strings.Index(rest, dir)
 		if i < 0 {
@@ -559,6 +610,43 @@ func namesPathIn(arg, dir string) bool {
 		if rest == "" || rest[0] == filepath.Separator || rest[0] == '/' {
 			return true
 		}
+	}
+}
+
+// pathsIn returns the absolute paths arg may name: itself, the value of a
+// --flag=value, and the value glued to a short flag (-F/path).
+func pathsIn(arg string) []string {
+	var out []string
+	add := func(p string) {
+		if filepath.IsAbs(p) {
+			out = append(out, filepath.Clean(p))
+		}
+	}
+	add(arg)
+	if _, v, ok := strings.Cut(arg, "="); ok {
+		add(v)
+	}
+	if len(arg) > 2 && arg[0] == '-' && arg[1] != '-' {
+		add(arg[2:])
+	}
+	return out
+}
+
+// resolve returns path with its symbolic links evaluated. A path that does
+// not exist yet is resolved through its deepest existing ancestor, where a
+// file created later would land.
+func resolve(path string) string {
+	rest := ""
+	for p := path; ; {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
 	}
 }
 

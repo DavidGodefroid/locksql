@@ -594,15 +594,83 @@ func TestProxyCommand(t *testing.T) {
 		"password flag": {head + "proxy_command=[\"x\", \"--password=hunter2\"]\n", "never reads secrets"},
 		"env password":  {head + "proxy_command=[\"env\", \"MYSQL_PWD=hunter2\", \"nc\"]\n", "never reads secrets"},
 		"token flag":    {head + "proxy_command=[\"x\", \"--token\", \"abc\"]\n", "never reads secrets"},
+		"mysql -p":      {head + "proxy_command=[\"docker\", \"exec\", \"-i\", \"db\", \"mysql\", \"-uroot\", \"-phunter2\"]\n", "never reads secrets"},
+		"mysql -p=":     {head + "proxy_command=[\"mariadb\", \"-p=hunter2\"]\n", "never reads secrets"},
+		"mysql -p123":   {head + "proxy_command=[\"/usr/bin/mysql\", \"-p1234\"]\n", "never reads secrets"},
+		"short -p":      {head + "proxy_command=[\"x\", \"-phunter2\"]\n", "never reads secrets"},
 		"not a list":    {head + "proxy_command=\"nc db 3306\"\n", "proxy_command"},
 	} {
 		if _, err := parse(c.body); err == nil || !strings.Contains(err.Error(), c.err) {
 			t.Errorf("%s: err = %v, want %q", name, err, c.err)
 		}
 	}
+	// -p is also ssh's and nc's port: a number there is no secret, nor is a
+	// lone -p, which would prompt and fail without a terminal.
+	for _, argv := range []string{
+		`["ssh", "-p2222", "host", "socat", "-", "TCP:127.0.0.1:3306"]`,
+		`["ssh", "-p", "2222", "host", "docker", "exec", "-i", "db", "mysql", "-uroot", "-p"]`,
+		`["nc", "-p1234", "db", "3306"]`,
+		`["docker", "exec", "-i", "db", "mysql", "-P3306"]`,
+	} {
+		if _, err := parse(head + "proxy_command=" + argv + "\n"); err != nil {
+			t.Errorf("%s: %v", argv, err)
+		}
+	}
 	// A remote host is reached as over TCP: production still needs tls.
 	_, err = ParseProfiles([]byte("[profiles.prod]\nengine=\"postgres\"\nhost=\"db.internal\"\ntls=\"prefer\"\nproduction=true\nproxy_command=[\"nc\", \"db\", \"5432\"]\n"), "t.toml", t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "needs tls") {
 		t.Errorf("production remote host: err = %v", err)
+	}
+}
+
+// namesPathIn sees through symbolic links, in either direction, and folds
+// case where the file system does.
+func TestNamesPathIn(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	outside := filepath.Join(root, "outside")
+	for _, d := range []string{project, outside} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(project, link); err != nil {
+		t.Skip("no symbolic links:", err)
+	}
+	script := filepath.Join(project, "proxy.sh")
+	if err := os.WriteFile(script, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	into := filepath.Join(outside, "proxy")
+	if err := os.Symlink(script, into); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		arg, dir string
+		want     bool
+	}{
+		"plain":                  {script, project, true},
+		"project through a link": {filepath.Join(link, "proxy.sh"), project, true},
+		"link as the project":    {script, link, true},
+		"new file through link":  {"-F" + filepath.Join(link, "ssh_config"), project, true},
+		"link into the project":  {into, project, true},
+		"option to a link":       {"--config=" + into, project, true},
+		"outside":                {filepath.Join(outside, "x"), project, false},
+		"prefix only":            {project + "2/x", project, false},
+		"not a path":             {"TCP:127.0.0.1:3306", project, false},
+	} {
+		if got := namesPathIn(c.arg, c.dir); got != c.want {
+			t.Errorf("%s: namesPathIn(%q, %q) = %v", name, c.arg, c.dir, got)
+		}
+	}
+	defer func(f bool) { foldCase = f }(foldCase)
+	foldCase = true
+	if !namesPathIn(strings.ToUpper(script), project) {
+		t.Error("folded case: the project is not seen")
+	}
+	foldCase = false
+	if namesPathIn(strings.ToUpper(script), project) {
+		t.Error("case-sensitive file system: a differently cased path is seen")
 	}
 }

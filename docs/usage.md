@@ -337,6 +337,16 @@ proxy_command = ["kubectl", "exec", "-i", "-n", "shop", "shop-db-0", "--",
   (`proxy_command: "docker" "exec" "-i" "shop-db" ...`), and an approved
   change ends the running session.
 
+**`proxy_command` in Docker.** The console image is a minimal Alpine with
+no `ssh`, `docker`, `kubectl`, `socat` or `nc`, and the command runs in the
+console's container: none of the recipes above work with the image as
+built. Build an image of your own on top of it with the client the recipe
+needs, and run the console from it ([docker.md, Databases that publish no
+port](docker.md#databases-that-publish-no-port)). `socat` or `nc` is only
+needed where the last step runs (the database's container or the remote
+host), never in the console's image. `locksql doctor` does not look for the
+program in the console's container; check it there yourself.
+
 **Socket directory on the host.** A local MariaDB/MySQL whose socket
 directory is bind-mounted on the console's host is reached with
 `host = "/path/to/mysqld.sock"`, as any local socket. Forwarding a socket

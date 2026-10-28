@@ -27,10 +27,16 @@ This file records the changes a user or an agent has to know about.
   `kubectl exec`, or `ssh ... socat` to a server bound to its container's
   loopback or to a Unix socket on a remote host. It runs without a shell, as
   the console account, in its home, without a terminal and with a scrubbed
-  environment, and may not name a file inside the project;
-  the argv is part of the approved policy (any change loosens it), its
-  stderr ends a connection error, and `locksql doctor` checks the program.
-  `docs/usage.md` gains "Databases that publish no port" with the recipes.
+  environment, and may not name a file inside the project (symbolic links
+  resolved, case folded on macOS and Windows) nor carry a secret
+  (`--password=`, `MYSQL_PWD=`, mysql's `-pSECRET`); closing the connection
+  ends the command and every process it started (a process group, a job
+  object on Windows). The argv is part of the approved policy (any change
+  loosens it), its stderr ends a connection error, and `locksql doctor`
+  checks the program. `docs/usage.md` gains "Databases that publish no
+  port" with the recipes; `docs/docker.md` shows how to add the client a
+  recipe needs to the console's image, which ships none, and why not to
+  mount the Docker socket there.
 
 ### Changed
 

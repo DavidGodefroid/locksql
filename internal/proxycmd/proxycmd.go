@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	kconfig "github.com/DavidGodefroid/lockkit/config"
 )
@@ -28,6 +29,9 @@ import (
 // maxStderr bounds the stderr kept from a command, in bytes: the tail,
 // where the error usually is.
 const maxStderr = 512
+
+// waitDelay bounds the wait for a command's pipes once it has ended.
+const waitDelay = 2 * time.Second
 
 // keptEnv are the environment variables the command inherits. Everything
 // else, such as PGPASSWORD, MYSQL_PWD or VAULT_TOKEN, is dropped.
@@ -93,7 +97,9 @@ func (p *Proxy) Dial(ctx context.Context, network, addr string) (net.Conn, error
 	} else {
 		cmd.Dir = os.TempDir()
 	}
-	detach(cmd)
+	// Wait gives up on the pipes WaitDelay after the command ended, when a
+	// process the command started outside its group still holds them.
+	cmd.WaitDelay = waitDelay
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("proxy_command: %w", err)
@@ -104,7 +110,8 @@ func (p *Proxy) Dial(ctx context.Context, network, addr string) (net.Conn, error
 	}
 	tail := &tailWriter{}
 	cmd.Stderr = tail
-	if err := cmd.Start(); err != nil {
+	kill, err := start(cmd)
+	if err != nil {
 		return nil, fmt.Errorf("proxy_command: %w", err)
 	}
 
@@ -118,7 +125,7 @@ func (p *Proxy) Dial(ctx context.Context, network, addr string) (net.Conn, error
 	end := func() {
 		once.Do(func() {
 			stdin.Close()
-			kill(cmd)
+			kill()
 			cmd.Wait()
 			if s := sanitize(tail.String()); s != "" {
 				p.mu.Lock()

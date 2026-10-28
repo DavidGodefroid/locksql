@@ -8,7 +8,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +43,28 @@ func helper(mode string) {
 		fmt.Println(wd)
 	case "pid":
 		fmt.Println(os.Getpid())
+		time.Sleep(time.Hour)
+	case "tree":
+		// A child that outlives nothing: closing the connection must end it
+		// with the command.
+		child := exec.Command(os.Args[0], "proxycmd-helper", "pid")
+		child.Stdout = os.Stdout
+		if err := child.Start(); err != nil {
+			fmt.Println(err)
+			return
+		}
+		time.Sleep(time.Hour)
+	case "orphan":
+		// A child that leaves the command's process group with its stderr:
+		// ending the command must not wait for it.
+		child := exec.Command(os.Args[0], "proxycmd-helper", "pid")
+		child.Stderr = os.Stderr
+		if _, err := start(child); err != nil {
+			fmt.Println(err)
+			return
+		}
+		fmt.Println(child.Process.Pid)
+		fmt.Fprintln(os.Stderr, "orphaned")
 		time.Sleep(time.Hour)
 	case "tty":
 		// A command run by the console must not reach its terminal.
@@ -173,4 +197,39 @@ func TestRunsInHome(t *testing.T) {
 	if got != want {
 		t.Errorf("working directory = %q, want %q", got, want)
 	}
+}
+
+// readPid reads the pid a helper prints on its first line.
+func readPid(t *testing.T, c net.Conn) int {
+	t.Helper()
+	c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	line, err := bufio.NewReader(c).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil {
+		t.Fatalf("pid line %q: %v", line, err)
+	}
+	return pid
+}
+
+// waitGone fails t unless the process pid ends within 5 seconds.
+func waitGone(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for alive(pid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("process %d still runs", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Closing the connection ends the command and every process it started.
+func TestCloseKillsTree(t *testing.T) {
+	c := dial(t, New(helperArgv("tree")))
+	pid := readPid(t, c)
+	c.Close()
+	waitGone(t, pid)
 }

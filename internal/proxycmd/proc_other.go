@@ -4,12 +4,10 @@ package proxycmd
 
 import "os/exec"
 
-// detach leaves cmd as it is.
-func detach(cmd *exec.Cmd) {}
-
-// kill ends the command.
-func kill(cmd *exec.Cmd) {
-	if cmd.Process != nil {
-		cmd.Process.Kill()
+// start starts cmd; kill ends it.
+func start(cmd *exec.Cmd) (kill func(), err error) {
+	if err := cmd.Start(); err != nil {
+		return nil, err
 	}
+	return func() { cmd.Process.Kill() }, nil
 }
