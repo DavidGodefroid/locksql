@@ -192,3 +192,21 @@ func TestShadowedCheckedAgainAtRun(t *testing.T) {
 		t.Fatal("the statement ran")
 	}
 }
+
+// A function created between the plan and its run is caught before the
+// k-anonymity counts run: they call COUNT and MIN. The answer is the
+// E_FUNCTION refusal, and nothing runs.
+func TestShadowedCheckedBeforeKCounts(t *testing.T) {
+	ss := &shadowSession{}
+	h := newHarness(t, uatProfile(), withShadows(ss), skip)
+	pr := h.plan(t, "SELECT id FROM users WHERE email = 'a@example.com' LIMIT 1", false)
+	ss.shadowed = []string{"count"}
+	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	wantCode(t, resp, ipc.CodeRefused)
+	if resp.Error != nil && (!strings.Contains(resp.Error.Message, "outside pg_catalog") || strings.Contains(resp.Error.Message, "k-anonymity check")) {
+		t.Errorf("refusal %q", resp.Error.Message)
+	}
+	if n := h.sess.runCount(); n != 0 {
+		t.Fatalf("%d statements ran (k-anonymity counts included)", n)
+	}
+}

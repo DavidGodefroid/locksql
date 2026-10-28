@@ -583,7 +583,11 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	// agent's answer is the same whatever the counts say.
 	base := pl.warnings
 	kAlert := func() *ipc.Response {
-		kw, err := s.kCount(ctx, sess, pl)
+		kw, refused, err := s.kCount(ctx, sess, pl)
+		if refused != nil {
+			r := s.refuseWarned(ctx, req.ID, pl, class, refused)
+			return &r
+		}
 		if err != nil {
 			s.auditRunFailed(rec, s.auditErrText(err, pl))
 			r := s.failedPlan(req.ID, "k-anonymity check", err, pl)

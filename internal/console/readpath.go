@@ -435,12 +435,13 @@ const hiddenWeightRefusal = "refused by the weight check (the details are shown 
 // kCount runs the k-anonymity row counts of a plan before its approval
 // and returns a warning for each count under k. A count never refuses: it
 // helps the human decide, and the agent learns nothing of it. A plan with
-// placeholder values is counted with them substituted. The error is the
-// connection's.
-func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]string, error) {
+// placeholder values is counted with them substituted. The refusal is
+// checkShadows' (a function or operator created since the plan); the
+// error is the connection's.
+func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]string, *refusal.Error, error) {
 	k := s.profile.Limits.KAnonymity
 	if pl.an == nil || pl.unmask || k <= 1 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	counted := pl
 	if len(pl.an.Values) > 0 {
@@ -448,7 +449,7 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 		// that analysis's to report.
 		cp := *pl
 		if r, err := s.analyzeRead(ctx, sess, &cp, pl.st.SQL); err != nil || r != nil {
-			return nil, nil
+			return nil, nil, nil
 		}
 		counted = &cp
 	}
@@ -460,10 +461,7 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 	// The counts call COUNT and MIN and compare: a function or operator
 	// created since the plan would run in them first.
 	if r, err := s.checkShadows(ctx, sess, pl.db, counted.shadow); err != nil || r != nil {
-		if err == nil {
-			err = r
-		}
-		return nil, err
+		return nil, r, err
 	}
 	var out []string
 	add := func(w string) {
@@ -476,7 +474,7 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 		res, err := sess.Run(ctx, pl.db, st, 1)
 		if err != nil {
 			if errors.Is(err, engine.ErrConnLost) || ctx.Err() != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			s.println("k-anonymity check failed: " + safeText(s.errText(err, c.SQL, false, counted), false))
 			add("k-anonymity: a count could not run, so the rows this statement covers are unknown")
@@ -502,7 +500,7 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 			add(fmt.Sprintf("k-anonymity: %s fewer than k=%d rows (%d)", what, k, n))
 		}
 	}
-	return out, nil
+	return out, nil, nil
 }
 
 func toInt(v any) (int64, bool) {
