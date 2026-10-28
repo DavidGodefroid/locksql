@@ -48,7 +48,7 @@ This file records the changes a user or an agent has to know about.
   `phone_loose`, masks national numbers without a trunk 0
   (`(415) 555-2671`, `612 345 678`); the default `phone` rule is unchanged
   and now documented next to the `detectors` setting. Detectors only mask
-  more than before (lockkit `32a0379`).
+  more than before (lockkit v0.2.0).
 - **`.locksql/` in Docker.** The console account exists only in the image,
   so nothing gave it the project's `.locksql/` directory, and an agent
   running as your uid could replace `pii.toml`. `locksql doctor --fix` now
