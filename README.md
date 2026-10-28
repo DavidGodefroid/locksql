@@ -521,6 +521,8 @@ mode   = "partial"                    # j***(12)
 column = "*.*.recipient_reference"    # <redacted:rN.R.C> (default)
 [[allow]]                             # explicit exception: never mask
 column = "app.templates.name"
+[[mask]]                              # '*' prefix/suffix inside a segment:
+column = "*.*.*email*"                # contact_email, email_backup, Email
 ```
 
 | Mode | Output | Notes |

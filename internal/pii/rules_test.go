@@ -42,7 +42,7 @@ func TestAddValidates(t *testing.T) {
 	if len(r.Mask) != 3 {
 		t.Errorf("Mask = %v, want 3 distinct rules", r.Mask)
 	}
-	for _, bad := range []string{"", "email", "users.email", "a.b.c.d", "a..c", "a.b*.c", "a.b. c"} {
+	for _, bad := range []string{"", "email", "users.email", "a.b.c.d", "a..c", "a.b. c", "a.**.c", "a.b*c.d", "a.*b*c.d", "a.b.e**"} {
 		if err := r.Add(bad); err == nil {
 			t.Errorf("Add(%q) accepted", bad)
 		}

@@ -91,6 +91,8 @@ func TestDiffEveryRule(t *testing.T) {
 		{"detector added", "detectors", func(p *Policy) { p.Profile.Detectors = append(p.Profile.Detectors, "iban") }, false},
 		{"allow added", "pii.allow", func(p *Policy) { p.PIIAllow = append(p.PIIAllow, "a.b.c") }, true},
 		{"allow removed", "pii.allow", func(p *Policy) { p.PIIAllow = nil }, false},
+		{"wildcard mask added", "pii.mask", func(p *Policy) { p.PIIMask = append(p.PIIMask, "*.*.*email*") }, false},
+		{"wildcard allow added", "pii.allow", func(p *Policy) { p.PIIAllow = append(p.PIIAllow, "*.*.*name*") }, true},
 		{"host", "host", func(p *Policy) { p.Profile.Host = "other" }, true},
 		{"port", "port", func(p *Policy) { p.Profile.Port = 3307 }, true},
 		{"engine", "engine", func(p *Policy) { p.Profile.Engine = EngineMySQL }, true},
