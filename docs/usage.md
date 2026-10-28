@@ -1143,7 +1143,9 @@ locksql doctor   [--profile P]
 - The parser is fail-closed: syntax it does not know is refused. Functions
   must be in the allowlist (`internal/sqlast/funcs.go`: common string,
   numeric, date and JSON functions, aggregates and window functions;
-  schema-qualified functions are refused). `REPEAT`, `LPAD`, `RPAD`, `SPACE`
+  schema-qualified functions are refused). A function name is written
+  unquoted, in ASCII letters, and in MySQL directly followed by `(`:
+  `"lower"(x)`, `` `lower`(x) `` and `lower (x)` (MySQL) are refused. `REPEAT`, `LPAD`, `RPAD`, `SPACE`
   and `ZEROBLOB` take a literal length of at most 65 536, and only literals
   and columns as arguments, except the string `LPAD` and `RPAD` pad, which
   may be any expression that calls none of these functions
