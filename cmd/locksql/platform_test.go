@@ -46,6 +46,9 @@ func TestHostModeCommandsRefused(t *testing.T) {
 // Bare locksql prints the help, in a terminal too: there is no host setup
 // left to lead to.
 func TestBareLocksqlPrintsUsageInTerminal(t *testing.T) {
+	saved := hostOS
+	hostOS = "linux"
+	t.Cleanup(func() { hostOS = saved })
 	var out, errOut bytes.Buffer
 	e := env{stdout: &out, stderr: &errOut, cwd: t.TempDir(), tty: true}
 	if code := runEnv(e, nil); code != exitUsage || !strings.Contains(errOut.String(), "usage") {

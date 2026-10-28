@@ -32,7 +32,9 @@ It checks the release's cosign signature and checksum, and installs the
 launcher as `/usr/local/bin/locksql` (with `sudo` when needed; set
 `LOCKSQL_INSTALL_DIR` for another directory). The launcher runs the image of
 its own release, `ghcr.io/davidgodefroid/locksql:X.Y.Z`, which Docker pulls
-on first use. Linux and macOS (Docker Desktop); on Windows, install it in
+on first use: `install.sh` checks the image's cosign signature too (and its
+`-vault` variant's) and writes the verified digests into the launcher, which
+runs the image by digest, never by a tag that could be moved. Linux and macOS (Docker Desktop); on Windows, install it in
 WSL 2 with Docker Desktop's WSL integration and run it there.
 
 ```sh
@@ -41,8 +43,9 @@ locksql update     # the latest release: a new launcher, then docker pull
 locksql update vX.Y.Z
 ```
 
-`locksql update` checks the signature and the checksum as `install.sh`
-does, and needs cosign the same way.
+`locksql update` checks the signatures and the checksum as `install.sh`
+does, and needs cosign the same way. With `LOCKSQL_SKIP_COSIGN=1` nothing is
+verified and the launcher runs the image by its tag.
 
 ### What runs where
 

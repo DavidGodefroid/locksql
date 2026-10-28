@@ -68,14 +68,24 @@ exit 0
 `)
 }
 
-// setVersion makes the launcher one a release installed.
+// setVersion makes the launcher one a release installed, without digests
+// (installed with LOCKSQL_SKIP_COSIGN=1).
 func (f *launcherFixture) setVersion(t *testing.T, v string) {
+	t.Helper()
+	f.setVersionDigests(t, v, "", "")
+}
+
+// setVersionDigests makes the launcher one a release installed, with the
+// digests of its verified images.
+func (f *launcherFixture) setVersionDigests(t *testing.T, v, digest, vault string) {
 	t.Helper()
 	b, err := os.ReadFile(f.script)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := strings.Replace(string(b), "\nlauncher_version=dev\n", "\nlauncher_version="+v+"\n", 1)
+	s = strings.Replace(s, "\nimage_digest=\n", "\nimage_digest="+digest+"\n", 1)
+	s = strings.Replace(s, "\nvault_image_digest=\n", "\nvault_image_digest="+vault+"\n", 1)
 	writeExec(t, f.script, s)
 }
 
@@ -272,6 +282,28 @@ func TestLauncherImage(t *testing.T) {
 	}
 }
 
+// A launcher installed with verified images runs them by digest.
+func TestLauncherRunsTheVerifiedDigest(t *testing.T) {
+	f := newLauncherFixture(t)
+	f.setVersionDigests(t, "1.2.3", fakeDigest, fakeVaultDigest)
+	for _, tc := range []struct {
+		env  []string
+		want string
+	}{
+		{nil, "ghcr.io/davidgodefroid/locksql@" + fakeDigest},
+		{[]string{"LOCKSQL_VAULT=1"}, "ghcr.io/davidgodefroid/locksql@" + fakeVaultDigest},
+		{[]string{"LOCKSQL_IMAGE=mine"}, "mine"},
+	} {
+		_, calls, err := f.run(t, f.project, tc.env, "console")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if imageArgs(lastRun(t, calls), tc.want) == nil {
+			t.Errorf("%v: %q not run: %q", tc.env, tc.want, lastRun(t, calls))
+		}
+	}
+}
+
 // version prints the launcher's version and its image's.
 func TestLauncherVersion(t *testing.T) {
 	f := newLauncherFixture(t)
@@ -331,10 +363,10 @@ func TestLauncherUpdate(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	b, _ := os.ReadFile(f.script)
-	if !strings.Contains(string(b), "\nlauncher_version="+shVersion+"\n") {
+	if !strings.Contains(string(b), "\nlauncher_version="+shVersion+"\n") || !strings.Contains(string(b), "\nimage_digest="+fakeDigest+"\n") {
 		t.Fatalf("launcher not replaced:\n%s", out)
 	}
-	if len(calls) != 1 || !hasSeq(calls[0], "pull", "ghcr.io/davidgodefroid/locksql:"+shVersion) {
+	if len(calls) != 1 || !hasSeq(calls[0], "pull", "ghcr.io/davidgodefroid/locksql@"+fakeDigest) {
 		t.Errorf("calls %q", calls)
 	}
 	args, _ := os.ReadFile(rel.cosignArgs)
@@ -348,6 +380,28 @@ func TestLauncherUpdateRefusesABadSignature(t *testing.T) {
 	f.setVersion(t, "0.9.0")
 	rel := newShFixture(t)
 	rel.cosign(t, false)
+	for _, tool := range []string{"curl", "cosign"} {
+		if err := os.Symlink(filepath.Join(rel.bin, tool), filepath.Join(f.bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, calls, err := f.run(t, f.project, nil, "update", "v"+shVersion)
+	if err == nil || !strings.Contains(out, "does not verify") || len(calls) != 0 {
+		t.Fatalf("%v, calls %q\n%s", err, calls, out)
+	}
+	b, _ := os.ReadFile(f.script)
+	if !strings.Contains(string(b), "\nlauncher_version=0.9.0\n") {
+		t.Fatal("launcher replaced")
+	}
+}
+
+// update refuses a release whose image does not verify, and keeps the
+// launcher.
+func TestLauncherUpdateRefusesAnUnverifiedImage(t *testing.T) {
+	f := newLauncherFixture(t)
+	f.setVersion(t, "0.9.0")
+	rel := newShFixture(t)
+	rel.cosignImages(t, true, false)
 	for _, tool := range []string{"curl", "cosign"} {
 		if err := os.Symlink(filepath.Join(rel.bin, tool), filepath.Join(f.bin, tool)); err != nil {
 			t.Fatal(err)

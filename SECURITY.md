@@ -79,7 +79,8 @@ sha256sum -c --ignore-missing checksums.txt
 and refuse to install without cosign (`LOCKSQL_SKIP_COSIGN=1` is their
 explicit way past it). The release image,
 `ghcr.io/davidgodefroid/locksql:X.Y.Z` (and `-vault`), is signed with cosign
-by the same workflow:
+by the same workflow. `install.sh` and `locksql update` verify it and write
+its digest into the launcher, which runs it by that digest. By hand:
 
 ```sh
 cosign verify ghcr.io/davidgodefroid/locksql:X.Y.Z \

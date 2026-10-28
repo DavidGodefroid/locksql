@@ -19,7 +19,8 @@ This file records the changes a user or an agent has to know about.
   'exec docker run ...'` step is gone (such entries keep working).
   `locksql version` prints the launcher's and the image's versions;
   `locksql update` replaces the launcher (signature and checksum checked)
-  and pulls the image. `LOCKSQL_IMAGE` runs an image of your own,
+  and pulls the image. The image's cosign signature is verified at install
+  and update, and the launcher runs it by that verified digest. `LOCKSQL_IMAGE` runs an image of your own,
   `LOCKSQL_DOCKER_ARGS` adds `docker run` arguments. The release publishes
   the image, signed with cosign, and no longer the `.deb`, `.rpm` and `.apk`
   packages of the binary; the archives keep the binary, for an agent that

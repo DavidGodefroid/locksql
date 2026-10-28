@@ -27,8 +27,12 @@
 #   VAULT_ADDR, VAULT_NAMESPACE  passed to the console
 set -eu
 
-# scripts/install.sh writes the release version here.
+# scripts/install.sh and locksql update write the release version here,
+# and the digests of its images once their cosign signatures verify: the
+# launcher then runs the image by digest, never by a tag that could move.
 launcher_version=dev
+image_digest=
+vault_image_digest=
 
 repo="DavidGodefroid/locksql"
 registry="ghcr.io/davidgodefroid/locksql"
@@ -43,7 +47,10 @@ if [ -z "$image" ]; then
 	else
 		image="$registry:$launcher_version"
 	fi
-	if [ "${LOCKSQL_VAULT:-0}" = 1 ]; then
+	if [ "$launcher_version" != dev ] && [ -n "$image_digest" ]; then
+		image="$registry@$image_digest"
+		[ "${LOCKSQL_VAULT:-0}" = 1 ] && image="$registry@$vault_image_digest"
+	elif [ "${LOCKSQL_VAULT:-0}" = 1 ]; then
 		case "$image" in
 		*:*) image="$image-vault" ;;
 		*) image="$image:vault" ;;
@@ -84,6 +91,19 @@ has_flag() {
 		case "$a" in "$f" | "$f"=*) return 0 ;; esac
 	done
 	return 1
+}
+
+# The release workflow run for a version tag, as scripts/install.sh checks it.
+identity='^https://github\.com/DavidGodefroid/locksql/\.github/workflows/release\.yml@refs/tags/v[0-9]'
+
+# verified_digest TAG: the digest of the release image registry:TAG, once
+# cosign verifies its signature by the release workflow; empty when it does
+# not verify.
+verified_digest() {
+	cosign verify --certificate-identity-regexp "$identity" \
+		--certificate-oidc-issuer https://token.actions.githubusercontent.com \
+		"$registry:$1" 2>/dev/null |
+		sed -n 's/.*"docker-manifest-digest":"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' | sed -n 1p
 }
 
 # update [vX.Y.Z]: replace this launcher with a release's (the cosign
@@ -132,8 +152,6 @@ update() {
 		say "downloading $archive ($tag)"
 		fetch "$base/$archive" "$tmp/$archive" || die "download failed: $base/$archive"
 		fetch "$base/checksums.txt" "$tmp/checksums.txt" || die "download failed: checksums.txt"
-		# The release workflow run for a version tag, as scripts/install.sh checks it.
-		identity='^https://github\.com/DavidGodefroid/locksql/\.github/workflows/release\.yml@refs/tags/v[0-9]'
 		if command -v cosign >/dev/null 2>&1; then
 			fetch "$base/checksums.txt.sigstore.json" "$tmp/checksums.txt.sigstore.json" ||
 				die "download failed: checksums.txt.sigstore.json"
@@ -157,7 +175,20 @@ update() {
 		[ "$want" = "$got" ] || die "checksum mismatch for $archive"
 		tar -xzf "$tmp/$archive" -C "$tmp" scripts/locksql 2>/dev/null ||
 			die "$archive holds no launcher (scripts/locksql): $tag predates the Docker launcher"
-		sed "s/^launcher_version=dev\$/launcher_version=$version/" "$tmp/scripts/locksql" >"$tmp/launcher"
+		digest= vdigest=
+		if command -v cosign >/dev/null 2>&1; then
+			digest="$(verified_digest "$version")"
+			vdigest="$(verified_digest "$version-vault")"
+			[ -n "$digest" ] && [ -n "$vdigest" ] ||
+				die "cosign: the signature of $registry:$version (and -vault) does not verify, or the image is not published yet"
+			say "cosign: image $registry:$version verified ($digest)"
+		else
+			say "WARNING: LOCKSQL_SKIP_COSIGN=1: the image is NOT verified and runs by its tag"
+		fi
+		sed -e "s/^launcher_version=dev\$/launcher_version=$version/" \
+			-e "s/^image_digest=\$/image_digest=$digest/" \
+			-e "s/^vault_image_digest=\$/vault_image_digest=$vdigest/" \
+			"$tmp/scripts/locksql" >"$tmp/launcher"
 		grep -qx "launcher_version=$version" "$tmp/launcher" || die "the launcher of $tag does not take its version"
 		if [ -w "$self" ]; then
 			install -m 0755 "$tmp/launcher" "$self"
@@ -168,7 +199,9 @@ update() {
 		fi
 		say "launcher updated to $tag ($self)"
 		registry_image="$registry:$version"
-		[ "${LOCKSQL_VAULT:-0}" = 1 ] && registry_image="$registry_image-vault"
+		[ -n "$digest" ] && registry_image="$registry@$digest"
+		[ "${LOCKSQL_VAULT:-0}" = 1 ] && registry_image="$registry:$version-vault"
+		[ "${LOCKSQL_VAULT:-0}" = 1 ] && [ -n "$vdigest" ] && registry_image="$registry@$vdigest"
 		[ -n "${LOCKSQL_IMAGE:-}" ] && say "LOCKSQL_IMAGE is set ($LOCKSQL_IMAGE): it still overrides $registry_image"
 		image="$registry_image"
 	fi

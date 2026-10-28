@@ -99,8 +99,29 @@ fi
 
 tar -xzf "$tmp/$archive" -C "$tmp" scripts/locksql 2>/dev/null ||
 	die "$archive holds no launcher (scripts/locksql): $tag predates the Docker launcher"
-# The launcher runs the image of its own version.
-sed "s/^launcher_version=dev\$/launcher_version=$version/" "$tmp/scripts/locksql" >"$tmp/launcher"
+# The launcher runs the images of its own version, by the digests whose
+# cosign signatures verify (the release workflow, as for checksums.txt).
+registry="ghcr.io/davidgodefroid/locksql"
+verified_digest() {
+	cosign verify --certificate-identity-regexp "$identity" \
+		--certificate-oidc-issuer https://token.actions.githubusercontent.com \
+		"$registry:$1" 2>/dev/null |
+		sed -n 's/.*"docker-manifest-digest":"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' | sed -n 1p
+}
+digest= vdigest=
+if command -v cosign >/dev/null 2>&1; then
+	digest="$(verified_digest "$version")"
+	vdigest="$(verified_digest "$version-vault")"
+	[ -n "$digest" ] && [ -n "$vdigest" ] ||
+		die "cosign: the signature of $registry:$version (and -vault) does not verify, or the image is not published yet"
+	say "cosign: image $registry:$version verified ($digest)"
+else
+	say "WARNING: LOCKSQL_SKIP_COSIGN=1: the image is NOT verified and runs by its tag"
+fi
+sed -e "s/^launcher_version=dev\$/launcher_version=$version/" \
+	-e "s/^image_digest=\$/image_digest=$digest/" \
+	-e "s/^vault_image_digest=\$/vault_image_digest=$vdigest/" \
+	"$tmp/scripts/locksql" >"$tmp/launcher"
 grep -qx "launcher_version=$version" "$tmp/launcher" || die "the launcher of $tag does not take its version"
 
 # Root-owned in a system directory, so that the agent's account cannot
@@ -114,7 +135,7 @@ else
 	sudo install -m 0755 "$tmp/launcher" "$dir/locksql"
 fi
 
-say "installed the locksql launcher $tag to $dir/locksql (image ghcr.io/davidgodefroid/locksql:$version)"
+say "installed the locksql launcher $tag to $dir/locksql (image $registry:$version${digest:+@$digest})"
 case ":$PATH:" in
 *":$dir:"*) ;;
 *) say "$dir is not on your PATH" ;;
