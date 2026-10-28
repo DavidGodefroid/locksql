@@ -78,18 +78,26 @@ while :; do
 	d="$(dirname "$d")"
 done
 
-# An explicit --project DIR (or --project=DIR) is the project instead, for
-# any command: it is mounted at its physical path, which the command gets in
-# its place.
+# An explicit --project DIR (or --project=DIR) of console or profile, the
+# commands that take it (neither takes a positional argument; config's
+# --project is a switch, and elsewhere it would be text such as SQL), is the
+# project instead: mounted at its physical path, which the command gets in
+# its place. "--" ends the options.
 take=
 explicit=
+case "${1:-}" in
+console | profile) scan=1 ;;
+*) scan= ;;
+esac
 for a in "$@"; do
+	[ -n "$scan" ] || break
 	if [ -n "$take" ]; then
 		explicit=$a
 		take=
 		continue
 	fi
 	case "$a" in
+	--) break ;;
 	--project) take=1 ;;
 	--project=*) explicit=${a#--project=} ;;
 	esac
@@ -99,12 +107,18 @@ if [ -n "$explicit" ]; then
 	case "$explicit" in /*) ;; *) explicit="$here/$explicit" ;; esac
 	project="$(cd "$explicit" 2>/dev/null && pwd -P)" || die "--project $explicit: no such directory"
 	n=$#
+	done_opts=
 	for a in "$@"; do
+		if [ -n "$done_opts" ]; then
+			set -- "$@" "$a"
+			continue
+		fi
 		if [ -n "$take" ]; then
 			a=$project
 			take=
 		fi
 		case "$a" in
+		--) done_opts=1 ;;
 		--project) take=1 ;;
 		--project=*) a="--project=$project" ;;
 		esac
@@ -151,12 +165,16 @@ check_locksql_dir() {
 	fi
 }
 
-# has_flag FLAG ARGS...: whether ARGS hold FLAG or FLAG=...
+# has_flag FLAG ARGS...: whether the options in ARGS (up to "--") hold
+# FLAG or FLAG=...
 has_flag() {
 	f=$1
 	shift
 	for a in "$@"; do
-		case "$a" in "$f" | "$f"=*) return 0 ;; esac
+		case "$a" in
+		--) return 1 ;;
+		"$f" | "$f"=*) return 0 ;;
+		esac
 	done
 	return 1
 }
