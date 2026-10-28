@@ -8,6 +8,17 @@ This file records the changes a user or an agent has to know about.
 
 ### Changed
 
+- **Vault token asked at start (#51).** With `credentials = "vault"` the
+  console asks `Vault token for <VAULT_ADDR>:` (no echo) before the first
+  Vault read, instead of relying on a `vault login` of the console account
+  and its `~/.vault-token`. The token is passed to the `vault` CLI as
+  `VAULT_TOKEN` in the child's environment only (never argv, disk, logs or
+  the audit trail), kept in memory for the session so reconnects and lease
+  renewals do not ask again, and wiped when the console ends. A token
+  Vault refuses (expired or revoked) is asked again, mid-session too;
+  three refusals in a row stop the connection. Needs lockkit with
+  `secrets.VaultReadToken`.
+
 - **Clear results refused at desktop security level 1.** When the console
   runs in a desktop terminal of the console account without a fingerprint
   reader, the agent's account can read its window, so the clear results

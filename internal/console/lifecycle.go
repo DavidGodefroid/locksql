@@ -54,6 +54,17 @@ type starter struct {
 	// row: the console ends even after a decision whose refusal it would
 	// otherwise go past (offerSaveAs).
 	lockedOut bool
+	// vaultToken is the Vault token the human typed (credentials =
+	// "vault"): kept in memory for the session, so reconnects and lease
+	// renewals do not ask again; nil until asked, and after Vault refused
+	// it. wipeVaultToken wipes it when the console ends.
+	vaultToken []byte
+}
+
+// wipeVaultToken wipes the Vault token the human typed.
+func (st *starter) wipeVaultToken() {
+	secrets.Wipe(st.vaultToken)
+	st.vaultToken = nil
 }
 
 // errLockedOut ends a start-up after too many non-matching fingers.
@@ -249,6 +260,7 @@ func Run(ctx context.Context, o Options) error {
 		appr = newFingerprintApprover(o.IO, iso.verifier, iso.sys.Finger, FingerDeadline)
 	}
 	st := &starter{o: o, io: o.IO, log: log, profile: p, approver: appr}
+	defer st.wipeVaultToken()
 
 	loadPolicy := func() (config.Policy, error) {
 		return policyFromFiles(o.Cwd, o.Profile, rulesPath)
@@ -641,8 +653,48 @@ func (st *starter) connectSecret(ctx context.Context, p config.Profile, open fun
 	return sess, nil
 }
 
-// vaultRead is secrets.VaultRead; tests replace it.
-var vaultRead = secrets.VaultRead
+// vaultRead is secrets.VaultReadToken; tests replace it.
+var vaultRead = secrets.VaultReadToken
+
+// vaultTokenTries is how many Vault tokens in a row may be refused before
+// a connection gives up.
+const vaultTokenTries = 3
+
+// vaultAddr is the Vault server the vault CLI talks to: VAULT_ADDR, or the
+// CLI's default.
+func vaultAddr() string {
+	if a := os.Getenv("VAULT_ADDR"); a != "" {
+		return a
+	}
+	return "https://127.0.0.1:8200"
+}
+
+// readVault reads the login at p.VaultPath with the Vault token of the
+// session, asked of the human the first time (no echo), and again when
+// Vault refuses it (expired or revoked) up to vaultTokenTries times. The
+// token goes to the vault CLI in its environment only, never its
+// arguments, a file, a log or the audit trail.
+func (st *starter) readVault(ctx context.Context, p config.Profile) (*secrets.VaultCredentials, error) {
+	for try := 1; ; try++ {
+		if st.vaultToken == nil {
+			tok, err := st.io.AskSecret(ctx, "Vault token for "+safeText(vaultAddr(), false)+": ")
+			if err != nil {
+				return nil, err
+			}
+			st.vaultToken = tok
+		}
+		c, err := vaultRead(ctx, p.VaultPath, st.vaultToken)
+		if err == nil || !errors.Is(err, secrets.ErrVaultAuth) {
+			return c, err
+		}
+		err = errors.New(secrets.Sanitize(err, st.vaultToken))
+		st.wipeVaultToken()
+		if try == vaultTokenTries {
+			return nil, fmt.Errorf("%w: %v", secrets.ErrVaultAuth, err)
+		}
+		st.io.Println(paint.Warn("Vault refused the token: " + err.Error()))
+	}
+}
 
 // connectVault connects with the login read from Vault at p.VaultPath
 // (credentials = "vault"): at every connection, so a rotated or
@@ -652,7 +704,7 @@ var vaultRead = secrets.VaultRead
 // profile open connects with.
 func (st *starter) connectVault(ctx context.Context, p config.Profile, prof *config.Profile, open func([]byte) (engine.Session, error), first bool) (engine.Session, error) {
 	fetched := st.now()
-	c, err := vaultRead(ctx, p.VaultPath)
+	c, err := st.readVault(ctx, p)
 	if err != nil {
 		return nil, fmt.Errorf("console: credentials from Vault (%s): %w", safeText(p.VaultPath, false), err)
 	}

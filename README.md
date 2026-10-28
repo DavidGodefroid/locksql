@@ -404,8 +404,9 @@ max_session         = "4h"          # ... and after this long in all
 
 With `credentials = "vault"` the console runs `vault read -format=json
 <vault_path>` at every connection, as the console account and with its
-environment (`VAULT_ADDR`, its token from `vault login`), and connects with
-the `username` and `password` of the secret. Nothing is stored. See
+environment (`VAULT_ADDR`), and connects with the `username` and `password`
+of the secret. The console asks for the Vault token at start and keeps it in
+memory for the session. Nothing is stored. See
 [Credentials from HashiCorp Vault](docs/usage.md#credentials-from-hashicorp-vault).
 
 ```toml
