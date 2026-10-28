@@ -484,7 +484,7 @@ func describePolicy(p config.Policy) []string {
 			l.StatementTimeout, l.ExplainRowsWarn, l.ExplainRowsRefuse, l.MaxRows, l.MaxCellChars, l.MaxOutputBytes),
 		fmt.Sprintf("  session: idle_timeout %s · max_session %s", l.IdleTimeout, l.MaxSession),
 		"  detectors: " + safeText(strings.Join(pr.Detectors, ", "), false),
-		fmt.Sprintf("  PII rules: %d mask, %d allow", len(p.PIIMask), len(p.PIIAllow)),
+		fmt.Sprintf("  PII rules: set %q · %d mask, %d allow", pr.PIIRules, len(p.PIIMask), len(p.PIIAllow)),
 	}
 	if pr.Engine != config.EngineSQLite {
 		mode := pr.TLS
@@ -498,6 +498,9 @@ func describePolicy(p config.Policy) []string {
 	}
 	if pr.SSH != nil {
 		lines = append(lines, "  ssh: "+safeText(config.SSHString(pr.SSH), false))
+	}
+	if pr.WriteFunctions != "" {
+		lines = append(lines, "  write_functions: "+pr.WriteFunctions)
 	}
 	for _, a := range p.PIIAllow {
 		lines = append(lines, red+"  allow "+safeText(a, false)+reset)

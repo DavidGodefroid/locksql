@@ -1,7 +1,7 @@
-# Running locksql in Docker
+# Setting up locksql in Docker
 
-The image runs locksql with nothing installed on your machine but Docker. It
-holds the separated setup that `sudo locksql install` makes on a host:
+locksql runs in Docker, with nothing installed on your machine but Docker.
+This guide is its setup. The image holds the separated setup:
 
 - the console runs as `locksql` (uid 10001), the only account that holds the
   database credentials;
@@ -10,8 +10,10 @@ holds the separated setup that `sudo locksql install` makes on a host:
 - `/etc/locksql/system.toml` is owned by root and the binary by root;
 - the socket directory `/run/locksql` (mode 2710, `locksql:locksql-clients`)
   is a named volume, `locksql-run`, shared by the console container and the
-  agent's containers. The kernel checks every peer on the socket as on a
-  host.
+  agent's containers. The kernel checks every peer on the socket.
+
+Other deployment modes (a host install, packages, desktop and session
+setups) still exist in the code but are no longer documented or supported.
 
 ## Build
 
@@ -47,8 +49,8 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
 MCP command, which is not on your machine: replace the `locksql` entry as in
 [Wire the agent](#wire-the-agent).
 
-Add a database profile with the wizard of `locksql setup` (its profile step
-alone: the account and access steps are the image's own):
+Add a database profile with the wizard (the accounts and the socket are the
+image's own):
 
 ```sh
 docker run -it --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
@@ -74,7 +76,7 @@ the container itself, and the wizard knows it:
 - a SQLite `path` is relative to the project root, which is mounted.
 
 Then give `.locksql/` to the console account. The console writes
-`pii.toml` there, and a directory your account owns would let the agent
+the PII rule sets there (`pii/<set>.toml`), and a directory your account owns would let the agent
 replace that file, and with it the masking rules. The account exists only in
 the image, so run the repair there, as root:
 
@@ -101,7 +103,8 @@ docker run -it --rm --name locksql-console --user locksql \
 ```
 
 Add `--profile P`, `--show-results`, `--auto` or
-`--allow-unmask` after `console` as on a host. The `locksql-home` volume
+`--allow-unmask` after `console`
+([Start the console](usage.md#2-start-the-console)). The `locksql-home` volume
 keeps the console account's state from one run to the next: the approved
 policy, the audit log and `~/.ssh/known_hosts` for an `ssh` profile. A key
 for `auth = "key"` must be in that volume, owned by `locksql` with mode 0600;
@@ -135,14 +138,16 @@ The agent starts the MCP server in a throwaway container, as `agent`, with
 the socket volume and the project mounted. `sh -c` expands `$PWD`, the
 directory the agent runs in (start the agent at the project root).
 
-Claude Code, for every project:
+Claude Code, for the project, replacing the entry `init claude` wrote in
+`.mcp.json`:
 
 ```sh
-claude mcp add --scope user locksql -- \
+claude mcp remove --scope project locksql
+claude mcp add --scope project locksql -- \
   sh -c 'exec docker run -i --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql mcp'
 ```
 
-or for one project, in `.mcp.json`:
+which leaves in `.mcp.json`:
 
 ```json
 {
@@ -156,8 +161,10 @@ or for one project, in `.mcp.json`:
 }
 ```
 
-Codex, Gemini CLI and Cursor take the same `command` and `args` in the files
-listed in [Agent wiring](usage.md#agent-wiring) (keep `tool_timeout_sec` or
+For every project instead, `claude mcp add --scope user` with the same
+command; a project's `.mcp.json` entry takes precedence over it, so remove the
+one `init claude` wrote. Codex, Gemini CLI and Cursor take the same `command`
+and `args` in the files listed in [Agent wiring](usage.md#agent-wiring) (keep `tool_timeout_sec` or
 `timeout` there: the console waits up to 5 minutes for an approval).
 
 The client commands run the same way:
@@ -168,7 +175,8 @@ docker run --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql sta
 
 `locksql doctor` runs as `agent` by default and as the console account with
 `--user locksql`. It warns that `locksql` has no login session: in Docker the
-container takes the place of that session.
+container takes the place of that session, and the checks of
+[`locksql doctor`](usage.md#locksql-doctor) about the host do not apply.
 
 ## Agent in its own container
 
@@ -216,19 +224,19 @@ command of [Set up a project](#set-up-a-project).
 
 ## What Docker does and does not separate
 
-Inside Docker the boundary is the same as on a host: the agent's container
-holds no credential, has no database connection and reaches the console only
-through the socket; a process that is neither the console account nor in
-`locksql-clients` is refused.
+Inside Docker the agent's container holds no credential, has no database
+connection and reaches the console only through the socket; a process that
+is neither the console account nor in `locksql-clients` (or `allowed_uids`)
+is refused.
 
 Your own account is another matter. Whoever can run `docker` commands can
 `docker attach` to the console and type an approval, `docker exec` into it
 and read its memory, or open the `locksql-home` volume. An agent that runs
 shell commands in your account usually can: the MCP server above is itself a
 `docker run`. The console cannot see this (its terminal belongs to the
-container), so treat Docker mode like the in-agent approval it improves on:
+container), so treat this setup like the in-agent approval it improves on:
 it keeps credentials out of the agent's reach and the approval in your
 terminal, but it does not stop an agent determined to go around it. For that
-boundary, either use `sudo locksql install` on the host, or run the agent
-itself in a container with no access to the Docker socket
-([Agent in its own container](#agent-in-its-own-container)).
+boundary, run the agent itself in a container with no access to the Docker
+socket ([Agent in its own container](#agent-in-its-own-container)): it then
+reaches the console only through the socket volume.
