@@ -40,6 +40,15 @@ This file records the changes a user or an agent has to know about.
 
 ### Fixed
 
+- **Value detectors (#17).** Unicode e-mail addresses
+  (`müller.hans@exämple.de`) are masked whole; phone, IBAN, card and
+  national-id values grouped with U+00A0, U+202F or U+2009, or written
+  with full-width digits, are masked; integral `float4`/`float8` cells go
+  through the detectors like integers. A new opt-in detector,
+  `phone_loose`, masks national numbers without a trunk 0
+  (`(415) 555-2671`, `612 345 678`); the default `phone` rule is unchanged
+  and now documented next to the `detectors` setting. Detectors only mask
+  more than before (lockkit `32a0379`).
 - **`.locksql/` in Docker.** The console account exists only in the image,
   so nothing gave it the project's `.locksql/` directory, and an agent
   running as your uid could replace `pii.toml`. `locksql doctor --fix` now

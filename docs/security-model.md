@@ -321,8 +321,11 @@ it append-only for the console account too.
   recording, a terminal that logs its output). That terminal is already the
   trusted party; locksql does not clear it.
 - **Masking is best effort.** Column rules depend on the rules being right,
-  and value detectors catch common formats only. Use a database account that
-  cannot read what the agent must never see.
+  and value detectors catch common formats only: `phone` needs `+`, `00`
+  or a trunk 0 unless `phone_loose` is enabled, full-width letters and
+  other Unicode compatibility forms are not folded, and a float column is
+  scanned only for integral values. Use a database account that cannot read
+  what the agent must never see.
 - **Probing under the threshold.** The probing warnings do not refuse. An
   agent that spreads equality probes through references under
   `limits.reference_probe`, across results or sessions, can still learn which
