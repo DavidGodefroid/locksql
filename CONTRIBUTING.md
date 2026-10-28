@@ -51,8 +51,8 @@ go test ./...
 Unit tests need no database: SQLite runs in-process, and the EXPLAIN
 fixtures under `testdata/explain/` cover the other engines.
 
-The module also builds for Windows, where locksql refuses to run (see
-[docs/usage.md](docs/usage.md#windows-wsl2)), and CI runs the unit tests on
+The module also builds for Windows, where locksql refuses to run (it runs
+in Docker, see [docs/docker.md](docs/docker.md)), and CI runs the unit tests on
 `windows-latest`. A test file that needs Unix accounts, file modes, sockets
 or terminals starts with `//go:build unix`; a single test skips with
 `t.Skip` and the reason. To check that the tests still compile for

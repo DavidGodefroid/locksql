@@ -459,3 +459,25 @@ func TestDiffSSH(t *testing.T) {
 		t.Errorf("no ssh both sides: %+v", ch)
 	}
 }
+
+// write_functions (issue #60): turning the allowlist off loosens, turning
+// it on tightens; the default leaves fingerprints unchanged.
+func TestDiffWriteFunctions(t *testing.T) {
+	off, on := fullPolicy(), fullPolicy()
+	on.Profile.WriteFunctions = WriteFunctionsAllowlist
+	if ch := Diff(on, off); len(ch) != 1 || ch[0].Field != "write_functions" || !ch[0].Loosens ||
+		ch[0].Old != WriteFunctionsAllowlist || ch[0].New != WriteFunctionsDenylist {
+		t.Errorf("allowlist -> denylist: %+v", ch)
+	}
+	if ch := Diff(off, on); len(ch) != 1 || ch[0].Field != "write_functions" || ch[0].Loosens {
+		t.Errorf("denylist -> allowlist: %+v", ch)
+	}
+	if Fingerprint(on) == Fingerprint(off) {
+		t.Error("write_functions is not part of the fingerprint")
+	}
+	explicit := fullPolicy()
+	explicit.Profile.WriteFunctions = WriteFunctionsDenylist
+	if Fingerprint(explicit) != Fingerprint(off) || len(Diff(off, explicit)) != 0 {
+		t.Error("write_functions = denylist differs from the default")
+	}
+}

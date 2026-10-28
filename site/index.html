@@ -61,7 +61,7 @@
     <a class="button" href="https://github.com/DavidGodefroid/locksql">View on GitHub</a>
   </div>
   <ul class="facts" aria-label="At a glance">
-    <li>Linux and macOS (Windows through WSL2), or Docker</li>
+    <li>Runs in Docker: Linux, macOS, Windows</li>
     <li>amd64 and arm64</li>
     <li>MariaDB, MySQL, PostgreSQL, SQLite</li>
     <li>Apache 2.0</li>
@@ -131,12 +131,12 @@
 <section aria-labelledby="highlights">
   <h2 id="highlights">Highlights</h2>
   <ul class="cards">
-    <li><span class="icon" aria-hidden="true">🔑</span><h3>One key holder</h3><p>Credentials are typed at console start, or read from the OS keychain or HashiCorp Vault. Never in argv, env, files, logs, the socket or error messages.</p></li>
+    <li><span class="icon" aria-hidden="true">🔑</span><h3>One key holder</h3><p>Credentials are typed at console start, or read from HashiCorp Vault. Never in argv, env, files, logs, the socket or error messages.</p></li>
     <li><span class="icon" aria-hidden="true">👤</span><h3>Human in the loop</h3><p>Every statement is shown with its plan, cost and PII footprint. On production you type the profile name, not <code>y</code>.</p></li>
     <li><span class="icon" aria-hidden="true">🧱</span><h3>Fail closed</h3><p>A dialect-aware classifier refuses anything it cannot classify with certainty. Reads are parsed in full; unknown syntax is refused.</p></li>
     <li><span class="icon" aria-hidden="true">🕶️</span><h3>PII masking</h3><p>Every output column is traced to its source through aliases, CTEs, unions and joins, then masked (<code>redact</code> by default, <code>partial</code> or <code>email</code>).</p></li>
     <li><span class="icon" aria-hidden="true">⚖️</span><h3>Weight check</h3><p><code>LIMIT</code> is mandatory, <code>EXPLAIN</code> runs first, and plans that would scan too many rows are refused before they run.</p></li>
-    <li><span class="icon" aria-hidden="true">🛡️</span><h3>OS separation</h3><p><code>locksql install</code> runs the console under its own account; the kernel checks every peer on the socket.</p></li>
+    <li><span class="icon" aria-hidden="true">🛡️</span><h3>OS separation</h3><p>The console runs as its own account in its own container, the agent’s MCP server in another; the kernel checks every peer on the socket they share.</p></li>
     <li><span class="icon" aria-hidden="true">🔎</span><h3>Blind search</h3><p>The agent filters on <code>'${email}'</code> and you type the value in the console, or on a redacted cell’s reference (<code>'${r1.2.3}'</code>). The value never reaches it.</p></li>
     <li><span class="icon" aria-hidden="true">👁️</span><h3>Clear for you only</h3><p>Ctrl-O in the console prints the clear rows there while the agent gets them masked; <code>--allow-unmask</code> (or <code>:unmask</code> in the console) is the only way an agent can ask for raw PII.</p></li>
     <li><span class="icon" aria-hidden="true">🔐</span><h3>Remote, verified</h3><p>TLS verifies the server certificate by default, with an optional client certificate, and an <code>ssh</code> table reaches a database behind a bastion: the console opens the tunnel itself, checks the host key and listens on no local port.</p></li>
@@ -148,18 +148,28 @@
 
 <section aria-labelledby="quick-start">
   <h2 id="quick-start">Quick start</h2>
-  <p class="prose">A first approved query in three commands:</p>
-  <pre tabindex="0" class="term"><code># 1. Install (see the Install page for packages, checksums and signatures)
-curl -fsSL https://raw.githubusercontent.com/DavidGodefroid/locksql/main/scripts/install.sh | sh
+  <p class="prose">locksql runs in Docker: nothing to install but Docker. A first approved query, from your project directory:</p>
+  <pre tabindex="0" class="term"><code># 1. Build the image (nothing else to install)
+docker build -t locksql https://github.com/DavidGodefroid/locksql.git
 
-# 2. In your project: the console account, your agents, a database profile
-locksql setup
+# 2. In your project: Claude Code's files, a database profile, then give
+#    .locksql/ to the console account (as root, inside the image)
+docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:$PWD" -w "$PWD" locksql init claude
+docker run -it --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:$PWD" -w "$PWD" locksql profile add
+docker run --rm --user 0 -v "$PWD:$PWD" -w "$PWD" locksql doctor --fix --yes
 
-# 3. In a session of the locksql account (switch user, or a text console
-#    with Ctrl-Alt-F3), start the console it printed and keep it open
-locksql console --project DIR</code></pre>
-  <p class="prose">Then ask your agent, anywhere in the project: “how many orders were placed yesterday?”. Each query waits for your <code>y</code> in the console. <code>locksql doctor --fix</code> checks the setup and repairs what it safely can.</p>
-  <p><a href="install/">Full install options, checksums and signatures</a></p>
+# 3. Point the agent's MCP server at the image
+claude mcp remove --scope project locksql
+claude mcp add --scope project locksql -- \
+  sh -c 'exec docker run -i --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql mcp'
+
+# 4. In a terminal you keep in view, start the console
+docker run -it --rm --name locksql-console --user locksql \
+  -v "$PWD:$PWD" -v locksql-run:/run/locksql -v locksql-home:/home/locksql \
+  locksql console --project "$PWD"</code></pre>
+  <p class="prose">Then ask your agent, in the project: “how many orders were placed yesterday?”. Each query waits for your <code>y</code> in the console.</p>
+  <p class="prose"><code>init claude</code> writes <code>.mcp.json</code> with <code>locksql mcp</code>, which is not on your machine: step 3 replaces that entry with the <code>docker run</code> above. A database on your machine is <code>host.docker.internal</code> (on Linux, add <code>--add-host=host.docker.internal:host-gateway</code> to the console’s <code>docker run</code>), and <code>credentials = "keychain"</code> is not available in a container: use <code>ask</code> or <code>vault</code>.</p>
+  <p><a href="install/">The full Docker setup</a></p>
 </section>
 
 <section aria-labelledby="limits">
