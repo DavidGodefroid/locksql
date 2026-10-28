@@ -50,7 +50,8 @@ verified and the launcher runs the image by its tag.
 ### What runs where
 
 The launcher mounts the project (the nearest directory up from where you
-are that holds `.locksql/`, or that directory itself) at its own path, and
+are that holds `.locksql/`, or that directory itself, or the `--project`
+you name) at its own path, and
 runs each command with the account it needs:
 
 | Command | Runs as | Volumes |

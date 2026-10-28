@@ -102,9 +102,11 @@ func (s *screen) waitFor(t *testing.T, from int, d time.Duration, prompts ...str
 	return "", 0
 }
 
-func TestFirstQueryThroughTheLauncher(t *testing.T) {
+// setup skips the test unless LOCKSQL_FIRSTQUERY=1, and finds the launcher.
+func setup(t *testing.T) {
+	t.Helper()
 	if os.Getenv("LOCKSQL_FIRSTQUERY") != "1" {
-		t.Skip("set LOCKSQL_FIRSTQUERY=1 on a throwaway machine: this test uses Docker volumes and the container locksql-console")
+		t.Skip("set LOCKSQL_FIRSTQUERY=1 on a throwaway machine: this test uses Docker volumes and console containers")
 	}
 	launcher = os.Getenv("LOCKSQL_FIRSTQUERY_LAUNCHER")
 	if launcher == "" {
@@ -113,8 +115,82 @@ func TestFirstQueryThroughTheLauncher(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Fatal("run as your own account, not as root")
 	}
+}
 
-	// A project with a SQLite database, where every account may enter.
+// startConsole starts cmd in a terminal and returns its screen, the
+// terminal, and the function that ends it (Ctrl-C) and logs the screen.
+func startConsole(t *testing.T, cmd *exec.Cmd) (*screen, *os.File, func()) {
+	t.Helper()
+	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 50, Cols: 160})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scr := &screen{done: make(chan struct{})}
+	go func() { scr.err = cmd.Wait(); close(scr.done) }()
+	go func() {
+		r := bufio.NewReader(tty)
+		buf := make([]byte, 4096)
+		for {
+			n, err := r.Read(buf)
+			scr.mu.Lock()
+			scr.buf.Write(buf[:n])
+			scr.mu.Unlock()
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return scr, tty, func() {
+		tty.Write([]byte{3}) // Ctrl-C ends the session
+		select {
+		case <-scr.done:
+		case <-time.After(10 * time.Second):
+			cmd.Process.Kill()
+		}
+		tty.Close()
+		t.Logf("console screen:\n%s", scr.String())
+	}
+}
+
+// The quick start, with the project mounted read-write in the console's
+// container, then read-only but for .locksql (LOCKSQL_READONLY_PROJECT=1,
+// as lea runs it): there the console checks, through Docker's bind mount,
+// that .locksql has the device and inode the launcher checked.
+func TestFirstQueryThroughTheLauncher(t *testing.T) {
+	setup(t)
+	t.Run("read-write project", func(t *testing.T) { firstQuery(t, nil) })
+	t.Run("read-only project", func(t *testing.T) { firstQuery(t, []string{"LOCKSQL_READONLY_PROJECT=1"}) })
+}
+
+// A console given a .locksql other than the one the launcher checked (here
+// a device and inode no directory has) refuses to start.
+func TestConsoleRefusesAnotherLocksqlDir(t *testing.T) {
+	setup(t)
+	project := demoProject(t)
+	human(t, 1, project, []string{"init", "claude"})
+	human(t, 2, project, []string{"doctor", "--fix", "--yes"}, 1)
+	image := os.Getenv("LOCKSQL_IMAGE")
+	if image == "" {
+		image = "locksql"
+	}
+	dir := filepath.Join(project, ".locksql")
+	cmd := exec.Command("docker", "run", "-it", "--rm", "--user", "locksql", "-v", project+":"+project+":ro",
+		"-v", dir+":"+dir, "-v", "locksql-run:/run/locksql", "-v", "locksql-home:/home/locksql",
+		"-e", "LOCKSQL_EXPECT_DIR=0:0", image, "console", "--project", project)
+	scr, _, end := startConsole(t, cmd)
+	defer end()
+	scr.waitFor(t, 0, time.Minute, "is not the directory the launcher checked")
+	select {
+	case <-scr.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the console still runs")
+	}
+}
+
+// demoProject is a project with a SQLite database, where every account may
+// enter.
+func demoProject(t *testing.T) string {
+	t.Helper()
 	project, err := os.MkdirTemp("", "locksql-demo-")
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +215,12 @@ func TestFirstQueryThroughTheLauncher(t *testing.T) {
 	if err := os.Chmod(filepath.Join(project, "demo.db"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	return project
+}
+
+// firstQuery runs the quick start in a new project, the console with env.
+func firstQuery(t *testing.T, env []string) {
+	project := demoProject(t)
 
 	// The human's commands of the quick start: the agent's files, a
 	// profile, then .locksql/ given to the console account (doctor --fix
@@ -150,38 +232,12 @@ func TestFirstQueryThroughTheLauncher(t *testing.T) {
 
 	// The console, in a terminal: the launcher runs it as the console
 	// account, in its own container.
-	t.Log("command 4: locksql console")
+	t.Logf("command 4: %s locksql console", strings.Join(env, " "))
 	cmd := exec.Command("sh", launcher, "console")
 	cmd.Dir = project
-	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 50, Cols: 160})
-	if err != nil {
-		t.Fatal(err)
-	}
-	scr := &screen{done: make(chan struct{})}
-	go func() { scr.err = cmd.Wait(); close(scr.done) }()
-	go func() {
-		r := bufio.NewReader(tty)
-		buf := make([]byte, 4096)
-		for {
-			n, err := r.Read(buf)
-			scr.mu.Lock()
-			scr.buf.Write(buf[:n])
-			scr.mu.Unlock()
-			if err != nil {
-				return
-			}
-		}
-	}()
-	defer func() {
-		tty.Write([]byte{3}) // Ctrl-C ends the session
-		select {
-		case <-scr.done:
-		case <-time.After(10 * time.Second):
-			cmd.Process.Kill()
-		}
-		tty.Close()
-		t.Logf("console screen:\n%s", scr.String())
-	}()
+	cmd.Env = append(os.Environ(), env...)
+	scr, tty, end := startConsole(t, cmd)
+	defer end()
 
 	// First start: approve the policy, answer the PII scan if it asks.
 	at := 0

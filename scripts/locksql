@@ -64,7 +64,8 @@ if [ -z "$image" ]; then
 	fi
 fi
 
-# The project root: the nearest directory up from here that holds .locksql/.
+# The project root: the nearest directory up from here that holds .locksql/
+# (or --project, below).
 here="$(pwd -P)"
 project="$here"
 d="$here"
@@ -77,6 +78,55 @@ while :; do
 	d="$(dirname "$d")"
 done
 
+# An explicit --project DIR (or --project=DIR) of console or profile, the
+# commands that take it (neither takes a positional argument; config's
+# --project is a switch, and elsewhere it would be text such as SQL), is the
+# project instead: mounted at its physical path, which the command gets in
+# its place. "--" ends the options.
+take=
+explicit=
+case "${1:-}" in
+console | profile) scan=1 ;;
+*) scan= ;;
+esac
+for a in "$@"; do
+	[ -n "$scan" ] || break
+	if [ -n "$take" ]; then
+		explicit=$a
+		take=
+		continue
+	fi
+	case "$a" in
+	--) break ;;
+	--project) take=1 ;;
+	--project=*) explicit=${a#--project=} ;;
+	esac
+done
+[ -z "$take" ] || die "--project: name the project directory"
+if [ -n "$explicit" ]; then
+	case "$explicit" in /*) ;; *) explicit="$here/$explicit" ;; esac
+	project="$(cd "$explicit" 2>/dev/null && pwd -P)" || die "--project $explicit: no such directory"
+	n=$#
+	done_opts=
+	for a in "$@"; do
+		if [ -n "$done_opts" ]; then
+			set -- "$@" "$a"
+			continue
+		fi
+		if [ -n "$take" ]; then
+			a=$project
+			take=
+		fi
+		case "$a" in
+		--) done_opts=1 ;;
+		--project) take=1 ;;
+		--project=*) a="--project=$project" ;;
+		esac
+		set -- "$@" "$a"
+	done
+	shift "$n"
+fi
+
 tty=-i
 if [ -t 0 ] && [ -t 1 ]; then tty=-it; fi
 
@@ -87,10 +137,15 @@ docker_run() {
 	command -v docker >/dev/null 2>&1 || die "docker is required: locksql runs in Docker (docs/docker.md)"
 	mountable "$project"
 	mountable "$here"
+	# From here when it is in the project, else from the project.
+	case "$here" in
+	"$project" | "$project"/*) workdir=$here ;;
+	*) workdir=$project ;;
+	esac
 	# LOCKSQL_DOCKER_ARGS is split on spaces, never globbed.
 	set -f
 	# shellcheck disable=SC2086 # LOCKSQL_DOCKER_ARGS is split on purpose
-	exec docker run --rm -v "$project:$project${project_mode:-}" -w "$here" ${LOCKSQL_DOCKER_ARGS:-} "$@"
+	exec docker run --rm -v "$project:$project${project_mode:-}" -w "$workdir" ${LOCKSQL_DOCKER_ARGS:-} "$@"
 }
 
 # mountable PATH: PATH can be a docker -v source and target, which ":"
@@ -110,12 +165,16 @@ check_locksql_dir() {
 	fi
 }
 
-# has_flag FLAG ARGS...: whether ARGS hold FLAG or FLAG=...
+# has_flag FLAG ARGS...: whether the options in ARGS (up to "--") hold
+# FLAG or FLAG=...
 has_flag() {
 	f=$1
 	shift
 	for a in "$@"; do
-		case "$a" in "$f" | "$f"=*) return 0 ;; esac
+		case "$a" in
+		--) return 1 ;;
+		"$f" | "$f"=*) return 0 ;;
+		esac
 	done
 	return 1
 }
@@ -266,13 +325,20 @@ console)
 	# LOCKSQL_READONLY_PROJECT=1: the console reads the project and writes
 	# only .locksql/ (its PII rules), for a project your agents write. A bind
 	# mount follows a symbolic link, so .locksql must be a directory.
-	# Checked again right before docker run: what is left is the instant
-	# between that check and docker's own mount.
+	# Checked again right before docker run; on Linux the console also
+	# checks the inode of what Docker mounted.
 	locksql_dir=
+	inode=
 	if [ "${LOCKSQL_READONLY_PROJECT:-0}" = 1 ]; then
 		locksql_dir="$project/.locksql"
 		check_locksql_dir
 		project_mode=:ro
+		# On Linux the console refuses to start on a .locksql other than
+		# this one (its device and inode), one swapped in before Docker's
+		# mount.
+		if [ "$(uname -s)" = Linux ]; then
+			inode="$(stat -c '%d:%i' "$locksql_dir")" || die "could not stat $locksql_dir"
+		fi
 	fi
 	# VAULT_CACERT: the file the vault CLI checks Vault's certificate
 	# against, mounted read-only at its own path.
@@ -300,6 +366,7 @@ console)
 		--add-host=host.docker.internal:host-gateway -e VAULT_ADDR -e VAULT_NAMESPACE \
 		-v locksql-run:/run/locksql -v locksql-home:/home/locksql \
 		${locksql_dir:+-v} ${locksql_dir:+"$locksql_dir:$locksql_dir"} \
+		${inode:+-e} ${inode:+"LOCKSQL_EXPECT_DIR=$inode"} \
 		${cacert:+-v} ${cacert:+"$cacert:$cacert:ro"} ${cacert:+-e} ${cacert:+"VAULT_CACERT=$cacert"} \
 		"$image" console "$@"
 	[ -z "$locksql_dir" ] || check_locksql_dir
