@@ -23,6 +23,14 @@ This file records the changes a user or an agent has to know about.
 
 ### Changed
 
+- **PostgreSQL: allowlisted functions overloaded in the database are
+  refused.** PostgreSQL picks the best match for an unqualified function
+  over every schema of the search path, so a `public.lower(varchar)` runs
+  instead of `pg_catalog.lower(text)` for a `varchar` argument. Before a
+  read (and a write under `write_functions = "allowlist"`) runs, the
+  console looks up the functions it calls and refuses it with `E_FUNCTION`
+  when one is also defined outside `pg_catalog`. Functions owned by an
+  extension are not counted.
 - **PII rules in named sets, one per profile by default.** PII rules no
   longer live in one `pii.toml` shared by every profile of a scope: each
   profile uses the set named by its new `pii_rules` key, by default its own

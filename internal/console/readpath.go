@@ -257,6 +257,9 @@ func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan,
 		}
 		return nil, err
 	}
+	if r, err := s.shadowed(ctx, sess, pl.db, an); err != nil || r != nil {
+		return r, err
+	}
 	pl.an = an
 	if len(s.rules.Mask) > 0 {
 		for _, rel := range an.Relations {
@@ -299,12 +302,46 @@ func (s *Server) strictWriteFunctions(ctx context.Context, sess engine.Session, 
 	}
 	env := s.astEnv(ctx, sess, db, true)
 	env.WriteFuncs = true
-	if _, err := sqlast.Analyze(parsed, env); err != nil {
+	an, err := sqlast.Analyze(parsed, env)
+	if err != nil {
 		var r *sqlclass.Refusal
 		if errors.As(err, &r) {
 			return r, nil
 		}
 		return nil, err
+	}
+	return s.shadowed(ctx, sess, db, an)
+}
+
+// shadowed refuses a statement that calls an allowlisted function which a
+// user-defined function also names, on a server that resolves the best
+// match over the search path (engine.FunctionShadows): an overload with a
+// closer argument type would run instead. The k-anonymity counts call
+// COUNT and MIN. It returns the refusal, if any; an error is the engine's.
+func (s *Server) shadowed(ctx context.Context, sess engine.Session, db string, an *sqlast.Analysis) (*refusal.Error, error) {
+	fs, ok := sess.(engine.FunctionShadows)
+	if !ok {
+		return nil, nil
+	}
+	var names []string
+	for _, f := range an.Funcs {
+		names = append(names, strings.ToLower(f))
+	}
+	if len(an.KChecks) > 0 {
+		names = append(names, "count", "min")
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+	slices.Sort(names)
+	names = slices.Compact(names)
+	hit, err := fs.ShadowedFunctions(ctx, db, names)
+	if err != nil {
+		return nil, err
+	}
+	if len(hit) > 0 {
+		return refusal.Newf(refusal.Function, "function %s is also defined outside pg_catalog in this database: a user-defined overload could run instead of the built-in, so the call is refused (ask the human to check that function)",
+			strings.Join(hit, ", ")), nil
 	}
 	return nil, nil
 }

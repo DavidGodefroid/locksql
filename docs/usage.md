@@ -750,6 +750,14 @@ locksql doctor   [--profile P]
   `performance_schema`, `sys`, SQLite internals) are refused, and so are `pg_stat_statements` and
   `pg_stat_activity` while mask rules exist (they hold the text of past
   statements). Every table and column must resolve against the catalog.
+- On PostgreSQL, a function outside `pg_catalog` that bears an allowlisted
+  name (`public.lower(varchar)`) would run instead of the built-in when its
+  argument type is a closer match. Before each read, and each write under
+  `write_functions = "allowlist"`, the console looks up the functions the
+  statement calls (and `count` and `min`, which its k-anonymity counts
+  call) and refuses it when one is also defined outside `pg_catalog`
+  (`E_FUNCTION`, `also defined outside pg_catalog`). Functions an extension
+  owns (`citext` overloads `lower`, `replace`, ...) are not counted.
 - Every output column is traced to its source columns, so an alias, a CTE or
   a subquery does not hide a PII column: `SELECT e FROM (SELECT email AS e
   FROM users) t LIMIT 5` is masked like `email`.
@@ -841,9 +849,9 @@ With `"allowlist"`:
 The refusal code is `E_FUNCTION` (`E_UNKNOWN_NAME` for a column that does
 not exist). DDL is not covered: a DDL tier can create functions, triggers
 and column defaults. Code the schema already holds still runs: triggers,
-column defaults, domain constraints, and a function created under an
-allowlisted name with a closer argument type or earlier in `search_path`;
-the privilege audit is the control there. Changing `"allowlist"` back to
+column defaults and domain constraints; the privilege audit is the control
+there. On PostgreSQL, a call to an allowlisted function that a function
+outside `pg_catalog` also names is refused (see below). Changing `"allowlist"` back to
 `"denylist"` is a policy loosening and waits for `:review`.
 
 ### Placeholders and cell references

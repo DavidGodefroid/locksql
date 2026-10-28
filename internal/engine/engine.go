@@ -181,6 +181,16 @@ type Noticer interface {
 	Notices() []string
 }
 
+// FunctionShadows is implemented by sessions whose server picks the best
+// match for an unqualified function name over the whole search path
+// (PostgreSQL): a user-defined function bearing an allowlisted name, with
+// a closer argument type, would run instead of the built-in.
+// ShadowedFunctions returns those of names (lower case) that a function
+// outside the system catalog also bears in database db.
+type FunctionShadows interface {
+	ShadowedFunctions(ctx context.Context, db string, names []string) ([]string, error)
+}
+
 // DialFunc opens the network connection to the database server. nil is a
 // direct TCP or Unix socket connection.
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)

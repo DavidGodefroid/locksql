@@ -396,3 +396,29 @@ func (s *session) ExtraPrivileges(ctx context.Context, tier config.Tier) ([]stri
 	}
 	return out, nil
 }
+
+// ShadowedFunctions implements engine.FunctionShadows: PostgreSQL resolves
+// an unqualified call to the best match over every schema of the search
+// path, so a function bearing a built-in's name with a closer argument
+// type (public.lower(varchar)) runs instead of pg_catalog.lower(text).
+// It returns the names a function outside pg_catalog also bears, in any
+// schema (a role's search_path may name it), unless an extension owns it:
+// extensions (citext overloads lower, replace, ...) are installed by an
+// administrator and are not refused here.
+func (s *session) ShadowedFunctions(ctx context.Context, db string, names []string) ([]string, error) {
+	var out []string
+	err := s.catalog(ctx, db, func(ctx context.Context, c *pgx.Conn) error {
+		rows, err := c.Query(ctx, `SELECT DISTINCT p.proname::text
+			FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+			WHERE n.nspname <> 'pg_catalog' AND p.proname = ANY($1::text[])
+			AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend d
+				WHERE d.classid = 'pg_catalog.pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
+			ORDER BY 1`, names)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	})
+	return out, err
+}
