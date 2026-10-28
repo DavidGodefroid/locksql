@@ -6,6 +6,18 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
+### Added
+
+- **`locksql config export` / `locksql config import`.** Share profiles
+  and PII rule sets with a team as one versioned JSON file. The export
+  holds no secret, no `user` (unless `--include-user`) and no file of one
+  machine (`tls_ca`, `tls_cert`, `tls_key`, `ssh.key` are named in
+  `needs_local` and given on import with `--local`). The import is strict,
+  validates the merged result before writing, refuses any loosening
+  without `--allow-loosen` (the console still asks at its next start),
+  keeps `*.bak` backups and writes a `config_import` audit record. See
+  docs/usage.md, "Share a configuration with your team".
+
 ### Changed
 
 - **PII rules in named sets, one per profile by default.** PII rules no
