@@ -278,9 +278,11 @@ vault_path  = "database/creds/reporting-ro"
   only: never in its arguments (`/proc/<pid>/cmdline`), on disk, in a log or
   in the audit trail. It stays in console memory for the session, so
   reconnects and lease renewals do not ask again, and is wiped when the
-  console ends. When Vault refuses it (expired or revoked token), the
-  console says `Vault refused the token` and asks again; three refused
-  tokens in a row stop the connection.
+  console ends. When Vault refuses the read, the console says `Vault
+  refused the read` and asks for a token again: Vault answers `permission
+  denied` alike for an expired or revoked token and for a policy that may
+  not read `vault_path`, so enter a valid token whose policy may read it.
+  Three refusals in a row stop the connection.
 - The login is the `username` and `password` fields of the secret's data
   (or of `data.data` for a KV version 2 secret, such as
   `secret/data/reporting`). For a secret holding only a password, set `user`

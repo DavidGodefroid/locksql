@@ -180,7 +180,8 @@ func TestConnectVaultFailure(t *testing.T) {
 	}
 }
 
-// refused is a read Vault refuses: the token is expired or revoked.
+// refused is a read Vault refuses: the token is expired or revoked, or its
+// policy may not read the path; the CLI's error does not tell which.
 func refused() (*secrets.VaultCredentials, error) {
 	return nil, fmt.Errorf("%w: the Vault token is invalid or expired, or its policy may not read database/creds/app-ro (permission denied)", secrets.ErrVaultAuth)
 }
@@ -210,8 +211,11 @@ func TestConnectVaultAsksAgainForARefusedToken(t *testing.T) {
 	if got := strings.Join(vaultEng.users, ","); got != "v-1,v-2" {
 		t.Errorf("engine users = %s", got)
 	}
+	// Vault answers "permission denied" alike for a bad token and for a
+	// policy that may not read the path: the warning blames neither alone.
 	out := io.output()
-	if !strings.Contains(out, "Vault refused the token") {
+	if !strings.Contains(out, "Vault refused the read") || !strings.Contains(out, "or a token whose policy may read database/creds/app-ro") ||
+		strings.Contains(out, "refused the token") {
 		t.Errorf("output %q", out)
 	}
 	for _, tok := range []string{"hvs.stale", "hvs.t1", "hvs.t2"} {

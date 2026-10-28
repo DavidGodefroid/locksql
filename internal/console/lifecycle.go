@@ -671,7 +671,9 @@ func vaultAddr() string {
 
 // readVault reads the login at p.VaultPath with the Vault token of the
 // session, asked of the human the first time (no echo), and again when
-// Vault refuses it (expired or revoked) up to vaultTokenTries times. The
+// Vault refuses the read up to vaultTokenTries times. Vault answers
+// "permission denied" alike for an expired or revoked token and for a
+// policy that may not read the path, so the warning names both. The
 // token goes to the vault CLI in its environment only, never its
 // arguments, a file, a log or the audit trail.
 func (st *starter) readVault(ctx context.Context, p config.Profile) (*secrets.VaultCredentials, error) {
@@ -692,7 +694,7 @@ func (st *starter) readVault(ctx context.Context, p config.Profile) (*secrets.Va
 		if try == vaultTokenTries {
 			return nil, fmt.Errorf("%w: %v", secrets.ErrVaultAuth, err)
 		}
-		st.io.Println(paint.Warn("Vault refused the token: " + err.Error()))
+		st.io.Println(paint.Warn("Vault refused the read: " + err.Error() + ". Enter the token again, or a token whose policy may read " + safeText(p.VaultPath, false)))
 	}
 }
 
