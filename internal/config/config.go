@@ -555,11 +555,68 @@ func checkProxyCommand(argv []string, p Profile, baseDir string, errf func(strin
 		if secretArg.MatchString(a) || shortPassword(a, mysql) {
 			return errf("%s looks like a secret; %s never reads secrets from config files", key, product.P.Name)
 		}
+		if climbs(a) {
+			return errf("%s climbs out of the command's directory with ..; give an absolute path", key)
+		}
+		if expandsHome(a) {
+			return errf("%s holds ~user, %%d or a $variable, which the command expands where %s cannot check it; write the path out", key, product.P.Name)
+		}
 		if namesPathIn(a, baseDir) {
 			return errf("%s is inside the project %s, which the agent can rewrite after the approval; install it elsewhere", key, baseDir)
 		}
 	}
 	return nil
+}
+
+// pathDelims end the text before a path inside an argument
+// (--config=/p, UNIX-CONNECT:/p, a,b, "p", @p) and a path component.
+const pathDelims = "/\\=:,; \t'\"@"
+
+// pathStarts returns the parts of arg that may start a path: arg itself,
+// what follows each of pathDelims, and the value glued to a short flag (-Fp).
+func pathStarts(arg string) []string {
+	out := []string{arg}
+	for i := 1; i < len(arg); i++ {
+		if strings.IndexByte(pathDelims, arg[i-1]) >= 0 {
+			out = append(out, arg[i:])
+		}
+	}
+	if len(arg) > 2 && arg[0] == '-' && arg[1] != '-' {
+		out = append(out, arg[2:])
+	}
+	return out
+}
+
+// climbs reports whether arg holds a .. path component: relative to the
+// command's directory, it could reach the project.
+func climbs(arg string) bool {
+	for _, p := range pathStarts(arg) {
+		if p == ".." || (strings.HasPrefix(p, "..") && strings.IndexByte(`/\`, p[2]) >= 0) {
+			return true
+		}
+	}
+	return false
+}
+
+// expandsHome reports whether arg holds a form the command may expand to a
+// directory locksql does not see: ~user, ssh's %d (the home) and $VAR or
+// ${VAR}. A ~ alone or before a separator is the console account's home,
+// which namesPathIn checks.
+func expandsHome(arg string) bool {
+	if strings.Contains(arg, "%d") {
+		return true
+	}
+	for i := 0; i+1 < len(arg); i++ {
+		if c := arg[i+1]; arg[i] == '$' && (c == '{' || c == '_' || unicode.IsLetter(rune(c))) {
+			return true
+		}
+	}
+	for _, p := range pathStarts(arg) {
+		if len(p) > 1 && p[0] == '~' && (p[1] == '_' || unicode.IsLetter(rune(p[1])) || unicode.IsDigit(rune(p[1]))) {
+			return true
+		}
+	}
+	return false
 }
 
 // foldCase is set where file names are case-insensitive by default, as on

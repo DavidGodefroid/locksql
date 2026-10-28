@@ -316,7 +316,9 @@ proxy_command = ["kubectl", "exec", "-i", "-n", "shop", "shop-db-0", "--",
   through a symbolic link, and whatever its case on macOS and Windows: the
   agent could rewrite that file after your approval. The command runs in an
   empty directory of its own, private to the console account and removed
-  when it ends, so a relative argument names nothing. Arguments are checked
+  when it ends, so a relative argument names nothing; a `..` component,
+  `~user`, ssh's `%d` and `$VAR` or `${VAR}`, which the command would
+  expand where locksql cannot check them, are refused. Arguments are checked
   like other values: no control characters, no embedded password, nothing
   that reads as a secret (`--password=`, `MYSQL_PWD=`, `--token`, mysql's
   `-pSECRET`); the database password is asked as usual and sent over the
