@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -44,7 +45,7 @@ func TestInstallRefusesABinaryAnotherAccountCanChange(t *testing.T) {
 	}
 	sum := fileSHA256(t, bin)
 
-	o := cli(t, t.TempDir(), "", "install", "--client", "agent", "--print")
+	o := installCLI(t, "--client", "agent", "--print")
 	o.want(t, exitFail, bin+" is owned by ", "could have been replaced by the agent",
 		"install a release into a root-owned directory (scripts/install.sh with the default /usr/local/bin)",
 		"--trust-binary", "sha256 "+sum)
@@ -52,7 +53,7 @@ func TestInstallRefusesABinaryAnotherAccountCanChange(t *testing.T) {
 		t.Errorf("the root script was printed for an untrusted binary:\n%s", o.stdout)
 	}
 
-	o = cli(t, t.TempDir(), "", "install", "--client", "agent", "--print", "--trust-binary")
+	o = installCLI(t, "--client", "agent", "--print", "--trust-binary")
 	check := "sha256sum -c -"
 	if runtime.GOOS == "darwin" {
 		check = "shasum -a 256 -c -"
@@ -159,10 +160,10 @@ func TestInstallYes(t *testing.T) {
 	var scripts []string
 	e := env{stdin: strings.NewReader(""), stdout: &out, stderr: &errb, cwd: t.TempDir(),
 		root: func(s string) error { scripts = append(scripts, s); return nil }}
-	if code := runEnv(e, []string{"install", "--client", "agent", "--trust-binary"}); code != exitUsage || len(scripts) != 0 {
+	if code := runInstall(e, []string{"--client", "agent", "--trust-binary"}); code != exitUsage || len(scripts) != 0 {
 		t.Fatalf("no terminal: code %d, scripts %d\n%s%s", code, len(scripts), out.String(), errb.String())
 	}
-	if code := runEnv(e, []string{"install", "--client", "agent", "--trust-binary", "--yes"}); code != exitOK || len(scripts) != 1 {
+	if code := runInstall(e, []string{"--client", "agent", "--trust-binary", "--yes"}); code != exitOK || len(scripts) != 1 {
 		t.Fatalf("--yes: code %d, scripts %d\n%s%s", code, len(scripts), out.String(), errb.String())
 	}
 	if !strings.Contains(scripts[0], "usermod -aG locksql-clients agent") || !strings.Contains(out.String(), "Done. Next:") {
@@ -213,11 +214,20 @@ func TestInstallShowsTheDigestBesideThePrompt(t *testing.T) {
 	var out, errb strings.Builder
 	e := env{stdin: strings.NewReader("n\n"), stdout: &out, stderr: &errb, cwd: t.TempDir(), tty: true,
 		root: func(string) error { t.Error("root ran"); return nil }}
-	if code := runEnv(e, []string{"install", "--client", "agent", "--trust-binary"}); code != exitOK {
+	if code := runInstall(e, []string{"--client", "agent", "--trust-binary"}); code != exitOK {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 	want := "binary: " + bin + "\nsha256: " + sum + "\nRun them now with sudo? [y/N] "
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("prompt lacks %q:\n%s", want, out.String())
 	}
+}
+
+// installCLI runs runInstall with args: the dispatch refuses `install`
+// (hostModeRefusal), but its code stays until a later release removes it.
+func installCLI(t *testing.T, args ...string) outcome {
+	t.Helper()
+	var out, errb bytes.Buffer
+	code := runInstall(env{stdin: strings.NewReader(""), stdout: &out, stderr: &errb, cwd: t.TempDir()}, args)
+	return outcome{code, out.String(), errb.String()}
 }

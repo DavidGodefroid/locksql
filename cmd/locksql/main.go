@@ -39,14 +39,11 @@ type helpRow struct{ name, args, desc string }
 
 var helpSections = []helpSection{
 	{title: "Human commands", rows: []helpRow{
-		{"locksql", "", "wire agents and lead to the separated setup (or start the console)"},
-		{"setup", "[--project DIR] [--yes] [--engine E ...]", "install, wire agents and add a database profile,\nthen print the command that starts the console"},
-		{"profile", "add [--project DIR] [--engine E ...]", "add a database profile to the project\n(the profile step of setup, for a console in a container)"},
+		{"profile", "add [--project DIR] [--engine E ...]", "add a database profile to the project"},
 		{"console", "[--profile P] [--project DIR] [--skip-permissions]", "run the approval console"},
 		{"forget", "--profile P", "remove the keychain secret"},
-		{"install", "[--client USER] [--print] [--trust-binary] [--yes]", "separate the console from the agent (sudo)\n(--trust-binary: copy a binary root does not own)"},
-		{"update", "[--version vX.Y.Z] [--yes] [--allow-downgrade]", "replace /usr/local/bin/locksql with a release\n(cosign signature and checksum checked; sudo)"},
-		{"doctor", "[--profile P] [--fix [--yes]]", "check that this machine is safe-ready\n(--fix: repair permissions, socket dir, wiring)"},
+		{"update", "[vX.Y.Z]", "update the launcher and its image (on the host;\ncosign signature and checksum checked)"},
+		{"doctor", "[--profile P] [--fix [--yes]]", "check the setup\n(--fix: repair permissions, socket dir, wiring)"},
 		{"init", "[claude|codex|cursor|gemini ...]", "write agent integration files into the project\n(default: the agents found on this machine)"},
 		{"stats", "[--log PATH] [--top N] [--export]", "count the refusals of the local audit log\n(--export: anonymised report, SQL shapes only)"},
 	}},
@@ -141,9 +138,6 @@ func runEnv(e env, args []string) int {
 		return exitFail
 	}
 	if len(args) == 0 {
-		if e.tty {
-			return runOnboard(e)
-		}
 		fmt.Fprint(stderr, usageText)
 		return exitUsage
 	}
@@ -168,12 +162,9 @@ func runEnv(e env, args []string) int {
 		return runMCP(e, args[1:])
 	case "init":
 		return runInit(e, args[1:])
-	case "install":
-		return runInstall(e, args[1:])
-	case "update":
-		return runUpdate(e, args[1:])
-	case "setup":
-		return runSetup(e, args[1:])
+	case "install", "update", "setup":
+		fmt.Fprintln(stderr, hostModeRefusal(cmd))
+		return exitFail
 	case "profile":
 		return runProfile(e, args[1:])
 	case "doctor":

@@ -147,7 +147,7 @@ func (f *updFixture) run(t *testing.T, tty bool, stdin string, args ...string) o
 			releases:      f.srv.URL + "/releases",
 			client:        f.srv.Client(),
 		}}
-	code := runEnv(e, append([]string{"update"}, args...))
+	code := runUpdate(e, args)
 	return outcome{code, out.String(), errb.String()}
 }
 
@@ -327,7 +327,7 @@ func TestUpdateRefusesOtherChannels(t *testing.T) {
 			root: func(s string) error { f.roots = append(f.roots, s); return nil },
 			upd: &updateEnv{exe: func() (string, error) { return path, nil }, installed: path,
 				releases: f.srv.URL + "/releases", client: f.srv.Client()}}
-		o := outcome{runEnv(e, []string{"update", "--yes"}), out.String(), errb.String()}
+		o := outcome{runUpdate(e, []string{"--yes"}), out.String(), errb.String()}
 		o.want(t, exitFail, "is not owned by root, or group or others may write it", "scripts/install.sh", "sudo locksql install")
 		f.wantNoRoot(t)
 	}

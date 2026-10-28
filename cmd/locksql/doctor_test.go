@@ -252,7 +252,7 @@ func TestDoctorSameUserMode(t *testing.T) {
 func TestInstallPrint(t *testing.T) {
 	// The test binary belongs to the test account: see
 	// TestInstallRefusesABinaryAnotherAccountCanChange.
-	o := cli(t, t.TempDir(), "", "install", "--client", "agent", "--print", "--trust-binary")
+	o := installCLI(t, "--client", "agent", "--print", "--trust-binary")
 	if o.code != 0 {
 		t.Fatalf("exit %d: %s", o.code, o.stderr)
 	}
@@ -270,10 +270,10 @@ func TestInstallPrint(t *testing.T) {
 			t.Error("install script lacks the 0710 socket directory")
 		}
 	}
-	if o := cli(t, t.TempDir(), "", "install", "--client", "locksql", "--print"); o.code != exitUsage {
+	if o := installCLI(t, "--client", "locksql", "--print"); o.code != exitUsage {
 		t.Error("same agent and console account accepted")
 	}
-	if o := cli(t, t.TempDir(), "", "install", "--client", "a;id", "--print"); o.code != exitUsage {
+	if o := installCLI(t, "--client", "a;id", "--print"); o.code != exitUsage {
 		t.Error("shell metacharacters accepted in an account name")
 	}
 }
