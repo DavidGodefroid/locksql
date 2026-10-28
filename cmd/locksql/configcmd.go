@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
@@ -212,9 +211,12 @@ type importPlan struct {
 	mode                 fs.FileMode
 	newSets              map[string]pii.Rules // the sets the import writes
 	changes              map[string][]config.Change
-	loosens              bool
-	skipped              []config.Skipped
-	conflicts            []string
+	// setChanges compares each written set with the set on disk, whatever
+	// profile the console resolves to it.
+	setChanges map[string][]config.Change
+	loosens    bool
+	skipped    []config.Skipped
+	conflicts  []string
 }
 
 // runConfigImport is `locksql config import`.
@@ -348,7 +350,8 @@ func planImport(sc configScope, share *config.Share, o config.ImportOptions) (*i
 	if err != nil {
 		return nil, err
 	}
-	p := &importPlan{oldConfig: old, mode: mode, skipped: skipped, newSets: map[string]pii.Rules{}, changes: map[string][]config.Change{}}
+	p := &importPlan{oldConfig: old, mode: mode, skipped: skipped, newSets: map[string]pii.Rules{}, changes: map[string][]config.Change{},
+		setChanges: map[string][]config.Change{}}
 	p.newConfig = f.TOML(configHeader)
 	if bytes.Equal(old, p.newConfig) || sameProfiles(old, p.newConfig, sc) {
 		p.newConfig = old
@@ -400,6 +403,12 @@ func planImport(sc configScope, share *config.Share, o config.ImportOptions) (*i
 		if prev, had := oldSets[set]; !had || !sameRules(prev, next) {
 			p.newSets[set] = next
 			sets[set] = next
+			if ch := setDiff(prev, next); len(ch) > 0 {
+				p.setChanges[set] = ch
+				for _, c := range ch {
+					p.loosens = p.loosens || c.Loosens
+				}
+			}
 		}
 	}
 
@@ -443,6 +452,16 @@ func sameProfiles(a, b []byte, sc configScope) bool {
 	return err1 == nil && err2 == nil && bytes.Equal(fa.TOML(""), fb.TOML(""))
 }
 
+// setDiff lists the rule changes from old to next with config.Diff's
+// classes: a removed mask rule, an added allow rule or a mode other than
+// redact loosens.
+func setDiff(old, next pii.Rules) []config.Change {
+	pol := func(r pii.Rules) config.Policy {
+		return config.NewPolicy(config.Profile{}, r.Mask, r.Allow).WithModes(r.Modes)
+	}
+	return config.Diff(pol(old), pol(next))
+}
+
 func sameRules(a, b pii.Rules) bool {
 	sa, sb := pii.ToShared(a), pii.ToShared(b)
 	return slices.Equal(sa.Mask, sb.Mask) && slices.Equal(sa.Allow, sb.Allow)
@@ -452,9 +471,9 @@ func sameRules(a, b pii.Rules) bool {
 // in red; then the PII rule sets written, mode conflicts and skipped
 // profiles.
 func printPlan(e env, p *importPlan) {
-	for _, n := range slices.Sorted(maps.Keys(p.changes)) {
-		fmt.Fprintf(e.stdout, "profile %s:\n", n)
-		for _, c := range p.changes[n] {
+	printChanges := func(title string, changes []config.Change) {
+		fmt.Fprintln(e.stdout, title+":")
+		for _, c := range changes {
 			line := "  " + c.Field + ": "
 			switch {
 			case c.Old == "":
@@ -470,14 +489,17 @@ func printPlan(e env, p *importPlan) {
 			fmt.Fprintln(e.stdout, line)
 		}
 	}
-	sets := make([]string, 0, len(p.newSets))
-	for s := range p.newSets {
-		sets = append(sets, s)
+	for _, n := range slices.Sorted(maps.Keys(p.changes)) {
+		printChanges("profile "+n, p.changes[n])
 	}
-	sort.Strings(sets)
-	for _, s := range sets {
+	for _, s := range slices.Sorted(maps.Keys(p.newSets)) {
 		r := p.newSets[s]
-		fmt.Fprintf(e.stdout, "PII rule set %s: %d mask, %d allow rules\n", s, len(r.Mask), len(r.Allow))
+		title := fmt.Sprintf("PII rule set %s (%d mask, %d allow rules)", s, len(r.Mask), len(r.Allow))
+		if ch := p.setChanges[s]; len(ch) > 0 {
+			printChanges(title, ch)
+		} else {
+			fmt.Fprintln(e.stdout, title)
+		}
 	}
 	for _, c := range p.conflicts {
 		fmt.Fprintln(e.stdout, "PII mode conflict: "+c)
@@ -487,22 +509,60 @@ func printPlan(e env, p *importPlan) {
 	}
 }
 
-// writePlan backs up and replaces the config file and the changed rule
-// sets. A legacy pii.toml is first moved to the default set, as the
-// console does.
-func writePlan(sc configScope, p *importPlan) error {
+// writePlan puts the new config file and rule sets in place, all or
+// nothing: every file is first written next to its target, every target
+// copied to *.bak, then the files are renamed into place; a failure undoes
+// the renames already done. A legacy pii.toml is first moved to the
+// default set, as the console does.
+func writePlan(sc configScope, p *importPlan) (err error) {
 	if len(p.newSets) > 0 {
 		if _, _, err := pii.MigrateLegacy(sc.dir); err != nil {
 			return err
 		}
 	}
-	if !bytes.Equal(p.oldConfig, p.newConfig) {
-		if p.oldConfig != nil {
-			if err := writeAtomic(sc.path+".bak", p.oldConfig, p.mode); err != nil {
-				return err
+	type target struct {
+		path, tmp string
+		old       []byte
+		existed   bool
+		perm      fs.FileMode
+	}
+	var targets []*target
+	defer func() {
+		for _, t := range targets {
+			if t.tmp != "" {
+				os.Remove(t.tmp)
 			}
 		}
-		if err := writeAtomic(sc.path, p.newConfig, p.mode); err != nil {
+	}()
+	stage := func(path string, perm fs.FileMode, write func(tmp string) error) error {
+		t := &target{path: path, perm: perm}
+		if st, err := os.Lstat(path); err == nil {
+			if !st.Mode().IsRegular() {
+				return fmt.Errorf("%s is not a regular file (a symbolic link?): refused", path)
+			}
+			if t.old, err = os.ReadFile(path); err != nil {
+				return err
+			}
+			t.existed, t.perm = true, st.Mode().Perm()
+		}
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		f, err := os.CreateTemp(dir, ".locksql-import-*.tmp")
+		if err != nil {
+			return err
+		}
+		t.tmp = f.Name()
+		f.Close()
+		targets = append(targets, t)
+		if err := write(t.tmp); err != nil {
+			return err
+		}
+		return os.Chmod(t.tmp, t.perm)
+	}
+	if !bytes.Equal(p.oldConfig, p.newConfig) {
+		if err := stage(sc.path, 0o644, func(tmp string) error { return os.WriteFile(tmp, p.newConfig, 0o600) }); err != nil {
 			return err
 		}
 	}
@@ -511,21 +571,30 @@ func writePlan(sc configScope, p *importPlan) error {
 		if err != nil {
 			return err
 		}
-		if st, err := os.Lstat(path); err == nil {
-			if !st.Mode().IsRegular() {
-				return fmt.Errorf("%s is not a regular file (a symbolic link?): refused", path)
-			}
-			old, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			if err := writeAtomic(path+".bak", old, st.Mode().Perm()); err != nil {
-				return err
-			}
-		}
-		if err := pii.SaveRulesFile(path, p.newSets[set]); err != nil {
+		r := p.newSets[set]
+		if err := stage(path, 0o644, func(tmp string) error { return pii.SaveRulesFile(tmp, r) }); err != nil {
 			return err
 		}
+	}
+	for _, t := range targets {
+		if t.existed {
+			if err := writeAtomic(t.path+".bak", t.old, t.perm); err != nil {
+				return err
+			}
+		}
+	}
+	for i, t := range targets {
+		if err := renameFile(t.tmp, t.path); err != nil {
+			for _, done := range targets[:i] {
+				if done.existed {
+					_ = writeAtomic(done.path, done.old, done.perm)
+				} else {
+					_ = os.Remove(done.path)
+				}
+			}
+			return fmt.Errorf("writing %s: %v; the files already written were rolled back", t.path, err)
+		}
+		t.tmp = ""
 	}
 	return nil
 }
@@ -573,3 +642,6 @@ func auditImport(e env, rec audit.Record) {
 		fmt.Fprintln(e.stderr, "locksql config import: audit log: "+err.Error())
 	}
 }
+
+// renameFile is os.Rename; tests replace it.
+var renameFile = os.Rename

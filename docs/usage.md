@@ -654,13 +654,17 @@ importer keeps the same sets. `--output` writes the file with mode 0600.
    the conflict is reported. `--replace` drops the scope's other profiles and
    replaces the imported sets;
 3. validates the merged config with the same rules as the console, then
-   compares each profile's policy with the current one (`config.Diff`). Any
-   loosening is shown in red and refuses the import unless `--allow-loosen`
-   is given; tightening needs no flag;
+   compares each profile's policy with the current one (`config.Diff`), and
+   each rule set it writes with the set on disk (a removed mask rule, an
+   added allow rule or a mode other than `redact` loosens, whichever
+   profile the console keeps on that set). Any loosening is shown in red
+   and refuses the import unless `--allow-loosen` is given; tightening
+   needs no flag;
 4. stops there with `--dry-run`; otherwise asks for confirmation on a
-   terminal (`--yes` elsewhere), copies `config.toml` and each rule set it
-   replaces to `*.bak`, writes through a temporary file and a rename,
-   keeps the file modes and refuses a symbolic link;
+   terminal (`--yes` elsewhere), writes every file next to its target,
+   copies `config.toml` and each rule set it replaces to `*.bak`, then
+   renames them into place: all or nothing (a failure restores the files
+   already replaced). It keeps the file modes and refuses a symbolic link;
 5. writes a `config_import` record (scope, profiles changed, whether
    loosening was allowed; no value) to your audit log.
 

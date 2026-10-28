@@ -395,3 +395,73 @@ func TestConfigImportRefusesBadFiles(t *testing.T) {
 		t.Error("a refused import wrote the config")
 	}
 }
+
+// Every rule set the import writes is compared with the set on disk, not
+// only through the profiles that resolve to it: the console may keep a
+// profile on a set the files alone do not point to (a profile approved on
+// the migrated default set keeps it even once <profile>.toml exists).
+func TestConfigImportSetDiffLoosens(t *testing.T) {
+	b := newMachine(t)
+	b.write(t, "[profiles.uat]\nengine = \"mariadb\"\nhost = \"db\"\n", map[string][]string{"uat": {"a.b.c"}, "default": {"app.users.email=email", "app.users.phone"}})
+	team := filepath.Join(t.TempDir(), "team.json")
+	// A merge keeps the stricter mode, so a relaxed mode needs --replace.
+	for name, c := range map[string][2]string{
+		"allow added":  {`"mask":[],"allow":[{"column":"app.users.email"}]`, ""},
+		"mode relaxed": {`"mask":[{"column":"app.users.email","mode":"email"},{"column":"app.users.phone","mode":"partial"}],"allow":[]`, "--replace"},
+	} {
+		_ = os.WriteFile(team, []byte(`{"locksql_config_format":1,"pii":{"default":{`+c[0]+`}}}`), 0o600)
+		args := []string{"config", "import", team, "--yes"}
+		if c[1] != "" {
+			args = append(args, c[1])
+		}
+		o := runIn(t, "", false, args...)
+		o.want(t, exitFail, "PII rule set default (", "loosens", "nothing written")
+		if r := b.rules(t, "default"); len(r.Allow) != 0 || r.Modes["app.users.phone"] != "" {
+			t.Errorf("%s: written: %+v", name, r)
+		}
+	}
+	// A removed mask rule under --replace.
+	_ = os.WriteFile(team, []byte(`{"locksql_config_format":1,"pii":{"default":{"mask":[{"column":"app.users.email","mode":"email"}],"allow":[]}}}`), 0o600)
+	runIn(t, "", false, "config", "import", team, "--yes", "--replace").want(t, exitFail, "pii.mask: app.users.phone", "loosens")
+	// A new mask rule tightens: no flag needed.
+	_ = os.WriteFile(team, []byte(`{"locksql_config_format":1,"pii":{"default":{"mask":[{"column":"app.users.iban"}],"allow":[]}}}`), 0o600)
+	runIn(t, "", false, "config", "import", team, "--yes").want(t, exitOK)
+	if r := b.rules(t, "default"); len(r.Mask) != 3 {
+		t.Errorf("tightening not written: %+v", r)
+	}
+}
+
+// A failure while the files are put in place undoes the files already
+// replaced: an import is all or nothing.
+func TestConfigImportAllOrNothing(t *testing.T) {
+	team := teamFile(t)
+	b := newMachine(t)
+	b.write(t, "[profiles.mine]\nengine = \"postgres\"\nhost = \"db.mine\"\n", map[string][]string{"shop": {"x.y.z"}})
+	cfgBefore, _ := os.ReadFile(b.cfg)
+	shopPath, _ := pii.SetPath(b.dir, "shop")
+	shopBefore, _ := os.ReadFile(shopPath)
+	old := renameFile
+	t.Cleanup(func() { renameFile = old })
+	calls := 0
+	renameFile = func(from, to string) error {
+		if calls++; calls == 2 {
+			return os.ErrPermission
+		}
+		return old(from, to)
+	}
+	runIn(t, "", false, append([]string{"config", "import", team, "--yes", "--allow-loosen"}, localArgs...)...).want(t, exitFail, "rolled back")
+	if after, _ := os.ReadFile(b.cfg); !bytes.Equal(after, cfgBefore) {
+		t.Errorf("config not restored:\n%s", after)
+	}
+	if after, _ := os.ReadFile(shopPath); !bytes.Equal(after, shopBefore) {
+		t.Errorf("rule set not restored:\n%s", after)
+	}
+	for _, d := range []string{b.dir, filepath.Join(b.dir, pii.SetsDir)} {
+		entries, _ := os.ReadDir(d)
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".") {
+				t.Errorf("temporary file left: %s", filepath.Join(d, e.Name()))
+			}
+		}
+	}
+}
