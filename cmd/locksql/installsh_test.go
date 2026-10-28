@@ -36,7 +36,7 @@ func newShFixture(t *testing.T) *shFixture {
 			t.Fatal(err)
 		}
 	}
-	for _, tool := range []string{"sh", "awk", "sha256sum", "shasum", "tar", "gzip", "install", "mktemp", "rm", "mkdir", "uname", "cat", "sed", "tr", "tail", "printf"} {
+	for _, tool := range []string{"sh", "awk", "sha256sum", "shasum", "tar", "gzip", "install", "mktemp", "rm", "mkdir", "uname", "cat", "sed", "tr", "tail", "printf", "grep"} {
 		if p, err := exec.LookPath(tool); err == nil {
 			if err := os.Symlink(p, filepath.Join(f.bin, tool)); err != nil {
 				t.Fatal(err)
@@ -58,7 +58,11 @@ cat "`+f.release+`/${1##*/}" > "$out"
 		t.Skip("install.sh supports amd64 and arm64 only")
 	}
 	archive := "locksql_" + shVersion + "_" + osName + "_" + arch + ".tar.gz"
-	data := tarGz(t, map[string][]byte{"locksql": []byte("#!/bin/sh\necho locksql " + shVersion + "\n")})
+	launcher, err := os.ReadFile(filepath.Join("..", "..", "scripts", "locksql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := tarGz(t, map[string][]byte{"locksql": []byte("#!/bin/sh\necho locksql " + shVersion + "\n"), "scripts/locksql": launcher})
 	if err := os.WriteFile(filepath.Join(f.release, archive), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -76,11 +80,38 @@ cat "`+f.release+`/${1##*/}" > "$out"
 // signature when ok.
 func (f *shFixture) cosign(t *testing.T, ok bool) {
 	t.Helper()
-	code := "0"
-	if !ok {
-		code = "1"
+	f.cosignImages(t, ok, ok)
+}
+
+// Digests the fake cosign reports for the release images.
+var (
+	fakeDigest      = "sha256:" + strings.Repeat("a", 64)
+	fakeVaultDigest = "sha256:" + strings.Repeat("b", 64)
+)
+
+// cosignImages installs a fake cosign that records its arguments (every
+// call, appended), accepts the signature of checksums.txt when blobOK, and
+// verifies the release images, printing their digests, when imageOK.
+func (f *shFixture) cosignImages(t *testing.T, blobOK, imageOK bool) {
+	t.Helper()
+	code := func(ok bool) string {
+		if ok {
+			return "0"
+		}
+		return "1"
 	}
-	writeExec(t, filepath.Join(f.bin, "cosign"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > '"+f.cosignArgs+"'\nexit "+code+"\n")
+	writeExec(t, filepath.Join(f.bin, "cosign"), `#!/bin/sh
+printf '%s\n' "$@" >> '`+f.cosignArgs+`'
+case "$1" in
+verify-blob) exit `+code(blobOK)+` ;;
+verify)
+	[ `+code(imageOK)+` = 0 ] || exit 1
+	for a in "$@"; do ref=$a; done
+	case "$ref" in *-vault) d='`+fakeVaultDigest+`' ;; *) d='`+fakeDigest+`' ;; esac
+	printf '[{"critical":{"identity":{"docker-reference":"%s"},"image":{"docker-manifest-digest":"%s"},"type":"cosign container image signature"}}]\n' "${ref%:*}" "$d"
+	;;
+esac
+`)
 }
 
 func (f *shFixture) run(t *testing.T, env ...string) (string, error) {
@@ -94,6 +125,92 @@ func (f *shFixture) run(t *testing.T, env ...string) (string, error) {
 func (f *shFixture) installed() bool {
 	_, err := os.Stat(filepath.Join(f.dest, "locksql"))
 	return err == nil
+}
+
+// install.sh installs the release's launcher, not its binary, set to run
+// the release's image.
+func TestInstallShInstallsTheLauncher(t *testing.T) {
+	f := newShFixture(t)
+	f.cosign(t, true)
+	out, err := f.run(t)
+	if err != nil {
+		t.Fatalf("install.sh: %v\n%s", err, out)
+	}
+	b, err := os.ReadFile(filepath.Join(f.dest, "locksql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "\nlauncher_version="+shVersion+"\n") || !strings.Contains(string(b), "docker run") {
+		t.Fatalf("not the launcher of %s:\n%s", shVersion, b)
+	}
+	for _, want := range []string{"\nimage_digest=" + fakeDigest + "\n", "\nvault_image_digest=" + fakeVaultDigest + "\n"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("launcher lacks %q", want)
+		}
+	}
+	args, _ := os.ReadFile(f.cosignArgs)
+	for _, want := range []string{"verify\n", "ghcr.io/davidgodefroid/locksql:" + shVersion + "\n", "ghcr.io/davidgodefroid/locksql:" + shVersion + "-vault\n", "--certificate-identity\nhttps://github.com/DavidGodefroid/locksql/.github/workflows/release.yml@refs/tags/v" + shVersion + "\n"} {
+		if !strings.Contains(string(args), want) {
+			t.Errorf("cosign args lack %q:\n%s", want, args)
+		}
+	}
+	if !strings.Contains(out, "ghcr.io/davidgodefroid/locksql:"+shVersion) {
+		t.Errorf("no image named:\n%s", out)
+	}
+}
+
+// An image whose signature does not verify (or not published yet) stops
+// the install: the launcher would run it.
+func TestInstallShRefusesAnUnverifiedImage(t *testing.T) {
+	f := newShFixture(t)
+	f.cosignImages(t, true, false)
+	out, err := f.run(t)
+	if err == nil || f.installed() || !strings.Contains(out, "does not verify, or the image is not published yet") {
+		t.Fatalf("%v, installed %v\n%s", err, f.installed(), out)
+	}
+}
+
+// Without cosign (LOCKSQL_SKIP_COSIGN=1) the launcher runs the image by
+// its tag, and says so.
+func TestInstallShSkipCosignLeavesNoDigest(t *testing.T) {
+	f := newShFixture(t)
+	out, err := f.run(t, "LOCKSQL_SKIP_COSIGN=1")
+	if err != nil || !strings.Contains(out, "the image is NOT verified") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	b, _ := os.ReadFile(filepath.Join(f.dest, "locksql"))
+	if !strings.Contains(string(b), "\nimage_digest=\n") {
+		t.Errorf("a digest without cosign:\n%s", b)
+	}
+}
+
+// LOCKSQL_VERSION takes only a version tag.
+func TestInstallShRefusesABadVersion(t *testing.T) {
+	f := newShFixture(t)
+	f.cosign(t, true)
+	out, err := f.run(t, "LOCKSQL_VERSION=v1.2.3;id")
+	if err == nil || f.installed() || !strings.Contains(out, "invalid version") {
+		t.Fatalf("%v, installed %v\n%s", err, f.installed(), out)
+	}
+}
+
+// A release before the launcher has none in its archive: install.sh says so
+// and installs nothing.
+func TestInstallShRefusesAnArchiveWithoutLauncher(t *testing.T) {
+	f := newShFixture(t)
+	f.cosign(t, true)
+	archive := "locksql_" + shVersion + "_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
+	data := tarGz(t, map[string][]byte{"locksql": []byte("#!/bin/sh\n")})
+	if err := os.WriteFile(filepath.Join(f.release, archive), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.release, "checksums.txt"), []byte(hexSum(data)+"  "+archive+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := f.run(t)
+	if err == nil || f.installed() || !strings.Contains(out, "holds no launcher") {
+		t.Fatalf("%v, installed %v\n%s", err, f.installed(), out)
+	}
 }
 
 func writeExec(t *testing.T, path, script string) {
@@ -120,7 +237,7 @@ func TestInstallShChecksTheReleaseWorkflowIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"verify-blob\n", "--certificate-identity-regexp\n" + ReleaseCertIdentityRegexp + "\n",
+	for _, want := range []string{"verify-blob\n", "--certificate-identity\nhttps://github.com/DavidGodefroid/locksql/.github/workflows/release.yml@refs/tags/v" + shVersion + "\n",
 		"--certificate-oidc-issuer\n" + releaseOIDCIssuer + "\n"} {
 		if !strings.Contains(string(args), want) {
 			t.Errorf("cosign args lack %q:\n%s", want, args)

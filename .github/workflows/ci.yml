@@ -105,24 +105,34 @@ jobs:
         run: |
           docker run --rm -v locksql-run:/run/locksql locksql doctor
           docker run --rm --user locksql -v locksql-run:/run/locksql -v locksql-home:/home/locksql locksql doctor
+      - name: the launcher runs every command in the image
+        run: |
+          set -x
+          sh scripts/locksql version | grep -x 'locksql launcher dev (image locksql)'
+          mkdir -p "$RUNNER_TEMP/proj" && cd "$RUNNER_TEMP/proj"
+          sh "$GITHUB_WORKSPACE/scripts/locksql" init claude
+          grep -Eq '"command": ?"locksql"' .mcp.json
+          test "$(stat -c %u .mcp.json)" = "$(id -u)"
+          sh "$GITHUB_WORKSPACE/scripts/locksql" profile add --profile local --engine sqlite --path app.db
+          # Exit 1: the console's checks fail from this container, which runs
+          # none (docs/docker.md); the repair itself is checked below.
+          code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" doctor --fix --yes || code=$?
+          test "$code" = 1
+          test "$(stat -c %u .locksql)" = 10001
+          code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" status --profile local || code=$?
+          test "$code" = 2 # no console is running
+          code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" install 2>err || code=$?
+          test "$code" = 1 && grep -q 'runs in Docker' err
       - name: docker build --target vault
         run: |
           docker build --target vault -t locksql:vault .
           docker run --rm --user locksql --entrypoint vault locksql:vault version
 
-  # The README's "first query in 3 commands" on a fresh machine: the
-  # runner's VM image and fresh Ubuntu and Fedora containers. The test
-  # installs the binary, runs locksql setup, starts the console in the
-  # console account's own terminal, then an agent plans and runs a SQLite
-  # query that the test approves by typing y in the console, as the human
-  # would: approval has no other way in. It changes the machine (an account,
-  # a group, /usr/local/bin, /etc/locksql), so it runs in CI only.
+  # The README's quick start, end to end through the launcher and an image
+  # built from this commit: init, profile add, doctor --fix, the console in
+  # a terminal, then the agent's plan and run, approved in the console.
   first-query:
-    name: first query (${{ matrix.target }})
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [runner, "ubuntu:24.04", "fedora:42"]
+    name: first query (launcher)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -133,84 +143,46 @@ jobs:
         with:
           go-version: "1.26.x"
           check-latest: true
-      - name: build locksql and the test
+      - name: docker build
+        run: docker build -t locksql .
+      - name: through the launcher
         run: |
-          mkdir -p "$RUNNER_TEMP/fq"
-          go build -o "$RUNNER_TEMP/fq/locksql" ./cmd/locksql
-          go test -c -tags firstquery -o "$RUNNER_TEMP/fq/firstquery.test" ./test/firstquery
-      - name: on the runner
-        if: matrix.target == 'runner'
-        run: |
+          go test -c -tags firstquery -o "$RUNNER_TEMP/firstquery.test" ./test/firstquery
           cd /tmp
-          # The runner image sets XDG_*_HOME under /home/runner, in the
-          # environment and in /etc/environment, which pam_env applies to
-          # every sudo: the console account would read the runner's config.
-          # A login session of the console account has none of them.
-          grep '^XDG_' /etc/environment || true
-          sudo sed -i '/^XDG_/d' /etc/environment
-          unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_CACHE_HOME XDG_DATA_HOME
-          LOCKSQL_FIRSTQUERY=1 LOCKSQL_FIRSTQUERY_BIN="$RUNNER_TEMP/fq/locksql" "$RUNNER_TEMP/fq/firstquery.test" -test.v
-      - name: in a fresh container
-        if: matrix.target != 'runner'
-        env:
-          IMAGE: ${{ matrix.target }}
-        run: |
-          docker run --rm -v "$RUNNER_TEMP/fq:/w:ro" "$IMAGE" sh -c '
-            set -e
-            if command -v apt-get >/dev/null; then
-              apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sudo >/dev/null
-            else
-              dnf install -y -q sudo util-linux util-linux-script shadow-utils >/dev/null
-            fi
-            useradd -m -s /bin/bash agent
-            echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent
-            su agent -c "cd /tmp && LOCKSQL_FIRSTQUERY=1 LOCKSQL_FIRSTQUERY_BIN=/w/locksql /w/firstquery.test -test.v"'
+          LOCKSQL_FIRSTQUERY=1 LOCKSQL_FIRSTQUERY_LAUNCHER="$GITHUB_WORKSPACE/scripts/locksql" "$RUNNER_TEMP/firstquery.test" -test.v
 
-  # `locksql update` against the real latest release: an old build installed
-  # as scripts/install.sh would, then replaced by the release after its
-  # cosign signature, checksum and version are checked. It changes
-  # /usr/local/bin, so it runs in CI only.
+  # The launcher of the latest release, installed by its install.sh (cosign
+  # signatures of checksums.txt and of the images, checksum), then updated:
+  # locksql version and a no-op locksql update. A latest release that
+  # predates the launcher has none to install: the job says so and stops.
   update:
-    name: update (runner)
+    name: update (launcher)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "1.26.x"
-          check-latest: true
       - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
         with:
           cosign-release: v2.6.1
-      - name: install an old build in /usr/local/bin
-        run: |
-          go build -ldflags "-X main.version=0.0.1" -o "$RUNNER_TEMP/locksql" ./cmd/locksql
-          sudo install -m 0755 -o root -g root "$RUNNER_TEMP/locksql" /usr/local/bin/locksql
-      - name: locksql update --yes
+      - name: install.sh, locksql version, locksql update
         run: |
           tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/DavidGodefroid/locksql/releases/latest)
           tag=${tag##*/}
           echo "latest release: $tag"
-          /usr/local/bin/locksql update --yes
-          test "$(stat -c '%U:%G %a' /usr/local/bin/locksql)" = "root:root 755"
-          test "$(/usr/local/bin/locksql version)" = "locksql ${tag#v}"
-          echo "LATEST=${tag#v}" >> "$GITHUB_ENV"
-      - name: a second run is a no-op
-        run: |
-          # A release older than locksql update has no such command: run the
-          # second update from this commit, stamped with the latest version
-          # and installed the same way.
-          if ! /usr/local/bin/locksql update --yes > out.txt 2>&1; then
-            go build -ldflags "-X main.version=$LATEST" -o "$RUNNER_TEMP/locksql" ./cmd/locksql
-            sudo install -m 0755 -o root -g root "$RUNNER_TEMP/locksql" /usr/local/bin/locksql
-            /usr/local/bin/locksql update --yes > out.txt 2>&1
-          fi
+          code=0; LOCKSQL_VERSION=$tag sh scripts/install.sh 2>out.txt || code=$?
           cat out.txt
-          grep -q "already at v$LATEST" out.txt
+          if [ "$code" != 0 ] && grep -q "holds no launcher" out.txt; then
+            echo "::notice::$tag predates the launcher: nothing to update yet"
+            exit 0
+          fi
+          test "$code" = 0
           test "$(stat -c '%U:%G %a' /usr/local/bin/locksql)" = "root:root 755"
+          grep -q '^image_digest=sha256:' /usr/local/bin/locksql
+          locksql version | tee version.txt
+          grep -q "^locksql launcher ${tag#v} (image ghcr.io/davidgodefroid/locksql@sha256:" version.txt
+          grep -qx "locksql ${tag#v}" version.txt || grep -qx "locksql $tag" version.txt
+          locksql update "$tag" 2>&1 | tee out.txt
+          grep -q "the launcher is already $tag" out.txt
 
   # Real servers in Docker. The harness in test/integration starts one
   # throwaway container per image (named ls-it-*, port on 127.0.0.1), seeds

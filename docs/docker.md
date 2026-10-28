@@ -1,7 +1,11 @@
 # Setting up locksql in Docker
 
-locksql runs in Docker, with nothing installed on your machine but Docker.
-This guide is its setup. The image holds the separated setup:
+locksql runs in Docker, with nothing on your machine but Docker and the
+`locksql` launcher. The launcher is a short shell script
+([`scripts/locksql`](../scripts/locksql)): every command you type,
+`locksql console`, `locksql version`, `locksql mcp` and the others, runs in
+the locksql image, never in a binary of its own on your machine. The image
+holds the separated setup:
 
 - the console runs as `locksql` (uid 10001), the only account that holds the
   database credentials;
@@ -12,49 +16,116 @@ This guide is its setup. The image holds the separated setup:
   is a named volume, `locksql-run`, shared by the console container and the
   agent's containers. The kernel checks every peer on the socket.
 
-Other deployment modes (a host install, packages, desktop and session
-setups) still exist in the code but are no longer documented or supported.
+## Install
 
-## Build
+Download the install script from the release you install, read it, then
+run it with that release:
 
-From a clone:
+```sh
+V=vX.Y.Z
+curl -fsSLO "https://raw.githubusercontent.com/DavidGodefroid/locksql/$V/scripts/install.sh"
+less install.sh
+LOCKSQL_VERSION=$V sh install.sh
+```
+
+It checks the release's cosign signature and checksum, and installs the
+launcher as `/usr/local/bin/locksql` (with `sudo` when needed; set
+`LOCKSQL_INSTALL_DIR` for another directory). The launcher runs the image of
+its own release, `ghcr.io/davidgodefroid/locksql:X.Y.Z`, which Docker pulls
+on first use: `install.sh` checks the image's cosign signature too (and its
+`-vault` variant's) and writes the verified digests into the launcher, which
+runs the image by digest, never by a tag that could be moved. Linux and macOS (Docker Desktop); on Windows, install it in
+WSL 2 with Docker Desktop's WSL integration and run it there.
+
+```sh
+locksql version    # the launcher's version and its image's
+locksql update     # the latest release: a new launcher, then docker pull
+locksql update vX.Y.Z
+```
+
+`locksql update` checks the signatures and the checksum as `install.sh`
+does, and needs cosign the same way. With `LOCKSQL_SKIP_COSIGN=1` nothing is
+verified and the launcher runs the image by its tag.
+
+### What runs where
+
+The launcher mounts the project (the nearest directory up from where you
+are that holds `.locksql/`, or that directory itself) at its own path, and
+runs each command with the account it needs:
+
+| Command | Runs as | Volumes |
+|---|---|---|
+| `console` | `locksql`, in a container of its own (`locksql-console-<n>`, one per project; `LOCKSQL_CONSOLE_NAME` names it), confined (no capability, no privilege gain, read-only root with a small `/tmp`, at most 256 processes and 1 GB), with `--add-host=host.docker.internal:host-gateway` and no log driver | `locksql-run`, `locksql-home` |
+| `stats`, `forget` | `locksql` | `locksql-home` |
+| `init`, `config` | you (your uid and gid), with your home mounted: they write the agents' files and your user config; a `config` file must be under the project or your home | |
+| `profile` | you, with `HOME=/tmp` | |
+| `doctor --fix` | root | |
+| everything else: `mcp`, `status`, `tables`, `plan`, `run`, `doctor`, `help`... | `agent` | `locksql-run` |
+
+The socket name is derived from the project path, so the console and the
+agent see the same one, and the console's hints name real paths.
+
+The launcher reads:
+
+- `LOCKSQL_IMAGE`: the image to run instead of the release's, for example
+  your own build (below);
+- `LOCKSQL_VAULT=1`: the image with the `vault` CLI
+  ([Credentials from Vault](#credentials-from-vault));
+- `LOCKSQL_DOCKER_ARGS`: more `docker run` arguments, split on spaces, for
+  example `LOCKSQL_DOCKER_ARGS="--network shop" locksql console`;
+- `LOCKSQL_READONLY_PROJECT=1`: the console mounts the project read-only,
+  but for `.locksql/`, for a project your agents write;
+- `LOCKSQL_CONSOLE_NAME`: the console's container name (default
+  `locksql-console-<n>`, from the project path);
+- `VAULT_ADDR`, `VAULT_NAMESPACE`, `VAULT_CACERT`: passed to the console.
+
+A path holding `:` (the project, your home) cannot be mounted: the launcher
+refuses it. On macOS, `doctor --fix` (a `chown` through Docker Desktop's
+file sharing) is untested.
+
+### Your own build
+
+From a clone, or without cloning:
 
 ```sh
 docker build -t locksql .
-```
-
-or without cloning:
-
-```sh
 docker build -t locksql https://github.com/DavidGodefroid/locksql.git
 ```
 
+then `LOCKSQL_IMAGE=locksql locksql ...`. The launcher of a clone
+(`sh scripts/locksql ...`) runs the image tagged `locksql` by default.
 `--build-arg VERSION=v0.8.0` sets the version that `locksql version` prints.
 
-## Set up a project
+### Migrating from a host install
 
-Mount the project at its own path (`-v "$PWD:$PWD" -w "$PWD"`): the socket name
-is derived from the project path, so the console and the agent must see the
-same one, and the console's hints then name real paths.
+Earlier releases installed a `locksql` binary on the host, and
+`sudo locksql install` a console account, its group, `/etc/locksql/` and a
+socket directory there. `install.sh` replaces that binary with the launcher;
+the image refuses `locksql install`, `locksql setup` and its own
+`locksql update`. What the host install created stays until you remove it:
+the `locksql` account and the `locksql-clients` group, `/etc/locksql/`, the
+socket directory (`/run/locksql`, `/etc/tmpfiles.d/locksql.conf` on Linux),
+and the console account's state in its home (approved policy, audit log).
+Agents wired with `locksql mcp` now reach the image through the launcher;
+an `.mcp.json` entry that runs `docker run ... locksql mcp` itself keeps
+working.
+
+## Set up a project
 
 In the project directory, `init` writes `.locksql/config.toml` with a
 commented example profile, and the agent files (here Claude Code's):
 
 ```sh
-docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
-  -v "$PWD:$PWD" -w "$PWD" locksql init claude
+locksql init claude
 ```
 
-`--user` and `HOME` make the files yours. `init` writes `locksql mcp` as the
-MCP command, which is not on your machine: replace the `locksql` entry as in
-[Wire the agent](#wire-the-agent).
+The MCP command it writes, `locksql mcp`, is the launcher: the agent starts
+the MCP server in a throwaway container ([Wire the agent](#wire-the-agent)).
 
-Add a database profile with the wizard (the accounts and the socket are the
-image's own):
+Add a database profile with the wizard:
 
 ```sh
-docker run -it --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
-  -v "$PWD:$PWD" -w "$PWD" locksql profile add
+locksql profile add
 ```
 
 It asks for the engine, host, port, TLS and where the password comes from,
@@ -64,13 +135,12 @@ never for the password itself, and appends the profile to
 database/creds/ro`) skip the questions. Inside a container, `localhost` is
 the container itself, and the wizard knows it:
 
-- a database on your machine is `host = "host.docker.internal"` (Docker
-  Desktop; on Linux add `--add-host=host.docker.internal:host-gateway` to the
-  console's `docker run`). That is not a loopback host, so `tls` defaults to
-  `verify-full`: set `tls = "disable"` or `"prefer"` for a local server
-  without TLS;
+- a database on your machine is `host = "host.docker.internal"`, which the
+  launcher maps to your machine. That is not a loopback host, so `tls`
+  defaults to `verify-full`: set `tls = "disable"` or `"prefer"` for a local
+  server without TLS;
 - a database in another container is reached by its name on a shared
-  network (`--network NAME` on the console's `docker run`);
+  network (`LOCKSQL_DOCKER_ARGS="--network NAME" locksql console`);
 - `credentials = "keychain"` needs an OS keychain, which the container does
   not have: use `credentials = "ask"`, or `"vault"` with the image below;
 - a SQLite `path` is relative to the project root, which is mounted.
@@ -78,10 +148,10 @@ the container itself, and the wizard knows it:
 Then give `.locksql/` to the console account. The console writes
 the PII rule sets there (`pii/<set>.toml`), and a directory your account owns would let the agent
 replace that file, and with it the masking rules. The account exists only in
-the image, so run the repair there, as root:
+the image, where the launcher runs the repair as root:
 
 ```sh
-docker run --rm --user 0 -v "$PWD:$PWD" -w "$PWD" locksql doctor --fix --yes
+locksql doctor --fix --yes
 ```
 
 It makes uid 10001 the owner of `.locksql/` (mode 0755) and makes
@@ -95,45 +165,37 @@ by `locksql init` for example.
 In a terminal you keep in view, from the project directory:
 
 ```sh
-docker run -it --rm --name locksql-console --user locksql \
-  -v "$PWD:$PWD" \
-  -v locksql-run:/run/locksql \
-  -v locksql-home:/home/locksql \
-  locksql console --project "$PWD"
+locksql console
 ```
 
 Add `--profile P`, `--show-results`, `--auto` or
-`--allow-unmask` after `console`
-([Start the console](usage.md#2-start-the-console)). The `locksql-home` volume
-keeps the console account's state from one run to the next: the approved
-policy, the audit log and `~/.ssh/known_hosts` for an `ssh` profile. A key
-for `auth = "key"` must be in that volume, owned by `locksql` with mode 0600;
-`auth = "password"` needs nothing there.
+`--allow-unmask` ([Start the console](usage.md#2-start-the-console)). The
+`locksql-home` volume keeps the console account's state from one run to the
+next: the approved policy, the audit log and `~/.ssh/known_hosts` for an
+`ssh` profile. A key for `auth = "key"` must be in that volume, owned by
+`locksql` with mode 0600; `auth = "password"` needs nothing there.
 
 ## Credentials from Vault
 
 `credentials = "vault"` runs the `vault` CLI in the console's container. The
-default image leaves it out (it adds some 550 MB); the `vault` target has it:
+default image leaves it out (it adds some 550 MB); the release's `-vault`
+image has it (`ghcr.io/davidgodefroid/locksql:X.Y.Z-vault`), which
+`LOCKSQL_VAULT=1` selects. For your own build, `docker build --target vault
+-t locksql:vault .` and `LOCKSQL_IMAGE=locksql:vault`.
+
+The console reads `VAULT_ADDR` and `VAULT_NAMESPACE` from its environment,
+which the launcher passes on, nothing else. The console account needs no
+`vault login`: at start the console asks `Vault token for <VAULT_ADDR>:` in its terminal (no
+echo) and keeps the token in memory for the session, never in
+`locksql-home` or anywhere on disk:
 
 ```sh
-docker build --target vault -t locksql .
+LOCKSQL_VAULT=1 VAULT_ADDR=https://vault.example.com locksql console
 ```
 
-The console reads `VAULT_ADDR` (and `VAULT_CACERT`, `VAULT_NAMESPACE`) from
-its environment: add `-e VAULT_ADDR=https://vault.example.com` to its
-`docker run`, nothing else. The console account needs no `vault login`: at start the
-console asks `Vault token for <VAULT_ADDR>:` in its terminal (no echo, which
-the `-it` of its `docker run` allows) and keeps the token in memory for the
-session, never in `locksql-home` or anywhere on disk:
-
-```sh
-docker run -it --rm --name locksql-console --user locksql \
-  -e VAULT_ADDR=https://vault.example.com \
-  -v "$PWD:$PWD" \
-  -v locksql-run:/run/locksql \
-  -v locksql-home:/home/locksql \
-  locksql console --project "$PWD"
-```
+`VAULT_CACERT` (a CA bundle for Vault's certificate) is passed too, its file
+mounted read-only at its own path: it must be readable by the console
+account (uid 10001), mode 0644 for example.
 
 Get the token without storing it, then paste it at the prompt:
 
@@ -168,20 +230,23 @@ USER agent
 ```
 
 ```sh
-docker build -t locksql -f Dockerfile.proxy .   # after docker build -t locksql .
-docker run --rm --entrypoint ssh locksql -V     # the client is there
+docker build -t locksql-proxy -f Dockerfile.proxy .   # after docker build -t locksql .
+docker run --rm --entrypoint ssh locksql-proxy -V     # the client is there
+LOCKSQL_IMAGE=locksql-proxy locksql console
 ```
 
-Tagging it `locksql` again keeps the commands of this guide unchanged. Add
+`FROM ghcr.io/davidgodefroid/locksql:X.Y.Z` builds on the release's image
+instead. Add
 `docker-cli` for a `docker exec` reached through `DOCKER_HOST=ssh://...`;
 for `kubectl`, copy a release binary checked against its published SHA-256,
 as the `Dockerfile` does for `vault`, and keep the kubeconfig in
 `locksql-home`. Pass `DOCKER_HOST`, `DOCKER_CONTEXT` or `KUBECONFIG` with
-`-e` on the console's `docker run`; the command inherits them.
+`LOCKSQL_DOCKER_ARGS="-e DOCKER_HOST=..."` on `locksql console`; the command
+inherits them.
 
 **Prefer `ssh` to the Docker host**, even when it is the machine the console
-runs on (`deploy@host.docker.internal`, with
-`--add-host=host.docker.internal:host-gateway` on Linux). The command runs
+runs on (`deploy@host.docker.internal`, which the launcher maps to your
+machine). The command runs
 without a terminal, so `ssh` needs a key without passphrase and the host key
 already known. Create both in `locksql-home`, as the console account, and
 check the fingerprint `ssh-keyscan` prints against the host's own
@@ -189,7 +254,8 @@ check the fingerprint `ssh-keyscan` prints against the host's own
 
 ```sh
 docker run -it --rm --user locksql -v locksql-home:/home/locksql \
-  --add-host=host.docker.internal:host-gateway --entrypoint sh locksql -c '
+  --add-host=host.docker.internal:host-gateway --entrypoint sh \
+  ghcr.io/davidgodefroid/locksql:X.Y.Z -c '
     mkdir -p -m 0700 ~/.ssh &&
     ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/id_ed25519 &&
     ssh-keyscan -t ed25519 host.docker.internal >> ~/.ssh/known_hosts &&
@@ -203,7 +269,8 @@ run `docker` is root on that host.
 
 **Do not mount the Docker socket into the console's container** unless you
 accept what follows. With `-v /var/run/docker.sock:/var/run/docker.sock` (and
-`--group-add` the socket's group, since the console does not run as root),
+`--group-add` the socket's group, since the console does not run as root,
+through `LOCKSQL_DOCKER_ARGS`; the launcher never mounts it),
 `docker exec` works from the console's container, but **the console's
 container becomes root on the host**: any process in it, the console or the
 command it runs, can start a privileged container that mounts the host's `/`.
@@ -213,54 +280,42 @@ console, or a `proxy_command` you approve without reading it, does. The
 
 ## Wire the agent
 
-The agent starts the MCP server in a throwaway container, as `agent`, with
-the socket volume and the project mounted. `sh -c` expands `$PWD`, the
-directory the agent runs in (start the agent at the project root).
-
-Claude Code, for the project, replacing the entry `init claude` wrote in
-`.mcp.json`:
-
-```sh
-claude mcp remove --scope project locksql
-claude mcp add --scope project locksql -- \
-  sh -c 'exec docker run -i --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql mcp'
-```
-
-which leaves in `.mcp.json`:
+`locksql init claude` wrote `locksql mcp` as the MCP command in `.mcp.json`:
+the agent runs the launcher, which starts the MCP server in a throwaway
+container, as `agent`, with the socket volume and the project mounted. Start
+the agent at the project root, or below it.
 
 ```json
 {
   "mcpServers": {
     "locksql": {
       "type": "stdio",
-      "command": "sh",
-      "args": ["-c", "exec docker run -i --rm -v \"$PWD:$PWD\" -w \"$PWD\" -v locksql-run:/run/locksql locksql mcp"]
+      "command": "locksql",
+      "args": ["mcp"]
     }
   }
 }
 ```
 
-For every project instead, `claude mcp add --scope user` with the same
-command; a project's `.mcp.json` entry takes precedence over it, so remove the
-one `init claude` wrote. Codex, Gemini CLI and Cursor take the same `command`
-and `args` in the files listed in [Agent wiring](usage.md#agent-wiring) (keep `tool_timeout_sec` or
-`timeout` there: the console waits up to 5 minutes for an approval).
+For every project instead, `claude mcp add --scope user locksql -- locksql
+mcp`. Codex, Gemini CLI and Cursor take the same `command` and `args` in the
+files listed in [Agent wiring](usage.md#agent-wiring) (keep
+`tool_timeout_sec` or `timeout` there: the console waits up to 5 minutes for
+an approval).
 
-The client commands run the same way:
+The client commands run the same way: `locksql status`, `locksql tables`...
 
-```sh
-docker run --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql status
-```
-
-`locksql doctor` runs as `agent` by default and as the console account with
-`--user locksql`. It warns that `locksql` has no login session: in Docker the
-container takes the place of that session, and the checks of
+`locksql doctor` runs as `agent`; `docker run --rm --user locksql -v
+locksql-run:/run/locksql -v locksql-home:/home/locksql
+ghcr.io/davidgodefroid/locksql:X.Y.Z doctor` checks the console account. It
+warns that `locksql` has no login session: in Docker the container takes the
+place of that session, and the checks of
 [`locksql doctor`](usage.md#locksql-doctor) about the host do not apply.
 
 ## Agent in its own container
 
 When the agent itself runs in a container that cannot reach the Docker
-socket, it cannot start `docker run` for the MCP server: it runs the
+socket, the launcher cannot start the MCP server: the agent runs the
 `locksql` binary inside its own container instead, as a client of the
 console container. The two containers share only the socket volume.
 
@@ -269,6 +324,7 @@ where the agent's uid has none: name it at build time.
 
 ```sh
 docker build -t locksql --build-arg ALLOWED_UIDS=1000 .
+LOCKSQL_IMAGE=locksql locksql console
 ```
 
 `ALLOWED_UIDS` is a comma-separated list of uids, written to `allowed_uids`
@@ -278,7 +334,9 @@ when neither container remaps user namespaces.
 
 The agent's image needs what a client host has:
 
-- the `locksql` binary, the same version as the console's;
+- the `locksql` binary, not the launcher: the one in the release archive
+  (`locksql_X.Y.Z_linux_ARCH.tar.gz`, checked as `install.sh` checks it),
+  the same version as the console's image;
 - `/etc/locksql/system.toml`, owned by root, mode 0644, with the image's
   `service_user`, `client_group` and `socket_dir`: without it the client looks
   for the socket in the user's runtime directory;
@@ -311,8 +369,8 @@ is refused.
 Your own account is another matter. Whoever can run `docker` commands can
 `docker attach` to the console and type an approval, `docker exec` into it
 and read its memory, or open the `locksql-home` volume. An agent that runs
-shell commands in your account usually can: the MCP server above is itself a
-`docker run`. The console cannot see this (its terminal belongs to the
+shell commands in your account usually can: the launcher it runs for the
+MCP server is itself a `docker run`. The console cannot see this (its terminal belongs to the
 container), so treat this setup like the in-agent approval it improves on:
 it keeps credentials out of the agent's reach and the approval in your
 terminal, but it does not stop an agent determined to go around it. For that

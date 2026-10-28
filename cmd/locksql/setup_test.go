@@ -91,7 +91,7 @@ type enterable struct{ os.FileInfo }
 func (e enterable) Mode() os.FileMode { return e.FileInfo.Mode() | 0o055 }
 
 func (f *setupFixture) run(args ...string) int {
-	return runEnv(f.e, append([]string{"setup"}, args...))
+	return runSetup(f.e, args)
 }
 
 func TestSetupInteractive(t *testing.T) {

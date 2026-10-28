@@ -146,28 +146,24 @@ itself, checks the bastion's host key and listens on no local port.
 
 ## Quick start
 
-locksql runs in Docker: nothing to install but Docker. A first approved
+locksql runs in Docker: nothing on your machine but Docker and the
+`locksql` launcher, which runs every command in the image. A first approved
 query, from your project directory:
 
 ```sh
-# 1. Build the image
-docker build -t locksql https://github.com/DavidGodefroid/locksql.git
+# 1. Install the launcher (it runs every locksql command in Docker)
+V=vX.Y.Z
+curl -fsSLO "https://raw.githubusercontent.com/DavidGodefroid/locksql/$V/scripts/install.sh"
+less install.sh && LOCKSQL_VERSION=$V sh install.sh
 
-# 2. In your project: Claude Code's files, a database profile, then give
-#    .locksql/ to the console account (as root, inside the image)
-docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:$PWD" -w "$PWD" locksql init claude
-docker run -it --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:$PWD" -w "$PWD" locksql profile add
-docker run --rm --user 0 -v "$PWD:$PWD" -w "$PWD" locksql doctor --fix --yes
+# 2. In your project: Claude Code's files (its MCP server is `locksql mcp`),
+#    a database profile, then give .locksql/ to the console account
+locksql init claude
+locksql profile add
+locksql doctor --fix --yes
 
-# 3. Point the agent's MCP server at the image
-claude mcp remove --scope project locksql
-claude mcp add --scope project locksql -- \
-  sh -c 'exec docker run -i --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql mcp'
-
-# 4. In a terminal you keep in view, start the console
-docker run -it --rm --name locksql-console --user locksql \
-  -v "$PWD:$PWD" -v locksql-run:/run/locksql -v locksql-home:/home/locksql \
-  locksql console --project "$PWD"
+# 3. In a terminal you keep in view, start the console
+locksql console
 ```
 
 Then ask your agent, in the project: "how many orders were placed
@@ -178,15 +174,15 @@ the only one that holds the database credentials. The agent's MCP server runs
 as `agent` (uid 10002) in a throwaway container. The two share only the
 socket volume `locksql-run`, and the kernel checks every peer on the socket.
 
-`init claude` writes `.mcp.json` with `locksql mcp`, which is not on your
-machine: step 3 replaces that entry with the `docker run` above (Codex,
-Gemini CLI and Cursor take the same command). `profile add` asks for the
-engine, host, TLS and where the password comes from (typed at console start,
-or Vault), never for the password itself. Inside a container `localhost` is
-the container: a database on your machine is `host.docker.internal` (on
-Linux, add `--add-host=host.docker.internal:host-gateway` to the console's
-`docker run`). The details, Vault, and an agent that itself runs in a
-container are in [docs/docker.md](docs/docker.md).
+`init claude` writes `.mcp.json` with `locksql mcp`: the launcher, which
+starts the MCP server in the image (Codex, Gemini CLI and Cursor take the
+same command). `profile add` asks for the engine, host, TLS and where the
+password comes from (typed at console start, or Vault), never for the
+password itself. Inside a container `localhost` is the container: a database
+on your machine is `host.docker.internal`, which the launcher maps to your
+machine. `locksql version` prints the launcher's version and its image's,
+`locksql update` updates both. What runs where, Vault, and an agent that
+itself runs in a container are in [docs/docker.md](docs/docker.md).
 
 ## How it works
 
@@ -699,22 +695,32 @@ deliberately narrow:
 
 ## Install
 
-locksql is built and run as a Docker image. The image holds the separated
-setup: the console runs as `locksql` in one container, the agent's MCP server
-as `agent` in another. Build it straight from the repository:
+locksql runs in Docker. On the host, `scripts/install.sh` installs only the
+`locksql` launcher, a shell script that runs every command in the release's
+image (`ghcr.io/davidgodefroid/locksql:X.Y.Z`), each with the account it
+needs: the console as `locksql` in one container, the agent's MCP server as
+`agent` in another. Download the script from the release you install, read
+it, then run it:
 
 ```sh
-docker build -t locksql https://github.com/DavidGodefroid/locksql.git
-docker build --target vault -t locksql https://github.com/DavidGodefroid/locksql.git   # with the vault CLI
+V=vX.Y.Z
+curl -fsSLO "https://raw.githubusercontent.com/DavidGodefroid/locksql/$V/scripts/install.sh"
+less install.sh
+LOCKSQL_VERSION=$V sh install.sh
 ```
 
-`--build-arg VERSION=v0.8.0` sets the version that `locksql version` prints.
-To upgrade, build again and restart the console. Read what Docker does and
-does not separate before you rely on it:
+It checks the release's cosign signature and checksum. `locksql version`
+prints the launcher's version and its image's; `locksql update` installs a
+newer release's launcher, checked the same way, and pulls its image. Linux
+and macOS; on Windows, WSL 2 with Docker Desktop. `LOCKSQL_IMAGE` runs an
+image of your own (`docker build -t locksql .` from a clone), `LOCKSQL_VAULT=1`
+the image with the vault CLI. Read what Docker does and does not separate
+before you rely on it:
 [docs/docker.md](docs/docker.md#what-docker-does-and-does-not-separate).
 
-Other deployment modes (a host install, packages, desktop and session
-setups) still exist in the code but are no longer documented or supported.
+The image refuses the former host install (`locksql install`, `setup` and
+the binary's own `update`): [migrating from a host
+install](docs/docker.md#migrating-from-a-host-install).
 
 [lea](https://github.com/DavidGodefroid/lea) does all of it in `lea init`
 and links a `locksql` command that opens the console.

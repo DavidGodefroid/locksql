@@ -63,7 +63,7 @@
 </section>
 <section aria-labelledby="setup">
   <h2 id="setup">How do I set it up?</h2>
-  <p>With Docker, in four steps: build the image from the repository; in your project, run <code>init</code> and <code>profile add</code> from the image (the wizard asks for a database profile, never a password) and <code>doctor --fix</code> as root inside it, which gives <code>.locksql/</code> to the console account; point the agent’s MCP server at the image (<code>docker run -i --rm … locksql mcp</code>); and start the console in its own container, in a terminal you keep in view. <a href="../install/">The Docker setup</a>.</p>
+  <p>With Docker, in three steps: install the <code>locksql</code> launcher, which runs every command in the image; in your project, run <code>locksql init claude</code> (its MCP server is <code>locksql mcp</code>), <code>locksql profile add</code> (the wizard asks for a database profile, never a password) and <code>locksql doctor --fix --yes</code>, which gives <code>.locksql/</code> to the console account; and start <code>locksql console</code> in a terminal you keep in view. <a href="../install/">The Docker setup</a>.</p>
 </section>
 <section aria-labelledby="agents">
   <h2 id="agents">Which AI agents does it work with?</h2>
