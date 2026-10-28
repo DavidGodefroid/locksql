@@ -501,6 +501,9 @@ func describePolicy(p config.Policy) []string {
 	if pr.SSH != nil {
 		lines = append(lines, "  ssh: "+safeText(config.SSHString(pr.SSH), false))
 	}
+	if pr.WriteFunctions != "" {
+		lines = append(lines, "  write_functions: "+pr.WriteFunctions)
+	}
 	if len(pr.ProxyCommand) > 0 {
 		lines = append(lines, "  proxy_command: "+safeText(config.ProxyString(pr.ProxyCommand), false))
 	}

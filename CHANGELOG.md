@@ -8,6 +8,19 @@ This file records the changes a user or an agent has to know about.
 
 ### Added
 
+- **`write_functions = "allowlist"`.** An opt-in profile setting that
+  applies the read function allowlist to writes: every function an
+  `INSERT`, `REPLACE`, `UPDATE` or `DELETE` calls, at any depth, must be
+  allowlisted (plus key generators such as `gen_random_uuid`, `nextval`,
+  `UUID`, `SYS_GUID`, `randomblob`), or the write is refused with
+  `E_FUNCTION`. Schema-qualified calls, calls through quoted or non-ASCII
+  names or with a blank before `(`, `CALL`, `MERGE` and writes the parser
+  does not read are refused, and every column the write names is resolved
+  against the catalog (PostgreSQL attribute notation `t.f` calls `f(t)`).
+  The default stays `"denylist"`; turning the allowlist off is a policy
+  loosening confirmed in the console, and existing approved policies keep
+  their fingerprint.
+
 - **Databases that publish no port** (#35). A profile can set
   `proxy_command`, an argv whose stdin and stdout carry each database
   connection, as OpenSSH's `ProxyCommand`: `docker exec`, `podman exec`,
@@ -21,6 +34,16 @@ This file records the changes a user or an agent has to know about.
 
 ### Changed
 
+- **Docker is the only documented deployment.** The README Quick start and
+  Install, `docs/usage.md` and the site now describe only the Docker setup:
+  build the image, `locksql init`, `locksql profile add`, `locksql doctor
+  --fix` as root in the image, wire the agent with `docker run ... locksql
+  mcp`, run the console container. `docs/docker.md` is the setup guide, and
+  for the stronger boundary it recommends running the agent in its own
+  container without the Docker socket. The install script, packages,
+  `locksql install`, `locksql setup`, `locksql update`, the desktop and
+  session setups and WSL2 are no longer documented or supported; their code
+  is unchanged.
 - **Clear results refused at desktop security level 1.** When the console
   runs in a desktop terminal of the console account without a fingerprint
   reader, the agent's account can read its window, so the clear results
@@ -53,6 +76,15 @@ This file records the changes a user or an agent has to know about.
 
 ### Fixed
 
+- **Value detectors (#17).** Unicode e-mail addresses
+  (`müller.hans@exämple.de`) are masked whole; phone, IBAN, card and
+  national-id values grouped with U+00A0, U+202F or U+2009, or written
+  with full-width digits, are masked; integral `float4`/`float8` cells go
+  through the detectors like integers. A new opt-in detector,
+  `phone_loose`, masks national numbers without a trunk 0
+  (`(415) 555-2671`, `612 345 678`); the default `phone` rule is unchanged
+  and now documented next to the `detectors` setting. Detectors only mask
+  more than before (lockkit v0.2.0).
 - **`.locksql/` in Docker.** The console account exists only in the image,
   so nothing gave it the project's `.locksql/` directory, and an agent
   running as your uid could replace `pii.toml`. `locksql doctor --fix` now
