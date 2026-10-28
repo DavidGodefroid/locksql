@@ -545,6 +545,38 @@ a mode is a loosening unless the new mode is `redact`.
 
 On PostgreSQL the first segment is the schema (`public.users.email`).
 
+### Share a configuration with your team
+
+`locksql config export` writes the profiles of your user config (or of the
+project with `--project`) and the PII rule sets they use to one JSON file;
+`locksql config import FILE` applies it on another machine:
+
+```sh
+locksql config export --output team.json                 # all profiles, their PII rule sets
+locksql config import team.json --dry-run                # show what would change
+locksql config import team.json --local uat.ssh.key=~/.ssh/id_ed25519
+```
+
+- **Never exported:** secrets (none is in a config file; a value that looks
+  like one fails the export), `user` (unless `--include-user`), files of one
+  machine (`tls_ca`, `tls_cert`, `tls_key`, `ssh.key`: listed in
+  `needs_local`, given on import with `--local NAME.KEY=VALUE`),
+  `proxy_command` (a command line: kept from your own config, never
+  imported), SQLite and
+  Unix-socket profiles, approved policies, the audit log and console flags.
+  `--no-pii` leaves the rule sets out.
+- **Import:** a strict format (unknown fields, newer formats and invalid
+  values are refused, nothing is written); imported profiles replace those
+  of the same name but keep your `user` and local files; rule sets are
+  merged (a mode conflict keeps `redact`); `--replace` replaces the
+  profiles and the imported sets instead. A backup (`*.bak`) is kept.
+- **Loosening:** any change that loosens the policy (new profile or host,
+  higher tier, weaker tls, higher limits, a removed mask rule, a new allow
+  rule, another rule set, ...) is refused unless you pass `--allow-loosen`,
+  and the console still asks you to approve it at its next start.
+
+The file describes your databases: keep it in a private repository.
+
 ## `--allow-unmask`
 
 An agent can ask for unmasked PII output (`locksql plan --unmask`, or

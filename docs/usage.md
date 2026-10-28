@@ -377,7 +377,8 @@ vault_path  = "database/creds/reporting-ro"
   with `VAULT_ADDR` (and `VAULT_NAMESPACE`, `VAULT_CACERT` if needed) in
   the console's environment ([docker.md](docker.md#credentials-from-vault)).
 - At start, before the first Vault read, the console asks
-  `Vault token for <VAULT_ADDR>:` (no echo). No `vault login` is needed, and
+  `Vault token for <VAULT_ADDR>:` (no echo). The console account needs no
+  `vault login`, and
   the console account's `~/.vault-token` and `VAULT_TOKEN` are not used.
   Get it with `vault login -method=oidc -no-store -token-only`, which
   prints the token without writing `~/.vault-token` in the agent's
@@ -742,6 +743,54 @@ The console watches the config and PII files while it runs.
 
 The approved policy is stored outside the repository, in
 `<user state dir>/locksql/approved/`.
+
+### Share a configuration with your team
+
+`locksql config export [--profile NAME]... [--project] [--no-pii]
+[--include-user] [--output FILE]` writes a versioned JSON file
+(`locksql_config_format: 1`) with the shared keys of the profiles of a scope
+(your user config, or the project with `--project`) and, keyed by name, the
+PII rule sets they use. Each profile carries its `pii_rules`, so that the
+importer keeps the same sets. `--output` writes the file with mode 0600.
+
+| Exported | Never exported |
+|---|---|
+| `engine`, `host`, `port`, `database`, `credentials`, `vault_path`, `credentials_ttl`, `tls`, `tls_server_name`, `tier`, `production`, `detectors`, `pii_rules`, `write_functions`, every `limits.*`, `ssh.host`, `ssh.port`, `ssh.user`, `ssh.auth`, `ssh.credentials`; `user` with `--include-user` | secrets (a value that looks like one fails the whole export), `tls_ca`, `tls_cert`, `tls_key`, `ssh.key` (named in `needs_local`), `proxy_command` (named in `needs_local`; a command line is never taken from a shared file nor from `--local`: the import keeps the one of your config, or skips the profile), SQLite and Unix-socket profiles (skipped with a warning), `/etc/locksql/system.toml`, approved policies, the audit log, stats, `known_hosts`, console flags |
+
+`locksql config import FILE|- [--project] [--profile NAME]... [--replace]
+[--dry-run] [--yes] [--allow-loosen] [--local NAME.KEY=VALUE]...`:
+
+1. reads the file strictly: an unknown field, a newer format, an invalid
+   name or value (engine, tier, tls, port, limits, durations, rule
+   patterns, modes), a control character or a value that looks like a
+   secret is refused and nothing is written. Nothing in the file is run or
+   expanded (`~`, `$VAR`);
+2. merges: an imported profile replaces the profile of the same name but
+   keeps its `user` (unless the file sets one) and its local files; a
+   profile whose `needs_local` keys are neither given with `--local` nor
+   already there is not imported, and is reported. Rule sets are merged as
+   a union; a column with a different mode on each side keeps `redact`, and
+   the conflict is reported. `--replace` drops the scope's other profiles and
+   replaces the imported sets;
+3. validates the merged config with the same rules as the console, then
+   compares each profile's policy with the current one (`config.Diff`), and
+   each rule set it writes with the set on disk (a removed mask rule, an
+   added allow rule or a mode other than `redact` loosens, whichever
+   profile the console keeps on that set). Any loosening is shown in red
+   and refuses the import unless `--allow-loosen` is given; tightening
+   needs no flag;
+4. stops there with `--dry-run`; otherwise asks for confirmation on a
+   terminal (`--yes` elsewhere), writes every file next to its target,
+   copies `config.toml` and each rule set it replaces to `*.bak`, then
+   renames them into place: all or nothing (a failure restores the files
+   already replaced). It keeps the file modes and refuses a symbolic link;
+5. writes a `config_import` record (scope, profiles changed, whether
+   loosening was allowed; no value) to your audit log.
+
+The import never approves anything: a loosened profile is approved in the
+console at its next start, as after a hand edit. A rewritten `config.toml`
+loses its comments (the `.bak` keeps them). Run `locksql doctor` afterwards.
+The file describes your databases: keep it in a private repository.
 
 ### Refusal statistics
 
@@ -1194,6 +1243,7 @@ finds the project's consoles.
 | `<user config dir>/locksql/pii/<set>.toml` | PII rule sets outside a project |
 | `<user config dir>/locksql/config.toml` | personal profiles |
 | `<user state dir>/locksql/approved/*.json` | last approved policies |
+| `config.toml.bak`, `pii/<set>.toml.bak` | the files before the last `locksql config import` |
 | `<user state dir>/locksql/audit.log` | JSONL audit log, mode 0600 (`O_APPEND`, no hash chain: `chattr +a` for more); the records of a client request name the requester (`peer_uid`, `peer_pid`, `peer_user`); an approval is written before the run, a `run` record after it |
 | `<runtime dir>/<project-hash>-<profile>.sock` | console socket (tests only) |
 | `/etc/locksql/system.toml` | separated mode setup (root-owned) |

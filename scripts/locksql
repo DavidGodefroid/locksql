@@ -6,7 +6,9 @@
 #   console          as the console account (locksql), in a container named
 #                    locksql-console, with the socket and home volumes
 #   stats, forget    as the console account, with its home volume
-#   init, profile    as you, so that the files they write are yours
+#   init, config     as you, with your home: they write your agents' files
+#                    and your user config
+#   profile          as you, so that the files it writes are yours
 #   doctor --fix     as root, which gives .locksql/ to the console account
 #   anything else    as the agent account (agent), with the socket volume:
 #                    mcp, status, tables, plan, run, doctor, help...
@@ -204,8 +206,9 @@ console)
 stats | forget)
 	docker_run "$tty" --user locksql -v locksql-home:/home/locksql "$image" "$@"
 	;;
-init)
-	# init also writes the agents' own files in your home (~/.codex, ...).
+init | config)
+	# init also writes the agents' own files in your home (~/.codex, ...);
+	# config exports and imports your user config there.
 	docker_run "$tty" --user "$(id -u):$(id -g)" -e HOME="$HOME" -v "$HOME:$HOME" "$image" "$@"
 	;;
 profile)

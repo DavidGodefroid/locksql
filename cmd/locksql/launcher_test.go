@@ -206,6 +206,7 @@ func TestLauncherAccountsPerCommand(t *testing.T) {
 		{[]string{"doctor"}, [][]string{{"-v", "locksql-run:/run/locksql"}}, [][]string{{"--user"}}},
 		{[]string{"doctor", "--fix", "--yes"}, [][]string{{"--user", "0"}}, [][]string{{"-v", "locksql-run:/run/locksql"}}},
 		{[]string{"init", "claude"}, [][]string{{"--user", me}, {"-e", "HOME=" + home}, {"-v", home + ":" + home}}, [][]string{{"-v", "locksql-run:/run/locksql"}}},
+		{[]string{"config", "export", "--output", "team.json"}, [][]string{{"--user", me}, {"-e", "HOME=" + home}, {"-v", home + ":" + home}}, [][]string{{"-v", "locksql-run:/run/locksql"}}},
 		{[]string{"profile", "add"}, [][]string{{"--user", me}, {"-e", "HOME=/tmp"}}, [][]string{{"-v", "locksql-run:/run/locksql"}}},
 		{[]string{"stats", "--top", "3"}, [][]string{{"--user", "locksql"}, {"-v", "locksql-home:/home/locksql"}}, [][]string{{"-v", "locksql-run:/run/locksql"}}},
 		{[]string{"forget", "--profile", "p"}, [][]string{{"--user", "locksql"}, {"-v", "locksql-home:/home/locksql"}}, nil},

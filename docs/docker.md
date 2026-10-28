@@ -54,7 +54,7 @@ runs each command with the account it needs:
 |---|---|---|
 | `console` | `locksql`, in a container named `locksql-console`, with `--add-host=host.docker.internal:host-gateway` and no log driver | `locksql-run`, `locksql-home` |
 | `stats`, `forget` | `locksql` | `locksql-home` |
-| `init` | you (your uid and gid), with your home mounted: it writes the agents' files | |
+| `init`, `config` | you (your uid and gid), with your home mounted: they write the agents' files and your user config; a `config` file must be under the project or your home | |
 | `profile` | you, with `HOME=/tmp` | |
 | `doctor --fix` | root | |
 | everything else: `mcp`, `status`, `tables`, `plan`, `run`, `doctor`, `help`... | `agent` | `locksql-run` |
@@ -173,8 +173,8 @@ image has it (`ghcr.io/davidgodefroid/locksql:X.Y.Z-vault`), which
 -t locksql:vault .` and `LOCKSQL_IMAGE=locksql:vault`.
 
 The console reads `VAULT_ADDR` and `VAULT_NAMESPACE` from its environment,
-which the launcher passes on, nothing else. No `vault login` is needed: at
-start the console asks `Vault token for <VAULT_ADDR>:` in its terminal (no
+which the launcher passes on, nothing else. The console account needs no
+`vault login`: at start the console asks `Vault token for <VAULT_ADDR>:` in its terminal (no
 echo) and keeps the token in memory for the session, never in
 `locksql-home` or anywhere on disk:
 
