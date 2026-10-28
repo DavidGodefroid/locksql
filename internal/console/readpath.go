@@ -457,6 +457,14 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 		ctx, cancel = context.WithTimeout(ctx, t+runGrace)
 		defer cancel()
 	}
+	// The counts call COUNT and MIN and compare: a function or operator
+	// created since the plan would run in them first.
+	if r, err := s.checkShadows(ctx, sess, pl.db, counted.shadow); err != nil || r != nil {
+		if err == nil {
+			err = r
+		}
+		return nil, err
+	}
 	var out []string
 	add := func(w string) {
 		if !slices.Contains(out, w) {
