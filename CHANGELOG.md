@@ -16,7 +16,7 @@ This file records the changes a user or an agent has to know about.
   the audit trail), kept in memory for the session so reconnects and lease
   renewals do not ask again, and wiped when the console ends. A token
   Vault refuses (expired or revoked) is asked again, mid-session too;
-  three refusals in a row stop the connection. Needs lockkit v0.2.0
+  three refusals in a row stop the connection. Needs lockkit v0.2.0.
 
 - **Clear results refused at desktop security level 1.** When the console
   runs in a desktop terminal of the console account without a fingerprint
