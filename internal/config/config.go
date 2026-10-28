@@ -673,7 +673,7 @@ func holdsPath(arg, dir string) bool {
 			return false
 		}
 		rest = rest[i+len(dir):]
-		if rest == "" || rest[0] == filepath.Separator || rest[0] == '/' {
+		if rest == "" || strings.IndexByte(pathDelims, rest[0]) >= 0 {
 			return true
 		}
 	}
@@ -689,7 +689,7 @@ func pathsIn(arg string) []string {
 	var out []string
 	add := func(p string) {
 		out = append(out, filepath.Clean(p))
-		if k := strings.IndexAny(p, ",;: \t'\""); k > 0 && filepath.IsAbs(p[:k]) {
+		if k := strings.IndexAny(p, strings.Trim(pathDelims, `/\\`)); k > 0 && filepath.IsAbs(p[:k]) {
 			out = append(out, filepath.Clean(p[:k]))
 		}
 	}
