@@ -1,172 +1,74 @@
 # Using locksql
 
-This guide walks through a session: setting up agents and a database, separating the
-console from the agent, running the console, and what the agent can do
-through the CLI and the MCP server. The [README](../README.md) has the
-configuration reference.
+This guide walks through a session: setting up a project and its agents,
+running the console, and what the agent can do through the CLI and the MCP
+server. locksql runs in Docker: [docker.md](docker.md) is the setup guide,
+and the [README](../README.md) has the configuration reference.
+
+Commands are written as `locksql <command>` for short. In Docker they run
+through the image: the client commands (`status`, `tables`, `plan`, `run`,
+`doctor`, ...) as the agent,
+
+```sh
+docker run --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql status
+```
+
+and the console as the console account ([section 2](#2-start-the-console)).
 
 ## 1. Set up
 
-### `locksql setup`
+[docker.md](docker.md) sets up a project: build the image, `locksql init`
+for the agent's files, `locksql profile add` for a database profile,
+`locksql doctor --fix` as root for the console account's access, then wire
+the agent and start the console.
 
-From your account (the one your agents run as), in the project:
+### `locksql profile add`
 
 ```sh
-locksql setup [--project DIR] [--client USER] [--trust-binary] [--yes]
-              [--profile NAME --engine E (--path FILE | --host H [--port N]
-               [--user U] [--database D] [--tls MODE]
-               [--credentials ask|keychain|vault [--vault-path P]])]
+docker run -it --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:$PWD" -w "$PWD" \
+  locksql profile add [--project DIR] [--profile NAME --engine E (--path FILE | --host H [--port N]
+                      [--user U] [--database D] [--tls MODE]
+                      [--credentials ask|vault [--vault-path P]])]
 ```
 
-It runs four steps and ends with the one command that starts the console:
+It asks for the profile's name (default `dev`), engine (`sqlite`,
+`postgres`, `mariadb`, `mysql`), then the SQLite file relative to the
+project, or host, port, user (empty: asked at console start), database
+(empty: chosen per query), for a remote host the `tls` mode (default
+`verify-full`), and where the password comes from: `ask` (typed at console
+start) or `vault` with its path
+([Credentials from HashiCorp Vault](#credentials-from-hashicorp-vault)). It
+never asks for a password. Inside a container it offers
+`host.docker.internal` as the host of a database on your machine, and never
+the keychain. The profile is appended to `<project>/.locksql/config.toml`
+(created when absent; the commented example of `locksql init` is kept), and
+only once the result loads. The flags skip the questions, and without a
+terminal they are required:
 
-1. **Agents.** Wires every installed agent for your account, as bare
-   `locksql` does ([Agent wiring](#agent-wiring)).
-2. **Console account.** Without a separated setup, runs `locksql install`
-   ([section 2](#2-separate-the-console-from-the-agent)): it shows the root
-   script and runs it with `sudo` once you confirm, then offers
-   `sudo passwd locksql` so that you can log in as the console account. On
-   macOS the script is only printed: run it as an administrator, then run
-   setup again.
-3. **Database profile.** When the project has no profile (or a profile is
-   given by flags), asks for its name (default `dev`), engine (`sqlite`,
-   `postgres`, `mariadb`, `mysql`), then the SQLite file relative to the
-   project, or host, port, user (empty: asked at console start), database
-   (empty: chosen per query), for a remote host the `tls` mode (default
-   `verify-full`), and where the password comes from: `ask` (typed at
-   console start), `keychain` (the console account's) or `vault` with its
-   path ([Credentials from HashiCorp Vault](#credentials-from-hashicorp-vault)).
-   It never asks for a password. The profile is appended to
-   `<project>/.locksql/config.toml` (created when absent; the commented
-   example of `locksql init` is kept), and only once the result loads.
-   `locksql profile add`, with the same profile flags, runs this step alone:
-   in a container ([docker.md](docker.md)) it offers
-   `host.docker.internal` as the host and never the keychain.
-4. **Project access.** Runs the project checks of `locksql doctor` and
-   their repairs (see [`--fix`](#locksql-doctor---fix)): the console
-   account must enter every directory down to the project, own
-   `.locksql/` and read the configs.
+```sh
+locksql profile add --engine sqlite --path demo.db
+locksql profile add --profile uat --engine postgres --host db.internal --user reporting
+```
 
 The project is the directory holding `.locksql/config.toml`, else the git
-root, else the current directory, or `--project`. Run again, setup changes
-nothing that is already in place: no second install, the profiles are kept,
-only missing access is repaired.
-
-Without a terminal (CI, scripts), setup needs `--yes`, which runs the root
-steps without asking (`sudo` may still ask for a password), and the profile
-as flags when the project has none:
-
-```sh
-locksql setup --yes --engine sqlite --path demo.db
-locksql setup --yes --profile uat --engine postgres --host db.internal --user reporting
-```
-
-After the first setup, log out and in again (your account joined
-`locksql-clients`), then start the console as setup printed it,
-in a session of the console account ([section 3](#3-start-the-console)).
-
-### Bare `locksql`
-
-```sh
-locksql
-```
-
-Bare `locksql` in a terminal (without a terminal it prints the usage):
-
-1. **Wires every installed agent** for your user account (see
-   [Agent wiring](#agent-wiring)), one line per file written. Agents already
-   wired are left alone.
-2. **Explains the separation** when it is not set up: the console must run in
-   a separate account, so that the agent cannot read or type into its
-   terminal. It asks `Set it up now with sudo locksql install? [y/N]`
-   (see [section 2](#2-separate-the-console-from-the-agent)).
-3. **Prints the next steps**: put the profile in
-   `<project>/.locksql/config.toml` (`locksql init <agent>` writes a
-   commented example there) and run `locksql console --project <project>` in
-   the `locksql` session ([Project mode](#project-mode)).
-
-Later runs wire agents installed since. A profile in a user config is seen by
-one account only, so the console and the agents share a project config:
-there is no `locksql add` and no database prompt.
-
-In the `locksql` session (the service account), bare `locksql` behaves like
-`locksql console` without `--profile`, and wires no agent (the agents live in
-your home). With no profile visible it says to use a project config and
-`--project`.
+root, else the current directory, or `--project`.
 
 ### Agent wiring
 
-Wiring is global: it applies to every directory. An agent is installed when
-its command is on `PATH` or its home directory exists.
+The agent starts the MCP server as a throwaway container of the image, as
+`agent`, with the project and the socket volume mounted: the command is
+`sh` and its arguments run `docker run -i ... locksql mcp`. `sh -c` expands
+`$PWD`, the directory the agent runs in: start the agent at the project
+root. `locksql init <agent>` writes the agent's instructions (skill, rules,
+`AGENTS.md` or `GEMINI.md` section) and an MCP entry `locksql mcp`, which is
+not on your machine: replace that entry with the command below.
 
-| Agent | Detected by | Written | Wired when |
-|---|---|---|---|
-| Claude Code | `claude` on `PATH` | user MCP server `locksql` (`claude mcp add --scope user locksql -- locksql mcp`); `~/.claude/skills/locksql/SKILL.md`; the read-only tool list merged into `permissions.allow` of `~/.claude/settings.json` | `mcpServers.locksql` exists at the top level of `~/.claude.json` and the skill exists (the permissions are merged only on a run that wires Claude) |
-| Codex | `codex` on `PATH` or `~/.codex/` | `[mcp_servers.locksql]` (`command`, `args`, `tool_timeout_sec = 600`) appended to `~/.codex/config.toml`; locksql section in `~/.codex/AGENTS.md` | the table exists and the section marker is present |
-| Gemini CLI | `gemini` on `PATH` or `~/.gemini/` | `mcpServers.locksql` in `~/.gemini/settings.json`; locksql section in `~/.gemini/GEMINI.md` | the entry exists and the marker is present |
-| Cursor | `cursor` or `cursor-agent` on `PATH`, or `~/.cursor/` | `mcpServers.locksql` in `~/.cursor/mcp.json` | the entry exists |
-
-- locksql only reads `~/.claude.json` (a state file Claude Code owns); the
-  server is added through the `claude` command.
-- `$CLAUDE_CONFIG_DIR` replaces `~/.claude` (and the `.claude.json` file is
-  read from it) and `$CODEX_HOME` replaces `~/.codex`, each only when set to
-  an absolute path. The paths in "To undo" follow these variables.
-- Cursor has no global rules file: the MCP server's own instructions carry
-  the rules.
-- Symlinked files (dotfiles) are followed.
-- Existing files are only added to: other keys and servers are kept, an
-  existing `locksql` entry is kept as is, and a file that cannot be parsed is
-  never rewritten (the line names it; fix it or add the entry by hand).
-- An existing inline `mcp_servers = { ... }` table in `config.toml` is
-  refused for Codex: add the `[mcp_servers.locksql]` table by hand.
-- A file owned by another account, or not writable by yours, is never
-  replaced, and neither is a file in a directory you cannot write: the line
-  names it; fix its owner or add the entry by hand.
-- Run as root (other than the service account), locksql does not wire agents:
-  run it from your own account.
-- A failure on one agent does not stop the others or the console. Files
-  written before the failure are listed first and stay.
-- Markdown sections sit between `<!-- locksql:begin -->` and
-  `<!-- locksql:end -->` markers.
-
-To undo:
-
-- Claude Code: `claude mcp remove --scope user locksql`; delete
-  `~/.claude/skills/locksql/`; delete the `locksql` entries from
-  `permissions.allow` in `~/.claude/settings.json`.
-- Codex: delete `[mcp_servers.locksql]` from `~/.codex/config.toml` and the
-  block between the markers in `~/.codex/AGENTS.md`.
-- Gemini CLI: delete `mcpServers.locksql` from `~/.gemini/settings.json` and
-  the marked block in `~/.gemini/GEMINI.md`.
-- Cursor: delete `mcpServers.locksql` from `~/.cursor/mcp.json`.
-
-There is no opt-out switch: every later bare `locksql` in a terminal, and
-every `locksql console` without `--profile`, wires again an installed agent
-that is not wired by the "Wired when" column above. So a removed Codex table
-or `AGENTS.md` section, Gemini or Cursor entry, or Claude MCP server or skill
-comes back (for Claude, with its permissions). A permission you remove from
-`permissions.allow` while Claude's MCP server and skill stay is not added
-back. `locksql console --profile P` never wires agents; use it to keep an
-agent unwired.
-
-Instructions written by an earlier version describe `tok_` token values,
-which no longer exist (mask mode `hash` is gone). Existing instructions are
-never overwritten, so regenerate them: delete
-`~/.claude/skills/locksql/SKILL.md` and the marked block in
-`~/.codex/AGENTS.md` and `~/.gemini/GEMINI.md`, then run bare `locksql`. In
-project mode, delete `.claude/skills/locksql/SKILL.md`,
-`.cursor/rules/locksql.mdc` and the marked block in `AGENTS.md` and
-`GEMINI.md`, then run `locksql init <agent>` again.
-
-#### Adding an entry by hand
-
-When locksql cannot write a file, add its entry yourself.
-
-Claude Code (user scope, then the skill with `locksql init claude` in any
-project, or copy it from there to `~/.claude/skills/locksql/SKILL.md`):
+Claude Code, for the project (`.mcp.json`):
 
 ```sh
-claude mcp add --scope user locksql -- locksql mcp
+claude mcp remove --scope project locksql
+claude mcp add --scope project locksql -- \
+  sh -c 'exec docker run -i --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql mcp'
 ```
 
 Codex, in `~/.codex/config.toml` (`tool_timeout_sec` covers the console's
@@ -174,36 +76,45 @@ Codex, in `~/.codex/config.toml` (`tool_timeout_sec` covers the console's
 
 ```toml
 [mcp_servers.locksql]
-command = "locksql"
-args = ["mcp"]
+command = "sh"
+args = ["-c", "exec docker run -i --rm -v \"$PWD:$PWD\" -w \"$PWD\" -v locksql-run:/run/locksql locksql mcp"]
 tool_timeout_sec = 600
 ```
 
-Gemini CLI, in `~/.gemini/settings.json` (`timeout` is in milliseconds), and
-Cursor, in `~/.cursor/mcp.json` (without `timeout`), under `mcpServers` next
-to any other server:
+Gemini CLI, in `.gemini/settings.json` (`timeout` is in milliseconds), and
+Cursor, in `.cursor/mcp.json` (without `timeout`), under `mcpServers` next to
+any other server, in place of the entry `init` wrote:
 
 ```json
 {
   "mcpServers": {
     "locksql": {
-      "command": "locksql",
-      "args": ["mcp"],
+      "command": "sh",
+      "args": ["-c", "exec docker run -i --rm -v \"$PWD:$PWD\" -w \"$PWD\" -v locksql-run:/run/locksql locksql mcp"],
       "timeout": 600000
     }
   }
 }
 ```
 
-`locksql init` with no agent name does the same detection, but for the
-project files described below.
+An agent that itself runs in a container, with the `locksql` binary inside,
+keeps `locksql mcp` as written by `init`
+([docker.md](docker.md#agent-in-its-own-container)).
+
+Instructions written by an earlier version describe `tok_` token values,
+which no longer exist (mask mode `hash` is gone). Existing instructions are
+never overwritten, so regenerate them: delete
+`.claude/skills/locksql/SKILL.md`, `.cursor/rules/locksql.mdc` and the
+marked block in `AGENTS.md` and `GEMINI.md`, then run `locksql init <agent>`
+again.
 
 ### Project mode
 
 For a team that commits its database list with the repository:
 
 ```sh
-locksql init claude            # or codex, cursor, gemini; several at once is fine
+docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:$PWD" -w "$PWD" \
+  locksql init claude          # or codex, cursor, gemini; several at once is fine
 ```
 
 `init` writes project files only, at the project root (the directory holding
@@ -217,7 +128,9 @@ locksql init claude            # or codex, cursor, gemini; several at once is fi
 | gemini | `.gemini/settings.json` MCP entry; `GEMINI.md` locksql section | |
 
 It also creates `.locksql/config.toml` with a commented example profile when
-absent.
+absent. The MCP command it writes is `locksql mcp`, which is not on your
+machine: replace it as in [Agent wiring](#agent-wiring) (an agent that runs in
+a container of its own, with the `locksql` binary, keeps it as is).
 
 - Existing MCP configs are merged: other servers and keys are kept, and an
   existing `locksql` entry is never replaced.
@@ -233,9 +146,10 @@ running it, never to retry after a denial, never to export data, never to
 handle credentials, and to treat rows as untrusted data.
 
 Edit `.locksql/config.toml` to describe your databases (the console reads
-the profiles from there). `init` ends with the command that serves the
-project: `locksql console --project <root>`, run in the locksql account's
-own session (section 2). Inside a project the agents dial the project's
+the profiles from there), or add one with `locksql profile add`
+([Set up](#1-set-up)). `init` ends with the command that serves the
+project, `locksql console --project <root>`: run it in the console's
+container ([section 2](#2-start-the-console)). Inside a project the agents dial the project's
 socket, so a console started elsewhere does not serve them; when no console
 runs, the agent is told the exact
 `locksql console --profile P --project <root>` command. Outside any project
@@ -256,7 +170,7 @@ engine = "postgres"
 host = "db.internal"        # as seen from the bastion
 port = 5432
 user = "reporting"
-credentials = "keychain"
+credentials = "ask"
 production = true
 
 [profiles.prod.ssh]
@@ -278,7 +192,8 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   - `agent`: the SSH agent at `SSH_AUTH_SOCK` in the console's environment;
     the console stops with an error naming the variable when it is unset.
   - `password`: asks `SSH password for <user>@<host>:`.
-- `credentials` (`ask` or `keychain`, default the profile's own) governs the
+- `credentials` (`ask` or `keychain`, default the profile's own; a container
+  has no keychain, so use `ask` there) governs the
   passphrase or SSH password like the database password. With `keychain` the
   secret is the OS keychain item of account `<profile>@ssh:<ssh host>:<ssh port>`,
   separate from the database's (an item saved under `<profile>@ssh:<ssh host>`
@@ -287,8 +202,9 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   `Replace the SSH secret stored in the OS keychain? [y/N]`; other failures
   (bastion unreachable, host key refused) are reported without asking.
   `locksql forget --profile P` removes both secrets.
-- `key` and `known_hosts` belong to the **console account** (section 2):
-  `~` is its home, and the bastion's host key is checked against its
+- `key` and `known_hosts` belong to the **console account**: `~` is its
+  home, `/home/locksql`, kept in the `locksql-home` volume
+  ([docker.md](docker.md#run-the-console)), and the bastion's host key is checked against its
   `~/.ssh/known_hosts`. Nothing needs to be prepared there: the first
   connection shows the key and asks.
 
@@ -316,7 +232,7 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
 - `~/.ssh/config`, `ProxyJump` chains and forwarding to a Unix socket on the
   bastion are not supported: the profile is the only input.
 - The SSH leg is encrypted and the bastion verified; the leg from the bastion
-  to the database is protected only by `tls` (section 3), whose default is
+  to the database is protected only by `tls` ([TLS to the database](#tls-to-the-database)), whose default is
   decided on `host` as seen from the bastion (`127.0.0.1` gives `prefer`, a
   remote name `verify-full`). When that leg is not verified the console
   says `encrypted by SSH to <bastion>; NOT encrypted (or not verified) from
@@ -324,7 +240,7 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   runs on the bastion). `production = true` accepts `tls = "prefer"` only for
   such a loopback `host`.
 - Any change of the `ssh` table, adding or removing it, loosens the policy
-  and waits for your approval (section 3), except `ssh.credentials` set back
+  and waits for your approval ([Policy changes](#policy-changes)), except `ssh.credentials` set back
   to `ask`.
 - The audit log records each tunnel as a `login` record with
   `"decision":"tunnel"`, `ssh_host` and `ssh_host_key` (the SHA256
@@ -352,9 +268,10 @@ vault_path  = "database/creds/reporting-ro"
 ```
 
 - The console runs `vault read -format=json -- <vault_path>`. The CLI must
-  be in the console's `PATH` and authenticated: in separated mode, run
-  `vault login` (or set `VAULT_ADDR`, `VAULT_TOKEN`, `VAULT_NAMESPACE`,
-  `VAULT_CACERT`) **as the console account**, never as the agent's.
+  be in the console's `PATH`, which the image's `vault` target provides,
+  and authenticated: run `vault login` (or set `VAULT_ADDR`, `VAULT_TOKEN`,
+  `VAULT_NAMESPACE`, `VAULT_CACERT`) **as the console account**, never as
+  the agent's ([docker.md](docker.md#credentials-from-vault)).
   locksql never sees the Vault token: the CLI reads it from its own
   environment or token helper.
 - The login is the `username` and `password` fields of the secret's data
@@ -373,7 +290,7 @@ vault_path  = "database/creds/reporting-ro"
   when set. locksql neither renews nor revokes leases; Vault revokes them
   when they end.
 - Errors say what to do and never quote the secret:
-  - `vault CLI not found`: install it in the console account's `PATH`;
+  - `vault CLI not found`: run the console from the image's `vault` target;
   - `not authenticated or not allowed`: no token, an expired one, or a
     policy that may not read the path (`vault login` as the console
     account);
@@ -393,214 +310,31 @@ vault_path  = "database/creds/reporting-ro"
   (`VAULT_TOKEN` or `~/.vault-token`), which would let the agent read the
   login itself.
 
-## 2. Separate the console from the agent
-
-The console runs only in an account of its own: an agent in the console's
-account could read its terminal, type into it and read its keychain session.
-`locksql console` refuses to start without the setup below (it names
-`locksql doctor` and `sudo locksql install`), and `doctor` reports same-user
-mode as a failure. On Linux and macOS (and inside WSL2 on Windows, see
-[Windows (WSL2)](#windows-wsl2)), `locksql install` sets it up once:
-
-```sh
-locksql install [--client USER] [--user locksql] [--group locksql-clients] [--print] [--trust-binary] [--yes]
-```
-
-It prints the root script and, on Linux, runs it with `sudo` after you
-confirm (`--yes` runs it without asking, and without a terminal; `--print`
-only prints; on macOS it always only prints). A binary already installed as
-`/usr/local/bin/locksql` is left in place.
-
-- The binary it copies is the one running. Unless that binary is owned by
-  root and writable by neither group nor others, `install` refuses: run from
-  the agent's account, a binary the agent replaced (a `go install` into
-  `~/go/bin`) would become the root-owned one the console trusts. Install a
-  release into a root-owned directory (`scripts/install.sh` with the default
-  `/usr/local/bin`), or pass `--trust-binary` to copy it anyway; both the
-  refusal and `--trust-binary` print its sha256, to compare with the release,
-  and with `--trust-binary` the root script checks its copy against that
-  sha256 (`sha256sum -c` on Linux, `shasum -a 256 -c` on macOS) and stops
-  before any change when it differs.
-
-The script:
-
-| Creates | Detail |
-|---|---|
-| account `locksql` | the console account, with its own home (mode 0700) |
-| group `locksql-clients` | the agent's account (`--client`, default you or `$SUDO_USER`) is added to it |
-| `/usr/local/bin/locksql` | owned by root, so the agent cannot replace the binary the console runs |
-| `/etc/locksql/system.toml` | owned by root, mode 0644; a file owned or writable by anyone else is refused |
-| `/run/locksql` | socket directory, `locksql:locksql-clients`, mode 2710 (setgid, so the socket inherits the group; via `/etc/tmpfiles.d`). On macOS, `/usr/local/var/run/locksql`, mode 0710: a new file always takes its directory's group there |
-
-`system.toml` keys:
-
-| Key | Default | Notes |
-|---|---|---|
-| `service_user` | `locksql` | the account the console must run as |
-| `client_group` | `locksql-clients` | members may connect to the console sockets (looked up at every connection: a removed member loses access at once) |
-| `socket_dir` | `/run/locksql` | absolute; owned by `service_user` and `client_group`, mode 0710 or 0750, plus setgid on Linux (2710 or 2750) |
-| `allowed_uids` | none | uids allowed besides the group's members |
-| `x11` | `warn` (`install` writes `refuse`) | what the console does in an X11 session |
-
-Then set a password for the console account, log out and in again (the group
-applies at login), open a separate login session as `locksql` (switch user,
-preferably Wayland) and start the console there with `--project` pointing at
-the agent's project directory. The profiles come from that project's
-`.locksql/config.toml`, readable by both accounts (`locksql init <agent>`
-writes a commented example). A user config is seen by one account only, so it
-cannot hold the profiles.
-
-The console also writes the PII rule sets, `.locksql/pii/<set>.toml`: at
-the first start of a set (the PII proposal), when you accept a rule and when
-a client adds one, and it moves a legacy `.locksql/pii.toml` to
-`pii/default.toml` once. It creates `.locksql/pii/`, writes a temporary
-`.pii-*.toml` and renames it over the file, so the console account needs
-write access to the `<project>/.locksql/` directory itself, not only to the
-files. Give it the directory and keep both files readable by
-both accounts:
-
-```sh
-sudo chown locksql <project>/.locksql
-sudo chmod 0755 <project>/.locksql
-chmod 0644 <project>/.locksql/config.toml   # rule sets are written 0644
-```
-
-`locksql setup` and `locksql doctor --fix` make these changes, and give the
-console account an ACL entry on the directories it cannot enter on the
-way to the project (a home directory of mode 0750, for example).
-
-The agent's account can still edit a file it owns in place, but it can no
-longer create or replace files in `.locksql/` (a `git checkout` that changes
-them needs the console account). An edit of these files from the agent's side
-is a policy change and waits for your approval when it loosens the policy
-(section 3). Without that access the console stops and names the directory.
-
-On Linux the console gives its socket to `client_group`, of which it is not a
-member: only the setgid bit of `socket_dir` makes that possible. An install
-made before it creates `/run/locksql` 0710 at every boot (from
-`/etc/tmpfiles.d/locksql.conf`), and the console stops with an error naming
-the directory: run `sudo locksql install` again.
-
-In separated mode the console refuses to start when:
-
-- it does not run as `service_user`;
-- `service_user` is itself in `client_group` or `allowed_uids`;
-- it was started through `sudo` or `su` from the login session (Linux
-  `loginuid`) of an account that may reach the console (`client_group` or
-  `allowed_uids`), or of a uid that names no account;
-- its terminal belongs to such an account or uid;
-- it runs in a `machinectl shell` (Linux, a `container-shell@` unit) while
-  a running `machinectl shell` process belongs to such an account or uid,
-  or none can be found: `loginuid` and the terminal name the console
-  account there, but the keystrokes come from the caller's terminal;
-- it runs in an SSH login from this machine (logind `REMOTE_HOST` a
-  loopback address), whose client account cannot be identified.
-
-The login session and the terminal of an account outside the client group
-(an administrator's, when the agents run under an account of their own) are
-accepted: the agent's account can read neither. The console then prints
-`started from the login session of uid N, an account outside the client
-group`.
-
-It serves a peer only when the kernel reports (`SO_PEERCRED` on Linux,
-`LOCAL_PEERCRED` on macOS) the console's own uid, a member of
-`client_group` or an `allowed_uids` entry. The socket is mode 0660, group
-`client_group`. Clients in turn check that the socket is served by
-`service_user` and refuse it otherwise.
-
-An X11 session lets any X client read the keyboard and the screen of the
-others: the console refuses to start in one on a production profile or with
-`x11 = "refuse"`, and warns otherwise. Use Wayland or a text console.
-
-### `locksql update`
-
-```sh
-locksql update [--version vX.Y.Z] [--yes] [--allow-downgrade]
-```
-
-Replaces `/usr/local/bin/locksql` with a release (the latest, or the one
-`--version` names), on Linux and macOS. Run it from your own account, without
-`sudo`: it asks for `sudo` only for the final copy.
-
-- **Which binary.** Only a release installed as `/usr/local/bin/locksql`,
-  owned by root and writable by neither group nor others
-  (`scripts/install.sh` with the default directory, then
-  `sudo locksql install`). A package's `/usr/bin/locksql` is refused with the
-  `apt`, `dnf` or `apk` command that upgrades it; any other binary is refused
-  with a pointer to `scripts/install.sh`.
-- **Which version.** The latest release is the one
-  `https://github.com/DavidGodefroid/locksql/releases/latest` redirects to.
-  When it is the running version, `update` prints `already at vX` and exits 0.
-  An older release needs `--allow-downgrade`, and a development build
-  (`locksql version` prints `dev`) needs `--version`.
-- **Checks.** In a private temporary directory (mode 0700), `update`
-  downloads the archive for your OS and architecture, `checksums.txt` and
-  its signature, and refuses unless all of these pass:
-  `cosign verify-blob` with the identity of this repository's release
-  workflow on a version tag (cosign must be installed: there is no
-  unsigned path), the archive's sha256 against `checksums.txt`, and the
-  `locksql version` of the extracted binary against the release.
-- **Replacement.** It prints the new binary's sha256 and the root script,
-  then asks `[y/N]` (`--yes` skips the question; without a terminal and
-  without `--yes` it refuses). The script copies the binary to a root-owned
-  temporary file, checks it against that sha256 (`sha256sum -c` on Linux,
-  `shasum -a 256 -c` on macOS) and stops before any change when it differs,
-  then installs it as `/usr/local/bin/locksql`, root-owned, mode 0755.
-  Nothing else changes.
-- **Afterwards.** A running console keeps the old binary: restart it
-  (`locksql console` in the `locksql` account).
-
-The checks run in the account that invokes `update`, as with
-`scripts/install.sh`: they protect against a tampered download, not against
-an account that is already compromised, which could change what `update`
-downloads, runs or prints before you confirm. Run it from an account you
-trust, and compare the printed sha256 when in doubt.
-
-#### New-version notice
-
-`locksql console` and `locksql doctor` tell you, on stderr, when a release
-newer than the running one exists:
-
-```text
-locksql v0.9.0 available (you run v0.8.0): locksql update
-```
-
-For a package's `/usr/bin/locksql` the first line is followed by the `apt`,
-`dnf` and `apk` commands with the version to use; for any other binary, by
-the releases page. Nothing else changes: not the output, not the exit code.
-
-- **One request a day.** The only request is a GET of
-  `https://github.com/DavidGodefroid/locksql/releases/latest` (redirect
-  followed, 2 s timeout), with no added header, body or identifier. Its time
-  and the tag found are cached in `$XDG_CACHE_HOME/locksql/update-check`
-  (else the user cache directory: `~/.cache` on Linux, `~/Library/Caches` on
-  macOS) of the account that runs the check, directory mode 0700, file mode
-  0600. A missing, corrupt or future-dated cache leads to a new check; a
-  failed check counts too.
-- **Silent.** A network error, a timeout, a non-200 status, a tag that is not
-  a version, or a cache that cannot be written prints nothing. A development
-  build (`dev`) never checks.
-- **Which account.** In a separated setup, the console checks in the console
-  account, after the handoff, never in the agent's account. `locksql mcp`
-  and the other commands never check.
-- **Off.** `LOCKSQL_NO_UPDATE_CHECK=1` turns it off: no request, no cache.
-  When `locksql console` hands off to the console account (`sudo -u`,
-  `machinectl shell`, `su -l` reset the environment), it passes the setting
-  on as the internal `--no-update-check` argument.
-
 ### `locksql doctor`
 
 ```sh
 locksql doctor [--profile P] [--fix [--yes]]
 ```
 
-Run it from both accounts. Each check prints ✓ (ok), ▲ (warning) or ✗
-(failed), with a remediation under each one that is not ✓, then a count of
-each; the exit code is 1 when any check fails.
+Run it from either container: as `agent` (the default user of the image),
+it checks what the agent's side sees; as the console account, what the
+console sees:
+
+```sh
+docker run --rm -v "$PWD:$PWD" -w "$PWD" -v locksql-run:/run/locksql locksql doctor
+docker run --rm --user locksql -v "$PWD:$PWD" -w "$PWD" \
+  -v locksql-run:/run/locksql -v locksql-home:/home/locksql locksql doctor
+```
+
+Each check prints ✓ (ok), ▲ (warning) or ✗ (failed), with a remediation
+under each one that is not ✓, then a count of each; the exit code is 1 when
+any check fails. Some checks are about a host and say little in a container:
+`separate session` warns there, since the container takes the place of the
+console account's login session.
 
 | Check | Fails or warns when |
 |---|---|
-| operating system | never (informational: locksql runs on Linux and macOS; on Windows, inside WSL2) |
+| operating system | never (informational) |
 | graphical session | X11 |
 | separation | same-user mode (fails; the console refuses to start); doctor then also warns on `dev.tty.legacy_tiocsti = 1` (terminal injection) and `kernel.yama.ptrace_scope = 0` (ptrace) |
 | system setup, console account | `system.toml` invalid or not root-owned; the console account missing or in the client group |
@@ -620,180 +354,38 @@ each; the exit code is 1 when any check fails.
 
 `--fix` runs the checks, then makes the repairs they offer, reports each
 one (`repaired: ...` or `not repaired: ...`) and runs the checks again. The
-repairs are small and idempotent; a second run finds nothing to do:
-
-| Check | Repair | Runs as |
-|---|---|---|
-| agent wiring | wires the agents, as bare `locksql` | you |
-| client access | `usermod -aG locksql-clients YOU` (macOS: `dseditgroup`); log out and in again | root |
-| console account isolated | removes the console account from the client group | root |
-| socket directory | recreates it with owner `service_user:client_group`, mode 2710 (macOS 0710), and on Linux rewrites `/etc/tmpfiles.d/locksql.conf` | root |
-| project access | `setfacl -m u:locksql:x DIR` (`rx` on the project itself): an ACL entry for the console account only, never a wider mode; Linux, when `setfacl` exists | you for your directories, else root |
-| project .locksql | `chown locksql .locksql && chmod 0755 .locksql` | root |
-| project .locksql/pii | `chown locksql .locksql/pii && chmod 0755 .locksql/pii` | root |
-| project config.toml, pii.toml, pii/<set>.toml | `chmod 0644` | you when you own it, else root |
-
-The root repairs run as one script, shown before `sudo` runs it, after
-`Run them now with sudo? [y/N]` (or at once with `--yes`; without a
-terminal `--fix` needs `--yes`). Everything else is left to the steps
-shown: a `system.toml` or a binary that root does not own is never
-re-owned (it could hold another account's changes: run `sudo locksql
-install` again), a secret in the agent's keychain is not deleted, and
-`sudo` rules are not touched.
-
-### Windows (WSL2)
-
-locksql does not run natively on Windows: the separation relies on Unix
-accounts, socket peer credentials and terminals. The Windows build exists
-so that CI runs the unit tests there; it refuses every command but
-`version` and `help` and points here. A native server (a named pipe ACL'd
-to a dedicated local account, `GetNamedPipeClientProcessId` for the peer
-check, Windows Credential Manager for secrets) is not implemented.
-
-Run locksql inside a WSL2 distribution instead. WSL2 is a Linux system:
-install the Linux release there (`scripts/install.sh`, into
-`/usr/local/bin`), and everything in this guide applies inside it. What
-differs is where the agent runs, and that decides what the separation is
-worth.
-
-| Layout | Agent | Console | Boundary |
-|---|---|---|---|
-| A (recommended) | inside WSL, as your WSL account | inside WSL, as `locksql` | the Linux kernel, as on a Linux host, once WSL interop is off |
-| B | on Windows (Claude Code, Cursor, Codex for Windows) | inside WSL, as `locksql` | none against the agent: like [Docker mode](docker.md#what-docker-does-and-does-not-separate) |
-
-The MCP client always reaches the console through its socket in
-`/run/locksql`, inside the distribution: no Windows process can open it.
-In layout B the agent's MCP server is therefore a Linux process too,
-started through `wsl.exe`.
-
-**Set up the distribution** (both layouts), in a WSL shell of your account:
-
-1. Turn on systemd, so that `/run/locksql`, which lives on a tmpfs, is
-   created again at every start of the distribution (from
-   `/etc/tmpfiles.d/locksql.conf`). In `/etc/wsl.conf`:
-
-   ```ini
-   [boot]
-   systemd = true
-   ```
-
-   Without systemd, run `sudo locksql install` again after each restart
-   of the distribution.
-2. Install the release and run `sudo locksql install` (section 2 above):
-   your WSL account becomes the client, `locksql` the console account.
-3. Keep the project in the distribution's own file system (`/home/...`),
-   not under `/mnt/c`: the Windows drives are mounted with fixed owners and
-   modes, so the console account cannot be given `.locksql/` as described
-   above. Windows tools reach the project at `\\wsl$\<distro>\home\...`.
-4. Apply the changes with `wsl.exe --shutdown` from Windows, then open the
-   distribution again.
-
-**Start the console** in a session of the console account of its own.
-Open it from Windows (a Windows Terminal tab, for instance), not with
-`su` or `sudo -u` from your WSL shell, which the console refuses
-(`loginuid`):
-
-```powershell
-wsl.exe -d <distro> -u locksql --cd /home/you/project
-```
-
-then, in that shell, `locksql console --project /home/you/project`.
-`locksql doctor` from both accounts checks the setup; under WSL its
-`separate session` check may warn that `locksql` has no login session,
-because WSL opens no desktop session for it. The console's own checks
-(account, `loginuid`, terminal owner) still run.
-
-**Layout A: the agent inside WSL.** Run Claude Code, Codex or Gemini CLI
-in the distribution, as your WSL account, and wire them with `locksql`
-there (section 1). An editor on Windows that runs its MCP servers inside
-WSL (a WSL remote window) counts as layout A when the server's command
-runs in the distribution. Then turn interop off, so that a Linux process
-cannot start Windows programs. With it on, the agent can run
-`wsl.exe -u root` (or `-u locksql`) and become root or the console account
-without a password, which the threat model excludes. In `/etc/wsl.conf`:
-
-```ini
-[interop]
-enabled = false
-appendWindowsPath = false
-```
-
-and `wsl.exe --shutdown`. Check that your editor's WSL integration still
-works without interop; if it needs interop, you are in layout B's trust
-level. Your WSL account must not have password-less `sudo` (`doctor`
-checks it).
-
-**Layout B: the agent on Windows.** The agent starts the MCP server in the
-distribution through `wsl.exe`, as your default WSL account (the client
-account), in the project directory; `wsl.exe` passes stdin and stdout
-through. Claude Code, for every project:
-
-```powershell
-claude mcp add --scope user locksql -- wsl.exe -d <distro> --cd /home/you/project -e /usr/local/bin/locksql mcp
-```
-
-or in `.mcp.json` (Codex, Gemini CLI and Cursor take the same `command`
-and `args`, as in [Agent wiring](#agent-wiring)):
-
-```json
-{
-  "mcpServers": {
-    "locksql": {
-      "type": "stdio",
-      "command": "wsl.exe",
-      "args": ["-d", "<distro>", "--cd", "/home/you/project", "-e", "/usr/local/bin/locksql", "mcp"]
-    }
-  }
-}
-```
-
-`--cd` must name the project the console serves: the socket name is
-derived from the project path. The client commands run the same way
-(`wsl.exe -d <distro> --cd /home/you/project -e /usr/local/bin/locksql status`).
-`locksql init`, run inside WSL, writes `locksql mcp` for the agents it
-finds there, not for the Windows ones: add the entry above by hand.
-
-In layout B the separation holds against the agent only as long as it runs
-no shell commands of its own: any process of your Windows account can run
-`wsl.exe -u root` or `wsl.exe -u locksql` without a password, attach to the
-console's session or read its memory. As with Docker, the credentials stay
-out of the agent's process and the approval stays in your terminal, but an
-agent determined to go around the console can. Use layout A for the
-boundary.
-
-This guide has not yet been verified end to end on Windows 11; report what
-differs in an issue.
-
-## 3. Start the console
-
-In a terminal you keep in view, in the `locksql` session (switch user on
-the desktop, or log in on a text console with Ctrl-Alt-F3):
+repairs are small and idempotent; a second run finds nothing to do. The one a
+Docker setup needs is the project's: the console account, which exists only
+in the image, must own `.locksql/` and read the configs. Run it there, as
+root, from the project directory:
 
 ```sh
-locksql console [--profile dev] [--project DIR] [--auto] [--allow-unmask] [--show-results]
+docker run --rm --user 0 -v "$PWD:$PWD" -w "$PWD" locksql doctor --fix --yes
+```
+
+| Check | Repair |
+|---|---|
+| project .locksql | `chown locksql .locksql && chmod 0755 .locksql` |
+| project .locksql/pii | `chown locksql .locksql/pii && chmod 0755 .locksql/pii` |
+| project config.toml, pii.toml, pii/<set>.toml | `chmod 0644` |
+
+Run it again whenever `.locksql/` is created anew, by `locksql init` for
+example. The checks of the console and its profiles fail from that
+container, which runs no console: read the `project` lines.
+
+## 2. Start the console
+
+In a terminal you keep in view, from the project directory:
+
+```sh
+docker run -it --rm --name locksql-console --user locksql \
+  -v "$PWD:$PWD" -v locksql-run:/run/locksql -v locksql-home:/home/locksql \
+  locksql console --project "$PWD" [--profile dev] [--auto] [--allow-unmask] [--show-results]
 ```
 
 Without `--profile` the console uses the only profile, or asks which one when
-there are several. It first wires agents installed since the last run (see
-[Agent wiring](#agent-wiring)).
-
-Run from another account of a separated setup, `locksql console` does
-not start in that terminal:
-
-- from an account that may reach the console (the agent's: the client
-  group or `allowed_uids`), it prints why and the command to run in the
-  `locksql` session (`locksql console --project <project root>` with your
-  flags), and exits with 1. The agents run in that account and can read its
-  terminals: what you type there, the database password included, would
-  reach them;
-- from another account (an administrator's, when the agents run under an
-  account of their own), it opens the console as `locksql` through the
-  first helper available: `sudo -u locksql -H`, `machinectl shell
-  locksql@` (Linux with systemd) or `su -l locksql`. The helper asks for its
-  own authentication; locksql passes it only the console's flags and the
-  project, never a secret, and the binary run is a root-owned one
-  (`/usr/local/bin/locksql` when the running one is not). The console then
-  applies its own isolation checks (section 2).
+there are several. [docker.md](docker.md#run-the-console) has the volumes,
+Vault and the networks a database needs.
 
 `--project` names the project directory (default: the current directory);
 the console and the agent must agree on it, since it selects the socket. A
@@ -818,20 +410,11 @@ approval screen says `result: shown here in clear`, and `locksql status`
 reports `show results on`. The audit log still holds no row data, and
 references and placeholders work as without it.
 
-The clear results are unavailable when the console runs in a desktop
-terminal of the console account (security levels 1 and 2): that window is
-on the agent's desktop, where the agent's account can read it.
-`--show-results` is then refused before any prompt or file write (`level 1
-does not accept --show-results: the agent's account can read this window`),
-and Ctrl-O or `:results` leave the results masked and say so (`results stay
-masked at level 1: the agent's account can read this window`); nothing is
-audited.
-
 The console needs an interactive terminal. At start it:
 
-0. **Checks the isolation** described in [section 2](#2-separate-the-console-from-the-agent):
-   the console refuses to start without a separated setup, then checks the
-   display.
+0. **Checks the isolation**: the console runs only as the console account
+   of the image, never as an account that may reach it (the agent's), then
+   checks the display.
 
 1. **Checks the policy.** On the first start of a profile the whole effective
    policy (host, engine, database, tier, production, credentials mode, limits,
@@ -840,8 +423,8 @@ The console needs an interactive terminal. At start it:
 2. **Production banner.** A `production = true` profile prints a red banner
    and asks you to type the profile name.
 3. **Credentials.** It asks for the database user when the profile has none,
-   then for the password (no echo). With `credentials = "keychain"` it reads
-   the OS keychain (service `locksql`, account `<profile>@<host>:<port>`, or
+   then for the password (no echo). With `credentials = "keychain"` (not in a
+   container, which has no keychain) it reads the OS keychain (service `locksql`, account `<profile>@<host>:<port>`, or
    `<profile>@<socket path>` for a Unix socket): an item is bound to the
    host and port it was saved for; the pre-upgrade item is moved to the
    default port or removed at the first start. After the first successful
@@ -1028,7 +611,8 @@ The console watches the config and PII files while it runs.
   host, port, engine, user or database, a weaker `tls` or any change of `tls_ca`,
   `tls_cert`, `tls_key` or `tls_server_name`,
   any change of the `ssh` table (except `ssh.credentials` set to `ask`),
-  `ask → keychain` or `vault`, any change of `vault_path`, a removed mask rule or detector, a mask mode
+  `ask → keychain` or `vault`, any change of `vault_path`,
+  `write_functions = "allowlist" → "denylist"`, a removed mask rule or detector, a mask mode
   changed to anything but `redact`, a new allow rule) waits for you. Plans are
   refused with `policy_pending` until you run `:review` and answer
   `Apply these changes? [y/N]`.
@@ -1052,7 +636,7 @@ importer keeps the same sets. `--output` writes the file with mode 0600.
 
 | Exported | Never exported |
 |---|---|
-| `engine`, `host`, `port`, `database`, `credentials`, `vault_path`, `credentials_ttl`, `tls`, `tls_server_name`, `tier`, `production`, `detectors`, `pii_rules`, every `limits.*`, `ssh.host`, `ssh.port`, `ssh.user`, `ssh.auth`, `ssh.credentials`; `user` with `--include-user` | secrets (a value that looks like one fails the whole export), `tls_ca`, `tls_cert`, `tls_key`, `ssh.key` (named in `needs_local`), SQLite and Unix-socket profiles (skipped with a warning), `/etc/locksql/system.toml`, approved policies, the audit log, stats, `known_hosts`, console flags |
+| `engine`, `host`, `port`, `database`, `credentials`, `vault_path`, `credentials_ttl`, `tls`, `tls_server_name`, `tier`, `production`, `detectors`, `pii_rules`, `write_functions`, every `limits.*`, `ssh.host`, `ssh.port`, `ssh.user`, `ssh.auth`, `ssh.credentials`; `user` with `--include-user` | secrets (a value that looks like one fails the whole export), `tls_ca`, `tls_cert`, `tls_key`, `ssh.key` (named in `needs_local`), SQLite and Unix-socket profiles (skipped with a warning), `/etc/locksql/system.toml`, approved policies, the audit log, stats, `known_hosts`, console flags |
 
 `locksql config import FILE|- [--project] [--profile NAME]... [--replace]
 [--dry-run] [--yes] [--allow-loosen] [--local NAME.KEY=VALUE]...`:
@@ -1090,11 +674,11 @@ The file describes your databases: keep it in a private repository.
 `locksql stats` counts the refusals in the audit log: by
 [refusal code](#refusal-codes), then by code and the token the check stopped
 at (`LIKE`, `FOR`, a function name, ...), most frequent first. It reads
-the local file and nothing else. Run it as the account that runs the console
-(in separated mode, in the `locksql` account's session), or point it at a
-copy of the log:
+the local file and nothing else. Run it as the account that runs the console,
+with its volume, or point it at a copy of the log:
 
 ```sh
+docker run --rm --user locksql -v locksql-home:/home/locksql locksql stats [--log PATH] [--top N]
 locksql stats [--log PATH] [--top N]        # text, for you
 locksql stats --export > refusals.json      # anonymised, to attach to an issue
 ```
@@ -1119,7 +703,7 @@ locksql stats --export > refusals.json      # anonymised, to attach to an issue
 - Maintainers merge the exports into the ranked list of
   [most refused constructs](refused-constructs.md).
 
-## 4. What the agent does
+## 3. What the agent does
 
 ### CLI
 
@@ -1264,6 +848,47 @@ PII columns (columns under a mask rule) may be used as follows:
   value the agent chose. An `INSERT` without a column list must name its
   columns (or store only `NULL`/`DEFAULT`); an `INSERT` into a masked column
   from a query is refused. Writing other columns is unaffected.
+
+#### Functions in writes (`write_functions`)
+
+Reads may call allowlisted functions only. Writes, DDL and admin statements
+are checked against a denylist, which is best-effort: a user-defined
+function or an extension (`cron.schedule` from pg_cron runs SQL later) can
+be named anything. A profile can apply the allowlist to writes too:
+
+```toml
+[profiles.prod]
+# ...
+write_functions = "allowlist"   # default "denylist"
+```
+
+With `"allowlist"`:
+
+- every function an `INSERT`, `REPLACE`, `UPDATE` or `DELETE` calls, at any
+  depth (`VALUES`, `SET`, `WHERE`, subqueries, CTEs, `ON CONFLICT`,
+  `RETURNING`), must be on the read allowlist of the dialect or one of the
+  key generators: PostgreSQL `gen_random_uuid`, `uuidv4`, `uuidv7`,
+  `nextval`; MySQL/MariaDB `UUID`, `UUID_SHORT`, `UUID_TO_BIN`,
+  `BIN_TO_UUID`, `SYS_GUID`; SQLite `randomblob`. `setval`,
+  `LAST_INSERT_ID(n)` and session or catalog functions are refused;
+- schema-qualified calls (`cron.schedule(...)`, `pg_catalog.lower(...)`),
+  calls through a quoted name or a name with non-ASCII letters
+  (PostgreSQL `"LOWER"(x)` is not `lower`) and calls with a blank before
+  `(` (MySQL `lower (x)` calls a stored function named `lower`) are refused;
+- every column the write names must exist: PostgreSQL reads `t.name`, when
+  `t` has no column `name`, as the call `name(t)`;
+- a write the parser does not read is refused, since its calls cannot be
+  listed: `MERGE`, multi-table MySQL writes, table functions in `FROM`;
+- `CALL` is refused (a stored procedure runs code the classifier cannot
+  see).
+
+The refusal code is `E_FUNCTION` (`E_UNKNOWN_NAME` for a column that does
+not exist). DDL is not covered: a DDL tier can create functions, triggers
+and column defaults. Code the schema already holds still runs: triggers,
+column defaults, domain constraints, and a function created under an
+allowlisted name with a closer argument type or earlier in `search_path`;
+the privilege audit is the control there. Changing `"allowlist"` back to
+`"denylist"` is a policy loosening and waits for `:review`.
 
 ### Placeholders and cell references
 
@@ -1443,7 +1068,7 @@ finds the project's consoles.
   also return it as structured content, `{"refusal": {"code", "retry",
   "hint", "span"}}` (see [Refusal codes](#refusal-codes)).
 
-## 5. Output
+## 4. Output
 
 - TSV by default, JSON with `--json` or through MCP.
 - Caps: `max_rows` rows, `max_cell_chars` per cell (cut with `…`) and
@@ -1472,7 +1097,7 @@ finds the project's consoles.
 - A result whose column count or labels differ from the analysis is dropped,
   since masking by position could hit the wrong column.
 
-## 6. Files and environment
+## 5. Files and environment
 
 | Path | Content |
 |---|---|
@@ -1486,6 +1111,11 @@ finds the project's consoles.
 | `<runtime dir>/<project-hash>-<profile>.sock` | console socket (tests only) |
 | `/etc/locksql/system.toml` | separated mode setup (root-owned) |
 | `<socket_dir>/<project-hash>-<profile>.sock` | console socket (separated mode), mode 0660 |
+
+In the image, the console account's home is `/home/locksql`, the
+`locksql-home` volume: its config, state (approved policies, audit log) and
+`~/.ssh` live there. `socket_dir` is `/run/locksql`, the `locksql-run`
+volume, and `/etc/locksql/system.toml` is the image's own.
 
 - User config dir: `os.UserConfigDir()` (`~/.config` on Linux,
   `~/Library/Application Support` on macOS).

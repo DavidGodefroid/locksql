@@ -1,8 +1,11 @@
 package config
 
 import (
+	"fmt"
+
 	"bytes"
 	"errors"
+	"github.com/BurntSushi/toml"
 	"reflect"
 	"strings"
 	"testing"
@@ -32,6 +35,7 @@ host = "db.internal"
 credentials = "vault"
 vault_path = "database/creds/reporting-ro"
 detectors = []
+write_functions = "allowlist"
 
 [profiles.local]
 engine = "sqlite"
@@ -283,5 +287,70 @@ func TestImportWritesValuesVerbatim(t *testing.T) {
 	got := mustParse(t, string(f.TOML("")))
 	if got["a"].Host != "$(id)`id`~$HOME" || got["a"].Database != `x"y` {
 		t.Errorf("values changed: %+v", got["a"])
+	}
+}
+
+// Every key a config file can hold survives the writer: a key added to
+// rawProfile and forgotten in ConfigFile.TOML would be dropped from the
+// profiles an import does not touch, a silent policy change.
+func TestConfigFileWritesEveryKey(t *testing.T) {
+	var fill func(v reflect.Value)
+	fill = func(v reflect.Value) {
+		switch v.Kind() {
+		case reflect.String:
+			v.SetString("v")
+		case reflect.Int, reflect.Int64:
+			v.SetInt(7)
+		case reflect.Float64:
+			v.SetFloat(1.5)
+		case reflect.Bool:
+			v.SetBool(true)
+		case reflect.Slice:
+			v.Set(reflect.ValueOf([]string{"v"}))
+		case reflect.Pointer:
+			v.Set(reflect.New(v.Type().Elem()))
+			fill(v.Elem())
+		case reflect.Struct:
+			for i := 0; i < v.NumField(); i++ {
+				fill(v.Field(i))
+			}
+		}
+	}
+	var r rawProfile
+	fill(reflect.ValueOf(&r).Elem())
+	f := &ConfigFile{profiles: map[string]rawProfile{"p": r}}
+	var back rawFile
+	if _, err := kconfigDecode(f.TOML(""), &back); err != nil {
+		t.Fatalf("%v\n%s", err, f.TOML(""))
+	}
+	if !reflect.DeepEqual(back.Profiles["p"], r) {
+		t.Errorf("keys lost by the writer:\nwrote %+v\nread  %+v\n%s", r, back.Profiles["p"], f.TOML(""))
+	}
+}
+
+func kconfigDecode(data []byte, into any) (any, error) {
+	md, err := toml.Decode(string(data), into)
+	if err == nil && len(md.Undecoded()) > 0 {
+		err = fmt.Errorf("unknown key %q", md.Undecoded()[0].String())
+	}
+	return nil, err
+}
+
+// Every profile key is either shared or listed as personal or local here:
+// a key added to Profile must be placed on purpose, else an import would
+// drop it on the other machine.
+func TestEveryProfileKeyIsPlaced(t *testing.T) {
+	notShared := map[string]bool{"name": true, "path": true, "user": true, "tls_ca": true, "tls_cert": true, "tls_key": true}
+	shared := map[string]bool{}
+	st := reflect.TypeOf(SharedProfile{})
+	for i := 0; i < st.NumField(); i++ {
+		shared[strings.Split(st.Field(i).Tag.Get("json"), ",")[0]] = true
+	}
+	pt := reflect.TypeOf(Profile{})
+	for i := 0; i < pt.NumField(); i++ {
+		k := strings.Split(pt.Field(i).Tag.Get("json"), ",")[0]
+		if !shared[k] && !notShared[k] {
+			t.Errorf("profile key %q is neither shared nor excluded", k)
+		}
 	}
 }

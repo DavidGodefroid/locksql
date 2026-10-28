@@ -135,6 +135,9 @@ type Profile struct {
 	// key, "" when it is not set; the console stores the set it resolved
 	// (RuleSetOf, or the migrated default set) in the policy it approves.
 	PIIRules string `json:"pii_rules,omitempty"`
+	// WriteFunctions is "" (the denylist of every class) or
+	// WriteFunctionsAllowlist: writes may call allowlisted functions only.
+	WriteFunctions string `json:"write_functions,omitempty"`
 }
 
 // ruleSetRe is a valid PII rule set name: it becomes a file name, so no
@@ -153,6 +156,13 @@ func RuleSetOf(p Profile) string {
 	}
 	return strings.ToLower(p.Name)
 }
+
+// Values of write_functions. The default, denylist, is stored as "" so that
+// policies approved before the setting existed keep their fingerprint.
+const (
+	WriteFunctionsDenylist  = "denylist"
+	WriteFunctionsAllowlist = "allowlist"
+)
 
 // Config is the merged set of profiles visible from a working directory.
 type Config struct {
@@ -248,7 +258,8 @@ type rawProfile struct {
 	CredentialsTTL string `toml:"credentials_ttl"`
 	VaultPath      string `toml:"vault_path"`
 	// PIIRules is nil when the key is absent: "" is refused.
-	PIIRules *string `toml:"pii_rules"`
+	PIIRules       *string `toml:"pii_rules"`
+	WriteFunctions string  `toml:"write_functions"`
 }
 
 type rawFile struct {
@@ -395,6 +406,13 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		}
 	default:
 		return Profile{}, errf("unknown credentials mode %q (want ask, keychain or vault)", p.Credentials)
+	}
+	switch r.WriteFunctions {
+	case "", WriteFunctionsDenylist:
+	case WriteFunctionsAllowlist:
+		p.WriteFunctions = WriteFunctionsAllowlist
+	default:
+		return Profile{}, errf("unknown write_functions mode %q (want denylist or allowlist)", r.WriteFunctions)
 	}
 	for _, d := range p.Detectors {
 		if !knownDetectors[d] {

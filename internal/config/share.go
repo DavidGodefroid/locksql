@@ -63,6 +63,7 @@ type SharedProfile struct {
 	Production     bool          `json:"production,omitempty"`
 	Detectors      []string      `json:"detectors"`
 	PIIRules       string        `json:"pii_rules,omitempty"`
+	WriteFunctions string        `json:"write_functions,omitempty"`
 	Limits         *SharedLimits `json:"limits,omitempty"`
 	SSH            *SharedSSH    `json:"ssh,omitempty"`
 	NeedsLocal     []string      `json:"needs_local,omitempty"`
@@ -126,6 +127,7 @@ func ExportProfile(p Profile, set string, includeUser bool) (SharedProfile, erro
 		Engine: p.Engine, Host: p.Host, Port: p.Port, Database: p.Database,
 		Credentials: p.Credentials, VaultPath: p.VaultPath, TLS: p.TLS, TLSServerName: p.TLSServerName,
 		Tier: p.Tier.String(), Production: p.Production, Detectors: append([]string{}, p.Detectors...), PIIRules: set,
+		WriteFunctions: p.WriteFunctions,
 		Limits: &SharedLimits{
 			StatementTimeout: durString(l.StatementTimeout), ExplainRowsWarn: l.ExplainRowsWarn, ExplainRowsRefuse: l.ExplainRowsRefuse,
 			MaxRows: l.MaxRows, MaxCellChars: l.MaxCellChars, MaxOutputBytes: l.MaxOutputBytes, ExplainCostRefuse: l.ExplainCostRefuse,
@@ -166,7 +168,8 @@ func durString(d time.Duration) string {
 func (s SharedProfile) strings() [][2]string {
 	out := [][2]string{{"engine", s.Engine}, {"host", s.Host}, {"user", s.User}, {"database", s.Database},
 		{"credentials", s.Credentials}, {"vault_path", s.VaultPath}, {"credentials_ttl", s.CredentialsTTL},
-		{"tls", s.TLS}, {"tls_server_name", s.TLSServerName}, {"tier", s.Tier}, {"pii_rules", s.PIIRules}}
+		{"tls", s.TLS}, {"tls_server_name", s.TLSServerName}, {"tier", s.Tier}, {"pii_rules", s.PIIRules},
+		{"write_functions", s.WriteFunctions}}
 	for _, d := range s.Detectors {
 		out = append(out, [2]string{"detectors", d})
 	}
@@ -419,6 +422,7 @@ func (s SharedProfile) raw() rawProfile {
 		Engine: s.Engine, Host: s.Host, Port: s.Port, User: s.User, Database: s.Database, Credentials: s.Credentials,
 		TLS: s.TLS, TLSServer: s.TLSServerName, Tier: s.Tier, Production: s.Production,
 		Detectors: append([]string{}, s.Detectors...), CredentialsTTL: s.CredentialsTTL, VaultPath: s.VaultPath,
+		WriteFunctions: s.WriteFunctions,
 	}
 	if s.Detectors == nil {
 		r.Detectors = nil
@@ -486,6 +490,7 @@ func (f *ConfigFile) TOML(header string) []byte {
 		if r.PIIRules != nil {
 			fmt.Fprintf(&b, "pii_rules = %s\n", tomlQuote(*r.PIIRules))
 		}
+		str("write_functions", r.WriteFunctions)
 		if l := r.Limits; l != (rawLimits{}) {
 			fmt.Fprintf(&b, "\n[profiles.%s.limits]\n", tomlQuote(name))
 			str("statement_timeout", l.StatementTimeout)

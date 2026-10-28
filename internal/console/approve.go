@@ -499,6 +499,9 @@ func describePolicy(p config.Policy) []string {
 	if pr.SSH != nil {
 		lines = append(lines, "  ssh: "+safeText(config.SSHString(pr.SSH), false))
 	}
+	if pr.WriteFunctions != "" {
+		lines = append(lines, "  write_functions: "+pr.WriteFunctions)
+	}
 	for _, a := range p.PIIAllow {
 		lines = append(lines, red+"  allow "+safeText(a, false)+reset)
 	}

@@ -67,6 +67,9 @@ func canonical(p Policy) Policy {
 			l.IdleTimeout = min(d.IdleTimeout, l.MaxSession)
 		}
 	}
+	if p.Profile.WriteFunctions == WriteFunctionsDenylist {
+		p.Profile.WriteFunctions = "" // the default
+	}
 	if p.Profile.TLS == "" && p.Profile.Engine != EngineSQLite && p.Profile.Engine != "" {
 		p.Profile.TLS = TLSPrefer // approved before the setting existed
 	}
@@ -92,8 +95,9 @@ func Fingerprint(p Policy) string { return kconfig.Fingerprint(canonical(p)) }
 // (0 means unlimited), a longer idle_timeout or max_session, a removed PII
 // rule or detector, an added allow rule, any change of engine, host, port,
 // path, database or user, and a credentials mode other than ask, a weaker
-// tls mode, any change of tls_ca, tls_cert, tls_key or tls_server_name and
-// any change of the ssh table, and any change of the PII rule set.
+// tls mode, any change of tls_ca, tls_cert, tls_key or tls_server_name, any
+// change of the ssh table, any change of the PII rule set, and
+// write_functions from allowlist to denylist.
 func Diff(approved, current Policy) []Change {
 	a, c := canonical(approved), canonical(current)
 	ap, cp := a.Profile, c.Profile
@@ -193,6 +197,16 @@ func Diff(approved, current Policy) []Change {
 		if f.o != f.n {
 			out = append(out, Change{Field: "limits." + f.field, Old: f.o.String(), New: f.n.String(), Loosens: f.n > f.o})
 		}
+	}
+	if ap.WriteFunctions != cp.WriteFunctions {
+		name := func(v string) string {
+			if v == "" {
+				return WriteFunctionsDenylist
+			}
+			return v
+		}
+		out = append(out, Change{Field: "write_functions", Old: name(ap.WriteFunctions), New: name(cp.WriteFunctions),
+			Loosens: ap.WriteFunctions == WriteFunctionsAllowlist})
 	}
 	if ap.CredentialsTTL != cp.CredentialsTTL {
 		out = append(out, Change{Field: "credentials_ttl", Old: dur(int64(ap.CredentialsTTL)), New: dur(int64(cp.CredentialsTTL)),

@@ -303,3 +303,32 @@ func TestPostgresPasswordAuth(t *testing.T) {
 		})
 	}
 }
+
+// TestDetectorsUnicodeAndFloatPG reads, through a console server with the
+// default detectors, the issue #17 cells as PostgreSQL returns them: a card
+// number in a float8 column, a Unicode e-mail address and NBSP-grouped
+// numbers. The agent sees none of them.
+func TestDetectorsUnicodeAndFloatPG(t *testing.T) {
+	const q = "SELECT 4111111111111111::float8 AS f, 'josé.dupont@exämple.de' AS e," +
+		" E'BE68\\u00a05390\\u00a00754\\u00a07034' AS i, E'0475\\u202f12\\u202f34\\u202f56' AS p, 1.5::float8 AS h LIMIT 1"
+	for _, v := range pgVersions() {
+		t.Run("postgres:"+v, func(t *testing.T) {
+			srv := startPostgres(t, v)
+			s := connectPG(t, srv, "ro", config.TierRead, 30*time.Second)
+			call := consoleServer(t, s, "app", pii.Rules{}, config.TierRead, config.DefaultDetectors())
+			rr, msg := agentRun(t, call, "app", q)
+			if msg != "" {
+				t.Fatal(msg)
+			}
+			all := fmt.Sprint(rr.Rows) + rr.Text
+			for _, leak := range []string{"4111111111111111", "4.111111111111111e+15", "dupont", "exämple", "7034", "34 56"} {
+				if strings.Contains(all, leak) {
+					t.Errorf("agent got %q: %.400s", leak, all)
+				}
+			}
+			if !strings.Contains(all, "1.5") {
+				t.Errorf("a non-integral float was masked: %.400s", all)
+			}
+		})
+	}
+}
