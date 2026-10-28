@@ -613,7 +613,7 @@ each; the exit code is 1 when any check fails.
 | tls_ca, tls_cert, tls_key (per profile) | a file that is missing or holds no PEM certificate, a certificate expired or expiring within 30 days, a key readable by group or others (files the agent's account cannot read are not checked) |
 | server certificate (per profile without `ssh`) | a TLS handshake that sends no user name and no secret: the server offers no TLS under `require` or stronger, its chain does not verify against `tls_ca` (or the system roots), it does not name `host` (or `tls_server_name`) under `verify-full`, it is expired or expires within 30 days; under `prefer` or `require` it says whether `verify-full` would pass |
 | agent wiring | an installed agent is not wired for this account (warns; not checked as root or as the console account) |
-| project access, project .locksql, project config.toml / pii.toml | separated mode, from an account other than the console's, inside a project: the console account cannot enter a directory down to the project (mode bits and POSIX ACLs), does not own `.locksql/` or it is writable by group or others, or cannot read a config |
+| project access, project .locksql, project .locksql/pii, project config.toml / pii.toml / pii/<set>.toml | separated mode, from an account other than the console's, inside a project: the console account cannot enter a directory down to the project (mode bits and POSIX ACLs), does not own `.locksql/` or `.locksql/pii/` or one is writable by group or others, or cannot read the config or the rule set of a project profile |
 | console (per profile) | not running; then, from its `health`: not separated, an X11 display, database privileges beyond the tier, EXPLAIN failing |
 
 #### `locksql doctor --fix`
@@ -630,7 +630,8 @@ repairs are small and idempotent; a second run finds nothing to do:
 | socket directory | recreates it with owner `service_user:client_group`, mode 2710 (macOS 0710), and on Linux rewrites `/etc/tmpfiles.d/locksql.conf` | root |
 | project access | `setfacl -m u:locksql:x DIR` (`rx` on the project itself): an ACL entry for the console account only, never a wider mode; Linux, when `setfacl` exists | you for your directories, else root |
 | project .locksql | `chown locksql .locksql && chmod 0755 .locksql` | root |
-| project config.toml, pii.toml | `chmod 0644` | you when you own it, else root |
+| project .locksql/pii | `chown locksql .locksql/pii && chmod 0755 .locksql/pii` | root |
+| project config.toml, pii.toml, pii/<set>.toml | `chmod 0644` | you when you own it, else root |
 
 The root repairs run as one script, shown before `sudo` runs it, after
 `Run them now with sudo? [y/N]` (or at once with `--yes`; without a
