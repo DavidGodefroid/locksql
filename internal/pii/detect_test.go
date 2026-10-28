@@ -120,7 +120,13 @@ func TestProposeLoginsFreeTextCoordinates(t *testing.T) {
 			t.Errorf("%s: proposed", c)
 		}
 	}
-	if len(Propose(col("last_login", "timestamp"))) != 0 {
-		t.Error("last_login timestamp: proposed")
+	// Engines report types in any case (MySQL DATETIME, SQL Server DATETIME2).
+	for _, typ := range []string{"timestamp", "TIMESTAMP", "DATETIME", "Date", "timestamp with time zone", "TIMESTAMPTZ"} {
+		if len(Propose(col("last_login", typ))) != 0 {
+			t.Errorf("last_login %s: proposed", typ)
+		}
+	}
+	if len(Propose(col("login", "VARCHAR(150)"))) != 1 {
+		t.Error("login VARCHAR: not proposed")
 	}
 }
