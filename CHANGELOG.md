@@ -6,6 +6,19 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
+### Added
+
+- **`write_functions = "allowlist"`.** An opt-in profile setting that
+  applies the read function allowlist to writes: every function an
+  `INSERT`, `REPLACE`, `UPDATE` or `DELETE` calls, at any depth, must be
+  allowlisted (plus key generators such as `gen_random_uuid`, `nextval`,
+  `UUID`, `SYS_GUID`, `randomblob`), or the write is refused with
+  `E_FUNCTION`. Schema-qualified calls, calls through quoted or non-ASCII
+  names, `CALL`, `MERGE` and writes the parser does not read are refused.
+  The default stays `"denylist"`; turning the allowlist off is a policy
+  loosening confirmed in the console, and existing approved policies keep
+  their fingerprint.
+
 ### Changed
 
 - **Clear results refused at desktop security level 1.** When the console

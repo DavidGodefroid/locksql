@@ -499,3 +499,26 @@ func TestVaultCredentials(t *testing.T) {
 		t.Errorf("ssh.credentials = %q, want ask", p.SSH.Credentials)
 	}
 }
+
+func TestWriteFunctions(t *testing.T) {
+	parse := func(body string) (Profile, error) {
+		ps, err := ParseProfiles([]byte("[profiles.p]\nengine=\"sqlite\"\npath=\"x.db\"\n"+body), "t.toml", t.TempDir())
+		return ps["p"], err
+	}
+	for body, want := range map[string]string{
+		"":                                "",
+		"write_functions=\"denylist\"\n":  "",
+		"write_functions=\"allowlist\"\n": WriteFunctionsAllowlist,
+	} {
+		p, err := parse(body)
+		if err != nil {
+			t.Fatalf("%q: %v", body, err)
+		}
+		if p.WriteFunctions != want {
+			t.Errorf("%q: write_functions = %q, want %q", body, p.WriteFunctions, want)
+		}
+	}
+	if _, err := parse("write_functions=\"strict\"\n"); err == nil || !strings.Contains(err.Error(), "want denylist or allowlist") {
+		t.Errorf("unknown mode: err = %v", err)
+	}
+}

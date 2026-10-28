@@ -387,6 +387,11 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", p.SQL, refusal.Newf(refusal.Tier,
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
 	}
+	if s.profile.WriteFunctions == config.WriteFunctionsAllowlist {
+		if r := strictWriteFunctions(s.dialect, st); r != nil {
+			return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", p.SQL, shifted(r, base))
+		}
+	}
 	if st.Class != sqlclass.Read && sqlast.HasPlaceholder(s.dialect, st.SQL) {
 		// A write is never analysed for placeholders: it would run with
 		// the literal text '${...}'.

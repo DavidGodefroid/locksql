@@ -274,6 +274,20 @@ func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan,
 	return nil, nil
 }
 
+// strictWriteFunctions applies write_functions = "allowlist": a write may
+// call allowlisted functions only (sqlast.CheckWriteFunctions), and CALL,
+// which runs a stored procedure the classifier cannot see, is refused.
+// DDL is not covered: a DDL tier can create functions and triggers.
+func strictWriteFunctions(d sqlclass.Dialect, st sqlclass.Statement) error {
+	switch {
+	case st.Class == sqlclass.Write:
+		return sqlast.CheckWriteFunctions(d, st.SQL)
+	case st.Kind == "call":
+		return refusal.New(refusal.Function, `CALL is not allowed under write_functions = "allowlist" (a stored procedure runs code the classifier cannot see)`)
+	}
+	return nil
+}
+
 // writePlan checks a write before it runs. While mask rules exist, a
 // write whose rows come back or that stores a query's rows
 // (sqlast.NeedsWriteAnalysis) is parsed and analysed like a read: its
