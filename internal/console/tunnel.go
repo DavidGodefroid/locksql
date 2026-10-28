@@ -197,6 +197,16 @@ func (s *proxiedSession) Notices() []string {
 		s.program, s.dbHost, strings.Join(n.Notices(), "; "))}
 }
 
+// ShadowedFunctions passes the lookup on (engine.FunctionShadows).
+func (s *proxiedSession) ShadowedFunctions(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.ShadowedFunctions(ctx, s.Session, db, names)
+}
+
+// ShadowedOperators passes the lookup on (engine.FunctionShadows).
+func (s *proxiedSession) ShadowedOperators(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.ShadowedOperators(ctx, s.Session, db, names)
+}
+
 // withProxyStderr adds what the proxy command wrote to its stderr to a
 // connection error: "No such container" says more than "EOF".
 func withProxyStderr(err error, stderr string) error {

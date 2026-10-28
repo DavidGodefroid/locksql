@@ -131,6 +131,7 @@ func TestShadowedFunctionsThroughWrappers(t *testing.T) {
 	inner := &shadowSession{fakeSession: &fakeSession{}, shadowed: []string{"lower"}}
 	for name, s := range map[string]engine.Session{
 		"tunnel": &tunneledSession{Session: inner},
+		"proxy":  &proxiedSession{Session: inner},
 		"vault":  &vaultSession{Session: inner},
 		"both":   &vaultSession{Session: &tunneledSession{Session: inner}},
 	} {
