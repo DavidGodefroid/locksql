@@ -38,7 +38,7 @@ func newLauncherFixture(t *testing.T) *launcherFixture {
 			t.Fatal(err)
 		}
 	}
-	for _, tool := range []string{"sh", "dirname", "id", "cat", "printf", "awk", "sha256sum", "shasum", "tar", "gzip", "install", "mktemp", "rm", "uname", "sed", "tr", "tail", "grep", "cksum", "ls"} {
+	for _, tool := range []string{"sh", "dirname", "id", "cat", "printf", "awk", "sha256sum", "shasum", "tar", "gzip", "install", "mktemp", "rm", "uname", "sed", "tr", "tail", "grep", "cksum", "stat"} {
 		if p, err := exec.LookPath(tool); err == nil {
 			if err := os.Symlink(p, filepath.Join(f.bin, tool)); err != nil {
 				t.Fatal(err)
@@ -282,9 +282,9 @@ func TestLauncherExplicitProject(t *testing.T) {
 }
 
 // LOCKSQL_READONLY_PROJECT, on Linux: the console gets the inode of the
-// .locksql the launcher checked, and refuses to start on any other (one
+// .locksql the launcher checked (device and inode), and refuses any other (one
 // swapped in before Docker mounted it).
-func TestLauncherReadOnlyProjectPinsTheInode(t *testing.T) {
+func TestLauncherReadOnlyProjectPinsTheDirectory(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the inode is passed on Linux only")
 	}
@@ -297,7 +297,8 @@ func TestLauncherReadOnlyProjectPinsTheInode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run := lastRun(t, calls); !hasSeq(run, "-e", "LOCKSQL_EXPECT_DIR_INODE="+strconv.FormatUint(uint64(st.Ino), 10)) {
+	want := strconv.FormatUint(uint64(st.Dev), 10) + ":" + strconv.FormatUint(uint64(st.Ino), 10)
+	if run := lastRun(t, calls); !hasSeq(run, "-e", "LOCKSQL_EXPECT_DIR="+want) {
 		t.Errorf("%q", run)
 	}
 	_, calls, err = f.run(t, f.project, nil, "console")
@@ -305,7 +306,7 @@ func TestLauncherReadOnlyProjectPinsTheInode(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, a := range lastRun(t, calls) {
-		if strings.HasPrefix(a, "LOCKSQL_EXPECT_DIR_INODE=") {
+		if strings.HasPrefix(a, "LOCKSQL_EXPECT_DIR=") {
 			t.Errorf("an inode without LOCKSQL_READONLY_PROJECT")
 		}
 	}

@@ -116,9 +116,9 @@ from there unless the working directory is inside it.
 
 With `LOCKSQL_READONLY_PROJECT=1`, `.locksql/` must be a directory whose
 physical path is itself; the launcher checks it twice, the second time
-right before `docker run`. On Linux it also passes the inode it checked
-(`LOCKSQL_EXPECT_DIR_INODE`), and the console refuses to start on a
-`.locksql` with another one: a directory swapped in between the check and
+right before `docker run`. On Linux it also passes the device and inode it checked
+(`LOCKSQL_EXPECT_DIR=DEV:INO`), and the console refuses to start on a
+`.locksql` with others: a directory swapped in between the check and
 Docker's mount never gets the console. On macOS (Docker Desktop's file
 sharing reports other inodes) only the two checks run. lea also mounts
 `.locksql` read-only in its agents' containers, which cannot swap it.

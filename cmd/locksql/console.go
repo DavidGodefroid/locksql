@@ -46,7 +46,7 @@ func runConsole(e env, args []string) int {
 	}
 	// In the launcher's container, a .locksql other than the one it
 	// checked was swapped in before Docker mounted it.
-	if want := os.Getenv(expectDirInodeEnv); want != "" {
+	if want := os.Getenv(expectDirEnv); want != "" {
 		proj, err := consoleProject(e.cwd, *project)
 		if err == nil {
 			err = checkConsoleDir(proj, want)

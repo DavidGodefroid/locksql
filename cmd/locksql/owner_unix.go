@@ -16,11 +16,11 @@ func fileOwner(fi os.FileInfo) (uid, gid int, ok bool) {
 	return int(st.Uid), int(st.Gid), true
 }
 
-// fileInode returns the inode number of a file.
-func fileInode(fi os.FileInfo) (uint64, bool) {
+// fileDevIno returns the device and inode numbers of a file.
+func fileDevIno(fi os.FileInfo) (dev, ino uint64, ok bool) {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
-		return 0, false
+		return 0, 0, false
 	}
-	return uint64(st.Ino), true
+	return uint64(st.Dev), uint64(st.Ino), true
 }

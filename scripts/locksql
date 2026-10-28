@@ -316,9 +316,10 @@ console)
 		check_locksql_dir
 		project_mode=:ro
 		# On Linux the console refuses to start on a .locksql other than
-		# this one (its inode), one swapped in before Docker's mount.
+		# this one (its device and inode), one swapped in before Docker's
+		# mount.
 		if [ "$(uname -s)" = Linux ]; then
-			inode="$(ls -di "$locksql_dir" | awk '{ print $1 }')"
+			inode="$(stat -c '%d:%i' "$locksql_dir")" || die "could not stat $locksql_dir"
 		fi
 	fi
 	# VAULT_CACERT: the file the vault CLI checks Vault's certificate
@@ -347,7 +348,7 @@ console)
 		--add-host=host.docker.internal:host-gateway -e VAULT_ADDR -e VAULT_NAMESPACE \
 		-v locksql-run:/run/locksql -v locksql-home:/home/locksql \
 		${locksql_dir:+-v} ${locksql_dir:+"$locksql_dir:$locksql_dir"} \
-		${inode:+-e} ${inode:+"LOCKSQL_EXPECT_DIR_INODE=$inode"} \
+		${inode:+-e} ${inode:+"LOCKSQL_EXPECT_DIR=$inode"} \
 		${cacert:+-v} ${cacert:+"$cacert:$cacert:ro"} ${cacert:+-e} ${cacert:+"VAULT_CACERT=$cacert"} \
 		"$image" console "$@"
 	[ -z "$locksql_dir" ] || check_locksql_dir
