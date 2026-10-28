@@ -428,6 +428,11 @@ first use, refusing a changed key). `host` is then the database as seen from
 the bastion; keep `tls = "verify-full"` unless the database runs on the
 bastion itself. See
 [Reaching a remote server through SSH](docs/usage.md#reaching-a-remote-server-through-ssh).
+A database that publishes no port (an internal Docker network, a server
+bound to its container's loopback) is reached with `proxy_command`, an argv
+whose stdin and stdout carry the connection, such as
+`["docker", "exec", "-i", "shop-db", "socat", "-", "TCP:127.0.0.1:3306"]`;
+see [Databases that publish no port](docs/usage.md#databases-that-publish-no-port).
 
 ```toml
 [profiles.prod]
@@ -477,6 +482,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `ssh.auth` | required | `key`, `agent` (`SSH_AUTH_SOCK` of the console) or `password` |
 | `ssh.key` | required with `auth = "key"` | private key of the console account, mode 0600 |
 | `ssh.credentials` | the profile's `credentials` (`ask` when that is `vault`) | `ask` or `keychain` for the passphrase or SSH password; `locksql forget --profile P` removes it too |
+| `proxy_command` | none | argv run without a shell, as the console account, once per connection; its stdin and stdout carry it (`docker exec`, `kubectl exec`, `ssh ... socat`). Not with `ssh`, sqlite or a Unix socket `host`; any change is a loosening |
 
 </details>
 
@@ -500,7 +506,10 @@ production = true
 ```
 
 `locksql pii` and `:pii` act on the set of the profile in use, and the
-approval screen shows the set next to the profile. `pii_rules` is read at
+approval screen shows the set next to the profile. The console warns at start
+when a profile without `pii_rules` shares its set by accident: with a
+profile whose name differs only by case, with a profile whose `pii_rules`
+names it, or because it is named `default`. `pii_rules` is read at
 start; pointing a profile at another set is a loosening, approved again at
 the next start.
 
@@ -522,6 +531,8 @@ mode   = "partial"                    # j***(12)
 column = "*.*.recipient_reference"    # <redacted:rN.R.C> (default)
 [[allow]]                             # explicit exception: never mask
 column = "app.templates.name"
+[[mask]]                              # '*' prefix/suffix inside a segment:
+column = "*.*.*email*"                # contact_email, email_backup, Email
 ```
 
 | Mode | Output | Notes |

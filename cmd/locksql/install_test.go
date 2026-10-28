@@ -169,3 +169,55 @@ func TestInstallYes(t *testing.T) {
 		t.Errorf("script:\n%s\nout:\n%s", scripts[0], out.String())
 	}
 }
+
+// A trusted, root-owned source is pinned too: root copies it after the
+// prompt, from a directory another account may still be able to write, so
+// the root script checks its copy against the sha256 shown to the human.
+func TestInstallSourcePinsATrustedBinary(t *testing.T) {
+	sh, err := filepath.EvalSymlinks("/bin/sh")
+	if err != nil {
+		t.Skip(err)
+	}
+	if msg, err := installSourceRefusal(sh); err != nil || msg != "" {
+		t.Skipf("%s is not a trusted root-owned binary here: %q %v", sh, msg, err)
+	}
+	sum := fileSHA256(t, sh)
+	pin, shown, msg, err := installSource(sh, false)
+	if err != nil || msg != "" || pin != sum || shown != sum {
+		t.Errorf("installSource(%s) = pin %q, shown %q, refusal %q, %v; want pin and shown %s", sh, pin, shown, msg, err, sum)
+	}
+	for _, script := range []string{
+		linuxInstallScript(sh, "agent", "locksql", "locksql-clients", pin),
+		darwinInstallScript(sh, "agent", "locksql", "locksql-clients", pin),
+	} {
+		if !strings.Contains(script, "echo '"+sum+"  '\"$tmp\"") || strings.Contains(script, "install -m 0755 -o root -g root "+shellQuote(sh)) {
+			t.Errorf("trusted binary installed unpinned:\n%s", script)
+		}
+	}
+}
+
+// The sha256 of the binary install copies stands beside the prompt, so the
+// human can compare it before answering.
+func TestInstallShowsTheDigestBesideThePrompt(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("install only prints its commands on macOS")
+	}
+	bin, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bin, err = filepath.EvalSymlinks(bin); err != nil {
+		t.Fatal(err)
+	}
+	sum := fileSHA256(t, bin)
+	var out, errb strings.Builder
+	e := env{stdin: strings.NewReader("n\n"), stdout: &out, stderr: &errb, cwd: t.TempDir(), tty: true,
+		root: func(string) error { t.Error("root ran"); return nil }}
+	if code := runEnv(e, []string{"install", "--client", "agent", "--trust-binary"}); code != exitOK {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	want := "binary: " + bin + "\nsha256: " + sum + "\nRun them now with sudo? [y/N] "
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("prompt lacks %q:\n%s", want, out.String())
+	}
+}

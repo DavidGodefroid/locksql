@@ -257,6 +257,10 @@ func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan,
 		}
 		return nil, err
 	}
+	pl.shadow = shadowNamesOf(an, parsed)
+	if r, err := s.checkShadows(ctx, sess, pl.db, pl.shadow); err != nil || r != nil {
+		return r, err
+	}
 	pl.an = an
 	if len(s.rules.Mask) > 0 {
 		for _, rel := range an.Relations {
@@ -282,29 +286,86 @@ func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan,
 // Every column of the write is also resolved against the catalog
 // (sqlast.Analyze, PII usage rules off: writePlan applies them): in
 // PostgreSQL, rel.name where rel has no column name calls name(rel).
-// It returns the refusal, if any; an error is the engine's.
-func (s *Server) strictWriteFunctions(ctx context.Context, sess engine.Session, db string, st sqlclass.Statement) (*refusal.Error, error) {
+// It returns the refusal, if any, and the names checkShadows looks up
+// again at run time; an error is the engine's.
+func (s *Server) strictWriteFunctions(ctx context.Context, sess engine.Session, db string, st sqlclass.Statement) (*refusal.Error, *shadowNames, error) {
 	switch {
 	case st.Kind == "call":
-		return refusal.New(refusal.Function, `CALL is not allowed under write_functions = "allowlist" (a stored procedure runs code the classifier cannot see)`), nil
+		return refusal.New(refusal.Function, `CALL is not allowed under write_functions = "allowlist" (a stored procedure runs code the classifier cannot see)`), nil, nil
 	case st.Class != sqlclass.Write:
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err := sqlast.CheckWriteFunctions(s.dialect, st.SQL); err != nil {
-		return refusal.From(err), nil
+		return refusal.From(err), nil, nil
 	}
 	parsed, err := sqlast.ParseWrite(s.dialect, st.SQL)
 	if err != nil {
-		return refusal.From(err), nil
+		return refusal.From(err), nil, nil
 	}
 	env := s.astEnv(ctx, sess, db, true)
 	env.WriteFuncs = true
-	if _, err := sqlast.Analyze(parsed, env); err != nil {
+	an, err := sqlast.Analyze(parsed, env)
+	if err != nil {
 		var r *sqlclass.Refusal
 		if errors.As(err, &r) {
-			return r, nil
+			return r, nil, nil
 		}
+		return nil, nil, err
+	}
+	sn := shadowNamesOf(an, parsed)
+	r, err := s.checkShadows(ctx, sess, db, sn)
+	return r, sn, err
+}
+
+// shadowNames are the functions and operators a statement calls, lower
+// case, sorted and unique, as checkShadows looks them up.
+type shadowNames struct{ funcs, ops []string }
+
+// shadowNamesOf lists the functions an analysed statement calls (and
+// COUNT and MIN, which its k-anonymity counts call) and its operators.
+func shadowNamesOf(an *sqlast.Analysis, st *sqlast.Statement) *shadowNames {
+	var funcs []string
+	for _, f := range an.Funcs {
+		funcs = append(funcs, strings.ToLower(f))
+	}
+	if len(an.KChecks) > 0 {
+		funcs = append(funcs, "count", "min")
+	}
+	slices.Sort(funcs)
+	return &shadowNames{funcs: slices.Compact(funcs), ops: sqlast.Operators(st)}
+}
+
+// checkShadows refuses a statement that calls an allowlisted function, or
+// uses an operator, that a user-defined function or operator outside
+// pg_catalog also names, on a server that resolves the best match over
+// the search path (engine.FunctionShadows): an overload with a closer
+// argument type would run instead. Only PostgreSQL resolves names that
+// way; a PostgreSQL session that cannot look them up (a wrapper that does
+// not pass the lookup on) fails the plan. The plan looks them up, and the
+// run again just before the statement, so that one created in between is
+// caught (what is created during the statement itself is not). It returns
+// the refusal, if any; an error is the engine's.
+func (s *Server) checkShadows(ctx context.Context, sess engine.Session, db string, sn *shadowNames) (*refusal.Error, error) {
+	if sn == nil || sess.Flavor() != engine.FlavorPostgres {
+		return nil, nil
+	}
+	if len(sn.funcs) > 0 {
+		hit, err := engine.ShadowedFunctions(ctx, sess, db, sn.funcs)
+		if err != nil {
+			return nil, err
+		}
+		if len(hit) > 0 {
+			return refusal.Newf(refusal.Function, "function %s is also defined outside pg_catalog in this database: a user-defined overload could run instead of the built-in, so the call is refused (ask the human to check that function)",
+				strings.Join(hit, ", ")), nil
+		}
+	}
+	hit, err := engine.ShadowedOperators(ctx, sess, db, sn.ops)
+	if err != nil {
 		return nil, err
+	}
+	if len(hit) > 0 {
+		return refusal.Newf(refusal.Function, "operator %s is also defined outside pg_catalog in this database: a user-defined overload could run instead of the built-in, so the statement is refused (ask the human to check that operator)",
+			strings.Join(hit, ", ")), nil
 	}
 	return nil, nil
 }
@@ -374,12 +435,13 @@ const hiddenWeightRefusal = "refused by the weight check (the details are shown 
 // kCount runs the k-anonymity row counts of a plan before its approval
 // and returns a warning for each count under k. A count never refuses: it
 // helps the human decide, and the agent learns nothing of it. A plan with
-// placeholder values is counted with them substituted. The error is the
-// connection's.
-func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]string, error) {
+// placeholder values is counted with them substituted. The refusal is
+// checkShadows' (a function or operator created since the plan); the
+// error is the connection's.
+func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]string, *refusal.Error, error) {
 	k := s.profile.Limits.KAnonymity
 	if pl.an == nil || pl.unmask || k <= 1 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	counted := pl
 	if len(pl.an.Values) > 0 {
@@ -387,7 +449,7 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 		// that analysis's to report.
 		cp := *pl
 		if r, err := s.analyzeRead(ctx, sess, &cp, pl.st.SQL); err != nil || r != nil {
-			return nil, nil
+			return nil, nil, nil
 		}
 		counted = &cp
 	}
@@ -395,6 +457,11 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, t+runGrace)
 		defer cancel()
+	}
+	// The counts call COUNT and MIN and compare: a function or operator
+	// created since the plan would run in them first.
+	if r, err := s.checkShadows(ctx, sess, pl.db, counted.shadow); err != nil || r != nil {
+		return nil, r, err
 	}
 	var out []string
 	add := func(w string) {
@@ -407,7 +474,7 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 		res, err := sess.Run(ctx, pl.db, st, 1)
 		if err != nil {
 			if errors.Is(err, engine.ErrConnLost) || ctx.Err() != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			s.println("k-anonymity check failed: " + safeText(s.errText(err, c.SQL, false, counted), false))
 			add("k-anonymity: a count could not run, so the rows this statement covers are unknown")
@@ -433,7 +500,7 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 			add(fmt.Sprintf("k-anonymity: %s fewer than k=%d rows (%d)", what, k, n))
 		}
 	}
-	return out, nil
+	return out, nil, nil
 }
 
 func toInt(v any) (int64, bool) {

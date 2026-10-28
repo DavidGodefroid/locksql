@@ -272,6 +272,23 @@ func TestEmptyDetectorsKept(t *testing.T) {
 	}
 }
 
+// Every detector name the lockkit pii package knows can be enabled,
+// including the opt-in phone_loose (issue #17).
+func TestOptInDetectorsAccepted(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, ".locksql", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(p), 0o700)
+	all := `["email","phone","phone_loose","iban","card","be_niss","fr_nir","nl_bsn","us_ssn"]`
+	_ = os.WriteFile(p, []byte("[profiles.a]\nengine=\"mysql\"\nhost=\"h\"\ndetectors="+all+"\n"), 0o600)
+	cfg, err := LoadFrom(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := cfg.Profiles["a"].Detectors; len(d) != 9 {
+		t.Errorf("detectors = %v", d)
+	}
+}
+
 func TestTier(t *testing.T) {
 	for _, s := range []string{"read", "write", "ddl", "admin"} {
 		tier, err := ParseTier(s)
@@ -520,5 +537,178 @@ func TestWriteFunctions(t *testing.T) {
 	}
 	if _, err := parse("write_functions=\"strict\"\n"); err == nil || !strings.Contains(err.Error(), "want denylist or allowlist") {
 		t.Errorf("unknown mode: err = %v", err)
+	}
+}
+
+func TestProxyCommand(t *testing.T) {
+	parse := func(body string) (Profile, error) {
+		ps, err := ParseProfiles([]byte("[profiles.p]\n"+body), "t.toml", t.TempDir())
+		return ps["p"], err
+	}
+	head := "engine=\"mariadb\"\nhost=\"127.0.0.1\"\n"
+	p, err := parse(head + "proxy_command=[\"ssh\", \"dockerhost\", \"docker\", \"exec\", \"-i\", \"db\", \"socat\", \"-\", \"TCP:127.0.0.1:3306\"]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"ssh", "dockerhost", "docker", "exec", "-i", "db", "socat", "-", "TCP:127.0.0.1:3306"}
+	if strings.Join(p.ProxyCommand, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("proxy_command = %q", p.ProxyCommand)
+	}
+	// The loopback host is the database inside the container: tls defaults
+	// as for any loopback host.
+	if p.TLS != TLSPrefer {
+		t.Errorf("tls = %q, want prefer", p.TLS)
+	}
+	if _, err := parse(head + "proxy_command=[\"/usr/bin/docker\", \"exec\", \"-i\", \"db\", \"nc\", \"127.0.0.1\", \"3306\"]\n"); err != nil {
+		t.Errorf("absolute program: %v", err)
+	}
+	ssh := "[profiles.p.ssh]\nhost=\"b\"\nuser=\"u\"\nauth=\"agent\"\n"
+	// The project, which the agent can write to after the approval, holds
+	// no part of the command.
+	project := t.TempDir()
+	for name, argv := range map[string]string{
+		"program":  fmt.Sprintf("[%q]", filepath.Join(project, "bin", "proxy")),
+		"argument": fmt.Sprintf("[\"sh\", %q]", filepath.Join(project, "proxy.sh")),
+		"flag":     fmt.Sprintf("[\"ssh\", %q, \"host\"]", "-F"+filepath.Join(project, "ssh_config")),
+		"option":   fmt.Sprintf("[\"ssh\", %q, \"host\"]", "--config="+filepath.Join(project, "ssh_config")),
+		"root":     fmt.Sprintf("[\"sh\", %q]", project),
+	} {
+		_, err := ParseProfiles([]byte("[profiles.p]\n"+head+"proxy_command="+argv+"\n"), "t.toml", project)
+		if err == nil || !strings.Contains(err.Error(), "inside the project") {
+			t.Errorf("%s in the project: err = %v", name, err)
+		}
+	}
+	if _, err := ParseProfiles([]byte("[profiles.p]\n"+head+"proxy_command=[\"sh\", \"/usr/local/bin/proxy.sh\"]\n"), "t.toml", project); err != nil {
+		t.Errorf("a program outside the project: %v", err)
+	}
+	for name, c := range map[string]struct{ body, err string }{
+		"empty":             {head + "proxy_command=[]\n", "proxy_command needs"},
+		"empty program":     {head + "proxy_command=[\"\", \"x\"]\n", "proxy_command needs"},
+		"relative":          {head + "proxy_command=[\"./bin/proxy\"]\n", "absolute path or a bare program name"},
+		"relative dir":      {head + "proxy_command=[\"bin/proxy\"]\n", "absolute path or a bare program name"},
+		"with ssh":          {head + "proxy_command=[\"nc\", \"db\", \"3306\"]\n" + ssh, "proxy_command and ssh"},
+		"socket host":       {"engine=\"mysql\"\nhost=\"/run/m.sock\"\nproxy_command=[\"nc\"]\n", "Unix socket"},
+		"sqlite":            {"engine=\"sqlite\"\npath=\"x.db\"\nproxy_command=[\"nc\"]\n", "not used by sqlite"},
+		"control":           {head + "proxy_command=[\"nc\", \"db\\u001b[2J\"]\n", "control"},
+		"embedded":          {head + "proxy_command=[\"psql\", \"postgres://u:pw@db/x\"]\n", "embedded password"},
+		"password flag":     {head + "proxy_command=[\"x\", \"--password=hunter2\"]\n", "never reads secrets"},
+		"env password":      {head + "proxy_command=[\"env\", \"MYSQL_PWD=hunter2\", \"nc\"]\n", "never reads secrets"},
+		"token flag":        {head + "proxy_command=[\"x\", \"--token\", \"abc\"]\n", "never reads secrets"},
+		"mysql -p":          {head + "proxy_command=[\"docker\", \"exec\", \"-i\", \"db\", \"mysql\", \"-uroot\", \"-phunter2\"]\n", "never reads secrets"},
+		"mysql -p=":         {head + "proxy_command=[\"mariadb\", \"-p=hunter2\"]\n", "never reads secrets"},
+		"mysql -p123":       {head + "proxy_command=[\"/usr/bin/mysql\", \"-p1234\"]\n", "never reads secrets"},
+		"short -p":          {head + "proxy_command=[\"x\", \"-phunter2\"]\n", "never reads secrets"},
+		"not a list":        {head + "proxy_command=\"nc db 3306\"\n", "proxy_command"},
+		"dot dot":           {head + "proxy_command=[\"sh\", \"../../home/u/proj/x\"]\n", "climbs"},
+		"flag dot dot":      {head + "proxy_command=[\"ssh\", \"-F..\\\\x\", \"h\"]\n", "climbs"},
+		"option dot dot":    {head + "proxy_command=[\"x\", \"--config=a/../../b\"]\n", "climbs"},
+		"tilde user":        {head + "proxy_command=[\"ssh\", \"-i\", \"~david/.ssh/k\", \"h\"]\n", "expands"},
+		"ssh token":         {head + "proxy_command=[\"ssh\", \"-oIdentityFile=%d/k\", \"h\"]\n", "expands"},
+		"env var":           {head + "proxy_command=[\"ssh\", \"-oIdentityFile=$HOME/k\", \"h\"]\n", "expands"},
+		"dot dot semicolon": {head + "proxy_command=[\"sh\", \"-c\", \"cat ..;x\"]\n", "climbs"},
+		"dot dot comma":     {head + "proxy_command=[\"x\", \"a,..,b\"]\n", "climbs"},
+		"ssh token %u":      {head + "proxy_command=[\"ssh\", \"-oIdentityFile=/home/%u/k\", \"h\"]\n", "expands"},
+		"command subst":     {head + "proxy_command=[\"sh\", \"-c\", \"cat $(pwd)/x\"]\n", "expands"},
+		"backtick":          {head + "proxy_command=[\"sh\", \"-c\", \"cat `pwd`/x\"]\n", "expands"},
+		"tilde plus":        {head + "proxy_command=[\"sh\", \"-c\", \"cat ~+/x\"]\n", "expands"},
+		"tilde after op":    {head + "proxy_command=[\"sh\", \"-c\", \"true&&~+/x\"]\n", "expands"},
+		"dot dot after op":  {head + "proxy_command=[\"sh\", \"-c\", \"cd x&&..\"]\n", "climbs"},
+		"positional":        {head + "proxy_command=[\"sh\", \"-c\", \"cat $1\"]\n", "expands"},
+		"env braces":        {head + "proxy_command=[\"ssh\", \"-oIdentityFile=${XDG_CONFIG_HOME}/k\", \"h\"]\n", "expands"},
+	} {
+		if _, err := parse(c.body); err == nil || !strings.Contains(err.Error(), c.err) {
+			t.Errorf("%s: err = %v, want %q", name, err, c.err)
+		}
+	}
+	// -p is also ssh's and nc's port: a number there is no secret, nor is a
+	// lone -p, which would prompt and fail without a terminal.
+	for _, argv := range []string{
+		`["ssh", "-p2222", "host", "socat", "-", "TCP:127.0.0.1:3306"]`,
+		`["ssh", "-p", "2222", "host", "docker", "exec", "-i", "db", "mysql", "-uroot", "-p"]`,
+		`["nc", "-p1234", "db", "3306"]`,
+		`["docker", "exec", "-i", "db", "mysql", "-P3306"]`,
+		`["ssh", "-i", "~/.ssh/id_ed25519", "-oProxyJump=deploy@bastion:22", "h", "socat", "-", "TCP:127.0.0.1:3306"]`,
+		`["ssh", "h", "printf", "100%%"]`,
+		`["socat", "-", "TCP:[::1]:3306"]`,
+		`["kubectl", "exec", "-i", "-n", "shop", "db-0", "--", "socat", "-", "UNIX-CONNECT:/run/my..sock"]`,
+	} {
+		if _, err := parse(head + "proxy_command=" + argv + "\n"); err != nil {
+			t.Errorf("%s: %v", argv, err)
+		}
+	}
+	// A remote host is reached as over TCP: production still needs tls.
+	_, err = ParseProfiles([]byte("[profiles.prod]\nengine=\"postgres\"\nhost=\"db.internal\"\ntls=\"prefer\"\nproduction=true\nproxy_command=[\"nc\", \"db\", \"5432\"]\n"), "t.toml", t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "needs tls") {
+		t.Errorf("production remote host: err = %v", err)
+	}
+}
+
+// namesPathIn sees through symbolic links, in either direction, and folds
+// case where the file system does.
+func TestNamesPathIn(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	outside := filepath.Join(root, "outside")
+	for _, d := range []string{project, outside} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(project, link); err != nil {
+		t.Skip("no symbolic links:", err)
+	}
+	script := filepath.Join(project, "proxy.sh")
+	if err := os.WriteFile(script, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	into := filepath.Join(outside, "proxy")
+	if err := os.Symlink(script, into); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		arg, dir string
+		want     bool
+	}{
+		"plain":                  {script, project, true},
+		"project through a link": {filepath.Join(link, "proxy.sh"), project, true},
+		"link as the project":    {script, link, true},
+		"new file through link":  {"-F" + filepath.Join(link, "ssh_config"), project, true},
+		"link into the project":  {into, project, true},
+		"option to a link":       {"--config=" + into, project, true},
+		"socat address":          {"UNIX-CONNECT:" + into, project, true},
+		"dot component":          {filepath.Join(root, ".") + "/./project/x", project, true},
+		"dot dot component":      {filepath.Join(outside, "..", "project", "x"), project, true},
+		"doubled separator":      {root + "//project//x", project, true},
+		"socat address options":  {"UNIX-CONNECT:" + into + ",retry=3", project, true},
+		"list of paths":          {"/usr/bin," + into, project, true},
+		"before an operator":     {"cd " + project + "&&./x", project, true},
+		"before a pipe":          {project + "|sh", project, true},
+		"before a quote":         {"'" + project + "'", project, true},
+		"outside":                {filepath.Join(outside, "x"), project, false},
+		"prefix only":            {project + "2/x", project, false},
+		"not a path":             {"TCP:127.0.0.1:3306", project, false},
+	} {
+		if got := namesPathIn(c.arg, c.dir); got != c.want {
+			t.Errorf("%s: namesPathIn(%q, %q) = %v", name, c.arg, c.dir, got)
+		}
+	}
+	// ssh and others expand ~ themselves, in the console account's home.
+	home, err := os.UserHomeDir()
+	if err == nil && filepath.IsAbs(home) {
+		for _, arg := range []string{"~/x", "-i~/.ssh/k", "IdentityFile=~/.ssh/k"} {
+			if !namesPathIn(arg, home) {
+				t.Errorf("%q: the home is not seen", arg)
+			}
+		}
+	}
+	defer func(f bool) { foldCase = f }(foldCase)
+	foldCase = true
+	if !namesPathIn(strings.ToUpper(script), project) {
+		t.Error("folded case: the project is not seen")
+	}
+	foldCase = false
+	if namesPathIn(strings.ToUpper(script), project) {
+		t.Error("case-sensitive file system: a differently cased path is seen")
 	}
 }

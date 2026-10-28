@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -117,12 +119,17 @@ type Profile struct {
 	TLSKey        string `json:"tls_key,omitempty"`
 	TLSServerName string `json:"tls_server_name,omitempty"`
 	// SSH, when set, is the bastion the profile is reached through.
-	SSH        *SSHProfile `json:"ssh,omitempty"`
-	Port       int         `json:"port"`
-	Tier       Tier        `json:"tier"`
-	Production bool        `json:"production"`
-	Detectors  []string    `json:"detectors"`
-	Limits     Limits      `json:"limits"`
+	SSH *SSHProfile `json:"ssh,omitempty"`
+	// ProxyCommand, when set, is the argv of a command whose stdin and
+	// stdout carry each connection to the database, as OpenSSH's
+	// ProxyCommand: docker exec, kubectl exec, ssh to a socket and so on.
+	// It runs without a shell, as the console account.
+	ProxyCommand []string `json:"proxy_command,omitempty"`
+	Port         int      `json:"port"`
+	Tier         Tier     `json:"tier"`
+	Production   bool     `json:"production"`
+	Detectors    []string `json:"detectors"`
+	Limits       Limits   `json:"limits"`
 	// CredentialsTTL makes the console ask for the secret again (and
 	// reconnect) once the connection is that old; 0 keeps it for the
 	// session. It suits short-lived secrets from a vault.
@@ -250,6 +257,7 @@ type rawProfile struct {
 	TLSKey      string    `toml:"tls_key"`
 	TLSServer   string    `toml:"tls_server_name"`
 	SSH         *rawSSH   `toml:"ssh"`
+	ProxyCmd    []string  `toml:"proxy_command"`
 	Tier        string    `toml:"tier"`
 	Production  bool      `toml:"production"`
 	Detectors   []string  `toml:"detectors"`
@@ -474,6 +482,12 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		}
 		p.SSH = s
 	}
+	if r.ProxyCmd != nil {
+		if err := checkProxyCommand(r.ProxyCmd, p, baseDir, errf); err != nil {
+			return Profile{}, err
+		}
+		p.ProxyCommand = r.ProxyCmd
+	}
 
 	applyDefaults(&p, detectorsSet)
 	// After the defaults: a remote host without tls is verify-full.
@@ -518,4 +532,234 @@ func buildSSH(r rawSSH, p Profile, errf func(string, ...any) error) (*SSHProfile
 		return nil, errf("ssh needs a TCP host; forwarding to a Unix socket is not supported")
 	}
 	return kconfig.ParseSSH(product.P, r, p.Credentials, errf)
+}
+
+// secretArg matches a proxy_command argument that carries a secret inline
+// (--password=x, MYSQL_PWD=x) or announces one in the next argument
+// (--token x).
+var secretArg = regexp.MustCompile(`(?i)(passw(or)?d|pwd|secret|token)([_-]?[a-z]*)?(=|$)`)
+
+// mysqlClient matches the programs whose -pSECRET is a password: the MySQL
+// and MariaDB clients and tools (mysql, mysqldump, mariadb-admin, ...).
+var mysqlClient = regexp.MustCompile(`(?i)^(mysql|mariadb)[a-z_-]*(\.exe)?$`)
+
+// shortPassword reports whether a is a password glued to -p, mysql style
+// (-pSECRET, -p=SECRET). -p is also ssh's and nc's port, so a number there is
+// a secret only once a MySQL client has appeared in the argv; a lone -p, which
+// prompts, carries none.
+func shortPassword(a string, mysql bool) bool {
+	v, ok := strings.CutPrefix(a, "-p")
+	if !ok || v == "" {
+		return false
+	}
+	return mysql || strings.Trim(v, "0123456789") != ""
+}
+
+// checkProxyCommand validates a proxy_command argv. The project (baseDir
+// for a project config), which the agent can write to after the approval,
+// must hold no part of the command: the program must be an absolute path or
+// a name looked up in PATH, and no argument may name a path inside baseDir,
+// wherever it appears in the argument (-F/proj/x, --config=/proj/x). The
+// command runs in an empty directory of its own, so a relative argument
+// does not resolve there either.
+func checkProxyCommand(argv []string, p Profile, baseDir string, errf func(string, ...any) error) error {
+	switch {
+	case p.Engine == EngineSQLite:
+		return errf("proxy_command is not used by sqlite")
+	case strings.HasPrefix(p.Host, "/"):
+		return errf("proxy_command needs a TCP host; a Unix socket is reached directly")
+	case p.SSH != nil:
+		return errf("proxy_command and ssh are exclusive; run ssh inside proxy_command instead")
+	case len(argv) == 0 || argv[0] == "":
+		return errf("proxy_command needs at least the program to run, such as [\"docker\", \"exec\", \"-i\", \"db\", \"nc\", \"127.0.0.1\", \"3306\"]")
+	case !filepath.IsAbs(argv[0]) && strings.ContainsAny(argv[0], `/\`):
+		return errf("proxy_command: the program must be an absolute path or a bare program name looked up in PATH")
+	}
+	mysql := false
+	for i, a := range argv {
+		key := fmt.Sprintf("proxy_command[%d]", i)
+		if err := kconfig.CheckValue(product.P, key, a); err != nil {
+			return errf("%v", err)
+		}
+		mysql = mysql || mysqlClient.MatchString(filepath.Base(filepath.FromSlash(a)))
+		if secretArg.MatchString(a) || shortPassword(a, mysql) {
+			return errf("%s looks like a secret; %s never reads secrets from config files", key, product.P.Name)
+		}
+		if climbs(a) {
+			return errf("%s climbs out of the command's directory with ..; give an absolute path", key)
+		}
+		if expandsHome(a) {
+			return errf("%s holds ~user, a %%-token, a $variable or a command substitution, which the command expands where %s cannot check it; write the path out", key, product.P.Name)
+		}
+		if namesPathIn(a, baseDir) {
+			return errf("%s is inside the project %s, which the agent can rewrite after the approval; install it elsewhere", key, baseDir)
+		}
+	}
+	return nil
+}
+
+// pathDelims end the text before a path inside an argument
+// (--config=/p, UNIX-CONNECT:/p, a,b, "p", @p, a&&p) and a path component.
+const pathDelims = "/\\=:,; \t\n'\"@&|<>(){}!"
+
+// pathStarts returns the parts of arg that may start a path: arg itself,
+// what follows each of pathDelims, and the value glued to a short flag (-Fp).
+func pathStarts(arg string) []string {
+	out := []string{arg}
+	for i := 1; i < len(arg); i++ {
+		if strings.IndexByte(pathDelims, arg[i-1]) >= 0 {
+			out = append(out, arg[i:])
+		}
+	}
+	if len(arg) > 2 && arg[0] == '-' && arg[1] != '-' {
+		out = append(out, arg[2:])
+	}
+	return out
+}
+
+// climbs reports whether arg holds a .. path component: relative to the
+// command's directory, it could reach the project.
+func climbs(arg string) bool {
+	for _, p := range pathStarts(arg) {
+		if p == ".." || (strings.HasPrefix(p, "..") && strings.IndexByte(pathDelims, p[2]) >= 0) {
+			return true
+		}
+	}
+	return false
+}
+
+// expandsHome reports whether arg holds a form the command may expand to a
+// path locksql does not see: ~user, ~+ or ~-, ssh's %-tokens (%d the home,
+// %u the user, ...), $VAR, ${VAR}, $1, $(...) or `...`. A ~ alone or before a
+// separator is the console account's home, which namesPathIn checks.
+func expandsHome(arg string) bool {
+	if strings.ContainsRune(arg, '`') {
+		return true
+	}
+	for i := 0; i+1 < len(arg); i++ {
+		c := arg[i+1]
+		switch arg[i] {
+		case '$':
+			if c != ' ' && c != '\t' {
+				return true
+			}
+		case '%':
+			if unicode.IsLetter(rune(c)) {
+				return true
+			}
+		}
+	}
+	for _, p := range pathStarts(arg) {
+		if len(p) > 1 && p[0] == '~' && (p[1] == '_' || p[1] == '+' || p[1] == '-' || unicode.IsLetter(rune(p[1])) || unicode.IsDigit(rune(p[1]))) {
+			return true
+		}
+	}
+	return false
+}
+
+// foldCase is set where file names are case-insensitive by default, as on
+// macOS and Windows, so that /Project names /project.
+var foldCase = runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+
+// namesPathIn reports whether arg holds dir, or a path below it, as a
+// whole path component. Symbolic links are resolved on both sides: a dir
+// reached through a link, and an argument that is, or lies below, a link
+// into dir, both count.
+func namesPathIn(arg, dir string) bool {
+	if dir == "" || !filepath.IsAbs(dir) {
+		return false
+	}
+	dirs := []string{filepath.Clean(dir)}
+	if r := resolve(dirs[0]); r != dirs[0] {
+		dirs = append(dirs, r)
+	}
+	args := []string{arg}
+	for _, p := range pathsIn(arg) {
+		args = append(args, p)
+		if r := resolve(p); r != p {
+			args = append(args, r)
+		}
+	}
+	for _, a := range args {
+		for _, d := range dirs {
+			if holdsPath(a, d) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// holdsPath reports whether arg holds dir, or a path below it, as a whole
+// path component, folding case where foldCase says so.
+func holdsPath(arg, dir string) bool {
+	arg = filepath.FromSlash(arg)
+	if foldCase {
+		arg, dir = strings.ToLower(arg), strings.ToLower(dir)
+	}
+	for rest := arg; ; {
+		i := strings.Index(rest, dir)
+		if i < 0 {
+			return false
+		}
+		rest = rest[i+len(dir):]
+		if rest == "" || strings.IndexByte(pathDelims, rest[0]) >= 0 {
+			return true
+		}
+	}
+}
+
+// pathsIn returns the absolute paths arg may name, cleaned: from every
+// place in arg where an absolute path starts (--config=/p, -F/p,
+// UNIX-CONNECT:/p, "/p", @/p) or where ~ stands for the console account's
+// home, which ssh and others expand themselves; each also cut at the first
+// character that ends a path in an option (UNIX-CONNECT:/p,retry=3).
+func pathsIn(arg string) []string {
+	home, _ := os.UserHomeDir()
+	var out []string
+	add := func(p string) {
+		out = append(out, filepath.Clean(p))
+		if k := strings.IndexAny(p, strings.Trim(pathDelims, "/\\")); k > 0 && filepath.IsAbs(p[:k]) {
+			out = append(out, filepath.Clean(p[:k]))
+		}
+	}
+	for i := range len(arg) {
+		rest := arg[i:]
+		if filepath.IsAbs(rest) {
+			add(rest)
+		}
+		if after, ok := strings.CutPrefix(rest, "~"); ok && filepath.IsAbs(home) &&
+			(after == "" || after[0] == '/' || after[0] == filepath.Separator) {
+			add(home + after)
+		}
+	}
+	return out
+}
+
+// resolve returns path with its symbolic links evaluated. A path that does
+// not exist yet is resolved through its deepest existing ancestor, where a
+// file created later would land.
+func resolve(path string) string {
+	rest := ""
+	for p := path; ; {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
+	}
+}
+
+// ProxyString renders a proxy_command argv for the approval screens, each
+// argument quoted so that one holding a space cannot read as two.
+func ProxyString(argv []string) string {
+	q := make([]string, len(argv))
+	for i, a := range argv {
+		q[i] = strconv.Quote(a)
+	}
+	return strings.Join(q, " ")
 }

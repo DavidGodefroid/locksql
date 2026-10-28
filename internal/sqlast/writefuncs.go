@@ -60,11 +60,25 @@ func CheckWriteFunctions(d sqlclass.Dialect, sql string) error {
 			bad = refuse(refusal.Function, "function calls through a quoted name or a name with non-ASCII letters are not allowed in a write under write_functions = \"allowlist\"").At(f.Sp.Pos, "")
 		case strings.ContainsAny(written, " \t\n\v\f\r"):
 			bad = refusef(refusal.Function, "%.64s: no blank is allowed between a function name and '(' in a write under write_functions = \"allowlist\" (MySQL then calls the stored function of that name)", strings.ToLower(f.Name)).At(f.Sp.Pos, "")
-		case !funcAllowed(d, f.Name) && !writeFuncs[d][f.Name]:
+		case !funcAllowed(d, f.Name) && !writeFuncAllowed(d, f):
 			bad = refusef(refusal.Function, "function %.64s is not in the allowlist (write_functions = \"allowlist\")", strings.ToLower(f.Name)).At(f.Sp.Pos, "")
 		}
 	})
 	return bad
+}
+
+// writeFuncAllowed reports a write built-in: writeFuncs, or MySQL
+// VALUES(col), the value an INSERT proposed for col, read in ON DUPLICATE
+// KEY UPDATE (elsewhere it is NULL).
+func writeFuncAllowed(d sqlclass.Dialect, f *FuncCall) bool {
+	if writeFuncs[d][f.Name] {
+		return true
+	}
+	if d == sqlclass.MySQL && f.Name == "VALUES" && len(f.Args) == 1 {
+		_, col := f.Args[0].(*ColumnRef)
+		return col
+	}
+	return false
 }
 
 // walkFuncs calls fn on every *FuncCall reachable from v. It walks the

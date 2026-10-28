@@ -25,6 +25,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/product"
+	"github.com/DavidGodefroid/locksql/internal/proxycmd"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 )
 
@@ -143,6 +144,38 @@ func resolveRuleSet(dir string, p config.Profile, approved *config.Policy) (stri
 	}
 	path, err := pii.SetPath(dir, set)
 	return set, path, err
+}
+
+// implicitSharingNotice is one line when profile p, without pii_rules,
+// shares its rule set set by accident: another profile uses it too (a
+// name that differs only by case, or that another profile names in its
+// pii_rules), or p is named "default", the set the former pii.toml
+// became. A profile kept on the migrated default set gets no notice, even
+// when another profile names that set: the migration said so once. All
+// profiles of one console keep their sets in the same directory
+// (rulesDirFor), so the comparison never crosses scopes. "" otherwise.
+func implicitSharingNotice(p config.Profile, set string, all map[string]config.Profile) string {
+	if p.PIIRules != "" || set == pii.DefaultSet && config.RuleSetOf(p) != pii.DefaultSet {
+		// Named on purpose, or kept on the migrated default set, which the
+		// migration notice covered, whoever else uses it.
+		return ""
+	}
+	var with []string
+	for name, q := range all {
+		if name != p.Name && config.RuleSetOf(q) == set {
+			with = append(with, name)
+		}
+	}
+	sort.Strings(with)
+	switch {
+	case len(with) > 0:
+		return fmt.Sprintf("note: profile %s sets no pii_rules and shares the PII rule set %q with %s; set pii_rules in its profile to give it a set of its own, or to %q to share it on purpose",
+			p.Name, set, strings.Join(with, ", "), set)
+	case set == pii.DefaultSet:
+		return fmt.Sprintf("note: profile %s sets no pii_rules and uses the PII rule set %q, which the former pii.toml became and the profiles approved before keep; set pii_rules in its profile to give it a set of its own",
+			p.Name, set)
+	}
+	return ""
 }
 
 // migrateRules moves the legacy pii.toml of dir to the default set, once,
@@ -285,6 +318,9 @@ func Run(ctx context.Context, o Options) error {
 	}
 	if n := legacyRulesNotice(o.Cwd, cfg.ProjectRoot, rulesPath); n != "" {
 		o.IO.Println(safeText(n, false))
+	}
+	if n := implicitSharingNotice(p, ruleSet, cfg.Profiles); n != "" {
+		o.IO.Println(paint.Warn(safeText(n, false)))
 	}
 	// A production profile, loaded or approved before, never runs in an
 	// X11 session: refused before the policy review, so that no X client
@@ -606,6 +642,11 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 			return nil, err
 		}
 	}
+	var proxy *proxycmd.Proxy
+	if len(p.ProxyCommand) > 0 {
+		proxy = proxycmd.New(p.ProxyCommand)
+		dial = proxy.Dial
+	}
 	// Every return without a session closes the tunnel opened for it; a
 	// session takes the tunnel over and closes it with itself.
 	connected := false
@@ -618,6 +659,12 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 		cctx, cancel := context.WithTimeout(ctx, connectTimeout)
 		defer cancel()
 		sess, err := eng.Connect(cctx, prof, secret, dial)
+		if proxy != nil {
+			if err != nil {
+				return nil, withProxyStderr(err, safeText(proxy.Stderr(), false))
+			}
+			return &proxiedSession{Session: sess, program: safeText(p.ProxyCommand[0], false), dbHost: p.Host}, nil
+		}
 		if err != nil || tun == nil {
 			return sess, err
 		}
@@ -824,6 +871,16 @@ func (s *vaultSession) DBUser() string { return s.user }
 // CredentialsExpire is when the session must be replaced by one with a
 // fresh login; zero for never.
 func (s *vaultSession) CredentialsExpire() time.Time { return s.refreshAt }
+
+// ShadowedFunctions passes the lookup on (engine.FunctionShadows).
+func (s *vaultSession) ShadowedFunctions(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.ShadowedFunctions(ctx, s.Session, db, names)
+}
+
+// ShadowedOperators passes the lookup on (engine.FunctionShadows).
+func (s *vaultSession) ShadowedOperators(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.ShadowedOperators(ctx, s.Session, db, names)
+}
 
 // Notices passes on the session's transport notices.
 func (s *vaultSession) Notices() []string {

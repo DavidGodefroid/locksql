@@ -144,6 +144,8 @@ type Analysis struct {
 	// KeyFilters are the non-PII columns compared with = and a literal in
 	// WHERE (the console checks whether one is a unique key).
 	KeyFilters []Source
+	// Funcs are the functions the statement calls, folded, each once.
+	Funcs []string
 }
 
 // RunSQL is the statement with its replacements applied.
@@ -1277,8 +1279,11 @@ func piiNames(p Prov) string {
 
 // call is the provenance of a function call.
 func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
-	if !funcAllowed(an.d, f.Name) && !(an.env.WriteFuncs && writeFuncs[an.d][f.Name]) {
+	if !funcAllowed(an.d, f.Name) && !(an.env.WriteFuncs && writeFuncAllowed(an.d, f)) {
 		return Prov{}, refusef(refusal.Function, "function %s is not in the allowlist", strings.ToLower(f.Name))
+	}
+	if !slices.Contains(an.a.Funcs, f.Name) {
+		an.a.Funcs = append(an.a.Funcs, f.Name)
 	}
 	if err := an.checkSizeArgs(f); err != nil {
 		return Prov{}, err

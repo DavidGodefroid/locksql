@@ -187,3 +187,63 @@ func Versions(name string, def ...string) []string {
 	}
 	return def
 }
+
+// StartUnpublished is StartVariant for a container that publishes no port:
+// its server is reached only from inside it (docker exec). ready runs until
+// it succeeds, typically a client inside the container on 127.0.0.1.
+func StartUnpublished(t testing.TB, variant, image string, env, cmdArgs []string,
+	ready func(Server) error, seed func(Server) error) Server {
+	t.Helper()
+	if !DockerAvailable() {
+		t.Skip("docker is not available")
+	}
+	key := image + "-" + variant
+	mu.Lock()
+	so, ok := servers[key]
+	if !ok {
+		so = &serverOnce{}
+		servers[key] = so
+	}
+	mu.Unlock()
+	so.once.Do(func() { so.srv, so.err = startUnpublished(key, image, env, cmdArgs, ready, seed) })
+	if so.err != nil {
+		t.Fatalf("start %s: %v", key, so.err)
+	}
+	return so.srv
+}
+
+func startUnpublished(key, image string, env, cmdArgs []string, ready, seed func(Server) error) (Server, error) {
+	name := "ls-it-" + strings.NewReplacer(":", "-", "/", "-", ".", "").Replace(key) + "-" + strconv.Itoa(os.Getpid())
+	args := []string{"run", "-d", "--rm", "--name", name}
+	for _, e := range env {
+		args = append(args, "-e", e)
+	}
+	args = append(args, image)
+	args = append(args, cmdArgs...)
+	if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
+		return Server{}, fmt.Errorf("docker run: %v: %s", err, out)
+	}
+	mu.Lock()
+	running = append(running, name)
+	mu.Unlock()
+	srv := Server{Name: name, Image: image, Host: "127.0.0.1"}
+
+	deadline := time.Now().Add(4 * time.Minute)
+	for {
+		err := ready(srv)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			return Server{}, fmt.Errorf("%s did not become ready: %v", image, err)
+		}
+		time.Sleep(time.Second)
+	}
+	if seed != nil {
+		if err := seed(srv); err != nil {
+			return Server{}, fmt.Errorf("seed %s: %v", image, err)
+		}
+	}
+	srv.Started = time.Now()
+	return srv, nil
+}

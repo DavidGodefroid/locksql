@@ -105,6 +105,7 @@ func TestWriteFunctionsAllowlist(t *testing.T) {
 		t.Fatal("a refused statement ran")
 	}
 	h.plan(t, "UPDATE users SET note = concat(lower(note), UUID()) WHERE id = abs(-1)", false)
+	h.plan(t, "INSERT INTO users (id, note) VALUES (9, 'a') ON DUPLICATE KEY UPDATE note = VALUES(note)", false)
 }
 
 func TestWriteFunctionsDefaultDenylist(t *testing.T) {

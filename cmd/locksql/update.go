@@ -27,7 +27,8 @@ import (
 
 // ReleaseCertIdentityRegexp is the certificate identity a release's
 // checksums.txt must be signed with: the release workflow of this
-// repository, run for a version tag. scripts/install.sh is to share it.
+// repository, run for a version tag. scripts/install.sh and the comment
+// in .goreleaser.yaml check the same one (installsh_test.go).
 const ReleaseCertIdentityRegexp = `^https://github\.com/DavidGodefroid/locksql/\.github/workflows/release\.yml@refs/tags/v[0-9]`
 
 // releaseOIDCIssuer is the issuer of that certificate: GitHub Actions.
@@ -207,15 +208,25 @@ func doUpdate(e env, u updateEnv, o updateOpts) int {
 	return exitOK
 }
 
-// packageHint is the refusal for a binary a package manager installed.
+// packageHint is the refusal for a binary a package manager installed. The
+// packages are covered by the signed checksums.txt, like the archives: the
+// commands check the signature and the checksum before installing, and
+// stop at the first failure (&& chaining; the download loop exits a
+// subshell, not the user's shell).
 func packageHint(bin string) string {
-	a := runtime.GOARCH
 	return fmt.Sprintf(`locksql update: %[1]s was installed by a package (deb, rpm or apk): upgrade it with the package manager.
-With V the new version (without its v), for example:
-  Debian, Ubuntu:  curl -fsSLO %[2]s/download/v$V/locksql_${V}_linux_%[3]s.deb && sudo apt install ./locksql_${V}_linux_%[3]s.deb
-  Fedora, RHEL:    sudo dnf install %[2]s/download/v$V/locksql_${V}_linux_%[3]s.rpm
-  Alpine:          curl -fsSLO %[2]s/download/v$V/locksql_${V}_linux_%[3]s.apk && sudo apk add --allow-untrusted ./locksql_${V}_linux_%[3]s.apk
-`, bin, releasesURL, a)
+Download the package, checksums.txt and its signature, check both, then install. With V the new version
+(without its v) and P the package type (deb, rpm or apk), for example V=0.9.0 P=deb:
+  F=locksql_${V}_linux_%[3]s.$P
+  (for f in "$F" checksums.txt checksums.txt.sigstore.json; do curl -fsSLO "%[2]s/download/v$V/$f" || exit 1; done) &&
+  cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '%[4]s' --certificate-oidc-issuer %[5]s checksums.txt &&
+  awk -v f="$F" '$2 == f { n++; print } END { exit !n }' checksums.txt >"$F.sha256" && sha256sum -c "$F.sha256" &&
+  echo "verified: $F"
+then, only after "verified: <package>":
+  Debian, Ubuntu:  sudo apt install "./$F"
+  Fedora, RHEL:    sudo dnf install "./$F"
+  Alpine:          sudo apk add --allow-untrusted "./$F"   (no apk key signs it: the cosign check above does)
+`, bin, releasesURL, runtime.GOARCH, ReleaseCertIdentityRegexp, releaseOIDCIssuer)
 }
 
 // channelHint is the refusal for a binary update may not replace.

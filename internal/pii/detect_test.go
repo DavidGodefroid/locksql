@@ -98,3 +98,35 @@ func TestQuasiNeverAlsoPII(t *testing.T) {
 		t.Error("birth_name (a name) not proposed as PII")
 	}
 }
+
+// Issue #18: logins, handles and bare mail columns are proposed; free text
+// and coordinates are asked as quasi-identifiers; metadata stays out.
+func TestProposeLoginsFreeTextCoordinates(t *testing.T) {
+	col := func(name, typ string) []engine.ColumnInfo {
+		return []engine.ColumnInfo{{DB: "app", Table: "users", Column: name, Type: typ}}
+	}
+	for _, c := range []string{"mail", "e_mail", "e-mail", "login", "username", "nickname", "pseudo", "handle"} {
+		if len(Propose(col(c, "varchar(100)"))) != 1 {
+			t.Errorf("%s: not proposed", c)
+		}
+	}
+	for _, c := range []string{"lat", "lng", "latitude", "longitude", "notes", "comment", "bio"} {
+		if len(Propose(col(c, "text"))) != 0 || len(ProposeQuasi(col(c, "text"))) != 1 {
+			t.Errorf("%s: want a quasi proposal only", c)
+		}
+	}
+	for _, c := range []string{"mail_id", "login_count", "template_name", "file_name"} {
+		if len(Propose(col(c, "varchar(100)")))+len(ProposeQuasi(col(c, "varchar(100)"))) != 0 {
+			t.Errorf("%s: proposed", c)
+		}
+	}
+	// Engines report types in any case (MySQL DATETIME, SQL Server DATETIME2).
+	for _, typ := range []string{"timestamp", "TIMESTAMP", "DATETIME", "Date", "timestamp with time zone", "TIMESTAMPTZ"} {
+		if len(Propose(col("last_login", typ))) != 0 {
+			t.Errorf("last_login %s: proposed", typ)
+		}
+	}
+	if len(Propose(col("login", "VARCHAR(150)"))) != 1 {
+		t.Error("login VARCHAR: not proposed")
+	}
+}
