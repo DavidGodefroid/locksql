@@ -210,16 +210,19 @@ func doUpdate(e env, u updateEnv, o updateOpts) int {
 
 // packageHint is the refusal for a binary a package manager installed. The
 // packages are covered by the signed checksums.txt, like the archives: the
-// commands check the signature and the checksum before installing.
+// commands check the signature and the checksum before installing, and
+// stop at the first failure (&& chaining; the download loop exits a
+// subshell, not the user's shell).
 func packageHint(bin string) string {
 	return fmt.Sprintf(`locksql update: %[1]s was installed by a package (deb, rpm or apk): upgrade it with the package manager.
 Download the package, checksums.txt and its signature, check both, then install. With V the new version
 (without its v) and P the package type (deb, rpm or apk), for example V=0.9.0 P=deb:
   F=locksql_${V}_linux_%[3]s.$P
-  for f in "$F" checksums.txt checksums.txt.sigstore.json; do curl -fsSLO "%[2]s/download/v$V/$f" || break; done
-  cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '%[4]s' --certificate-oidc-issuer %[5]s checksums.txt
-  grep "  $F\$" checksums.txt | sha256sum -c -
-then:
+  (for f in "$F" checksums.txt checksums.txt.sigstore.json; do curl -fsSLO "%[2]s/download/v$V/$f" || exit 1; done) &&
+  cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '%[4]s' --certificate-oidc-issuer %[5]s checksums.txt &&
+  awk -v f="$F" '$2 == f' checksums.txt | sha256sum -c - &&
+  echo "verified: $F"
+then, only after "verified: <package>":
   Debian, Ubuntu:  sudo apt install "./$F"
   Fedora, RHEL:    sudo dnf install "./$F"
   Alpine:          sudo apk add --allow-untrusted "./$F"   (no apk key signs it: the cosign check above does)
