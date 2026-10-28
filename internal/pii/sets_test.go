@@ -144,3 +144,23 @@ func mustLoad(t *testing.T, path string) Rules {
 	}
 	return r
 }
+
+// ENOENT is only the other console's move when the default set is there
+// afterwards; otherwise the error stands.
+func TestMigrateLegacyVanished(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, LegacyFile), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := rename
+	t.Cleanup(func() { rename = old })
+	rename = func(from, to string) error {
+		if err := os.Remove(from); err != nil { // deleted, not moved
+			return err
+		}
+		return os.Rename(from, to)
+	}
+	if _, _, err := MigrateLegacy(dir); err == nil {
+		t.Fatal("vanished pii.toml without a default set: no error")
+	}
+}

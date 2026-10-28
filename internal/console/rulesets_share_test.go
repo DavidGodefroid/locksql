@@ -22,6 +22,7 @@ func TestImplicitSharingNotice(t *testing.T) {
 		{"named default", []config.Profile{prof("default", "")}, "default"},
 		{"another's explicit set", []config.Profile{prof("shop", ""), prof("uat", "shop")}, "uat"},
 		{"explicit default", []config.Profile{prof("uat", "default")}, ""},
+		{"migrated next to explicit default", []config.Profile{prof("uat", ""), prof("prod", "default")}, ""},
 	}
 	for _, c := range cases {
 		all := map[string]config.Profile{}
@@ -30,6 +31,9 @@ func TestImplicitSharingNotice(t *testing.T) {
 		}
 		p := c.profiles[0]
 		set := config.RuleSetOf(p)
+		if c.name == "migrated next to explicit default" {
+			set = "default" // kept on the migrated set by its approval
+		}
 		got := implicitSharingNotice(p, set, all)
 		if c.name == "alone" {
 			// Kept on the migrated default set: the migration notice said so.

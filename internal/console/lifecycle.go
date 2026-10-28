@@ -138,10 +138,14 @@ func resolveRuleSet(dir string, p config.Profile, approved *config.Policy) (stri
 // shares its rule set set by accident: another profile uses it too (a
 // name that differs only by case, or that another profile names in its
 // pii_rules), or p is named "default", the set the former pii.toml
-// became. A profile kept on the migrated default set gets no notice: the
-// migration said so once. "" otherwise.
+// became. A profile kept on the migrated default set gets no notice, even
+// when another profile names that set: the migration said so once. All
+// profiles of one console keep their sets in the same directory
+// (rulesDirFor), so the comparison never crosses scopes. "" otherwise.
 func implicitSharingNotice(p config.Profile, set string, all map[string]config.Profile) string {
-	if p.PIIRules != "" {
+	if p.PIIRules != "" || set == pii.DefaultSet && config.RuleSetOf(p) != pii.DefaultSet {
+		// Named on purpose, or kept on the migrated default set, which the
+		// migration notice covered, whoever else uses it.
 		return ""
 	}
 	var with []string
@@ -155,7 +159,7 @@ func implicitSharingNotice(p config.Profile, set string, all map[string]config.P
 	case len(with) > 0:
 		return fmt.Sprintf("note: profile %s sets no pii_rules and shares the PII rule set %q with %s; set pii_rules in its profile to give it a set of its own, or to %q to share it on purpose",
 			p.Name, set, strings.Join(with, ", "), set)
-	case set == pii.DefaultSet && config.RuleSetOf(p) == pii.DefaultSet:
+	case set == pii.DefaultSet:
 		return fmt.Sprintf("note: profile %s sets no pii_rules and uses the PII rule set %q, which the former pii.toml became and the profiles approved before keep; set pii_rules in its profile to give it a set of its own",
 			p.Name, set)
 	}

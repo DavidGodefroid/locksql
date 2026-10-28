@@ -85,8 +85,11 @@ func MigrateLegacy(dir string) (from, to string, err error) {
 	}
 	if err := rename(legacy, def); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			// Another console starting at the same time moved it first.
-			return "", "", nil
+			// Another console starting at the same time moved it first,
+			// if the default set is there now.
+			if st, serr := os.Lstat(def); serr == nil && st.Mode().IsRegular() {
+				return "", "", nil
+			}
 		}
 		return "", "", fmt.Errorf("pii: moving %s to %s: %w", legacy, def, err)
 	}
