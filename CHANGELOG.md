@@ -21,7 +21,7 @@ This file records the changes a user or an agent has to know about.
   `handle` for masking, and asks about free-text columns (`notes`,
   `comment`, `bio`, `remarks`, ...) and coordinates (`lat`, `lng`,
   `latitude`, `longitude`) as quasi-identifiers (`[y/N]`). `mail_id`,
-  `login_count` and other metadata columns stay out (lockkit#21).
+  `login_count` and other metadata columns stay out (lockkit#21, v0.2.1).
 
 ### Changed
 
