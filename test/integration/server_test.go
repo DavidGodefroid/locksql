@@ -310,7 +310,7 @@ func TestPostgresPasswordAuth(t *testing.T) {
 // numbers. The agent sees none of them.
 func TestDetectorsUnicodeAndFloatPG(t *testing.T) {
 	const q = "SELECT 4111111111111111::float8 AS f, 'josé.dupont@exämple.de' AS e," +
-		" E'BE68\\u00a05390\\u00a00754\\u00a07034' AS i, E'0475\\u202f12\\u202f34\\u202f56' AS p, 1.5::float8 AS h"
+		" E'BE68\\u00a05390\\u00a00754\\u00a07034' AS i, E'0475\\u202f12\\u202f34\\u202f56' AS p, 1.5::float8 AS h LIMIT 1"
 	for _, v := range pgVersions() {
 		t.Run("postgres:"+v, func(t *testing.T) {
 			srv := startPostgres(t, v)
