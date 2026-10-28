@@ -92,6 +92,10 @@ This file records the changes a user or an agent has to know about.
   `pii/default.toml` (the set `default`), with a one-time notice; profiles
   approved before keep using it until they get a `pii_rules` key, and any
   new profile starts with its own, empty set.
+  The console warns at start when a profile without `pii_rules` shares
+  its set by accident (names that differ only by case, a name another
+  profile uses as its `pii_rules`, or a profile named `default`). Two
+  consoles starting together no longer fail on the migration.
 - **Docker is the only documented deployment.** The README Quick start and
   Install, `docs/usage.md` and the site now describe only the Docker setup:
   build the image, `locksql init`, `locksql profile add`, `locksql doctor

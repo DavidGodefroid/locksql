@@ -146,6 +146,38 @@ func resolveRuleSet(dir string, p config.Profile, approved *config.Policy) (stri
 	return set, path, err
 }
 
+// implicitSharingNotice is one line when profile p, without pii_rules,
+// shares its rule set set by accident: another profile uses it too (a
+// name that differs only by case, or that another profile names in its
+// pii_rules), or p is named "default", the set the former pii.toml
+// became. A profile kept on the migrated default set gets no notice, even
+// when another profile names that set: the migration said so once. All
+// profiles of one console keep their sets in the same directory
+// (rulesDirFor), so the comparison never crosses scopes. "" otherwise.
+func implicitSharingNotice(p config.Profile, set string, all map[string]config.Profile) string {
+	if p.PIIRules != "" || set == pii.DefaultSet && config.RuleSetOf(p) != pii.DefaultSet {
+		// Named on purpose, or kept on the migrated default set, which the
+		// migration notice covered, whoever else uses it.
+		return ""
+	}
+	var with []string
+	for name, q := range all {
+		if name != p.Name && config.RuleSetOf(q) == set {
+			with = append(with, name)
+		}
+	}
+	sort.Strings(with)
+	switch {
+	case len(with) > 0:
+		return fmt.Sprintf("note: profile %s sets no pii_rules and shares the PII rule set %q with %s; set pii_rules in its profile to give it a set of its own, or to %q to share it on purpose",
+			p.Name, set, strings.Join(with, ", "), set)
+	case set == pii.DefaultSet:
+		return fmt.Sprintf("note: profile %s sets no pii_rules and uses the PII rule set %q, which the former pii.toml became and the profiles approved before keep; set pii_rules in its profile to give it a set of its own",
+			p.Name, set)
+	}
+	return ""
+}
+
 // migrateRules moves the legacy pii.toml of dir to the default set, once,
 // and returns the notice to print then; "" when nothing moved.
 func migrateRules(dir string) (string, error) {
@@ -286,6 +318,9 @@ func Run(ctx context.Context, o Options) error {
 	}
 	if n := legacyRulesNotice(o.Cwd, cfg.ProjectRoot, rulesPath); n != "" {
 		o.IO.Println(safeText(n, false))
+	}
+	if n := implicitSharingNotice(p, ruleSet, cfg.Profiles); n != "" {
+		o.IO.Println(paint.Warn(safeText(n, false)))
 	}
 	// A production profile, loaded or approved before, never runs in an
 	// X11 session: refused before the policy review, so that no X client

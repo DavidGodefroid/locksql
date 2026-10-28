@@ -111,3 +111,56 @@ func TestSetsDirLinkRefused(t *testing.T) {
 		t.Fatalf("written through the link: %v", entries)
 	}
 }
+
+// Two consoles starting together both see pii.toml; the one that renames
+// second finds it gone. That is no error: the other one moved it.
+func TestMigrateLegacyRace(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, LegacyFile), []byte("[[mask]]\ncolumn = \"a.b.c\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := rename
+	t.Cleanup(func() { rename = old })
+	rename = func(from, to string) error {
+		if err := os.Rename(from, to); err != nil { // the other console
+			return err
+		}
+		return os.Rename(from, to)
+	}
+	from, to, err := MigrateLegacy(dir)
+	if err != nil || from != "" || to != "" {
+		t.Fatalf("lost race: %q %q %v", from, to, err)
+	}
+	if r := mustLoad(t, filepath.Join(dir, SetsDir, DefaultSet+".toml")); len(r.Mask) != 1 {
+		t.Fatalf("default set = %+v", r)
+	}
+}
+
+func mustLoad(t *testing.T, path string) Rules {
+	t.Helper()
+	r, err := LoadRulesFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// ENOENT is only the other console's move when the default set is there
+// afterwards; otherwise the error stands.
+func TestMigrateLegacyVanished(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, LegacyFile), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := rename
+	t.Cleanup(func() { rename = old })
+	rename = func(from, to string) error {
+		if err := os.Remove(from); err != nil { // deleted, not moved
+			return err
+		}
+		return os.Rename(from, to)
+	}
+	if _, _, err := MigrateLegacy(dir); err == nil {
+		t.Fatal("vanished pii.toml without a default set: no error")
+	}
+}

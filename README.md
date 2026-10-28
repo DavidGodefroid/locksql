@@ -506,7 +506,10 @@ production = true
 ```
 
 `locksql pii` and `:pii` act on the set of the profile in use, and the
-approval screen shows the set next to the profile. `pii_rules` is read at
+approval screen shows the set next to the profile. The console warns at start
+when a profile without `pii_rules` shares its set by accident: with a
+profile whose name differs only by case, with a profile whose `pii_rules`
+names it, or because it is named `default`. `pii_rules` is read at
 start; pointing a profile at another set is a loosening, approved again at
 the next start.
 
