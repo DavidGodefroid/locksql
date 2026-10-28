@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// On Windows every command but version and help refuses and names WSL2.
+// On Windows every command but version and help refuses and names Docker.
 func TestWindowsRefusesCommands(t *testing.T) {
 	saved := hostOS
 	hostOS = "windows"
@@ -16,7 +16,7 @@ func TestWindowsRefusesCommands(t *testing.T) {
 		if code := run(args, &out, &errOut); code != exitFail {
 			t.Errorf("%v: exit %d, want %d", args, code, exitFail)
 		}
-		if !strings.Contains(errOut.String(), "WSL2") || out.Len() != 0 {
+		if !strings.Contains(errOut.String(), "docs/docker.md") || out.Len() != 0 {
 			t.Errorf("%v: stdout %q stderr %q", args, out.String(), errOut.String())
 		}
 	}

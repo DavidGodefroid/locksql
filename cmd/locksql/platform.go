@@ -9,10 +9,10 @@ var hostOS = runtime.GOOS
 // Windows. The module builds there so that its CI runs the unit tests, but
 // the console's separation from the agent relies on Unix accounts, socket
 // peer credentials and terminals, which a native Windows build does not
-// have: locksql runs inside WSL2 instead.
-const windowsRefusal = "locksql: native Windows is not supported: run locksql inside WSL2 " +
-	"(console and agent in WSL, or a Windows agent launching `wsl locksql mcp`); " +
-	"see docs/usage.md, section Windows (WSL2)"
+// have: locksql runs in Docker instead.
+const windowsRefusal = "locksql: native Windows is not supported: run locksql in Docker " +
+	"(Docker Desktop: the console and the agent's MCP server in Linux containers); " +
+	"see docs/docker.md"
 
 // platformAllows reports whether cmd may run on this platform.
 func platformAllows(cmd string) bool {

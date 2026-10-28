@@ -15,17 +15,16 @@ weaknesses as described in [SECURITY.md](../SECURITY.md).
   commands and the MCP server.
 - **Other local users** are not trusted.
 
-locksql supports Linux and macOS only; on Windows it runs inside WSL2, a
-Linux system, where the agent must run too for the boundary below to hold
-(see [Windows (WSL2)](usage.md#windows-wsl2)). Where the agent runs depends
-on the mode:
+locksql runs in Linux containers, the documented setup being Docker
+([docker.md](docker.md)); the binary refuses to run on native Windows.
+Where the agent runs depends on the mode:
 
 | Mode | Console runs as | Agent runs as | Boundary |
 |---|---|---|---|
-| Separated (`sudo locksql install`, `/etc/locksql/system.toml`) | the `locksql` account, in its own login session | its own account, member of `locksql-clients` | the kernel: separate uids, peer credentials on the socket, a root-owned binary and system file |
+| Separated (the Docker image, `/etc/locksql/system.toml`) | the `locksql` account (uid 10001), in its own container | `agent` (uid 10002), member of `locksql-clients`, in another container sharing only the socket volume | the kernel: separate uids, peer credentials on the socket, a root-owned binary and system file |
 
 Separation is mandatory. Without `system.toml` the console refuses to start
-and names `locksql doctor` and `sudo locksql install`; `doctor` reports
+and names `locksql doctor`; `doctor` reports
 same-user mode as a failure. Same-user threats (an agent reading the
 console's terminal, typing into it through TIOCSTI, attaching with ptrace or
 reading the keychain session) are therefore excluded, not mitigated by a
@@ -33,7 +32,9 @@ warning.
 
 The agent's account is assumed to have no password-less `sudo`
 (`locksql doctor` fails otherwise) and no other way to become `locksql` or
-root.
+root. Access to the Docker daemon is such a way: an agent that can run
+`docker` commands can attach to the console's container
+([What Docker does and does not separate](docker.md#what-docker-does-and-does-not-separate)).
 
 ## Principles
 
@@ -59,7 +60,7 @@ root.
 | The agent loosens its own policy | The socket protocol has no method that loosens policy. Config and PII file edits are detected by a policy fingerprint diff; a loosening is held until the human confirms it. The approved policy is stored outside the repository. |
 | Credential leak | Secrets exist only in console memory or the OS keychain (the console account's, in separated mode). They never go through argv, environment, files, logs, the socket or error messages (errors are sanitised). Config keys named like secrets and DSNs with passwords are refused. Core dumps are disabled (`RLIMIT_CORE=0`, and `PR_SET_DUMPABLE=0` on Linux); when that fails, the console warns, and refuses to open a production profile. `credentials_ttl` bounds how long one secret stays in use, and `limits.idle_timeout` and `limits.max_session` end an idle or long session, with its connection and secret (raising either is a loosening). `doctor` flags a secret left in the agent's keychain. With `credentials = "vault"` the login is read from Vault by the console account at every connection and kept in memory only; the Vault token is asked of the human at start, kept in console memory for the session and handed to the `vault` CLI in its environment only (never argv or disk), and `doctor` fails when the agent's account holds one. |
 | Statement smuggling | The classifier refuses several statements, comments, variables, bind parameters and unbalanced quotes, and classifies by keywords outside literals per dialect. Reads are limited to `SELECT`, `WITH ... SELECT` and `EXPLAIN SELECT` and parsed in full by a fail-closed parser: unknown syntax is refused. Multi-statements are off in every driver; PostgreSQL uses the extended protocol only. Tier `read` is also enforced by a read-only session and transaction on the server. |
-| Dangerous functions and statements | Reads may call only allowlisted functions (`internal/sqlast/funcs.go`); schema-qualified (possibly user-defined) functions and system schemas and relations are refused. At every tier, statements and constructs on a denylist are refused: file and OS access, engine escape hatches (`ATTACH`, `load_extension`, `dblink`), SQLite raw storage tables (`sqlite_dbpage`, `dbstat`), sleeps, benchmarks, advisory locks, `FOR UPDATE`, session tampering (`SET ROLE`, `set_config`, guarded `SET` targets), statements carrying credentials, server, replication, backup and statistics control functions, and DDL that reaches the server's filesystem, another server or native code (`DATA DIRECTORY`, remote storage engines, foreign servers and tables, tablespaces, `LANGUAGE C` and untrusted languages, SQLite file modules). Above tier `read` this denylist is the only function check, and it is best-effort: user-defined functions and extensions can be named anything (see the limitations); the privilege audit and the human approval are the controls there. On PostgreSQL a read's transaction is rolled back, so a `SET` smuggled through a function it calls does not outlive the statement. |
+| Dangerous functions and statements | Reads may call only allowlisted functions (`internal/sqlast/funcs.go`); schema-qualified (possibly user-defined) functions and system schemas and relations are refused. At every tier, statements and constructs on a denylist are refused: file and OS access, engine escape hatches (`ATTACH`, `load_extension`, `dblink`), SQLite raw storage tables (`sqlite_dbpage`, `dbstat`), sleeps, benchmarks, advisory locks, `FOR UPDATE`, session tampering (`SET ROLE`, `set_config`, guarded `SET` targets), statements carrying credentials, server, replication, backup and statistics control functions, and DDL that reaches the server's filesystem, another server or native code (`DATA DIRECTORY`, remote storage engines, foreign servers and tables, tablespaces, `LANGUAGE C` and untrusted languages, SQLite file modules). Above tier `read` this denylist is the only function check, and it is best-effort: user-defined functions and extensions can be named anything (see the limitations); the privilege audit and the human approval are the controls there. A profile with `write_functions = "allowlist"` applies the read allowlist to every function call in `INSERT`, `REPLACE`, `UPDATE` and `DELETE` and refuses `CALL`, `MERGE` and the writes the parser does not read; turning it off is a policy loosening. On PostgreSQL a read's transaction is rolled back, so a `SET` smuggled through a function it calls does not outlive the statement. |
 | Server overload | READ statements need `LIMIT n <= max_rows`; `EXPLAIN` estimates the rows examined and refuses heavy plans, and `explain_cost_refuse` caps the engine's total cost (not on SQLite); k-anonymity counts are weighed too; under a PII filter the verdict is decided at run time: a REFUSE verdict is shown to the human on the console before the agent is told, and the agent only learns that the weight check refused; a server-side timeout plus a client-side cancel (on MySQL the server-side `max_execution_time` covers SELECT only: a write or DDL is ended by the client-side `KILL QUERY` at the deadline); one request at a time. A recursive CTE gets a WARN on PostgreSQL and SQLite, whose planners mark it and can only guess how often it iterates. The parser bounds the bytes a statement can build from literals and size functions (65 536 per value, at most 64 column-width inputs, through every CTE and derived-table layer); `string_agg`-like aggregates over large stored columns remain bounded only by `statement_timeout`. |
 | PII exposure | Column rules proposed from the schema at every start; per-rule mask modes (`redact` by default); quasi-identifiers proposed apart and masked only on acceptance; value detectors with checksums; unmasking is off unless the human allows it in the console (`--allow-unmask` at start, `:unmask` while it runs), then per query, shown in red and never auto-approved. A profile that names a `database` serves that database only, the one its scan covers, so another database the account can see is never read without rules. |
 | Alias or expression bypass | Every output column of a read is resolved to its base source columns through aliases, functions, subqueries, CTEs (recursive ones by fixpoint), set operations, joins and `*`, and masked on that source, not on its label. Expressions and functions over PII columns are refused; aggregates other than `COUNT`, `MIN` and `MAX` are redacted. The result's column count and labels must match the analysis or the result is dropped; the engine's origin metadata is a second check. |
@@ -191,6 +192,9 @@ it append-only for the console account too.
   well-known escape hatches; what it misses is left to the account's
   privileges, which the console audits when it connects, and to the human,
   who approves every statement above tier `read` as written.
+  `write_functions = "allowlist"` closes the gap for writes, not for DDL: a
+  DDL tier can create functions, triggers and column defaults that later
+  writes run.
 - **Same-user mode is excluded.** The console refuses to start without a
   separated setup, so an agent running as the console's account (reading its
   keychain session, attaching with ptrace, typing into its terminal) is not a

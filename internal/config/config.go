@@ -129,7 +129,17 @@ type Profile struct {
 	// VaultPath is the Vault path read for the login when Credentials is
 	// "vault", such as "database/creds/app-readonly".
 	VaultPath string `json:"vault_path,omitempty"`
+	// WriteFunctions is "" (the denylist of every class) or
+	// WriteFunctionsAllowlist: writes may call allowlisted functions only.
+	WriteFunctions string `json:"write_functions,omitempty"`
 }
+
+// Values of write_functions. The default, denylist, is stored as "" so that
+// policies approved before the setting existed keep their fingerprint.
+const (
+	WriteFunctionsDenylist  = "denylist"
+	WriteFunctionsAllowlist = "allowlist"
+)
 
 // Config is the merged set of profiles visible from a working directory.
 type Config struct {
@@ -224,6 +234,7 @@ type rawProfile struct {
 	// CredentialsTTL is a duration ("20m", "1h").
 	CredentialsTTL string `toml:"credentials_ttl"`
 	VaultPath      string `toml:"vault_path"`
+	WriteFunctions string `toml:"write_functions"`
 }
 
 type rawFile struct {
@@ -364,6 +375,13 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		}
 	default:
 		return Profile{}, errf("unknown credentials mode %q (want ask, keychain or vault)", p.Credentials)
+	}
+	switch r.WriteFunctions {
+	case "", WriteFunctionsDenylist:
+	case WriteFunctionsAllowlist:
+		p.WriteFunctions = WriteFunctionsAllowlist
+	default:
+		return Profile{}, errf("unknown write_functions mode %q (want denylist or allowlist)", r.WriteFunctions)
 	}
 	for _, d := range p.Detectors {
 		if !knownDetectors[d] {

@@ -396,6 +396,15 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	if r != nil {
 		return *r
 	}
+	if s.profile.WriteFunctions == config.WriteFunctionsAllowlist {
+		r, err := s.strictWriteFunctions(ctx, sess, db, st)
+		if err != nil {
+			return s.failed(req.ID, "plan", err)
+		}
+		if r != nil {
+			return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", p.SQL, shifted(r, base))
+		}
+	}
 	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String(), src: p.SQL, base: base}
 	if !p.Unmask && st.Class != sqlclass.Read {
 		// Before the run: a write's RETURNING list or a data-modifying
