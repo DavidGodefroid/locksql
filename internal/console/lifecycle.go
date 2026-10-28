@@ -106,13 +106,42 @@ func (st *starter) audit(rec audit.Record) {
 	}
 }
 
-// rulesPathFor is the PII rules file: in the project when there is one,
-// else next to the user config.
-func rulesPathFor(projectRoot, userConfigPath string) string {
+// rulesDirFor is the directory of the PII rule sets: the project's
+// .locksql when there is one, else the user config directory.
+func rulesDirFor(projectRoot, userConfigPath string) string {
 	if projectRoot != "" {
-		return filepath.Join(projectRoot, pii.RulesFile)
+		return filepath.Join(projectRoot, filepath.Dir(pii.RulesFile))
 	}
-	return filepath.Join(filepath.Dir(userConfigPath), filepath.Base(pii.RulesFile))
+	return filepath.Dir(userConfigPath)
+}
+
+// resolveRuleSet is the PII rule set of profile p and its file in dir.
+// pii_rules wins; without it, a profile approved before named sets, or
+// approved on the default set since, keeps the default set (the migrated
+// pii.toml) while that set exists; any other profile gets its own set,
+// named after it. approved is nil when nothing was approved yet.
+func resolveRuleSet(dir string, p config.Profile, approved *config.Policy) (string, string, error) {
+	if err := pii.CheckSetsDir(dir); err != nil {
+		return "", "", err
+	}
+	set := config.RuleSetOf(p)
+	if p.PIIRules == "" && approved != nil && pii.SetExists(dir, pii.DefaultSet) {
+		if a := approved.Profile.PIIRules; a == "" || a == pii.DefaultSet {
+			set = pii.DefaultSet
+		}
+	}
+	path, err := pii.SetPath(dir, set)
+	return set, path, err
+}
+
+// migrateRules moves the legacy pii.toml of dir to the default set, once,
+// and returns the notice to print then; "" when nothing moved.
+func migrateRules(dir string) (string, error) {
+	from, to, err := pii.MigrateLegacy(dir)
+	if err != nil || from == "" {
+		return "", err
+	}
+	return fmt.Sprintf("note: PII rules are now kept in named sets; %s moved to the set %q (%s). The profiles approved before keep using it until you give them pii_rules = \"<set>\"; any other profile uses a set named after it.", from, pii.DefaultSet, to), nil
 }
 
 // legacyRulesNotice is one line when, outside a project, cwd holds a
@@ -137,8 +166,10 @@ func legacyRulesNotice(cwd, projectRoot, rulesPath string) string {
 var newIsolationEnv = realIsolationEnv
 
 // policyFromFiles reads the current policy of profile from the config
-// found from cwd and from the PII rules at rulesPath, mask modes included.
-func policyFromFiles(cwd, profile, rulesPath string) (config.Policy, error) {
+// found from cwd and from the PII rule set at rulesPath, mask modes
+// included. set names that rule set: it is resolved once, at start, so a
+// pii_rules change applies at the next start.
+func policyFromFiles(cwd, profile, rulesPath, set string) (config.Policy, error) {
 	c, err := config.Load(cwd)
 	if err != nil {
 		return config.Policy{}, err
@@ -151,6 +182,7 @@ func policyFromFiles(cwd, profile, rulesPath string) (config.Policy, error) {
 	if err != nil {
 		return config.Policy{}, err
 	}
+	cp.PIIRules = set
 	return config.NewPolicy(cp, r.Mask, r.Allow).WithModes(r.Modes), nil
 }
 
@@ -223,11 +255,26 @@ func Run(ctx context.Context, o Options) error {
 			return err
 		}
 	}
-	rulesPath := rulesPathFor(cfg.ProjectRoot, ucp)
+	rulesDir := rulesDirFor(cfg.ProjectRoot, ucp)
+	key := config.ApprovedKey(cfg.ProjectRoot, p.Name)
+	n, err := migrateRules(rulesDir)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrConfig, err)
+	}
+	if n != "" {
+		o.IO.Println(safeText(n, false))
+	}
+	var prev *config.Policy
+	if ap, err := config.LoadApproved(o.StateDir, key); err == nil {
+		prev = ap // none yet, or unreadable: startPolicy reports it
+	}
+	ruleSet, rulesPath, err := resolveRuleSet(rulesDir, p, prev)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrConfig, err)
+	}
 	if n := legacyRulesNotice(o.Cwd, cfg.ProjectRoot, rulesPath); n != "" {
 		o.IO.Println(safeText(n, false))
 	}
-	key := config.ApprovedKey(cfg.ProjectRoot, p.Name)
 	// A production profile, loaded or approved before, never runs in an
 	// X11 session: refused before the policy review, so that no X client
 	// can answer it and no approval is written.
@@ -251,7 +298,7 @@ func Run(ctx context.Context, o Options) error {
 	st := &starter{o: o, io: o.IO, log: log, profile: p, approver: appr}
 
 	loadPolicy := func() (config.Policy, error) {
-		return policyFromFiles(o.Cwd, o.Profile, rulesPath)
+		return policyFromFiles(o.Cwd, o.Profile, rulesPath, ruleSet)
 	}
 	cur, err := loadPolicy()
 	if err != nil {
@@ -266,6 +313,14 @@ func Run(ctx context.Context, o Options) error {
 	if err := st.checkLockedOut(); err != nil {
 		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
 		return err
+	}
+	if approved.Profile.PIIRules == "" {
+		// Approved before named sets: record the set in force, so that a
+		// later switch is shown as one.
+		approved.Profile.PIIRules = ruleSet
+		if err := config.SaveApproved(o.StateDir, key, approved); err != nil {
+			return err
+		}
 	}
 	p = approved.Profile
 	st.profile = p
@@ -301,7 +356,7 @@ func Run(ctx context.Context, o Options) error {
 	}
 
 	// 3. Host (confirmed with the policy) and user.
-	o.IO.Println(paint.OK(fmt.Sprintf("profile %s · %s %s %s", paint.Bold(p.Name), p.Engine, st.where(), paint.Dim("(approved policy)"))))
+	o.IO.Println(paint.OK(fmt.Sprintf("profile %s · %s %s · PII rules %q %s", paint.Bold(p.Name), p.Engine, st.where(), p.PIIRules, paint.Dim("(approved policy)"))))
 	st.user = p.User
 	// With credentials = "vault" the user comes with the login (connect).
 	if st.user == "" && p.Engine != config.EngineSQLite && p.Credentials != config.CredentialsVault {

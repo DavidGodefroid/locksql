@@ -75,8 +75,9 @@ type Options struct {
 type ServerConfig struct {
 	// Policy is the approved policy the server enforces.
 	Policy config.Policy
-	// RulesPath is the PII rules file: <project>/.locksql/pii.toml, or
-	// pii.toml in the user config directory outside a project.
+	// RulesPath is the file of the profile's PII rule set:
+	// <project>/.locksql/pii/<set>.toml, or pii/<set>.toml in the user
+	// config directory outside a project.
 	RulesPath string
 	// StateDir and ApprovedKey locate the approved policy file.
 	StateDir    string

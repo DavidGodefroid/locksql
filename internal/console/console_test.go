@@ -1192,7 +1192,7 @@ func TestPolicyFromFilesKeepsMaskModes(t *testing.T) {
 	writeProjectConfig(t, root, 100)
 	rulesPath := filepath.Join(root, pii.RulesFile)
 	writeRules(t, root, "[[mask]]\ncolumn = \"app.users.email\"\nmode = \"partial\"\n")
-	load := func() (config.Policy, error) { return policyFromFiles(root, "uat", rulesPath) }
+	load := func() (config.Policy, error) { return policyFromFiles(root, "uat", rulesPath, "uat") }
 	cur, err := load()
 	if err != nil {
 		t.Fatal(err)
