@@ -177,7 +177,15 @@ with it without the counts.
 
 ## The rules and where they come from
 
-Rules live in `.locksql/pii.toml` (`pii.Rules`): `[[mask]]` patterns
+Rules live in named rule sets (`pii.Rules`), one file per set:
+`pii/<set>.toml` next to the config (`pii.SetPath`). A profile's set is its
+`pii_rules` key, by default its own name in lower case
+(`config.RuleSetOf`); the console resolves it once at start
+(`console.resolveRuleSet`) and stores it in the approved policy
+(`Profile.PIIRules`), so `config.Diff` reports a switch of set as a
+loosening. The legacy single `pii.toml` is moved once to the set `default`
+(`pii.MigrateLegacy`), and the profiles approved before keep that set until
+they name one. A set file holds `[[mask]]` patterns
 `db.table.column` (any segment may be `*`, or a name with a leading or
 trailing `*` such as `*email*`) with an optional mode, and
 `[[allow]]` patterns that beat every mask. At every start the console
