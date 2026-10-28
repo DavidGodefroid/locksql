@@ -25,6 +25,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/product"
+	"github.com/DavidGodefroid/locksql/internal/proxycmd"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 )
 
@@ -539,6 +540,11 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 			return nil, err
 		}
 	}
+	var proxy *proxycmd.Proxy
+	if len(p.ProxyCommand) > 0 {
+		proxy = proxycmd.New(p.ProxyCommand)
+		dial = proxy.Dial
+	}
 	// Every return without a session closes the tunnel opened for it; a
 	// session takes the tunnel over and closes it with itself.
 	connected := false
@@ -551,6 +557,12 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 		cctx, cancel := context.WithTimeout(ctx, connectTimeout)
 		defer cancel()
 		sess, err := eng.Connect(cctx, prof, secret, dial)
+		if proxy != nil {
+			if err != nil {
+				return nil, withProxyStderr(err, safeText(proxy.Stderr(), false))
+			}
+			return &proxiedSession{Session: sess, program: safeText(p.ProxyCommand[0], false), dbHost: p.Host}, nil
+		}
 		if err != nil || tun == nil {
 			return sess, err
 		}

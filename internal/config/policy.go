@@ -93,7 +93,7 @@ func Fingerprint(p Policy) string { return kconfig.Fingerprint(canonical(p)) }
 // rule or detector, an added allow rule, any change of engine, host, port,
 // path, database or user, and a credentials mode other than ask, a weaker
 // tls mode, any change of tls_ca, tls_cert, tls_key or tls_server_name and
-// any change of the ssh table.
+// any change of the ssh table or of proxy_command.
 func Diff(approved, current Policy) []Change {
 	a, c := canonical(approved), canonical(current)
 	ap, cp := a.Profile, c.Profile
@@ -148,6 +148,10 @@ func Diff(approved, current Policy) []Change {
 			out = append(out, Change{Field: "ssh.credentials", Old: as.Credentials, New: cs.Credentials, Loosens: cs.Credentials != CredentialsAsk})
 		}
 	}
+
+	// Another command reaches the database another way, as the console
+	// account: every change loosens.
+	same("proxy_command", ProxyString(ap.ProxyCommand), ProxyString(cp.ProxyCommand))
 
 	limit := func(field string, o, n int64, format func(int64) string) {
 		if o != n {

@@ -314,7 +314,9 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   30 s; after 3 missed answers the tunnel closes and the next query
   reconnects (asking again for any secret not in the keychain).
 - `~/.ssh/config`, `ProxyJump` chains and forwarding to a Unix socket on the
-  bastion are not supported: the profile is the only input.
+  bastion are not supported: the profile is the only input. For a socket,
+  or a database that publishes no port, see
+  [Databases that publish no port](#databases-that-publish-no-port).
 - The SSH leg is encrypted and the bastion verified; the leg from the bastion
   to the database is protected only by `tls` (section 3), whose default is
   decided on `host` as seen from the bastion (`127.0.0.1` gives `prefer`, a
@@ -331,6 +333,97 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   fingerprint), and a key trusted on first use as
   `"decision":"hostkey-added"`. `locksql doctor` shows the bastion and
   reports a key file others can read.
+
+### Databases that publish no port
+
+A database in a container often publishes no port: it sits on an internal
+Docker or Podman network (the default of platforms such as Coolify), and may
+listen only on `127.0.0.1` inside its container. Do not publish the port
+(`-p 3306:3306`) to reach it; one of these recipes does, from the most
+direct to the most general.
+
+**Bastion plus container address.** When the Docker host is your bastion and
+the server listens on the container's network address, an `ssh` table
+whose `host` is the container's IP works as for any other host. Container
+names do not resolve on the host and container IPs change on restart, so
+give the container a fixed address on a user-defined network
+(`docker network create --subnet ...` and `--ip`).
+
+**`proxy_command`.** For a server bound to loopback inside its container, a
+socket, or anything only `docker exec`, `podman exec`, `kubectl exec` or
+`nsenter` can reach, the profile names a command whose stdin and stdout
+carry the connection, as OpenSSH's `ProxyCommand`:
+
+```toml
+[profiles.shop]
+engine = "mariadb"
+host   = "127.0.0.1"   # where the command connects, inside the container
+port   = 3306
+user   = "reporting"
+proxy_command = ["docker", "exec", "-i", "shop-db", "socat", "-", "TCP:127.0.0.1:3306"]
+```
+
+Other commands, each an argv list:
+
+```toml
+# On a remote Docker host, through ssh (key or agent, no prompt):
+proxy_command = ["ssh", "-o", "BatchMode=yes", "deploy@docker-host",
+                 "docker", "exec", "-i", "shop-db", "socat", "-", "TCP:127.0.0.1:3306"]
+# A Unix socket on a remote host (a bind-mounted socket directory):
+proxy_command = ["ssh", "-o", "BatchMode=yes", "deploy@docker-host",
+                 "socat", "-", "UNIX-CONNECT:/srv/shop/run/mysqld.sock"]
+# Kubernetes:
+proxy_command = ["kubectl", "exec", "-i", "-n", "shop", "shop-db-0", "--",
+                 "socat", "-", "TCP:127.0.0.1:5432"]
+```
+
+- The command runs once per database connection (the console opens a
+  control connection beside the main one, and PostgreSQL a cancel
+  connection), and ends with it. `socat` or `nc` must exist where the last
+  step runs; many database images ship neither, so install it in the image,
+  or copy a static relay into the container.
+- It runs **without a shell** (no quoting, no `$VAR`, no `~`), as the console
+  account, in a session of its own with no terminal: it can neither read
+  what you type into the console nor prompt there, so `ssh` must
+  authenticate with an agent or a key without passphrase, and know the host
+  key already (`BatchMode=yes` makes it fail instead of waiting). Its
+  environment keeps only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`,
+  `LC_ALL`, `LC_CTYPE`, `TMPDIR`, `TZ`, `SSH_AUTH_SOCK`, `XDG_RUNTIME_DIR`,
+  `XDG_CONFIG_HOME`, `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`,
+  `CONTAINER_HOST`, `CONTAINERS_CONF` and `KUBECONFIG` (and what Windows
+  needs to start a program); `PGPASSWORD`, `MYSQL_PWD`, `VAULT_TOKEN` and the
+  like never reach it.
+- The program is an absolute path or a bare name looked up in `PATH`; a
+  relative path is refused, and `locksql doctor` fails a program inside the
+  project, where the agent could rewrite it after your approval. Arguments
+  are checked like other values: no control characters, no embedded
+  password, nothing that reads as a secret (`--password=`, `MYSQL_PWD=`,
+  `--token`); the database password is asked as usual and sent over the
+  connection, never to the command.
+- When the connection fails, what the command wrote to its stderr ends the
+  error (`proxy_command stderr: Error: No such container: shop-db`), on one
+  line, without control characters, at most 512 bytes.
+- `host` and `port` say where the command connects; `tls` follows them as
+  for a direct connection (`127.0.0.1` gives `prefer`, a remote name
+  `verify-full`, and `production = true` needs `require` or stronger unless
+  `host` is loopback). The command carries the stream from the console to
+  where it runs (encrypted by `ssh`, local for `docker exec` on this host,
+  TLS to the Kubernetes API); beyond, only `tls` protects it, and the
+  console warns `reached through proxy_command <program>; NOT encrypted (or
+  not verified) from where it runs to <host>: ...` unless `host` is
+  loopback.
+- `proxy_command` excludes an `ssh` table (run `ssh` inside it instead), a
+  Unix socket `host` and sqlite. The argv is part of the approved policy:
+  adding, removing or changing it loosens the policy and waits for your
+  approval, which shows it quoted
+  (`proxy_command: "docker" "exec" "-i" "shop-db" ...`), and an approved
+  change ends the running session.
+
+**Socket directory on the host.** A local MariaDB/MySQL whose socket
+directory is bind-mounted on the console's host is reached with
+`host = "/path/to/mysqld.sock"`, as any local socket. Forwarding a socket
+through the built-in `ssh` table is not supported; use the `socat
+UNIX-CONNECT` recipe above.
 
 ### Credentials from HashiCorp Vault
 

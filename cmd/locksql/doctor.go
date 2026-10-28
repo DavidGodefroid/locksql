@@ -603,8 +603,13 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 			add(checkOK, "tls", "tls = \""+p.TLS+"\": the server certificate is verified", "")
 		case p.SSH != nil && config.IsLoopback(p.Host):
 			add(checkOK, "tls", "the database is on the bastion: the ssh tunnel encrypts the whole path (tls = \""+p.TLS+"\")", "")
+		case len(p.ProxyCommand) > 0 && config.IsLoopback(p.Host):
+			add(checkOK, "tls", "the database listens on loopback where proxy_command runs: the command carries the whole path (tls = \""+p.TLS+"\")", "")
 		case config.IsLoopback(p.Host):
 			add(checkOK, "tls", "loopback host: tls = \""+p.TLS+"\"", "")
+		case len(p.ProxyCommand) > 0:
+			add(checkWarn, "tls", "tls = \""+p.TLS+"\": proxy_command carries the stream to where it runs, but an attacker on the network between there and "+p.Host+" can read the traffic or obtain the password",
+				"set tls = \"verify-full\" (and tls_ca if the server's CA is private), or proxy to the database's own loopback")
 		case p.SSH != nil:
 			add(checkWarn, "tls", "tls = \""+p.TLS+"\": encrypted by ssh to "+p.SSH.Host+", but an attacker on the bastion's network can read the traffic or obtain the password",
 				"set tls = \"verify-full\" (and tls_ca if the server's CA is private)")
@@ -645,6 +650,10 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 				add(checkOK, "ssh key", path+" is private", "")
 			}
 		}
+	}
+
+	if len(p.ProxyCommand) > 0 {
+		out = append(out, proxyChecks(d, p, sys, cwd, name)...)
 	}
 
 	st, err := d.status(cwd, p.Name)
@@ -737,4 +746,37 @@ func vaultChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, name string
 	}
 	add(checkOK, "credentials", "read from Vault at "+p.VaultPath+" at every connection", "")
 	return out
+}
+
+// proxyChecks reports on a profile reached through proxy_command: the
+// program must exist, and must not live in the project, which the agent
+// can write to after the human approved the command.
+func proxyChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd, name string) []check {
+	add := func(state, detail, fix string) []check {
+		return []check{{state: state, title: name + ": proxy_command", detail: detail, fix: fix}}
+	}
+	argv := config.ProxyString(p.ProxyCommand)
+	prog := p.ProxyCommand[0]
+	if filepath.IsAbs(prog) {
+		if root, ok := config.FindProjectRoot(cwd); ok {
+			if rel, err := filepath.Rel(root, prog); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return add(checkFail, prog+" is inside the project "+root+", where the agent can rewrite it after the approval",
+					"install the program outside the project, owned by root or the console account")
+			}
+		}
+	}
+	// In a separated setup the console account runs the command with its
+	// own PATH: nothing to look up here.
+	if sys == nil {
+		var err error
+		if filepath.IsAbs(prog) {
+			_, err = d.stat(prog)
+		} else if d.lookPath != nil {
+			_, err = d.lookPath(prog)
+		}
+		if err != nil {
+			return add(checkFail, prog+" not found: "+argv, "install it, or fix proxy_command")
+		}
+	}
+	return add(checkOK, "reached through "+argv, "")
 }

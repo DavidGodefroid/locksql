@@ -459,3 +459,35 @@ func TestDiffSSH(t *testing.T) {
 		t.Errorf("no ssh both sides: %+v", ch)
 	}
 }
+
+func TestDiffProxyCommand(t *testing.T) {
+	with := func(argv ...string) Policy {
+		p := fullPolicy()
+		p.Profile.ProxyCommand = argv
+		return p
+	}
+	a := with("docker", "exec", "-i", "db", "nc", "127.0.0.1", "3306")
+	for name, c := range map[string]Policy{
+		"changed":  with("docker", "exec", "-i", "other", "nc", "127.0.0.1", "3306"),
+		"appended": with("docker", "exec", "-i", "db", "nc", "127.0.0.1", "3306", "-v"),
+		"removed":  fullPolicy(),
+	} {
+		ch := Diff(a, c)
+		if len(ch) != 1 || ch[0].Field != "proxy_command" || !ch[0].Loosens {
+			t.Errorf("%s: %+v", name, ch)
+		}
+	}
+	if ch := Diff(fullPolicy(), a); len(ch) != 1 || ch[0].New != `"docker" "exec" "-i" "db" "nc" "127.0.0.1" "3306"` {
+		t.Errorf("added: %+v", ch)
+	}
+	// An argument holding a space must not read as two.
+	if ch := Diff(with("a b"), with("a", "b")); len(ch) != 1 {
+		t.Errorf("split argument: %+v", ch)
+	}
+	if ch := Diff(a, with("docker", "exec", "-i", "db", "nc", "127.0.0.1", "3306")); len(ch) != 0 {
+		t.Errorf("same argv: %+v", ch)
+	}
+	if Fingerprint(a) == Fingerprint(fullPolicy()) {
+		t.Error("proxy_command is not in the fingerprint")
+	}
+}

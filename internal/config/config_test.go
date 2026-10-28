@@ -499,3 +499,52 @@ func TestVaultCredentials(t *testing.T) {
 		t.Errorf("ssh.credentials = %q, want ask", p.SSH.Credentials)
 	}
 }
+
+func TestProxyCommand(t *testing.T) {
+	parse := func(body string) (Profile, error) {
+		ps, err := ParseProfiles([]byte("[profiles.p]\n"+body), "t.toml", t.TempDir())
+		return ps["p"], err
+	}
+	head := "engine=\"mariadb\"\nhost=\"127.0.0.1\"\n"
+	p, err := parse(head + "proxy_command=[\"ssh\", \"dockerhost\", \"docker\", \"exec\", \"-i\", \"db\", \"socat\", \"-\", \"TCP:127.0.0.1:3306\"]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"ssh", "dockerhost", "docker", "exec", "-i", "db", "socat", "-", "TCP:127.0.0.1:3306"}
+	if strings.Join(p.ProxyCommand, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("proxy_command = %q", p.ProxyCommand)
+	}
+	// The loopback host is the database inside the container: tls defaults
+	// as for any loopback host.
+	if p.TLS != TLSPrefer {
+		t.Errorf("tls = %q, want prefer", p.TLS)
+	}
+	if _, err := parse(head + "proxy_command=[\"/usr/bin/docker\", \"exec\", \"-i\", \"db\", \"nc\", \"127.0.0.1\", \"3306\"]\n"); err != nil {
+		t.Errorf("absolute program: %v", err)
+	}
+	ssh := "[profiles.p.ssh]\nhost=\"b\"\nuser=\"u\"\nauth=\"agent\"\n"
+	for name, c := range map[string]struct{ body, err string }{
+		"empty":         {head + "proxy_command=[]\n", "proxy_command needs"},
+		"empty program": {head + "proxy_command=[\"\", \"x\"]\n", "proxy_command needs"},
+		"relative":      {head + "proxy_command=[\"./bin/proxy\"]\n", "absolute path or a bare program name"},
+		"relative dir":  {head + "proxy_command=[\"bin/proxy\"]\n", "absolute path or a bare program name"},
+		"with ssh":      {head + "proxy_command=[\"nc\", \"db\", \"3306\"]\n" + ssh, "proxy_command and ssh"},
+		"socket host":   {"engine=\"mysql\"\nhost=\"/run/m.sock\"\nproxy_command=[\"nc\"]\n", "Unix socket"},
+		"sqlite":        {"engine=\"sqlite\"\npath=\"x.db\"\nproxy_command=[\"nc\"]\n", "not used by sqlite"},
+		"control":       {head + "proxy_command=[\"nc\", \"db\\u001b[2J\"]\n", "control"},
+		"embedded":      {head + "proxy_command=[\"psql\", \"postgres://u:pw@db/x\"]\n", "embedded password"},
+		"password flag": {head + "proxy_command=[\"x\", \"--password=hunter2\"]\n", "never reads secrets"},
+		"env password":  {head + "proxy_command=[\"env\", \"MYSQL_PWD=hunter2\", \"nc\"]\n", "never reads secrets"},
+		"token flag":    {head + "proxy_command=[\"x\", \"--token\", \"abc\"]\n", "never reads secrets"},
+		"not a list":    {head + "proxy_command=\"nc db 3306\"\n", "proxy_command"},
+	} {
+		if _, err := parse(c.body); err == nil || !strings.Contains(err.Error(), c.err) {
+			t.Errorf("%s: err = %v, want %q", name, err, c.err)
+		}
+	}
+	// A remote host is reached as over TCP: production still needs tls.
+	_, err = ParseProfiles([]byte("[profiles.prod]\nengine=\"postgres\"\nhost=\"db.internal\"\ntls=\"prefer\"\nproduction=true\nproxy_command=[\"nc\", \"db\", \"5432\"]\n"), "t.toml", t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "needs tls") {
+		t.Errorf("production remote host: err = %v", err)
+	}
+}

@@ -9,7 +9,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -116,12 +118,17 @@ type Profile struct {
 	TLSKey        string `json:"tls_key,omitempty"`
 	TLSServerName string `json:"tls_server_name,omitempty"`
 	// SSH, when set, is the bastion the profile is reached through.
-	SSH        *SSHProfile `json:"ssh,omitempty"`
-	Port       int         `json:"port"`
-	Tier       Tier        `json:"tier"`
-	Production bool        `json:"production"`
-	Detectors  []string    `json:"detectors"`
-	Limits     Limits      `json:"limits"`
+	SSH *SSHProfile `json:"ssh,omitempty"`
+	// ProxyCommand, when set, is the argv of a command whose stdin and
+	// stdout carry each connection to the database, as OpenSSH's
+	// ProxyCommand: docker exec, kubectl exec, ssh to a socket and so on.
+	// It runs without a shell, as the console account.
+	ProxyCommand []string `json:"proxy_command,omitempty"`
+	Port         int      `json:"port"`
+	Tier         Tier     `json:"tier"`
+	Production   bool     `json:"production"`
+	Detectors    []string `json:"detectors"`
+	Limits       Limits   `json:"limits"`
 	// CredentialsTTL makes the console ask for the secret again (and
 	// reconnect) once the connection is that old; 0 keeps it for the
 	// session. It suits short-lived secrets from a vault.
@@ -217,6 +224,7 @@ type rawProfile struct {
 	TLSKey      string    `toml:"tls_key"`
 	TLSServer   string    `toml:"tls_server_name"`
 	SSH         *rawSSH   `toml:"ssh"`
+	ProxyCmd    []string  `toml:"proxy_command"`
 	Tier        string    `toml:"tier"`
 	Production  bool      `toml:"production"`
 	Detectors   []string  `toml:"detectors"`
@@ -425,6 +433,12 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		}
 		p.SSH = s
 	}
+	if r.ProxyCmd != nil {
+		if err := checkProxyCommand(r.ProxyCmd, p, errf); err != nil {
+			return Profile{}, err
+		}
+		p.ProxyCommand = r.ProxyCmd
+	}
 
 	applyDefaults(&p, detectorsSet)
 	// After the defaults: a remote host without tls is verify-full.
@@ -469,4 +483,47 @@ func buildSSH(r rawSSH, p Profile, errf func(string, ...any) error) (*SSHProfile
 		return nil, errf("ssh needs a TCP host; forwarding to a Unix socket is not supported")
 	}
 	return kconfig.ParseSSH(product.P, r, p.Credentials, errf)
+}
+
+// secretArg matches a proxy_command argument that carries a secret inline
+// (--password=x, MYSQL_PWD=x) or announces one in the next argument
+// (--token x).
+var secretArg = regexp.MustCompile(`(?i)(passw(or)?d|pwd|secret|token)([_-]?[a-z]*)?(=|$)`)
+
+// checkProxyCommand validates a proxy_command argv. The program must be an
+// absolute path or a name looked up in PATH: a relative path would resolve
+// in the project, which the agent can write to after the approval.
+func checkProxyCommand(argv []string, p Profile, errf func(string, ...any) error) error {
+	switch {
+	case p.Engine == EngineSQLite:
+		return errf("proxy_command is not used by sqlite")
+	case strings.HasPrefix(p.Host, "/"):
+		return errf("proxy_command needs a TCP host; a Unix socket is reached directly")
+	case p.SSH != nil:
+		return errf("proxy_command and ssh are exclusive; run ssh inside proxy_command instead")
+	case len(argv) == 0 || argv[0] == "":
+		return errf("proxy_command needs at least the program to run, such as [\"docker\", \"exec\", \"-i\", \"db\", \"nc\", \"127.0.0.1\", \"3306\"]")
+	case !filepath.IsAbs(argv[0]) && strings.ContainsAny(argv[0], `/\`):
+		return errf("proxy_command: the program must be an absolute path or a bare program name looked up in PATH")
+	}
+	for i, a := range argv {
+		key := fmt.Sprintf("proxy_command[%d]", i)
+		if err := kconfig.CheckValue(product.P, key, a); err != nil {
+			return errf("%v", err)
+		}
+		if secretArg.MatchString(a) {
+			return errf("%s looks like a secret; %s never reads secrets from config files", key, product.P.Name)
+		}
+	}
+	return nil
+}
+
+// ProxyString renders a proxy_command argv for the approval screens, each
+// argument quoted so that one holding a space cannot read as two.
+func ProxyString(argv []string) string {
+	q := make([]string, len(argv))
+	for i, a := range argv {
+		q[i] = strconv.Quote(a)
+	}
+	return strings.Join(q, " ")
 }

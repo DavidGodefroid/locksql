@@ -276,6 +276,24 @@ it append-only for the console account too.
   `ssh.credentials` set to `ask`). Out of scope: `ProxyJump`
   chains, `~/.ssh/config` (never read), certificate host keys
   (`@cert-authority`) and forwarding to a Unix socket on the bastion.
+
+  A profile with `proxy_command` reaches its database through a command
+  whose stdin and stdout carry each connection (`docker exec`, `kubectl
+  exec`, `ssh ... socat`). The argv is in the approved policy: the agent,
+  which can write the project config, cannot add or change it without the
+  human approving a loosening that shows it quoted, and an approved change
+  ends the running session. The command runs without a shell, as the
+  console account, in a new session with no controlling terminal (it cannot
+  read the console's keystrokes or prompt there), with an environment
+  reduced to an allowlist that keeps no secret variable; the database
+  password goes over the connection, never to the command. A relative
+  program path is refused, and `locksql doctor` fails a program inside the
+  project, which the agent could rewrite after the approval. The command's
+  stderr is shown on a failed connection as one sanitized line of at most
+  512 bytes. `tls` applies beyond the command's end as for a direct
+  connection. Out of scope: what the command itself trusts (its own
+  configuration, `~/.ssh/config`, the Docker or Kubernetes credentials of
+  the console account), which the human approves with the argv.
 - **Write tiers.** Above tier `read`, the human's approval is the gate. The
   classifier assigns the class shown on the screen, but the server does not
   restrict what an approved write statement does within the account's
