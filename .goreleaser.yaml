@@ -74,7 +74,7 @@ checksum:
 # Keyless cosign signature of the checksum file (GitHub OIDC in CI). Verify
 # with:
 #   cosign verify-blob --bundle checksums.txt.sigstore.json \
-#     --certificate-identity-regexp 'https://github.com/DavidGodefroid/locksql/' \
+#     --certificate-identity-regexp '^https://github\.com/DavidGodefroid/locksql/\.github/workflows/release\.yml@refs/tags/v[0-9]' \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
 #     checksums.txt
 signs:
