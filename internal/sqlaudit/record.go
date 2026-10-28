@@ -30,6 +30,8 @@ const (
 	EventResults   = audit.EventResults
 	EventUnmask    = audit.EventUnmask
 	EventLogout    = audit.EventLogout
+	// EventConfigImport is a `locksql config import`, applied or refused.
+	EventConfigImport = "config_import"
 )
 
 // Open opens locksql's audit log: <stateDir>/locksql/audit.log.
@@ -77,6 +79,12 @@ type Record struct {
 	PeerUID  *int   `json:"peer_uid,omitempty"`
 	PeerPID  int    `json:"peer_pid,omitempty"`
 	PeerUser string `json:"peer_user,omitempty"`
+	// Scope, Profiles and AllowLoosen describe a config import: the scope
+	// written (user or project), the profiles it changes and whether
+	// loosening was allowed. Never a value.
+	Scope       string   `json:"scope,omitempty"`
+	Profiles    []string `json:"profiles,omitempty"`
+	AllowLoosen bool     `json:"allow_loosen,omitempty"`
 }
 
 // AuditEvent implements lockkit's audit.Record.

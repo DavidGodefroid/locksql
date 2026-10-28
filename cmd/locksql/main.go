@@ -49,6 +49,7 @@ var helpSections = []helpSection{
 		{"doctor", "[--profile P] [--fix [--yes]]", "check that this machine is safe-ready\n(--fix: repair permissions, socket dir, wiring)"},
 		{"init", "[claude|codex|cursor|gemini ...]", "write agent integration files into the project\n(default: the agents found on this machine)"},
 		{"stats", "[--log PATH] [--top N] [--export]", "count the refusals of the local audit log\n(--export: anonymised report, SQL shapes only)"},
+		{"config", "export|import [--project] [--profile P] ...", "share profiles and PII rules with your team\n(import: --dry-run, --allow-loosen, --local P.KEY=V)"},
 	}},
 	{title: "Client commands", rows: []helpRow{
 		{"status", "[--profile P]", ""},
@@ -182,6 +183,8 @@ func runEnv(e env, args []string) int {
 		return runStats(e, args[1:])
 	case "pii":
 		return runPII(e, args[1:])
+	case "config":
+		return runConfig(e, args[1:])
 	case "tables", "describe", "plan", "run", "request", "logout":
 		return runClient(e, cmd, args[1:])
 	default:
