@@ -6,8 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -36,7 +38,7 @@ func newLauncherFixture(t *testing.T) *launcherFixture {
 			t.Fatal(err)
 		}
 	}
-	for _, tool := range []string{"sh", "dirname", "id", "cat", "printf", "awk", "sha256sum", "shasum", "tar", "gzip", "install", "mktemp", "rm", "uname", "sed", "tr", "tail", "grep", "cksum"} {
+	for _, tool := range []string{"sh", "dirname", "id", "cat", "printf", "awk", "sha256sum", "shasum", "tar", "gzip", "install", "mktemp", "rm", "uname", "sed", "tr", "tail", "grep", "cksum", "ls"} {
 		if p, err := exec.LookPath(tool); err == nil {
 			if err := os.Symlink(p, filepath.Join(f.bin, tool)); err != nil {
 				t.Fatal(err)
@@ -213,11 +215,15 @@ func TestLauncherConsoleReadOnlyProject(t *testing.T) {
 // is removed first.
 func TestLauncherConsoleProjectAndStaleContainer(t *testing.T) {
 	f := newLauncherFixture(t)
-	out, calls, err := f.run(t, f.root, []string{"DOCKER_INSPECT=false"}, "console", "--project=/elsewhere")
+	other := filepath.Join(f.root, "other")
+	if err := os.Mkdir(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, calls, err := f.run(t, f.root, []string{"DOCKER_INSPECT=false"}, "console", "--project=other")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if got := strings.Join(imageArgs(lastRun(t, calls), "locksql"), " "); got != "locksql console --project=/elsewhere" {
+	if got := strings.Join(imageArgs(lastRun(t, calls), "locksql"), " "); got != "locksql console --project="+other {
 		t.Errorf("command %q", got)
 	}
 	removed := false
@@ -228,6 +234,80 @@ func TestLauncherConsoleProjectAndStaleContainer(t *testing.T) {
 	}
 	if !removed {
 		t.Errorf("stopped console not removed: %q", calls)
+	}
+}
+
+// An explicit --project is the project mounted, at its physical path, for
+// any command: not the one of the working directory. The command gets that
+// path; outside it, the command runs from the project.
+func TestLauncherExplicitProject(t *testing.T) {
+	f := newLauncherFixture(t)
+	other := filepath.Join(f.root, "other")
+	if err := os.MkdirAll(filepath.Join(other, ".locksql"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(f.root, "link")
+	if err := os.Symlink(other, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		dir  string
+		args []string
+		want string // the command, from the image on
+		w    string
+	}{
+		{f.project, []string{"console", "--project", other}, "locksql console --project " + other, other},
+		{f.project, []string{"console", "--project=" + link, "--profile", "p"}, "locksql console --project=" + other + " --profile p", other},
+		{f.root, []string{"profile", "add", "--project", "other"}, "locksql profile add --project " + other, other},
+		{filepath.Join(other, ".locksql"), []string{"doctor", "--project", other}, "locksql doctor --project " + other, filepath.Join(other, ".locksql")},
+	} {
+		out, calls, err := f.run(t, tc.dir, nil, tc.args...)
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", tc.args, err, out)
+		}
+		run := lastRun(t, calls)
+		if !hasSeq(run, "-v", other+":"+other, "-w", tc.w) || hasSeq(run, "-v", f.project+":"+f.project) {
+			t.Errorf("%v: mounts %q", tc.args, run)
+		}
+		if got := strings.Join(imageArgs(run, "locksql"), " "); got != tc.want {
+			t.Errorf("%v: command %q, want %q", tc.args, got, tc.want)
+		}
+	}
+	for _, args := range [][]string{{"console", "--project", filepath.Join(f.root, "missing")}, {"status", "--project"}} {
+		out, calls, err := f.run(t, f.project, nil, args...)
+		if err == nil || !strings.Contains(out, "--project") || len(calls) != 0 {
+			t.Errorf("%v: %v, calls %q\n%s", args, err, calls, out)
+		}
+	}
+}
+
+// LOCKSQL_READONLY_PROJECT, on Linux: the console gets the inode of the
+// .locksql the launcher checked, and refuses to start on any other (one
+// swapped in before Docker mounted it).
+func TestLauncherReadOnlyProjectPinsTheInode(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the inode is passed on Linux only")
+	}
+	f := newLauncherFixture(t)
+	var st syscall.Stat_t
+	if err := syscall.Stat(filepath.Join(f.project, ".locksql"), &st); err != nil {
+		t.Fatal(err)
+	}
+	_, calls, err := f.run(t, f.project, []string{"LOCKSQL_READONLY_PROJECT=1"}, "console")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run := lastRun(t, calls); !hasSeq(run, "-e", "LOCKSQL_EXPECT_DIR_INODE="+strconv.FormatUint(uint64(st.Ino), 10)) {
+		t.Errorf("%q", run)
+	}
+	_, calls, err = f.run(t, f.project, nil, "console")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range lastRun(t, calls) {
+		if strings.HasPrefix(a, "LOCKSQL_EXPECT_DIR_INODE=") {
+			t.Errorf("an inode without LOCKSQL_READONLY_PROJECT")
+		}
 	}
 }
 

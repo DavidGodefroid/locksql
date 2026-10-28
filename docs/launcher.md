@@ -107,13 +107,21 @@ Any failed check stops before the launcher is replaced. cosign is required
 
 A project path, `$HOME` (for `init`, `config`) or a `VAULT_CACERT` path
 holding `:` is refused: docker `-v` separates on it. `LOCKSQL_DOCKER_ARGS`
-is split on spaces and never globbed. With `LOCKSQL_READONLY_PROJECT=1`,
-`.locksql/` must be a directory whose physical path is itself; the launcher
-checks it twice, the second time right before `docker run`, but cannot
-close the instant between that check and Docker's own mount: an agent that
-can replace `.locksql` in that instant could redirect the console's
-writable mount. lea closes it by mounting `.locksql` read-only in its
-agents' containers.
+is split on spaces and never globbed.
+
+An explicit `--project DIR` (or `--project=DIR`), for any subcommand, is
+the project mounted instead of the one of the working directory: resolved
+to its physical path, which replaces `DIR` in the command; the command runs
+from there unless the working directory is inside it.
+
+With `LOCKSQL_READONLY_PROJECT=1`, `.locksql/` must be a directory whose
+physical path is itself; the launcher checks it twice, the second time
+right before `docker run`. On Linux it also passes the inode it checked
+(`LOCKSQL_EXPECT_DIR_INODE`), and the console refuses to start on a
+`.locksql` with another one: a directory swapped in between the check and
+Docker's mount never gets the console. On macOS (Docker Desktop's file
+sharing reports other inodes) only the two checks run. lea also mounts
+`.locksql` read-only in its agents' containers, which cannot swap it.
 
 ## Former host install
 

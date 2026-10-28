@@ -44,6 +44,18 @@ func runConsole(e env, args []string) int {
 		fmt.Fprintln(e.stderr, "locksql console: must run in a terminal: it asks the human for credentials and approvals")
 		return exitUsage
 	}
+	// In the launcher's container, a .locksql other than the one it
+	// checked was swapped in before Docker mounted it.
+	if want := os.Getenv(expectDirInodeEnv); want != "" {
+		proj, err := consoleProject(e.cwd, *project)
+		if err == nil {
+			err = checkConsoleDir(proj, want)
+		}
+		if err != nil {
+			fmt.Fprintln(e.stderr, "locksql console:", err)
+			return exitFail
+		}
+	}
 	// Started from another account of a separated setup: open the console
 	// in the console account, or say how.
 	if proj, err := consoleProject(e.cwd, *project); err == nil {
