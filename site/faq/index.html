@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>locksql FAQ — databases, agents, security limits</title>
-  <meta name="description" content="Answers on locksql: supported databases, agents and platforms (Windows through WSL2), setup, credentials, approval, refusals, masking limits, k-anonymity, TLS, audit log and licence.">
+  <meta name="description" content="Answers on locksql: supported databases, agents and platforms (anything that runs Docker), setup, credentials, approval, refusals, masking limits, k-anonymity, TLS, audit log and licence.">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
@@ -12,7 +12,7 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="locksql">
   <meta property="og:title" content="locksql FAQ — databases, agents, security limits">
-  <meta property="og:description" content="Answers on locksql: supported databases, agents and platforms (Windows through WSL2), setup, credentials, approval, refusals, masking limits, k-anonymity, TLS, audit log and licence.">
+  <meta property="og:description" content="Answers on locksql: supported databases, agents and platforms (anything that runs Docker), setup, credentials, approval, refusals, masking limits, k-anonymity, TLS, audit log and licence.">
   <meta property="og:url" content="https://locksql.com/faq/">
   <meta property="og:image" content="https://locksql.com/assets/og.png">
   <meta property="og:image:type" content="image/png">
@@ -22,7 +22,7 @@
   <meta property="og:locale" content="en_US">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="locksql FAQ — databases, agents, security limits">
-  <meta name="twitter:description" content="Answers on locksql: supported databases, agents and platforms (Windows through WSL2), setup, credentials, approval, refusals, masking limits, k-anonymity, TLS, audit log and licence.">
+  <meta name="twitter:description" content="Answers on locksql: supported databases, agents and platforms (anything that runs Docker), setup, credentials, approval, refusals, masking limits, k-anonymity, TLS, audit log and licence.">
   <meta name="twitter:image" content="https://locksql.com/assets/og.png">
   <meta name="twitter:image:alt" content="locksql — Your AI writes the query. You hold the key.">
   <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -59,19 +59,19 @@
 </section>
 <section aria-labelledby="os">
   <h2 id="os">Which operating systems? Does it run on Windows?</h2>
-  <p>Linux and macOS, on amd64 and arm64. Native Windows is not supported: the separation relies on Unix accounts, socket peer credentials and terminals. On Windows, run locksql inside WSL2, with the agent inside WSL too for the boundary to hold. <a href="../install/#windows">Windows: inside WSL2</a>. A Docker image also runs it with nothing but Docker installed, with a weaker boundary against an agent that can run <code>docker</code>: <a href="../install/#docker">Docker</a>.</p>
+  <p>Anything that runs Docker: Linux, macOS, and Windows through Docker Desktop, on amd64 and arm64. The console and the agent’s MCP server run in Linux containers, whatever the host; locksql itself does not run natively on Windows. <a href="../install/">Install</a>.</p>
 </section>
 <section aria-labelledby="setup">
   <h2 id="setup">How do I set it up?</h2>
-  <p>Install it, then run <code>locksql setup</code> in your project: it wires your agents, creates the <code>locksql</code> console account once you confirm, asks for a database profile (never a password) and prints the command that starts the console in that account’s session. <code>locksql doctor</code> checks the setup from either account, and <code>locksql doctor --fix</code> repairs what it safely can. <a href="../install/#setup">Setup steps</a>.</p>
+  <p>With Docker, in four steps: build the image from the repository; in your project, run <code>init</code> and <code>profile add</code> from the image (the wizard asks for a database profile, never a password) and <code>doctor --fix</code> as root inside it, which gives <code>.locksql/</code> to the console account; point the agent’s MCP server at the image (<code>docker run -i --rm … locksql mcp</code>); and start the console in its own container, in a terminal you keep in view. <a href="../install/">The Docker setup</a>.</p>
 </section>
 <section aria-labelledby="agents">
   <h2 id="agents">Which AI agents does it work with?</h2>
-  <p>Claude Code, Codex, Gemini CLI and Cursor are wired automatically by bare <code>locksql</code>. An agent talks to the console either through the MCP server (<code>locksql mcp</code>, over stdio) or through the <code>locksql</code> CLI from a shell.</p>
+  <p>Claude Code, Codex, Gemini CLI and Cursor: each starts the MCP server from the image with the same command in its MCP config (<a href="../install/#wire">Wire the agent</a>). An agent talks to the console either through the MCP server (<code>locksql mcp</code>, over stdio) or through the <code>locksql</code> CLI from a shell.</p>
 </section>
 <section aria-labelledby="password">
   <h2 id="password">Does the agent ever see my database password?</h2>
-  <p>No. The agent never sees a credential and never opens a connection. Credentials are typed at console start (no echo), or read from the OS keychain or HashiCorp Vault, and never appear in argv, environment, files, logs, the socket protocol or error messages. No config file may hold a secret.</p>
+  <p>No. The agent never sees a credential and never opens a connection. Credentials are typed at console start (no echo), or read from HashiCorp Vault, and never appear in argv, environment, files, logs, the socket protocol or error messages. No config file may hold a secret.</p>
 </section>
 <section aria-labelledby="self-approve">
   <h2 id="self-approve">Can the agent approve its own queries, or turn approval off?</h2>
@@ -79,7 +79,7 @@
 </section>
 <section aria-labelledby="own-account">
   <h2 id="own-account">Why does the console need its own OS account?</h2>
-  <p>An agent in the console’s own account could read or type into its terminal. Separation is mandatory: without it the console refuses to start. <code>sudo locksql install</code> sets it up.</p>
+  <p>An agent in the console’s own account could read or type into its terminal. Separation is mandatory: without it the console refuses to start. The image sets it up: the console runs as the <code>locksql</code> account (uid 10001) in its own container, the agent’s MCP server as <code>agent</code> (uid 10002) in another. They share only the socket volume <code>locksql-run</code>, and the kernel checks every peer on the socket. Whoever can run <code>docker</code> commands can still attach to the console: <a href="../install/#separation">what Docker does and does not separate</a>.</p>
 </section>
 <section aria-labelledby="timeout">
   <h2 id="timeout">What happens if I don’t answer the approval prompt?</h2>
@@ -135,7 +135,7 @@
 </section>
 <section aria-labelledby="go">
   <h2 id="go">Do I need Go to install it?</h2>
-  <p>No. Releases ship static binaries and Linux packages; no Go toolchain is needed. Building from source needs Go 1.26 or later. <a href="../install/">Install options</a>.</p>
+  <p>No. Docker builds it: the image’s build stage holds the Go toolchain, and the image you run is a small Alpine image without it. <a href="../install/#build">Build the image</a>.</p>
 </section>
 <section aria-labelledby="stable">
   <h2 id="stable">Is locksql stable?</h2>
