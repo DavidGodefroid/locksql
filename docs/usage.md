@@ -155,8 +155,8 @@ runs, the agent is told the exact
 `locksql console --profile P --project <root>` command. Outside any project
 it is told `locksql console --profile P --project DIR`, DIR being the
 project's directory, and `locksql doctor`. Both
-`.locksql/config.toml` and `.locksql/pii.toml` hold no secret and are meant
-to be committed.
+`.locksql/config.toml` and the rule sets in `.locksql/pii/` hold no secret
+and are meant to be committed.
 
 ### Reaching a remote server through SSH
 
@@ -360,7 +360,7 @@ console account's login session.
 | tls_ca, tls_cert, tls_key (per profile) | a file that is missing or holds no PEM certificate, a certificate expired or expiring within 30 days, a key readable by group or others (files the agent's account cannot read are not checked) |
 | server certificate (per profile without `ssh`) | a TLS handshake that sends no user name and no secret: the server offers no TLS under `require` or stronger, its chain does not verify against `tls_ca` (or the system roots), it does not name `host` (or `tls_server_name`) under `verify-full`, it is expired or expires within 30 days; under `prefer` or `require` it says whether `verify-full` would pass |
 | agent wiring | an installed agent is not wired for this account (warns; not checked as root or as the console account) |
-| project access, project .locksql, project config.toml / pii.toml | separated mode, from an account other than the console's, inside a project: the console account cannot enter a directory down to the project (mode bits and POSIX ACLs), does not own `.locksql/` or it is writable by group or others, or cannot read a config |
+| project access, project .locksql, project .locksql/pii, project config.toml / pii.toml / pii/<set>.toml | separated mode, from an account other than the console's, inside a project: the console account cannot enter a directory down to the project (mode bits and POSIX ACLs), does not own `.locksql/` or `.locksql/pii/` or one is writable by group or others, or cannot read the config or the rule set of a project profile |
 | console (per profile) | not running; then, from its `health`: not separated, an X11 display, database privileges beyond the tier, EXPLAIN failing |
 
 #### `locksql doctor --fix`
@@ -379,7 +379,8 @@ docker run --rm --user 0 -v "$PWD:$PWD" -w "$PWD" locksql doctor --fix --yes
 | Check | Repair |
 |---|---|
 | project .locksql | `chown locksql .locksql && chmod 0755 .locksql` |
-| project config.toml, pii.toml | `chmod 0644` |
+| project .locksql/pii | `chown locksql .locksql/pii && chmod 0755 .locksql/pii` |
+| project config.toml, pii.toml, pii/<set>.toml | `chmod 0644` |
 
 Run it again whenever `.locksql/` is created anew, by `locksql init` for
 example. The checks of the console and its profiles fail from that
@@ -455,9 +456,10 @@ The console needs an interactive terminal. At start it:
 6. **Scans the schema for PII** at every start: columns whose names or types
    look like personal data, and that no mask or allow rule names yet, are
    listed by table. Accept all (`a`), review one by one (`r`) or skip (`s`).
-   On the first start the result is written to `.locksql/pii.toml` inside a
-   project, or `<user config dir>/locksql/pii.toml` outside one (even when
-   empty); later, accepted rules are added to the file as it is on disk, so
+   On the first start of a rule set the result is written to the profile's
+   set, `.locksql/pii/<set>.toml` inside a project, or
+   `<user config dir>/locksql/pii/<set>.toml` outside one (even when empty;
+   the set is `pii_rules`, by default the profile name); later, accepted rules are added to the file as it is on disk, so
    unconfirmed edits there are neither lost nor applied. Outside a project, a
    `<current dir>/.locksql/pii.toml` from an earlier version is no longer
    read: the console says so once while the new file does not exist; copy it
@@ -1069,8 +1071,8 @@ finds the project's consoles.
 | Path | Content |
 |---|---|
 | `.locksql/config.toml` | project profiles (no secrets) |
-| `.locksql/pii.toml` | PII column rules (project) |
-| `<user config dir>/locksql/pii.toml` | PII column rules outside a project |
+| `.locksql/pii/<set>.toml` | PII rule sets (project); a legacy `pii.toml` is moved to `pii/default.toml` |
+| `<user config dir>/locksql/pii/<set>.toml` | PII rule sets outside a project |
 | `<user config dir>/locksql/config.toml` | personal profiles |
 | `<user state dir>/locksql/approved/*.json` | last approved policies |
 | `<user state dir>/locksql/audit.log` | JSONL audit log, mode 0600 (`O_APPEND`, no hash chain: `chattr +a` for more); the records of a client request name the requester (`peer_uid`, `peer_pid`, `peer_user`); an approval is written before the run, a `run` record after it |
