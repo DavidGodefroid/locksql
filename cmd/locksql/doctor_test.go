@@ -248,6 +248,61 @@ func TestDoctorSameUserMode(t *testing.T) {
 	}
 }
 
+// The image refuses locksql install: no fix may send the human there.
+func TestDoctorFixesNameNoHostInstall(t *testing.T) {
+	missing := func(d *doctorEnv) {
+		d.lookupUser = func(string) (*user.User, error) { return nil, errors.New("no such user") }
+	}
+	noSocketDir := func(d *doctorEnv) {
+		stat := d.stat
+		d.stat = func(p string) (os.FileInfo, error) {
+			if p == "/run/locksql" {
+				return nil, fs.ErrNotExist
+			}
+			return stat(p)
+		}
+	}
+	noSetgid := func(d *doctorEnv) {
+		stat := d.stat
+		d.stat = func(p string) (os.FileInfo, error) {
+			if p == "/run/locksql" {
+				return fakeInfo{"locksql", fs.ModeDir | 0o710}, nil
+			}
+			return stat(p)
+		}
+	}
+	writable := func(d *doctorEnv) { d.ownerOf = func(os.FileInfo) (int, int, bool) { return 1000, 1000, true } }
+	badSys := func(d *doctorEnv) {
+		d.loadSys = func() (*sysconf.Config, error) { return nil, errors.New("bad system.toml") }
+	}
+	for name, c := range map[string]struct {
+		sys    *sysconf.Config
+		mutate func(*doctorEnv)
+		title  string
+	}{
+		"same-user":            {nil, func(*doctorEnv) {}, "separation"},
+		"same-user binary":     {nil, writable, "binary"},
+		"bad system config":    {separatedSys(), badSys, "system setup"},
+		"no console account":   {separatedSys(), missing, "console account"},
+		"writable binary":      {separatedSys(), writable, "binary"},
+		"no socket directory":  {separatedSys(), noSocketDir, "socket directory"},
+		"socket dir no setgid": {separatedSys(), noSetgid, "socket directory"},
+	} {
+		d := fakeDoctor(c.sys)
+		c.mutate(&d)
+		found := false
+		for _, ch := range doctor(d, doctorProject(t, "ask"), "") {
+			if strings.Contains(ch.fix, "locksql install") || strings.Contains(ch.detail, "locksql install") {
+				t.Errorf("%s: %s: %q", name, ch.title, ch.fix)
+			}
+			found = found || ch.title == c.title && ch.fix != ""
+		}
+		if !found {
+			t.Errorf("%s: no %q check with a fix", name, c.title)
+		}
+	}
+}
+
 func TestDoctorShowsSetgidMode(t *testing.T) {
 	checks := doctor(fakeDoctor(separatedSys()), doctorProject(t, "ask"), "")
 	if stateOf(checks, "socket directory") != checkOK {
