@@ -564,34 +564,9 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		return errResp(req.ID, ipc.CodeNoSuchPlan, "no such plan: it is unknown, already used or expired; plan the query again")
 	}
 	class := pl.st.Class.String()
-	if int(pl.st.Class) > int(s.profile.Tier) {
-		return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, refusal.Newf(refusal.Tier,
-			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
-	}
-	// Unmasked output may have been turned off (:unmask) since query.plan.
-	if pl.unmask && !s.allowUnmask {
-		return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, refusal.New(refusal.UnmaskOff, "unmasked output was turned off in this console since the plan: run the query masked"))
-	}
-	// The limits may have changed since query.plan (a tightening is applied
-	// at once): the verdict shown and enforced is the one under the policy
-	// in force now.
-	var hiddenRefusal *refusal.Error
-	if pl.explain != nil {
-		r := s.assess(pl)
-		if r == nil {
-			if r = s.assessK(pl); r != nil {
-				pl.level = weight.Refuse.String()
-				pl.reasons = append(pl.reasons, r.Reason)
-			}
-		}
-		if r != nil {
-			if !estimatesHidden(pl) {
-				return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, r)
-			}
-			// Under a PII filter an immediate answer would tell the
-			// agent the verdict: the refusal waits for the human.
-			hiddenRefusal = r
-		}
+	hiddenRefusal, r := s.runChecks(ctx, req.ID, pl)
+	if r != nil {
+		return *r
 	}
 	sess, r := s.session(ctx, req.ID)
 	if r != nil {
@@ -678,6 +653,45 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		rec.Event, rec.Decision, rec.Approval = audit.EventApproved, "approved", s.approver.Mode()
 	}
 	return s.runApproved(ctx, req.ID, sess, pl, rec, class, start)
+}
+
+// runChecks are the checks of a plan at run time, under the policy and the
+// switches in force now: the tier, unmasked output, and the weight check
+// with the limits in force (a tightening applies at once). It returns the
+// refusal to answer at once, or hidden, a weight refusal under a PII
+// filter that waits for the human (an immediate answer would tell the
+// agent the verdict).
+func (s *Server) runChecks(ctx context.Context, id int64, pl *plan) (hidden *refusal.Error, resp *ipc.Response) {
+	class := pl.st.Class.String()
+	if int(pl.st.Class) > int(s.profile.Tier) {
+		return nil, ptr(s.refuse(ctx, id, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, refusal.Newf(refusal.Tier,
+			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier)))
+	}
+	// Unmasked output may have been turned off (:unmask) since query.plan.
+	if pl.unmask && !s.allowUnmask {
+		return nil, ptr(s.refuse(ctx, id, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, refusal.New(refusal.UnmaskOff, "unmasked output was turned off in this console since the plan: run the query masked")))
+	}
+	// The limits may have changed since query.plan (a tightening is applied
+	// at once): the verdict shown and enforced is the one under the policy
+	// in force now.
+	if pl.explain != nil {
+		r := s.assess(pl)
+		if r == nil {
+			if r = s.assessK(pl); r != nil {
+				pl.level = weight.Refuse.String()
+				pl.reasons = append(pl.reasons, r.Reason)
+			}
+		}
+		if r != nil {
+			if !estimatesHidden(pl) {
+				return nil, ptr(s.refuse(ctx, id, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, r))
+			}
+			// Under a PII filter an immediate answer would tell the
+			// agent the verdict: the refusal waits for the human.
+			hidden = r
+		}
+	}
+	return hidden, nil
 }
 
 // runApproved records the decision and runs the approved plan pl: the
