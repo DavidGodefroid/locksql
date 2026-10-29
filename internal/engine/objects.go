@@ -15,6 +15,9 @@ type ObjectRefs struct {
 	Relations []string `json:"relations"`
 	Functions []string `json:"functions"`
 	Operators []string `json:"operators"`
+	// Writes: the statement writes; the tables whose foreign keys
+	// reference its relations are followed too (a cascade reaches them).
+	Writes bool `json:"writes,omitempty"`
 }
 
 // ObjectDef is the definition of one object a statement resolves to, as

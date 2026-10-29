@@ -94,6 +94,7 @@ func objectRefs(d sqlclass.Dialect, pl *plan) engine.ObjectRefs {
 			refs.Functions = append(refs.Functions, strings.ToLower(f))
 		}
 	}
+	refs.Writes = pl.st.Class != sqlclass.Read
 	if pl.shadow != nil {
 		refs.Functions = append(refs.Functions, pl.shadow.funcs...)
 		refs.Operators = append(refs.Operators, pl.shadow.ops...)

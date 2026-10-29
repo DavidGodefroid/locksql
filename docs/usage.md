@@ -1169,6 +1169,8 @@ The retry rules:
 | `E_STALE` | the definitions the statement resolves to (functions, views, rules, triggers, row-level policies, grants, search path) changed between the plan and the run, or during the run | rewrite | plan the statement again; the human approves the new plan |
 | `E_POLICY` | a refusal no check named (fail-closed; should not happen) | stop | none: report it as a bug |
 
+`E_STALE` comes from the plan hash: on PostgreSQL it covers the effective `search_path` and the definitions of what the statement resolves to (functions and operators, views, rules, triggers, row-level policies, grants, column defaults and generated columns, constraints, partitions; for a write, the tables its foreign keys cascade into), followed up to 8 levels deep; a deeper statement is refused. The functions a PL/pgSQL body calls and the objects dynamic SQL reaches are not followed: only the calling function's own source is hashed.
+
 `E_K_ANON` (fewer than `k_anonymity` rows behind a PII filter, group or
 aggregate) is no longer emitted since v0.5.2: a count under k is a warning on
 the approval screen (see [Approving a query](#approving-a-query)). The code stays reserved, and

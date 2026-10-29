@@ -20,8 +20,13 @@ This file records the changes a user or an agent has to know about.
   object the statement resolves to: functions and operators (body,
   settings, `SECURITY DEFINER`, grants), views (`pg_get_viewdef`), rules,
   triggers and their functions, row-level policies and the row-level
-  security switches, grants, followed through views, rules, triggers and
-  policies. `query.run` checks it before the approval, then again in the
+  security switches, grants, column defaults and generated columns,
+  constraints, partitions and inheritance, followed through views, rules,
+  triggers, policies, defaults and constraints (and, for a write, into the
+  tables whose foreign keys cascade from it). Objects nested deeper than 8
+  levels refuse the plan rather than go unhashed. Not followed: the
+  functions a PL/pgSQL body calls (only its own source is hashed) and what
+  dynamic SQL reaches. `query.run` checks it before the approval, then again in the
   statement's own transaction just before and just after the statement: a
   plan whose objects changed is refused with the new code `E_STALE` (the
   statement rolled back when they changed during it). `CREATE OR REPLACE`

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -87,6 +88,45 @@ GRANT SELECT, UPDATE ON ph_t TO rw;`)
 				prev = cur
 			}
 
+			// What a write reaches beyond its table: defaults, foreign keys
+			// that cascade into another table and that table's triggers,
+			// partitions.
+			wrefs := engine.ObjectRefs{Relations: []string{"ph_w", "ph_part"}, Functions: []string{}, Operators: []string{}, Writes: true}
+			psql(`CREATE TABLE ph_w (id int PRIMARY KEY, label text);
+CREATE TABLE ph_part (id int, k int) PARTITION BY RANGE (k);
+CREATE TABLE ph_part_1 PARTITION OF ph_part FOR VALUES FROM (0) TO (10);
+GRANT SELECT ON ph_w, ph_part TO ro;`)
+			wprev := writeState(t, s, wrefs)
+			for _, c := range []struct{ name, sql string }{
+				{"SET DEFAULT", `ALTER TABLE ph_w ALTER label SET DEFAULT 'x'`},
+				{"generated column", `ALTER TABLE ph_w ADD COLUMN g int GENERATED ALWAYS AS (id * 2) STORED`},
+				{"foreign key with cascade", `CREATE TABLE ph_child (id int, w_id int REFERENCES ph_w (id) ON DELETE CASCADE)`},
+				{"trigger on the cascaded table", `CREATE TRIGGER ph_ctr BEFORE DELETE ON ph_child FOR EACH ROW EXECUTE FUNCTION ph_trg()`},
+				{"new partition", `CREATE TABLE ph_part_2 PARTITION OF ph_part FOR VALUES FROM (10) TO (20)`},
+				{"trigger on a partition", `CREATE TRIGGER ph_ptr BEFORE INSERT ON ph_part_1 FOR EACH ROW EXECUTE FUNCTION ph_trg()`},
+				{"check constraint", `ALTER TABLE ph_w ADD CONSTRAINT ph_ck CHECK (id > 0)`},
+			} {
+				psql(c.sql)
+				cur := writeState(t, s, wrefs)
+				if reflect.DeepEqual(wprev, cur) {
+					t.Errorf("%s: the state did not change", c.name)
+				}
+				wprev = cur
+			}
+
+			// Deeper than the bound: refused, never hashed in part.
+			chain := "CREATE VIEW ph_d0 AS SELECT id FROM ph_t;\n"
+			for i := 1; i <= 10; i++ {
+				chain += fmt.Sprintf("CREATE VIEW ph_d%d AS SELECT id FROM ph_d%d;\n", i, i-1)
+			}
+			psql(chain + "GRANT SELECT ON ALL TABLES IN SCHEMA public TO ro;")
+			if _, err := engine.ObjectStateOf(ctx, s, "app", engine.ObjectRefs{Relations: []string{"ph_d10"}}); err == nil || !strings.Contains(err.Error(), "deeper") {
+				t.Errorf("a view chain past the bound: %v, want a refusal", err)
+			}
+			if _, err := engine.ObjectStateOf(ctx, s, "app", engine.ObjectRefs{Relations: []string{"ph_d3"}}); err != nil {
+				t.Errorf("a short view chain: %v", err)
+			}
+
 			// The search path of a new session: ALTER ROLE applies at login.
 			psql(`ALTER ROLE ro SET search_path = ph_alt, public`)
 			s2 := connectPG(t, srv, "ro", config.TierRead, 30*time.Second)
@@ -144,4 +184,13 @@ GRANT SELECT, UPDATE ON ph_t TO rw;`)
 			}
 		})
 	}
+}
+
+func writeState(t *testing.T, s engine.Session, refs engine.ObjectRefs) engine.ObjectState {
+	t.Helper()
+	st, err := engine.ObjectStateOf(context.Background(), s, "app", refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
 }

@@ -103,7 +103,7 @@ func objectState(ctx context.Context, c *pgx.Conn, refs engine.ObjectRefs) (engi
 				return st, err
 			}
 			st.Objects = append(st.Objects, d...)
-			r, f, err := relationUses(ctx, c, rels)
+			r, f, err := relationUses(ctx, c, rels, refs.Writes)
 			if err != nil {
 				return st, err
 			}
@@ -125,6 +125,11 @@ func objectState(ctx context.Context, c *pgx.Conn, refs engine.ObjectRefs) (engi
 			nextRels, nextFuncs = append(nextRels, r...), append(nextFuncs, f...)
 		}
 		rels, funcs = nextRels, nextFuncs
+	}
+	// Objects still to follow past the bound would go unhashed: fail
+	// closed rather than approve what was not read.
+	if unseen(rels, seenRel) || unseen(funcs, seenFunc) {
+		return st, fmt.Errorf("postgres: the objects the statement uses nest deeper than %d levels (views, rules, triggers, policies, defaults, constraints): it cannot be bound to a plan hash", maxObjectDepth)
 	}
 	slices.SortFunc(st.Objects, func(a, b engine.ObjectDef) int {
 		if k := strings.Compare(a.Kind, b.Kind); k != 0 {
@@ -152,7 +157,7 @@ func relationDefs(ctx context.Context, c *pgx.Conn, rels []uint32) ([]engine.Obj
 	var out []engine.ObjectDef
 	for _, q := range []string{
 		`SELECT 'relation', c.oid::regclass::text,
-			concat(c.relkind, E'\x1f', c.relrowsecurity, E'\x1f', c.relforcerowsecurity, E'\x1f', c.relacl::text, E'\x1f', pg_catalog.pg_get_userbyid(c.relowner), E'\x1f', c.reloptions::text, E'\x1f', CASE WHEN c.relkind IN ('v', 'm') THEN pg_catalog.pg_get_viewdef(c.oid) END, E'\x1f', (SELECT string_agg(a.attname || ' ' || pg_catalog.format_type(a.atttypid, a.atttypmod) || ' ' || coalesce(a.attacl::text, ''), ', ' ORDER BY a.attnum)
+			concat(c.relkind, E'\x1f', c.relrowsecurity, E'\x1f', c.relforcerowsecurity, E'\x1f', c.relacl::text, E'\x1f', pg_catalog.pg_get_userbyid(c.relowner), E'\x1f', c.reloptions::text, E'\x1f', CASE WHEN c.relkind IN ('v', 'm') THEN pg_catalog.pg_get_viewdef(c.oid) END, E'\x1f', (SELECT string_agg(concat(a.attname, ' ', pg_catalog.format_type(a.atttypid, a.atttypmod), ' ', a.attnotnull, a.attidentity, a.attgenerated, ' ', a.attacl::text), ', ' ORDER BY a.attnum)
 					FROM pg_catalog.pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped))
 		FROM pg_catalog.pg_class c WHERE c.oid = ANY($1::oid[])`,
 		`SELECT 'rule', r.ev_class::regclass::text || '.' || r.rulename,
@@ -161,6 +166,16 @@ func relationDefs(ctx context.Context, c *pgx.Conn, rels []uint32) ([]engine.Obj
 		`SELECT 'trigger', t.tgrelid::regclass::text || '.' || t.tgname,
 			concat(t.tgenabled, E'\x1f', pg_catalog.pg_get_triggerdef(t.oid))
 		FROM pg_catalog.pg_trigger t WHERE t.tgrelid = ANY($1::oid[]) AND NOT t.tgisinternal`,
+		`SELECT 'default', d.adrelid::regclass::text || '.' || a.attname, pg_catalog.pg_get_expr(d.adbin, d.adrelid)
+		FROM pg_catalog.pg_attrdef d JOIN pg_catalog.pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+		WHERE d.adrelid = ANY($1::oid[])`,
+		// Constraints of the relations, and the foreign keys of other
+		// tables that reference them (ON DELETE CASCADE, SET NULL, ...).
+		`SELECT 'constraint', c.conrelid::regclass::text || '.' || c.conname,
+			concat(c.contype, E'\x1f', c.condeferrable, E'\x1f', c.condeferred, E'\x1f', c.convalidated, E'\x1f', pg_catalog.pg_get_constraintdef(c.oid))
+		FROM pg_catalog.pg_constraint c WHERE c.conrelid = ANY($1::oid[]) OR c.confrelid = ANY($1::oid[])`,
+		`SELECT 'inherits', i.inhrelid::regclass::text || ' < ' || i.inhparent::regclass::text, i.inhseqno::text
+		FROM pg_catalog.pg_inherits i WHERE i.inhrelid = ANY($1::oid[]) OR i.inhparent = ANY($1::oid[])`,
 		`SELECT 'policy', p.polrelid::regclass::text || '.' || p.polname,
 			concat(p.polcmd, E'\x1f', p.polpermissive, E'\x1f', p.polroles::regrole[]::text, E'\x1f', pg_catalog.pg_get_expr(p.polqual, p.polrelid), E'\x1f', pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid))
 		FROM pg_catalog.pg_policy p WHERE p.polrelid = ANY($1::oid[])`,
@@ -175,13 +190,39 @@ func relationDefs(ctx context.Context, c *pgx.Conn, rels []uint32) ([]engine.Obj
 }
 
 // relationUses are the relations and functions that the views, rules,
-// triggers and policies of rels use.
-func relationUses(ctx context.Context, c *pgx.Conn, rels []uint32) (relOut, funcOut []uint32, err error) {
+// triggers, policies, defaults and constraints of rels use, their
+// partitions and inheritance relatives and, for a write, the tables whose
+// foreign keys reference them. A PL/pgSQL body records nothing in
+// pg_depend: the functions it calls are not followed (only its own source
+// is hashed), nor are the objects dynamic SQL reaches.
+func relationUses(ctx context.Context, c *pgx.Conn, rels []uint32, writes bool) (relOut, funcOut []uint32, err error) {
 	r, f, err := uses(ctx, c, `(d.classid = 'pg_catalog.pg_rewrite'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_rewrite WHERE ev_class = ANY($1::oid[])))
 		OR (d.classid = 'pg_catalog.pg_policy'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_policy WHERE polrelid = ANY($1::oid[])))
 		OR (d.classid = 'pg_catalog.pg_trigger'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_trigger WHERE tgrelid = ANY($1::oid[]) AND NOT tgisinternal))
-		OR (d.classid = 'pg_catalog.pg_class'::regclass AND d.objid = ANY($1::oid[]))`, rels)
-	return r, f, err
+		OR (d.classid = 'pg_catalog.pg_class'::regclass AND d.objid = ANY($1::oid[]))
+		OR (d.classid = 'pg_catalog.pg_attrdef'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_attrdef WHERE adrelid = ANY($1::oid[])))
+		OR (d.classid = 'pg_catalog.pg_constraint'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_constraint WHERE conrelid = ANY($1::oid[])))`, rels)
+	if err != nil {
+		return nil, nil, err
+	}
+	// The tables a statement on rels reaches too: their partitions and
+	// inheritance children and parents, and the tables whose foreign keys
+	// reference them (a cascade runs their triggers).
+	q := `SELECT i.inhrelid FROM pg_catalog.pg_inherits i WHERE i.inhparent = ANY($1::oid[])
+		UNION SELECT i.inhparent FROM pg_catalog.pg_inherits i WHERE i.inhrelid = ANY($1::oid[])`
+	if writes {
+		q += ` UNION SELECT c.conrelid FROM pg_catalog.pg_constraint c WHERE c.contype = 'f' AND c.confrelid = ANY($1::oid[])`
+	}
+	more, err := oidsOf(ctx, c, q, rels)
+	return append(r, more...), f, err
+}
+
+func oidsOf(ctx context.Context, c *pgx.Conn, q string, arg []uint32) ([]uint32, error) {
+	rows, err := c.Query(ctx, q, arg)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[uint32])
 }
 
 // uses are the relations and functions outside the server's own schemas
@@ -234,6 +275,11 @@ func defs[T any](ctx context.Context, c *pgx.Conn, q string, arg []T) ([]engine.
 		err := r.Scan(&d.Kind, &d.Name, &d.Def)
 		return d, err
 	})
+}
+
+// unseen reports whether in holds an oid not seen yet.
+func unseen(in []uint32, seen map[uint32]bool) bool {
+	return slices.ContainsFunc(in, func(o uint32) bool { return !seen[o] })
 }
 
 // fresh are the oids of in not seen yet, marked seen.
