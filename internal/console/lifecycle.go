@@ -98,7 +98,9 @@ func (st *starter) appr() Approver {
 	return st.approver
 }
 
-func (st *starter) audit(rec audit.Record) {
+// audit writes rec; a failure is told and returned: an approval at start
+// is not saved without its record.
+func (st *starter) audit(rec audit.Record) error {
 	rec.Profile, rec.Engine, rec.DBUser = st.profile.Name, st.profile.Engine, st.user
 	rec.Host = st.profile.Host
 	if st.profile.Engine == config.EngineSQLite {
@@ -109,8 +111,14 @@ func (st *starter) audit(rec audit.Record) {
 	}
 	if err := st.log.Append(rec); err != nil {
 		st.io.Println("audit log write failed: " + err.Error())
+		return err
 	}
+	return nil
 }
+
+// errApprovalUnrecorded: the human approved a policy at start, but the
+// record could not be written; nothing is saved and the console stops.
+var errApprovalUnrecorded = errors.New("console: the approval of the policy could not be recorded in the audit log")
 
 // rulesDirFor is the directory of the PII rule sets: the project's
 // .locksql when there is one, else the user config directory.
@@ -568,10 +576,12 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 			st.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused", Reason: reason, Error: errText})
 			return config.Policy{}, "", errors.New("console: the policy was not approved")
 		}
+		if st.audit(audit.Record{Event: audit.EventPolicy, Decision: "applied", Approval: st.appr().Mode()}) != nil {
+			return config.Policy{}, "", errApprovalUnrecorded
+		}
 		if err := config.SaveApproved(stateDir, key, cur); err != nil {
 			return config.Policy{}, "", err
 		}
-		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "applied", Approval: st.appr().Mode()})
 		return cur, "", nil
 	}
 	if err != nil {
@@ -606,10 +616,12 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 		io.Println("changes refused: the last approved policy applies")
 		return *ap, config.Fingerprint(cur), nil
 	}
+	if st.audit(audit.Record{Event: audit.EventPolicy, Decision: "applied", Approval: st.appr().Mode()}) != nil {
+		return config.Policy{}, "", errApprovalUnrecorded
+	}
 	if err := config.SaveApproved(stateDir, key, cur); err != nil {
 		return config.Policy{}, "", err
 	}
-	st.audit(audit.Record{Event: audit.EventPolicy, Decision: "applied", Approval: st.appr().Mode()})
 	return cur, "", nil
 }
 

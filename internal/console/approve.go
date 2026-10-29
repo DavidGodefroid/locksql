@@ -389,6 +389,15 @@ func (s *Server) CheckPolicy() {
 // proxy_command) included, ends the session: the open connection no longer
 // matches the policy.
 func (s *Server) adopt(p config.Policy, decision string) error {
+	rec := audit.Record{Event: audit.EventPolicy, Decision: decision}
+	if decision == "applied" {
+		// A loosening takes effect only once recorded: the record comes
+		// first, and a failed write leaves the last approved policy.
+		rec.Approval = s.approver.Mode()
+		if err := s.writeAudit(rec); err != nil {
+			return fmt.Errorf("the approval could not be recorded in the audit log: %w", err)
+		}
+	}
 	if s.cfg.StateDir != "" && s.cfg.ApprovedKey != "" {
 		if err := config.SaveApproved(s.cfg.StateDir, s.cfg.ApprovedKey, p); err != nil {
 			return err
@@ -398,11 +407,9 @@ func (s *Server) adopt(p config.Policy, decision string) error {
 	if err := s.apply(p); err != nil {
 		return err
 	}
-	rec := audit.Record{Event: audit.EventPolicy, Decision: decision}
-	if decision == "applied" {
-		rec.Approval = s.approver.Mode()
+	if decision != "applied" {
+		s.audit(rec)
 	}
-	s.audit(rec)
 	n := p.Profile
 	if n.Production && !old.Production && s.sess != nil {
 		// The start-up privilege audit accepted extra grants with a typed
