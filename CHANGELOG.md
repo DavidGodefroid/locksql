@@ -13,6 +13,13 @@ This file records the changes a user or an agent has to know about.
   same audit records): the screens are pinned byte for byte by golden tests
   (`internal/console/testdata/screens`). The upcoming hub mode then plugs
   into one place shared by every Lock.
+- **Chained audit log.** Each audit record now ends with `prev_hash`, the
+  hash of the line before it (lockkit's `audit.Verify`
+  checks the chain and names the first record edited, removed, inserted or
+  reordered). The line before it is the 0.8 line, byte for byte. Existing logs
+  are not rewritten: new records chain onto their last line. Records of
+  hub mode will also carry `ticket`, `approver`, `facade` and `hub_sig`.
+  `locksql stats` reads old and new logs alike.
 
 - **Plan hash.** `query.plan` answers a `plan_hash` (`sha256:…`) of the
   normalised statement, the profile, the policy fingerprint and, on
@@ -35,8 +42,8 @@ This file records the changes a user or an agent has to know about.
 - **Hub mode** (`locksql console --hub URL --hub-key-file PATH --instance
   NAME`, written by `lock up`; `locksql hub-key --instance NAME` prints the
   instance key to pin). The human decides in lockhub instead of this
-  terminal: `query.run` answers `{"status":"pending","ticket":…}` (a result,
-  not an error), the plan kept in lockkit's persistent plans store, bound to
+  terminal: `query.run` answers `{"status":"pending","ticket":…,"instance":…}` (a result,
+  not an error; over MCP, lockkit's standard pending answer), the plan kept in lockkit's persistent plans store, bound to
   the client's account, the policy fingerprint and the plan hash; the ticket
   carries the approval screen with every value of the statement masked.
   `locksql_run` with `ticket` (CLI: `locksql run TICKET`) runs it once the

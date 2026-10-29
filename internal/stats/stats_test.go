@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/DavidGodefroid/lockkit/ticket"
 
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
@@ -229,4 +232,55 @@ func FuzzShapeVocabulary(f *testing.F) {
 			t.Fatalf("ExportToken(%q) = %q", sql, tok)
 		}
 	})
+}
+
+// The chain (prev_hash) and the hub fields are additive: a log written
+// with them gives the report of the same records in the format before
+// them, and the export holds none of them.
+func TestReadChainedLogLikeOldFormat(t *testing.T) {
+	recs := []audit.Record{
+		refused("E_MASKED_FILTER", "LIKE", "SELECT id FROM users WHERE email LIKE 'a%' LIMIT 1"),
+		refused("E_NO_LIMIT", "", "SELECT id FROM users"),
+		{Event: audit.EventApproved, SQL: "SELECT 1 LIMIT 1", Ticket: "01JB0000000000000000000000",
+			Approver: &ticket.Approver{ID: "u1", Display: "David"}, Facade: "tty", HubSig: "c2ln"},
+		{Event: audit.EventRefused, SQL: "SELECT 1"},
+	}
+	old, err := Read(logOf(t, recs...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	l, err := audit.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range recs {
+		if err := l.Append(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(l.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"prev_hash":"sha256:`)) || !bytes.Contains(raw, []byte(`"hub_sig":"c2ln"`)) {
+		t.Fatalf("log lacks the chain or the hub fields:\n%s", raw)
+	}
+	chained, err := Read(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprintf("%+v", chained) != fmt.Sprintf("%+v", old) {
+		t.Errorf("report changed:\nchained %+v\nold     %+v", chained, old)
+	}
+	var a, b bytes.Buffer
+	if err := old.WriteExport(&a, "0.9.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := chained.WriteExport(&b, "0.9.0"); err != nil {
+		t.Fatal(err)
+	}
+	if a.String() != b.String() || strings.Contains(b.String(), "c2ln") || strings.Contains(b.String(), "David") {
+		t.Errorf("export changed or leaks hub fields:\n%s\n%s", a.String(), b.String())
+	}
 }

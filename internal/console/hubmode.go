@@ -148,11 +148,7 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 	sc := &kconsole.Screen{Hub: &kconsole.HubTicket{PlanID: hp.ID, Caller: caller, Risk: s.hubRisk(pl), Masked: s.hubScreen(pl),
 		Requester: ticket.Requester{Agent: kconsole.PeerText(ctx)}}}
 	a := s.asker().Ask(ctx, id, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
-		rec.Event, rec.Decision, rec.Reason, rec.Error, rec.Approval = b.Event, b.Decision, b.Reason, b.Error, b.Approval
-		if b.Ticket != "" {
-			// The 0.8 record has no ticket field yet (#92).
-			rec.Reason = "ticket " + b.Ticket
-		}
+		rec.Event, rec.Decision, rec.Reason, rec.Error, rec.Approval, rec.Ticket = b.Event, b.Decision, b.Reason, b.Error, b.Approval, b.Ticket
 		s.audit(rec)
 	})
 	return a.Refusal
@@ -217,9 +213,9 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string) 
 		return refusedResp(id, hiddenWeightRefusal, refusal.New(refusal.Cost, hiddenWeightRefusal).Info("", 0))
 	}
 	s.println(paint.Step("ticket " + safeText(ticketID, false) + " approved in lockhub: running"))
-	rec.Event, rec.Decision, rec.Approval, rec.Reason = audit.EventApproved, "approved", kconsole.HubApproval, "ticket "+ticketID
+	rec.Event, rec.Decision, rec.Approval, rec.Ticket = audit.EventApproved, "approved", kconsole.HubApproval, ticketID
 	if dec != nil {
-		rec.Reason += " approved by " + dec.Approver.ID + " on " + dec.Facade
+		rec.Approver, rec.Facade = &dec.Approver, dec.Facade
 	}
 	resp := s.runApproved(ctx, id, sess, pl, rec, class, time.Time{})
 	if resp.Error != nil {
@@ -258,7 +254,7 @@ func (s *Server) hubStale(ctx context.Context, id int64, body hubPlan, old strin
 	if resp.Error != nil || json.Unmarshal(resp.Result, &p) != nil || p.Status != "pending" {
 		return resp
 	}
-	return okResp(id, map[string]string{"status": "stale", "ticket": p.Ticket, "lock": product.P.Name, "stale_ticket": old})
+	return okResp(id, map[string]string{"status": "stale", "ticket": p.Ticket, "lock": product.P.Name, "instance": s.cfg.Hub.Instance, "stale_ticket": old})
 }
 
 // withdraw ends the plan of a ticket that can no longer run.

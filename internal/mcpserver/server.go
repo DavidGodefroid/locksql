@@ -169,11 +169,14 @@ type (
 		// Refusal is set, on an error result, when the console refused
 		// the run.
 		Refusal *refusal.Info `json:"refusal,omitempty"`
-		// Status is "pending" or "stale" in hub mode (the human decides in
-		// lockhub): run Ticket once told it is decided. Not an error.
+		// In hub mode (the human decides in lockhub) the run is pending, or
+		// stale (StaleTicket changed; Ticket is the new one): the agent ends
+		// its turn and runs Ticket once told it is decided. Not an error.
+		// The fields of mcpkit.PendingResult, optional here.
 		Status      string `json:"status,omitempty"`
 		Ticket      string `json:"ticket,omitempty"`
 		Lock        string `json:"lock,omitempty"`
+		Instance    string `json:"instance,omitempty"`
 		StaleTicket string `json:"stale_ticket,omitempty"`
 	}
 	// PlanOut is the plan, or on an error result the refusal.
@@ -441,8 +444,21 @@ func (t *tools) run(ctx context.Context, req *mcp.CallToolRequest, in RunIn) (*m
 	if err != nil {
 		return nil, RunOut{}, err
 	}
-	out := RunOut{Columns: nonNil(r.Columns), Rows: exactRows(r.Rows), Truncated: r.Truncated, CutCells: r.CutCells, Affected: r.Affected, DurationMS: r.DurationMS,
-		Status: r.Status, Ticket: r.Ticket, Lock: r.Lock, StaleTicket: r.StaleTicket}
+	if r.Status != "" {
+		// The lock's standard pending answer (with the instance, for the
+		// agent's harness to suspend it until the ticket is decided).
+		res, pr := mcpkit.PendingOn(r.Lock, r.Instance, r.Ticket)
+		pr.Status = r.Status
+		out := RunOut{Columns: []string{}, Rows: [][]any{}, Status: pr.Status, Ticket: pr.Ticket, Lock: pr.Lock, Instance: pr.Instance, StaleTicket: r.StaleTicket}
+		if r.Status != mcpkit.StatusPending {
+			var b bytes.Buffer
+			client.FormatRun(&b, r)
+			res = render(func(w *bytes.Buffer) { w.Write(b.Bytes()) })
+		}
+		res.StructuredContent = out
+		return res, out, nil
+	}
+	out := RunOut{Columns: nonNil(r.Columns), Rows: exactRows(r.Rows), Truncated: r.Truncated, CutCells: r.CutCells, Affected: r.Affected, DurationMS: r.DurationMS}
 	return render(func(w *bytes.Buffer) {
 		w.WriteString(UntrustedPreamble + "\n")
 		var b bytes.Buffer

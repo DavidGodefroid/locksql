@@ -605,3 +605,37 @@ func TestInstructionsCarryAgentRules(t *testing.T) {
 		}
 	}
 }
+
+// In hub mode a pending run is the lock's standard pending answer, with
+// the instance the ticket is on, not an error.
+func TestRunPendingCarriesTheInstance(t *testing.T) {
+	f := &fakeConn{profile: "uat", runResult: ipc.RunResult{Status: "pending", Ticket: "01JB0000000000000000000000", Lock: "locksql", Instance: "sql-uat"}}
+	cs := connect(t, withFake(f), nil)
+	r := call(t, cs, "locksql_run", map[string]any{"plan_id": "p1"})
+	if r.IsError || !strings.Contains(text(r), "Pending human approval: ticket 01JB0000000000000000000000 on locksql") {
+		t.Fatalf("pending answer: error %v, %q", r.IsError, text(r))
+	}
+	b, _ := json.Marshal(r.StructuredContent)
+	var out map[string]any
+	if err := json.Unmarshal(b, &out); err != nil || out["status"] != "pending" || out["instance"] != "sql-uat" || out["lock"] != "locksql" || out["ticket"] != "01JB0000000000000000000000" {
+		t.Fatalf("structured content %s", b)
+	}
+	// A ticket runs through RunTicket.
+	_ = call(t, cs, "locksql_run", map[string]any{"ticket": "01JB0000000000000000000000"})
+	f.mu.Lock()
+	calls := slices.Clone(f.calls)
+	f.mu.Unlock()
+	if !slices.Contains(calls, "run ticket:01JB0000000000000000000000") {
+		t.Errorf("calls %v", calls)
+	}
+}
+
+// Out of hub mode the run result has no pending field.
+func TestRunResultHasNoPendingFields(t *testing.T) {
+	f := &fakeConn{profile: "uat", runResult: ipc.RunResult{Columns: []string{"id"}, Rows: [][]any{{json.Number("1")}}, Text: "id\n1\n"}}
+	cs := connect(t, withFake(f), nil)
+	b, _ := json.Marshal(call(t, cs, "locksql_run", map[string]any{"plan_id": "p1"}).StructuredContent)
+	if strings.Contains(string(b), "status") || strings.Contains(string(b), "ticket") {
+		t.Fatalf("structured content %s", b)
+	}
+}

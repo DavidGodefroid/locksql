@@ -163,6 +163,7 @@ type RunResult struct {
 	Status      string `json:"status,omitempty"`
 	Ticket      string `json:"ticket,omitempty"`
 	Lock        string `json:"lock,omitempty"`
+	Instance    string `json:"instance,omitempty"`
 	StaleTicket string `json:"stale_ticket,omitempty"`
 }
 
