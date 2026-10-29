@@ -10,6 +10,7 @@ import (
 
 	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"github.com/DavidGodefroid/lockkit/sanitize"
+	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/lockkit/ui"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
@@ -398,14 +399,21 @@ func (s *Server) adopt(p config.Policy, decision string) error {
 			return fmt.Errorf("the approval could not be recorded in the audit log: %w", err)
 		}
 	}
+	// failed records that an applied change did not happen.
+	failed := func(err error) error {
+		if decision == "applied" {
+			s.audit(audit.Record{Event: audit.EventPolicy, Decision: "failed", Error: secrets.Sanitize(err)})
+		}
+		return err
+	}
 	if s.cfg.StateDir != "" && s.cfg.ApprovedKey != "" {
 		if err := config.SaveApproved(s.cfg.StateDir, s.cfg.ApprovedKey, p); err != nil {
-			return err
+			return failed(err)
 		}
 	}
 	old := s.profile
 	if err := s.apply(p); err != nil {
-		return err
+		return failed(err)
 	}
 	if decision != "applied" {
 		s.audit(rec)

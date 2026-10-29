@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
+	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
+	"github.com/DavidGodefroid/locksql/internal/pii"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 )
 
@@ -130,5 +132,49 @@ func TestStartPolicyAuditFailure(t *testing.T) {
 	}
 	if _, err := config.LoadApproved(state, key); err == nil {
 		t.Error("policy saved without a record")
+	}
+}
+
+// Declining to mask a quasi-identifier widens the PII rules: nothing is
+// saved without its record.
+func TestPIIAllowAuditFailure(t *testing.T) {
+	root, state := t.TempDir(), t.TempDir()
+	rulesPath := filepath.Join(root, pii.RulesFile)
+	log, err := audit.Open(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readOnlyLog(t, state)
+	io := &fakeIO{answers: []string{"n"}}
+	p := uatProfile()
+	st := &starter{io: io, log: log, profile: p}
+	sess := &columnsSession{cols: []engine.ColumnInfo{{DB: "app", Table: "users", Column: "gender", Type: "varchar"}}}
+	key := config.ApprovedKey(root, p.Name)
+	if _, err := st.piiBootstrap(context.Background(), sess, []string{"app"}, rulesPath, state, key, config.NewPolicy(p, nil, nil)); err == nil {
+		t.Fatal("allow rule kept without a record")
+	}
+	if _, err := os.Stat(rulesPath); err == nil {
+		t.Error("rules file written without a record")
+	}
+	if _, err := config.LoadApproved(state, key); err == nil {
+		t.Error("policy saved without a record")
+	}
+}
+
+// A trusted SSH host key that cannot be recorded is not trusted, so it is
+// never written to known_hosts.
+func TestHostKeyAuditFailure(t *testing.T) {
+	state := t.TempDir()
+	log, err := audit.Open(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &starter{io: &fakeIO{}, log: log, profile: uatProfile()}
+	if !st.recordHostKey("bastion.example.com", "SHA256:abc") {
+		t.Fatal("recorded key refused")
+	}
+	readOnlyLog(t, state)
+	if st.recordHostKey("bastion.example.com", "SHA256:def") {
+		t.Fatal("host key trusted without a record")
 	}
 }
