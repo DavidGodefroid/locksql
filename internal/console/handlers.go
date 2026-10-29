@@ -396,7 +396,18 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	if r != nil {
 		return *r
 	}
-	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String(), src: p.SQL, base: base}
+	var shadow *shadowNames
+	if s.profile.WriteFunctions == config.WriteFunctionsAllowlist {
+		r, sn, err := s.strictWriteFunctions(ctx, sess, db, st)
+		if err != nil {
+			return s.failed(req.ID, "plan", err)
+		}
+		if r != nil {
+			return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", p.SQL, shifted(r, base))
+		}
+		shadow = sn
+	}
+	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String(), src: p.SQL, base: base, shadow: shadow}
 	if !p.Unmask && st.Class != sqlclass.Read {
 		// Before the run: a write's RETURNING list or a data-modifying
 		// CTE must not move PII under another label, since refusing its
@@ -572,7 +583,11 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	// agent's answer is the same whatever the counts say.
 	base := pl.warnings
 	kAlert := func() *ipc.Response {
-		kw, err := s.kCount(ctx, sess, pl)
+		kw, refused, err := s.kCount(ctx, sess, pl)
+		if refused != nil {
+			r := s.refuseWarned(ctx, req.ID, pl, class, refused)
+			return &r
+		}
 		if err != nil {
 			s.auditRunFailed(rec, s.auditErrText(err, pl))
 			r := s.failedPlan(req.ID, "k-anonymity check", err, pl)
@@ -641,6 +656,16 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		if missing, _ := s.placeholders(pl); len(missing) > 0 {
 			return s.refuseWarned(ctx, req.ID, pl, class, refusal.New(refusal.Placeholder, "a placeholder has no value"))
 		}
+	}
+
+	// A function or operator created since the plan would run instead of
+	// the built-in: look them up again.
+	if r, err := s.checkShadows(ctx, sess, pl.db, pl.shadow); err != nil || r != nil {
+		if err != nil {
+			s.auditRunFailed(rec, s.auditErrText(err, pl))
+			return s.failedPlan(req.ID, "plan", err, pl)
+		}
+		return s.refuseWarned(ctx, req.ID, pl, class, r)
 	}
 
 	rctx := ctx

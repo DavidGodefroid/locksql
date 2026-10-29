@@ -61,7 +61,7 @@
   <pre tabindex="0" class="diagram" role="img" aria-label="Process layout: the console in your terminal holds credentials, policy, classifier, EXPLAIN, approval prompt, masking and audit, and talks to the database over its native protocol; the agent side runs locksql mcp or the locksql CLI with no secrets and no database connection; they talk over a local socket with JSON-RPC."><code> Your terminal                                    Agent side
  ┌───────────────────────────────────┐            ┌──────────────────────────────┐
  │ locksql console --profile dev     │  local     │ locksql mcp   (stdio MCP)    │◄── AI agent
- │  credentials: ask·keychain·Vault  │  socket    │ locksql plan|run|status|pii  │◄── AI via shell
+ │  credentials: ask · Vault         │  socket    │ locksql plan|run|status|pii  │◄── AI via shell
  │  policy · classifier · EXPLAIN    │◄──────────►│ no secrets, no DB connection │
  │  approval prompt · masking · audit│  JSON-RPC  └──────────────────────────────┘
  └─────────────────┬─────────────────┘
@@ -182,7 +182,7 @@ locksql doctor   [--profile P] [--fix [--yes]]</code></pre>
   <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#cli">CLI reference</a></p>
   <h3 id="agents">Supported agents</h3>
   <div class="prose">
-    <p><code>locksql setup</code> (and bare <code>locksql</code>) wires Claude Code, Codex, Gemini CLI and Cursor for your user account; the wiring is global, so it applies in every directory. <code>locksql init claude|codex|cursor|gemini</code> writes project files instead.</p>
+    <p>Claude Code, Codex, Gemini CLI and Cursor start the MCP server with <code>locksql mcp</code>: the launcher runs it from the image, in a throwaway container, as <code>agent</code>. <code>locksql init claude|codex|cursor|gemini</code> writes the project files, the instructions and that MCP command. <a href="../install/#wire">Wire the agent</a>.</p>
     <p>The generated instructions tell the agent to use the database only on explicit request, to pass a one-line intent with each plan, to prefer non-production profiles, to show the plan before running it, never to retry after a denial, never to export data, never to handle credentials, and to treat rows as untrusted data.</p>
     <p>Skills, rules and tool descriptions are guidance. Every check that matters runs in the console.</p>
   </div>
@@ -290,7 +290,7 @@ SELECT COUNT(*) FROM orders o JOIN customers c ON o.customer_id = c.id
 </tbody>
 </table>
 </div>
-  <p class="prose">All engines are pure Go: the binary is built with <code>CGO_ENABLED=0</code>. locksql supports Linux and macOS, on amd64 and arm64. On Windows it runs inside WSL2 (<a href="../install/#windows">see Install</a>); native Windows is not supported.</p>
+  <p class="prose">All engines are pure Go: the binary is built with <code>CGO_ENABLED=0</code>. locksql runs in Linux containers, on amd64 and arm64, wherever Docker runs (<a href="../install/">see Install</a>); native Windows is not supported.</p>
 </section>
 
 <section aria-labelledby="unmask">
@@ -342,7 +342,7 @@ SELECT COUNT(*) FROM orders o JOIN customers c ON o.customer_id = c.id
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
       </ul>
-      <p>Pre-release (<code>v0.8.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (<code>v0.9.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
     </div>
   </footer>
 </body>

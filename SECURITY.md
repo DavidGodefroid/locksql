@@ -59,6 +59,48 @@ To contribute one:
 - Reports are linked here with the reviewer's name (or anonymously if you
   prefer) and the fixes they led to.
 
+## Verifying a release
+
+Each release's `checksums.txt` covers its archives, and is
+signed keylessly by `.github/workflows/release.yml` run for the release's tag.
+Check the signature against that workflow run for the tag you install, not
+any workflow or tag of the repository (a tag moved to an older release's
+signed files would pass a looser check), then the file you downloaded
+against `checksums.txt`:
+
+```sh
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity 'https://github.com/DavidGodefroid/locksql/.github/workflows/release.yml@refs/tags/vX.Y.Z' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+sha256sum -c --ignore-missing checksums.txt
+```
+
+`scripts/install.sh` and the launcher's `locksql update` run the same check
+and refuse to install without cosign (`LOCKSQL_SKIP_COSIGN=1` is their
+explicit way past it). The release image,
+`ghcr.io/davidgodefroid/locksql:X.Y.Z` (and `-vault`), is signed with cosign
+by the same workflow. `install.sh` and `locksql update` verify it and write
+its digest into the launcher, which runs it by that digest. By hand:
+
+```sh
+cosign verify ghcr.io/davidgodefroid/locksql:X.Y.Z \
+  --certificate-identity 'https://github.com/DavidGodefroid/locksql/.github/workflows/release.yml@refs/tags/vX.Y.Z' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The actions the workflows run are pinned to full commit SHAs, and the
+release job pins the versions of GoReleaser, cosign and syft.
+
+Release tags are annotated, not yet signed (`v0.1.0` to `v0.8.1`). From
+the first signed tag on, its key is published on the maintainer's GitHub
+profile (<https://github.com/DavidGodefroid.gpg>, or the SSH signing keys),
+and a tag can be checked before you build from it:
+
+```sh
+git verify-tag vX.Y.Z
+```
+
 ## Supported versions
 
 Only the latest release receives security fixes.

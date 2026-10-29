@@ -252,7 +252,7 @@ func TestDoctorSameUserMode(t *testing.T) {
 func TestInstallPrint(t *testing.T) {
 	// The test binary belongs to the test account: see
 	// TestInstallRefusesABinaryAnotherAccountCanChange.
-	o := cli(t, t.TempDir(), "", "install", "--client", "agent", "--print", "--trust-binary")
+	o := installCLI(t, "--client", "agent", "--print", "--trust-binary")
 	if o.code != 0 {
 		t.Fatalf("exit %d: %s", o.code, o.stderr)
 	}
@@ -270,10 +270,10 @@ func TestInstallPrint(t *testing.T) {
 			t.Error("install script lacks the 0710 socket directory")
 		}
 	}
-	if o := cli(t, t.TempDir(), "", "install", "--client", "locksql", "--print"); o.code != exitUsage {
+	if o := installCLI(t, "--client", "locksql", "--print"); o.code != exitUsage {
 		t.Error("same agent and console account accepted")
 	}
-	if o := cli(t, t.TempDir(), "", "install", "--client", "a;id", "--print"); o.code != exitUsage {
+	if o := installCLI(t, "--client", "a;id", "--print"); o.code != exitUsage {
 		t.Error("shell metacharacters accepted in an account name")
 	}
 }
@@ -364,5 +364,44 @@ func TestDoctorVault(t *testing.T) {
 	d.stat = os.Stat
 	if c := findCheck(profileChecks(d, p, separatedSys(), t.TempDir()), "vault token"); c == nil || c.state != checkFail || !strings.Contains(c.detail, ".vault-token") {
 		t.Errorf("~/.vault-token check = %+v", c)
+	}
+}
+
+func TestDoctorProxyCommand(t *testing.T) {
+	p := config.Profile{Name: "p", Engine: config.EngineMariaDB, Host: "127.0.0.1", TLS: config.TLSPrefer, Credentials: config.CredentialsAsk,
+		ProxyCommand: []string{"docker", "exec", "-i", "db", "nc", "127.0.0.1", "3306"}}
+	d := fakeDoctor(nil)
+	d.lookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	if c := findCheck(profileChecks(d, p, nil, t.TempDir()), "proxy_command"); c == nil || c.state != checkFail || !strings.Contains(c.detail, "docker") {
+		t.Errorf("missing program check = %+v", c)
+	}
+	d.lookPath = func(string) (string, error) { return "/usr/bin/docker", nil }
+	checks := profileChecks(d, p, nil, t.TempDir())
+	if c := findCheck(checks, "proxy_command"); c == nil || c.state != checkOK || !strings.Contains(c.detail, `"docker" "exec"`) {
+		t.Errorf("proxy_command check = %+v", c)
+	}
+	if c := findCheck(checks, ": tls"); c == nil || c.state != checkOK {
+		t.Errorf("tls check of a loopback database behind a proxy = %+v", c)
+	}
+
+	// A program inside the project can be rewritten by the agent after the
+	// approval.
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".locksql"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".locksql", "config.toml"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.ProxyCommand = []string{filepath.Join(root, "bin", "proxy")}
+	d.stat = os.Stat
+	if c := findCheck(profileChecks(d, p, nil, filepath.Join(root, "sub")), "proxy_command"); c == nil || c.state != checkFail || !strings.Contains(c.detail, "project") {
+		t.Errorf("program in the project check = %+v", c)
+	}
+
+	remote := p
+	remote.Host, remote.ProxyCommand = "db.internal", []string{"kubectl", "exec", "-i", "pod", "--", "nc", "db.internal", "3306"}
+	if c := findCheck(profileChecks(d, remote, nil, t.TempDir()), ": tls"); c == nil || c.state != checkWarn || !strings.Contains(c.detail, "proxy_command") {
+		t.Errorf("tls check of a remote database behind a proxy = %+v", c)
 	}
 }

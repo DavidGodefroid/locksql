@@ -75,8 +75,9 @@ type Options struct {
 type ServerConfig struct {
 	// Policy is the approved policy the server enforces.
 	Policy config.Policy
-	// RulesPath is the PII rules file: <project>/.locksql/pii.toml, or
-	// pii.toml in the user config directory outside a project.
+	// RulesPath is the file of the profile's PII rule set:
+	// <project>/.locksql/pii/<set>.toml, or pii/<set>.toml in the user
+	// config directory outside a project.
 	RulesPath string
 	// StateDir and ApprovedKey locate the approved policy file.
 	StateDir    string
@@ -156,6 +157,9 @@ type plan struct {
 	// it of the statement the checks read: refusals point into src.
 	src  string
 	base int
+	// shadow are the functions and operators checkShadows looks up again
+	// just before the run (nil: none to check).
+	shadow *shadowNames
 }
 
 // Server serves client requests one at a time against one session. It is

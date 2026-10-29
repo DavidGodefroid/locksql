@@ -52,7 +52,7 @@ func profileWritten(e env, root string, s profileSpec) {
 			fmt.Fprintf(e.stdout, "%s %s does not exist yet: the console never creates it.\n", p.Yellow("note:"), filepath.Join(root, s.path))
 		}
 	case s.credentials == config.CredentialsVault:
-		fmt.Fprintf(e.stdout, "%s the console reads the login with the vault CLI: log in to Vault (vault login) as the console account, with VAULT_ADDR in its environment.\n", p.Yellow("note:"))
+		fmt.Fprintf(e.stdout, "%s the console reads the login with the vault CLI and asks for the Vault token at start (no vault login needed): set VAULT_ADDR in the console account's environment.\n", p.Yellow("note:"))
 	}
 }
 

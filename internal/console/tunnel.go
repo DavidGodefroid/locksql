@@ -143,6 +143,16 @@ type tunneledSession struct {
 	bastion, dbHost string
 }
 
+// ShadowedFunctions passes the lookup on (engine.FunctionShadows).
+func (s *tunneledSession) ShadowedFunctions(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.ShadowedFunctions(ctx, s.Session, db, names)
+}
+
+// ShadowedOperators passes the lookup on (engine.FunctionShadows).
+func (s *tunneledSession) ShadowedOperators(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.ShadowedOperators(ctx, s.Session, db, names)
+}
+
 func (s *tunneledSession) Close() error {
 	err := s.Session.Close()
 	if s.closeTunnel != nil {
@@ -164,4 +174,44 @@ func (s *tunneledSession) Notices() []string {
 	}
 	return []string{fmt.Sprintf("encrypted by SSH to %s; NOT encrypted (or not verified) from the bastion to %s: %s",
 		s.bastion, s.dbHost, strings.Join(n.Notices(), "; "))}
+}
+
+// proxiedSession is a database session reached through proxy_command; the
+// commands end with the session's connections.
+type proxiedSession struct {
+	engine.Session
+	program, dbHost string
+}
+
+// Notices restates the session's transport notices: what carries the
+// stream from the console to where the command runs is the command's
+// business (ssh, the docker socket, the Kubernetes API); from there to the
+// database, the database's own tls mode applies, unless the database
+// listens on loopback where the command runs.
+func (s *proxiedSession) Notices() []string {
+	n, ok := s.Session.(engine.Noticer)
+	if !ok || len(n.Notices()) == 0 || config.IsLoopback(s.dbHost) {
+		return nil
+	}
+	return []string{fmt.Sprintf("reached through proxy_command %s; NOT encrypted (or not verified) from where it runs to %s: %s",
+		s.program, s.dbHost, strings.Join(n.Notices(), "; "))}
+}
+
+// ShadowedFunctions passes the lookup on (engine.FunctionShadows).
+func (s *proxiedSession) ShadowedFunctions(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.ShadowedFunctions(ctx, s.Session, db, names)
+}
+
+// ShadowedOperators passes the lookup on (engine.FunctionShadows).
+func (s *proxiedSession) ShadowedOperators(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.ShadowedOperators(ctx, s.Session, db, names)
+}
+
+// withProxyStderr adds what the proxy command wrote to its stderr to a
+// connection error: "No such container" says more than "EOF".
+func withProxyStderr(err error, stderr string) error {
+	if stderr == "" {
+		return err
+	}
+	return fmt.Errorf("%w (proxy_command stderr: %s)", err, stderr)
 }

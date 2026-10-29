@@ -1,19 +1,20 @@
 //go:build firstquery && linux
 
-// Package firstquery checks the README's "first query in 3 commands" path
-// on a fresh Linux machine, end to end and without a human: CI runs it on
-// a throwaway runner (or container) where this account has password-less
-// sudo. It changes the machine (an account, a group, /usr/local/bin,
-// /etc/locksql): never run it on yours.
+// Package firstquery checks the README's quick start end to end and
+// without a human, through the launcher and the image: locksql init,
+// profile add and doctor --fix, then locksql console in a terminal. The
+// agent's two calls (plan, run) and the human's approval in the console
+// follow; approval stays a keystroke in the console's terminal, which the
+// test types as the human would. It uses Docker volumes (locksql-run,
+// locksql-home) and the container name locksql-console: CI runs it on a
+// throwaway runner.
 //
-//	LOCKSQL_FIRSTQUERY=1 LOCKSQL_FIRSTQUERY_BIN=/path/to/locksql \
+//	docker build -t locksql .
+//	LOCKSQL_FIRSTQUERY=1 LOCKSQL_FIRSTQUERY_LAUNCHER=$PWD/scripts/locksql \
 //	  go test -tags firstquery -v ./test/firstquery/
 //
-// The three commands are the human's: install the binary, locksql setup,
-// locksql console in the console account. The agent's two calls (plan,
-// run) and the human's approval in the console follow; approval stays a
-// keystroke in the console's terminal, which the test types as the human
-// would.
+// The launcher of a clone runs the image tagged locksql (LOCKSQL_IMAGE
+// overrides it).
 package firstquery
 
 import (
@@ -33,32 +34,35 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+// launcher is the locksql launcher under test (scripts/locksql).
+var launcher string
 
-// human runs one of the human's commands and logs it as typed.
-func human(t *testing.T, n int, dir string, name string, args ...string) {
+// human runs one of the human's commands through the launcher and logs it
+// as typed; ok lists the exit codes that pass.
+func human(t *testing.T, n int, dir string, args []string, ok ...int) {
 	t.Helper()
-	t.Logf("command %d: %s %s", n, name, strings.Join(args, " "))
-	cmd := exec.Command(name, args...)
+	t.Logf("command %d: locksql %s", n, strings.Join(args, " "))
+	cmd := exec.Command("sh", append([]string{launcher}, args...)...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	t.Logf("%s", out)
-	if err != nil {
-		t.Fatalf("command %d failed: %v", n, err)
+	code := cmd.ProcessState.ExitCode()
+	for _, c := range append(ok, 0) {
+		if code == c {
+			return
+		}
 	}
+	t.Fatalf("command %d failed: %v", n, err)
 }
 
-// agent runs a client command as the agent's account would after logging
-// in again: with the client group that setup just gave it.
+// agent runs a client command as the agent does: the launcher, which runs
+// it in the image as the agent account.
 func agent(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
-	words := []string{"locksql"}
-	for _, a := range args {
-		words = append(words, shellQuote(a))
-	}
-	line := "cd " + shellQuote(dir) + " && " + strings.Join(words, " ")
-	t.Logf("agent: %s", strings.Join(words, " "))
-	out, err := exec.Command("sg", "locksql-clients", "-c", line).CombinedOutput()
+	t.Logf("agent: locksql %s", strings.Join(args, " "))
+	cmd := exec.Command("sh", append([]string{launcher}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
 	return string(out), err
 }
 
@@ -98,19 +102,95 @@ func (s *screen) waitFor(t *testing.T, from int, d time.Duration, prompts ...str
 	return "", 0
 }
 
-func TestFirstQueryInThreeCommands(t *testing.T) {
+// setup skips the test unless LOCKSQL_FIRSTQUERY=1, and finds the launcher.
+func setup(t *testing.T) {
+	t.Helper()
 	if os.Getenv("LOCKSQL_FIRSTQUERY") != "1" {
-		t.Skip("set LOCKSQL_FIRSTQUERY=1 on a throwaway machine: this test installs locksql system-wide")
+		t.Skip("set LOCKSQL_FIRSTQUERY=1 on a throwaway machine: this test uses Docker volumes and console containers")
 	}
-	bin := os.Getenv("LOCKSQL_FIRSTQUERY_BIN")
-	if bin == "" {
-		t.Fatal("LOCKSQL_FIRSTQUERY_BIN: the locksql binary to install")
+	launcher = os.Getenv("LOCKSQL_FIRSTQUERY_LAUNCHER")
+	if launcher == "" {
+		t.Fatal("LOCKSQL_FIRSTQUERY_LAUNCHER: the launcher, scripts/locksql")
 	}
 	if os.Geteuid() == 0 {
-		t.Fatal("run as the agent's account (with sudo), not as root")
+		t.Fatal("run as your own account, not as root")
 	}
+}
 
-	// A project with a SQLite database, where every account may enter.
+// startConsole starts cmd in a terminal and returns its screen, the
+// terminal, and the function that ends it (Ctrl-C) and logs the screen.
+func startConsole(t *testing.T, cmd *exec.Cmd) (*screen, *os.File, func()) {
+	t.Helper()
+	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 50, Cols: 160})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scr := &screen{done: make(chan struct{})}
+	go func() { scr.err = cmd.Wait(); close(scr.done) }()
+	go func() {
+		r := bufio.NewReader(tty)
+		buf := make([]byte, 4096)
+		for {
+			n, err := r.Read(buf)
+			scr.mu.Lock()
+			scr.buf.Write(buf[:n])
+			scr.mu.Unlock()
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return scr, tty, func() {
+		tty.Write([]byte{3}) // Ctrl-C ends the session
+		select {
+		case <-scr.done:
+		case <-time.After(10 * time.Second):
+			cmd.Process.Kill()
+		}
+		tty.Close()
+		t.Logf("console screen:\n%s", scr.String())
+	}
+}
+
+// The quick start, with the project mounted read-write in the console's
+// container, then read-only but for .locksql (LOCKSQL_READONLY_PROJECT=1,
+// as lea runs it): there the console checks, through Docker's bind mount,
+// that .locksql has the device and inode the launcher checked.
+func TestFirstQueryThroughTheLauncher(t *testing.T) {
+	setup(t)
+	t.Run("read-write project", func(t *testing.T) { firstQuery(t, nil) })
+	t.Run("read-only project", func(t *testing.T) { firstQuery(t, []string{"LOCKSQL_READONLY_PROJECT=1"}) })
+}
+
+// A console given a .locksql other than the one the launcher checked (here
+// a device and inode no directory has) refuses to start.
+func TestConsoleRefusesAnotherLocksqlDir(t *testing.T) {
+	setup(t)
+	project := demoProject(t)
+	human(t, 1, project, []string{"init", "claude"})
+	human(t, 2, project, []string{"doctor", "--fix", "--yes"}, 1)
+	image := os.Getenv("LOCKSQL_IMAGE")
+	if image == "" {
+		image = "locksql"
+	}
+	dir := filepath.Join(project, ".locksql")
+	cmd := exec.Command("docker", "run", "-it", "--rm", "--user", "locksql", "-v", project+":"+project+":ro",
+		"-v", dir+":"+dir, "-v", "locksql-run:/run/locksql", "-v", "locksql-home:/home/locksql",
+		"-e", "LOCKSQL_EXPECT_DIR=0:0", image, "console", "--project", project)
+	scr, _, end := startConsole(t, cmd)
+	defer end()
+	scr.waitFor(t, 0, time.Minute, "is not the directory the launcher checked")
+	select {
+	case <-scr.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the console still runs")
+	}
+}
+
+// demoProject is a project with a SQLite database, where every account may
+// enter.
+func demoProject(t *testing.T) string {
+	t.Helper()
 	project, err := os.MkdirTemp("", "locksql-demo-")
 	if err != nil {
 		t.Fatal(err)
@@ -135,57 +215,29 @@ func TestFirstQueryInThreeCommands(t *testing.T) {
 	if err := os.Chmod(filepath.Join(project, "demo.db"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	return project
+}
 
-	// 1. Install the binary (what scripts/install.sh does with a release).
-	human(t, 1, project, "sudo", "install", "-m", "0755", bin, "/usr/local/bin/locksql")
-	// 2. Set up: the console account, the agents, the profile, the access.
-	human(t, 2, project, "locksql", "setup", "--yes", "--engine", "sqlite", "--path", "demo.db")
+// firstQuery runs the quick start in a new project, the console with env.
+func firstQuery(t *testing.T, env []string) {
+	project := demoProject(t)
 
-	// 3. The console, in the console account and a terminal of its own:
-	// script(1) run as the console account gives it a terminal the agent's
-	// account does not own. A process of a login session of the agent's
-	// account would be refused by the console (that session shares the
-	// human's display and terminal): there, a transient systemd service
-	// stands in for the console account's own session.
-	console := []string{"sudo", "-u", "locksql", "-H", "--", "script", "-qfec", "locksql console --project " + shellQuote(project), "/dev/null"}
-	if lu, _ := os.ReadFile("/proc/self/loginuid"); strings.TrimSpace(string(lu)) != "4294967295" && len(lu) > 0 {
-		console = []string{"sudo", "systemd-run", "--quiet", "--pty", "--uid=locksql", "--property=WorkingDirectory=/",
-			"/usr/local/bin/locksql", "console", "--project", project}
-	}
-	t.Logf("command 3: %s", strings.Join(console, " "))
-	// What the console account sees, for a failure before the console prints.
-	pre, preErr := exec.Command("sudo", "-u", "locksql", "-H", "--", "sh", "-c", "id; ls -ld "+shellQuote(project)+"; locksql version").CombinedOutput()
-	t.Logf("as the console account: %v\n%s", preErr, pre)
-	cmd := exec.Command(console[0], console[1:]...)
-	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 50, Cols: 160})
-	if err != nil {
-		t.Fatal(err)
-	}
-	scr := &screen{done: make(chan struct{})}
-	go func() { scr.err = cmd.Wait(); close(scr.done) }()
-	go func() {
-		r := bufio.NewReader(tty)
-		buf := make([]byte, 4096)
-		for {
-			n, err := r.Read(buf)
-			scr.mu.Lock()
-			scr.buf.Write(buf[:n])
-			scr.mu.Unlock()
-			if err != nil {
-				return
-			}
-		}
-	}()
-	defer func() {
-		tty.Write([]byte{3}) // Ctrl-C ends the session
-		select {
-		case <-scr.done:
-		case <-time.After(10 * time.Second):
-			cmd.Process.Kill()
-		}
-		tty.Close()
-		t.Logf("console screen:\n%s", scr.String())
-	}()
+	// The human's commands of the quick start: the agent's files, a
+	// profile, then .locksql/ given to the console account (doctor --fix
+	// exits 1: the console's checks fail from its container, which runs
+	// none).
+	human(t, 1, project, []string{"init", "claude"})
+	human(t, 2, project, []string{"profile", "add", "--profile", "dev", "--engine", "sqlite", "--path", "demo.db"})
+	human(t, 3, project, []string{"doctor", "--fix", "--yes"}, 1)
+
+	// The console, in a terminal: the launcher runs it as the console
+	// account, in its own container.
+	t.Logf("command 4: %s locksql console", strings.Join(env, " "))
+	cmd := exec.Command("sh", launcher, "console")
+	cmd.Dir = project
+	cmd.Env = append(os.Environ(), env...)
+	scr, tty, end := startConsole(t, cmd)
+	defer end()
 
 	// First start: approve the policy, answer the PII scan if it asks.
 	at := 0

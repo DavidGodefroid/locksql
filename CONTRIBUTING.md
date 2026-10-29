@@ -51,8 +51,8 @@ go test ./...
 Unit tests need no database: SQLite runs in-process, and the EXPLAIN
 fixtures under `testdata/explain/` cover the other engines.
 
-The module also builds for Windows, where locksql refuses to run (see
-[docs/usage.md](docs/usage.md#windows-wsl2)), and CI runs the unit tests on
+The module also builds for Windows, where locksql refuses to run (it runs
+in Docker, see [docs/docker.md](docs/docker.md)), and CI runs the unit tests on
 `windows-latest`. A test file that needs Unix accounts, file modes, sockets
 or terminals starts with `//go:build unix`; a single test skips with
 `t.Skip` and the reason. To check that the tests still compile for
@@ -151,3 +151,29 @@ goreleaser release --snapshot --clean --skip=sign
 ```
 
 The output goes to `dist/`, which is ignored by git.
+
+The release chain is pinned end to end:
+
+- every `uses:` in `.github/workflows/` names a full commit SHA with its
+  version as a comment (`actions/checkout@<sha> # v7.0.1`); Dependabot bumps
+  both. Check a new SHA is the tag's commit (`gh api
+  repos/OWNER/REPO/commits/vX.Y.Z --jq .sha`) and keep the comment exact:
+  `TestWorkflowActionsArePinnedBySHA` fails on a tag or a missing version;
+- `release.yml` pins the GoReleaser, cosign and syft versions and does not
+  use `check-latest`;
+- the cosign identity is the release workflow run for the exact tag
+  installed in `scripts/install.sh` and the launcher `scripts/locksql`
+  (`TestScriptsPinTheExactReleaseTag`), and for a version tag in
+  `.goreleaser.yaml`'s comment (`ReleaseCertIdentityRegexp`).
+
+Tags are created by the maintainer only (the `protect release tags` ruleset
+restricts creating, moving and deleting `v*` tags; `protect main` requires a
+pull request and the CI checks). Sign release tags:
+
+```sh
+git tag -s vX.Y.Z -m "locksql vX.Y.Z"   # with gpg.format=ssh for an SSH key
+git verify-tag vX.Y.Z
+```
+
+with a key published on the maintainer's GitHub profile, which is where
+`SECURITY.md` sends users to verify it.

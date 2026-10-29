@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/DavidGodefroid/locksql/internal/config"
+	"github.com/DavidGodefroid/locksql/internal/pii"
 )
 
 // repair is a change `locksql doctor --fix` (and `locksql setup`) can make
@@ -104,7 +107,8 @@ func permsFor(perm os.FileMode, uid, gid int, acl []aclEntry, a svcAccount) uint
 
 // projectChecks are what the console account needs to serve the project
 // at root: enter every directory down to it, read its config and own its
-// .locksql directory, where it writes pii.toml. me is this account's uid.
+// .locksql directory and its pii directory, where it writes the PII rule
+// sets. me is this account's uid.
 func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 	var out []check
 	add := func(state, title, detail, fix string, r *repair) {
@@ -198,47 +202,89 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 			strings.Join(cmds, "; ")+" (or move the project where every account may enter)", r)
 	}
 
-	// 2. The .locksql directory: the console writes pii.toml there.
+	// 2. The .locksql directory, and pii in it: the console writes the PII
+	// rule sets there.
 	dir := filepath.Join(root, ".locksql")
-	if d.lstat != nil {
-		if fi, err := d.lstat(dir); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
-			add(checkFail, "project .locksql", dir+" is a symbolic link: the console account must own a directory of the project itself",
-				"replace it with a directory holding config.toml and pii.toml", nil)
-			return out
+	sets := filepath.Join(dir, pii.SetsDir)
+	ownDir := func(title, path string) bool {
+		if d.lstat != nil {
+			if fi, err := d.lstat(path); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+				add(checkFail, title, path+" is a symbolic link: the console account must own a directory of the project itself",
+					"replace it with a directory holding "+filepath.Base(path)+"'s files", nil)
+				return false
+			}
 		}
-	}
-	if fi, err := d.stat(dir); err == nil {
-		uid, _, ok := d.ownerOf(fi)
-		perm := fi.Mode().Perm()
-		switch {
-		case !ok:
-		case uid != svc.uid || perm&0o022 != 0 || perm&0o005 != 0o005:
-			// The uid, not the name: in Docker the console account exists
-			// only in the image.
-			add(checkFail, "project .locksql", fmt.Sprintf("%s: %04o, owner uid %d; the console account (%s, uid %d) must own it (it writes pii.toml there) and every account read it", dir, perm, uid, svc.name, svc.uid),
-				fmt.Sprintf("sudo chown %d %s && sudo chmod 0755 %s", svc.uid, shellQuote(dir), shellQuote(dir)),
-				&repair{what: "give " + dir + " to " + svc.name + ", mode 0755", root: giveDirScript(dir, svc.uid)})
-		default:
-			add(checkOK, "project .locksql", fmt.Sprintf("%s %04o, owned by %s", dir, perm, svc.name), "", nil)
+		if fi, err := d.stat(path); err == nil {
+			uid, _, ok := d.ownerOf(fi)
+			perm := fi.Mode().Perm()
+			switch {
+			case !ok:
+			case uid != svc.uid || perm&0o022 != 0 || perm&0o005 != 0o005:
+				// The uid, not the name: in Docker the console account exists
+				// only in the image.
+				add(checkFail, title, fmt.Sprintf("%s: %04o, owner uid %d; the console account (%s, uid %d) must own it (it writes the PII rule sets there) and every account read it", path, perm, uid, svc.name, svc.uid),
+					fmt.Sprintf("sudo chown %d %s && sudo chmod 0755 %s", svc.uid, shellQuote(path), shellQuote(path)),
+					&repair{what: "give " + path + " to " + svc.name + ", mode 0755", root: giveDirScript(path, svc.uid)})
+			default:
+				add(checkOK, title, fmt.Sprintf("%s %04o, owned by %s", path, perm, svc.name), "", nil)
+			}
 		}
+		return true
 	}
+	if !ownDir("project .locksql", dir) {
+		return out
+	}
+	setsOK := ownDir("project .locksql/pii", sets)
 
-	// 3. The files both accounts read.
-	for _, name := range []string{"config.toml", "pii.toml"} {
-		path := filepath.Join(dir, name)
+	// 3. The files both accounts read: the config, a legacy pii.toml, and
+	// the rule set of every project profile.
+	readable := func(title, in, name string) {
+		path := filepath.Join(in, name)
 		p, uid, ok := perms(path)
 		if !ok || p&4 != 0 {
-			continue
+			return
 		}
 		r := &repair{what: "make " + path + " readable (0644)"}
 		if uid == me {
 			r.apply = func() error { return os.Chmod(path, 0o644) }
 		} else {
-			r.root = inDirScript(dir, readableScript(name))
+			r.root = inDirScript(in, readableScript(name))
 		}
-		add(checkFail, "project "+name, path+" is not readable by "+svc.name, "chmod 0644 "+shellQuote(path), r)
+		add(checkFail, title, path+" is not readable by "+svc.name, "chmod 0644 "+shellQuote(path), r)
+	}
+	for _, name := range []string{"config.toml", pii.LegacyFile} {
+		readable("project "+name, dir, name)
+	}
+	if setsOK {
+		for _, set := range projectRuleSets(d, root) {
+			readable("project "+pii.SetsDir+"/"+set+".toml", sets, set+".toml")
+		}
 	}
 	return out
+}
+
+// projectRuleSets are the PII rule sets the project's profiles use, and
+// the default set a legacy pii.toml became; none when the config cannot be
+// read (the config checks report it).
+func projectRuleSets(d doctorEnv, root string) []string {
+	if d.readFile == nil {
+		return nil
+	}
+	path := filepath.Join(root, ".locksql", "config.toml")
+	data, err := d.readFile(path)
+	if err != nil {
+		return nil
+	}
+	profiles, err := config.ParseProfiles(data, path, root)
+	if err != nil {
+		return nil
+	}
+	sets := []string{pii.DefaultSet}
+	for _, p := range profiles {
+		sets = append(sets, config.RuleSetOf(p))
+	}
+	slices.Sort(sets)
+	return slices.Compact(sets)
 }
 
 // giveDirScript is the root script that gives dir to uid, mode 0755.

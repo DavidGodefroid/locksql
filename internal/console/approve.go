@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -392,8 +393,9 @@ func loosens(changes []config.Change) bool {
 }
 
 // adopt records p as the approved policy and enforces it. A change of the
-// connection settings, the transport (the tls settings, the ssh table) included,
-// ends the session: the open connection no longer matches the policy.
+// connection settings, the transport (the tls settings, the ssh table,
+// proxy_command) included, ends the session: the open connection no longer
+// matches the policy.
 func (s *Server) adopt(p config.Policy, decision string) error {
 	if s.cfg.StateDir != "" && s.cfg.ApprovedKey != "" {
 		if err := config.SaveApproved(s.cfg.StateDir, s.cfg.ApprovedKey, p); err != nil {
@@ -425,7 +427,7 @@ func (s *Server) adopt(p config.Policy, decision string) error {
 	if old.Engine != n.Engine || old.Host != n.Host || old.Port != n.Port || old.Path != n.Path ||
 		old.User != n.User || old.Database != n.Database ||
 		old.TLS != n.TLS || old.TLSCA != n.TLSCA || old.TLSCert != n.TLSCert || old.TLSKey != n.TLSKey ||
-		old.TLSServerName != n.TLSServerName || !sameSSH(old.SSH, n.SSH) {
+		old.TLSServerName != n.TLSServerName || !sameSSH(old.SSH, n.SSH) || !slices.Equal(old.ProxyCommand, n.ProxyCommand) {
 		s.println("connection settings changed: the session ends; start the console again")
 		s.End("connection settings changed")
 	}
@@ -484,7 +486,7 @@ func describePolicy(p config.Policy) []string {
 			l.StatementTimeout, l.ExplainRowsWarn, l.ExplainRowsRefuse, l.MaxRows, l.MaxCellChars, l.MaxOutputBytes),
 		fmt.Sprintf("  session: idle_timeout %s · max_session %s", l.IdleTimeout, l.MaxSession),
 		"  detectors: " + safeText(strings.Join(pr.Detectors, ", "), false),
-		fmt.Sprintf("  PII rules: %d mask, %d allow", len(p.PIIMask), len(p.PIIAllow)),
+		fmt.Sprintf("  PII rules: set %q · %d mask, %d allow", pr.PIIRules, len(p.PIIMask), len(p.PIIAllow)),
 	}
 	if pr.Engine != config.EngineSQLite {
 		mode := pr.TLS
@@ -498,6 +500,12 @@ func describePolicy(p config.Policy) []string {
 	}
 	if pr.SSH != nil {
 		lines = append(lines, "  ssh: "+safeText(config.SSHString(pr.SSH), false))
+	}
+	if pr.WriteFunctions != "" {
+		lines = append(lines, "  write_functions: "+pr.WriteFunctions)
+	}
+	if len(pr.ProxyCommand) > 0 {
+		lines = append(lines, "  proxy_command: "+safeText(config.ProxyString(pr.ProxyCommand), false))
 	}
 	for _, a := range p.PIIAllow {
 		lines = append(lines, red+"  allow "+safeText(a, false)+reset)

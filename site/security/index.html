@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>locksql security model — guarantees and limits</title>
-  <meta name="description" content="What locksql protects, against whom, and how: one key holder, OS separation, human approval, fail-closed parsing, masking, and its documented limits.">
+  <meta name="description" content="What locksql protects, against whom, and how: one key holder, container separation, human approval, fail-closed parsing, masking, and its documented limits.">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
@@ -12,7 +12,7 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="locksql">
   <meta property="og:title" content="locksql security model — guarantees and limits">
-  <meta property="og:description" content="What locksql protects, against whom, and how: one key holder, OS separation, human approval, fail-closed parsing, masking, and its documented limits.">
+  <meta property="og:description" content="What locksql protects, against whom, and how: one key holder, container separation, human approval, fail-closed parsing, masking, and its documented limits.">
   <meta property="og:url" content="https://locksql.com/security/">
   <meta property="og:image" content="https://locksql.com/assets/og.png">
   <meta property="og:image:type" content="image/png">
@@ -22,7 +22,7 @@
   <meta property="og:locale" content="en_US">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="locksql security model — guarantees and limits">
-  <meta name="twitter:description" content="What locksql protects, against whom, and how: one key holder, OS separation, human approval, fail-closed parsing, masking, and its documented limits.">
+  <meta name="twitter:description" content="What locksql protects, against whom, and how: one key holder, container separation, human approval, fail-closed parsing, masking, and its documented limits.">
   <meta name="twitter:image" content="https://locksql.com/assets/og.png">
   <meta name="twitter:image:alt" content="locksql — Your AI writes the query. You hold the key.">
   <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -65,7 +65,7 @@
     <li><strong>The agent</strong> (and anything that can steer it, such as text stored in the database or in files it reads) is <em>not</em> trusted. It runs the client commands and the MCP server.</li>
     <li><strong>Other local users</strong> are not trusted.</li>
   </ul>
-  <p class="prose">locksql supports Linux and macOS only; on Windows it runs inside WSL2, a Linux system, where the agent must run too for this boundary to hold (<a href="../install/#windows">Windows: inside WSL2</a>).</p>
+  <p class="prose">locksql runs in Docker: the console and the agent’s MCP server run in Linux containers, on any host that runs Docker (<a href="../install/">Install</a>).</p>
 </section>
 
 <section aria-labelledby="principles">
@@ -84,11 +84,11 @@
   <h2 id="enforces">What the console enforces</h2>
   <div class="prose">
     <h3 id="key-holder">One key holder</h3>
-    <p>Credentials are typed at console start (no echo), or read from the OS keychain or HashiCorp Vault. They never appear in argv, environment, files, logs, the socket protocol or error messages. The console disables core dumps. <code>credentials_ttl</code> makes it ask again after a set time (vault leases).</p>
+    <p>Credentials are typed at console start (no echo), or read from HashiCorp Vault. They never appear in argv, environment, files, logs, the socket protocol or error messages. The console disables core dumps. <code>credentials_ttl</code> makes it ask again after a set time (vault leases).</p>
 
     <h3 id="os-separation">OS separation</h3>
-    <p><code>locksql install</code> creates a <code>locksql</code> console account and a <code>locksql-clients</code> group: the console runs as that account in its own login session, the agent’s account only reaches its socket, and the kernel checks every peer. The console refuses to start without this setup, since an agent in the console’s own account could read or type into its terminal.</p>
-    <p>It also refuses a session that names the console account but carries the agent’s keystrokes: started through <code>sudo</code> or <code>su</code> from the agent’s login session, on a terminal the agent’s account owns, in a <code>machinectl shell</code> opened from the agent’s account, or in an SSH login from the same machine. An administrator outside the client group can still hand the console off.</p>
+    <p>The separation is two containers built from one image. The console runs as the <code>locksql</code> account (uid 10001) in its own container; the agent’s MCP server runs as <code>agent</code> (uid 10002), a member of the <code>locksql-clients</code> group, in another. They share only the socket volume <code>locksql-run</code> (the socket directory, mode <code>2710</code>, <code>locksql:locksql-clients</code>), and the kernel checks every peer on the socket: a process that is neither the console account nor in <code>locksql-clients</code> is refused. The credentials live only in the console’s container and its <code>locksql-home</code> volume; the agent’s container holds none and has no database connection.</p>
+    <p>The console refuses to start without a separated setup, since an agent in the console’s own account could read or type into its terminal. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/docker.md">Running locksql in Docker</a>.</p>
 
     <h3 id="approval">Human approval</h3>
     <p>Every statement is shown and approved in the console terminal; no socket method can approve. On a production profile you type the profile name, not <code>y</code>. Pending keystrokes are flushed before each prompt, so type-ahead never approves. No answer within 5 minutes means denied.</p>
@@ -149,11 +149,11 @@ takes effect after you confirm it in the console.</p>
     <p>These limits are part of the design. Read them before you rely on locksql.</p>
 
     <h3 id="same-user">Same-user mode is excluded</h3>
-    <p>The console refuses to start without a separated setup, so an agent running as the console’s account (reading its keychain session, attaching with ptrace, typing into its terminal) is not a supported configuration.</p>
+    <p>The console refuses to start without a separated setup, so an agent running as the console’s account (reading its memory, attaching with ptrace, typing into its terminal) is not a supported configuration.</p>
 
     <h3 id="console-account">The console account</h3>
-    <p>Malware running as <code>locksql</code> or as root, and an agent account that can become either, are out of scope. So is an X11 session on a non-production profile with <code>x11 = "warn"</code>.</p>
-    <p>The agent’s account is assumed to have no password-less <code>sudo</code> (<code>locksql doctor</code> fails otherwise) and no other way to become <code>locksql</code> or root.</p>
+    <p>Malware running as <code>locksql</code> or as root, and an agent that can become either, are out of scope.</p>
+    <p>Docker adds one more: whoever can run <code>docker</code> commands can attach to the console and type an approval, exec into its container and read its memory, or open the <code>locksql-home</code> volume. An agent that runs shell commands in your account usually can, since the launcher it runs for its MCP server is itself a <code>docker run</code>, and the console cannot see it. That setup keeps the credentials out of the agent’s reach and the approval in your terminal, but it is no boundary against an agent determined to go around it. For that boundary, run the agent in its own container, without access to the Docker socket (<a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/docker.md#agent-in-its-own-container">Agent in its own container</a>).</p>
 
     <h3 id="transport">Transport security</h3>
     
@@ -299,7 +299,7 @@ certificate host keys and forwarding to a Unix socket on the bastion.</p>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
         <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
       </ul>
-      <p>Pre-release (<code>v0.8.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (<code>v0.9.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
     </div>
   </footer>
 </body>

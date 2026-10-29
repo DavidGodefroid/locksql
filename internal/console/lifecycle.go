@@ -25,6 +25,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/product"
+	"github.com/DavidGodefroid/locksql/internal/proxycmd"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 )
 
@@ -54,6 +55,17 @@ type starter struct {
 	// row: the console ends even after a decision whose refusal it would
 	// otherwise go past (offerSaveAs).
 	lockedOut bool
+	// vaultToken is the Vault token the human typed (credentials =
+	// "vault"): kept in memory for the session, so reconnects and lease
+	// renewals do not ask again; nil until asked, and after Vault refused
+	// it. wipeVaultToken wipes it when the console ends.
+	vaultToken []byte
+}
+
+// wipeVaultToken wipes the Vault token the human typed.
+func (st *starter) wipeVaultToken() {
+	secrets.Wipe(st.vaultToken)
+	st.vaultToken = nil
 }
 
 // errLockedOut ends a start-up after too many non-matching fingers.
@@ -106,13 +118,74 @@ func (st *starter) audit(rec audit.Record) {
 	}
 }
 
-// rulesPathFor is the PII rules file: in the project when there is one,
-// else next to the user config.
-func rulesPathFor(projectRoot, userConfigPath string) string {
+// rulesDirFor is the directory of the PII rule sets: the project's
+// .locksql when there is one, else the user config directory.
+func rulesDirFor(projectRoot, userConfigPath string) string {
 	if projectRoot != "" {
-		return filepath.Join(projectRoot, pii.RulesFile)
+		return filepath.Join(projectRoot, filepath.Dir(pii.RulesFile))
 	}
-	return filepath.Join(filepath.Dir(userConfigPath), filepath.Base(pii.RulesFile))
+	return filepath.Dir(userConfigPath)
+}
+
+// resolveRuleSet is the PII rule set of profile p and its file in dir.
+// pii_rules wins; without it, a profile approved before named sets, or
+// approved on the default set since, keeps the default set (the migrated
+// pii.toml) while that set exists; any other profile gets its own set,
+// named after it. approved is nil when nothing was approved yet.
+func resolveRuleSet(dir string, p config.Profile, approved *config.Policy) (string, string, error) {
+	if err := pii.CheckSetsDir(dir); err != nil {
+		return "", "", err
+	}
+	set := config.RuleSetOf(p)
+	if p.PIIRules == "" && approved != nil && pii.SetExists(dir, pii.DefaultSet) {
+		if a := approved.Profile.PIIRules; a == "" || a == pii.DefaultSet {
+			set = pii.DefaultSet
+		}
+	}
+	path, err := pii.SetPath(dir, set)
+	return set, path, err
+}
+
+// implicitSharingNotice is one line when profile p, without pii_rules,
+// shares its rule set set by accident: another profile uses it too (a
+// name that differs only by case, or that another profile names in its
+// pii_rules), or p is named "default", the set the former pii.toml
+// became. A profile kept on the migrated default set gets no notice, even
+// when another profile names that set: the migration said so once. All
+// profiles of one console keep their sets in the same directory
+// (rulesDirFor), so the comparison never crosses scopes. "" otherwise.
+func implicitSharingNotice(p config.Profile, set string, all map[string]config.Profile) string {
+	if p.PIIRules != "" || set == pii.DefaultSet && config.RuleSetOf(p) != pii.DefaultSet {
+		// Named on purpose, or kept on the migrated default set, which the
+		// migration notice covered, whoever else uses it.
+		return ""
+	}
+	var with []string
+	for name, q := range all {
+		if name != p.Name && config.RuleSetOf(q) == set {
+			with = append(with, name)
+		}
+	}
+	sort.Strings(with)
+	switch {
+	case len(with) > 0:
+		return fmt.Sprintf("note: profile %s sets no pii_rules and shares the PII rule set %q with %s; set pii_rules in its profile to give it a set of its own, or to %q to share it on purpose",
+			p.Name, set, strings.Join(with, ", "), set)
+	case set == pii.DefaultSet:
+		return fmt.Sprintf("note: profile %s sets no pii_rules and uses the PII rule set %q, which the former pii.toml became and the profiles approved before keep; set pii_rules in its profile to give it a set of its own",
+			p.Name, set)
+	}
+	return ""
+}
+
+// migrateRules moves the legacy pii.toml of dir to the default set, once,
+// and returns the notice to print then; "" when nothing moved.
+func migrateRules(dir string) (string, error) {
+	from, to, err := pii.MigrateLegacy(dir)
+	if err != nil || from == "" {
+		return "", err
+	}
+	return fmt.Sprintf("note: PII rules are now kept in named sets; %s moved to the set %q (%s). The profiles approved before keep using it until you give them pii_rules = \"<set>\"; any other profile uses a set named after it.", from, pii.DefaultSet, to), nil
 }
 
 // legacyRulesNotice is one line when, outside a project, cwd holds a
@@ -137,8 +210,10 @@ func legacyRulesNotice(cwd, projectRoot, rulesPath string) string {
 var newIsolationEnv = realIsolationEnv
 
 // policyFromFiles reads the current policy of profile from the config
-// found from cwd and from the PII rules at rulesPath, mask modes included.
-func policyFromFiles(cwd, profile, rulesPath string) (config.Policy, error) {
+// found from cwd and from the PII rule set at rulesPath, mask modes
+// included. set names that rule set: it is resolved once, at start, so a
+// pii_rules change applies at the next start.
+func policyFromFiles(cwd, profile, rulesPath, set string) (config.Policy, error) {
 	c, err := config.Load(cwd)
 	if err != nil {
 		return config.Policy{}, err
@@ -151,6 +226,7 @@ func policyFromFiles(cwd, profile, rulesPath string) (config.Policy, error) {
 	if err != nil {
 		return config.Policy{}, err
 	}
+	cp.PIIRules = set
 	return config.NewPolicy(cp, r.Mask, r.Allow).WithModes(r.Modes), nil
 }
 
@@ -223,11 +299,29 @@ func Run(ctx context.Context, o Options) error {
 			return err
 		}
 	}
-	rulesPath := rulesPathFor(cfg.ProjectRoot, ucp)
+	rulesDir := rulesDirFor(cfg.ProjectRoot, ucp)
+	key := config.ApprovedKey(cfg.ProjectRoot, p.Name)
+	n, err := migrateRules(rulesDir)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrConfig, err)
+	}
+	if n != "" {
+		o.IO.Println(safeText(n, false))
+	}
+	var prev *config.Policy
+	if ap, err := config.LoadApproved(o.StateDir, key); err == nil {
+		prev = ap // none yet, or unreadable: startPolicy reports it
+	}
+	ruleSet, rulesPath, err := resolveRuleSet(rulesDir, p, prev)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrConfig, err)
+	}
 	if n := legacyRulesNotice(o.Cwd, cfg.ProjectRoot, rulesPath); n != "" {
 		o.IO.Println(safeText(n, false))
 	}
-	key := config.ApprovedKey(cfg.ProjectRoot, p.Name)
+	if n := implicitSharingNotice(p, ruleSet, cfg.Profiles); n != "" {
+		o.IO.Println(paint.Warn(safeText(n, false)))
+	}
 	// A production profile, loaded or approved before, never runs in an
 	// X11 session: refused before the policy review, so that no X client
 	// can answer it and no approval is written.
@@ -249,9 +343,10 @@ func Run(ctx context.Context, o Options) error {
 		appr = newFingerprintApprover(o.IO, iso.verifier, iso.sys.Finger, FingerDeadline)
 	}
 	st := &starter{o: o, io: o.IO, log: log, profile: p, approver: appr}
+	defer st.wipeVaultToken()
 
 	loadPolicy := func() (config.Policy, error) {
-		return policyFromFiles(o.Cwd, o.Profile, rulesPath)
+		return policyFromFiles(o.Cwd, o.Profile, rulesPath, ruleSet)
 	}
 	cur, err := loadPolicy()
 	if err != nil {
@@ -266,6 +361,14 @@ func Run(ctx context.Context, o Options) error {
 	if err := st.checkLockedOut(); err != nil {
 		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
 		return err
+	}
+	if approved.Profile.PIIRules == "" {
+		// Approved before named sets: record the set in force, so that a
+		// later switch is shown as one.
+		approved.Profile.PIIRules = ruleSet
+		if err := config.SaveApproved(o.StateDir, key, approved); err != nil {
+			return err
+		}
 	}
 	p = approved.Profile
 	st.profile = p
@@ -301,7 +404,7 @@ func Run(ctx context.Context, o Options) error {
 	}
 
 	// 3. Host (confirmed with the policy) and user.
-	o.IO.Println(paint.OK(fmt.Sprintf("profile %s · %s %s %s", paint.Bold(p.Name), p.Engine, st.where(), paint.Dim("(approved policy)"))))
+	o.IO.Println(paint.OK(fmt.Sprintf("profile %s · %s %s · PII rules %q %s", paint.Bold(p.Name), p.Engine, st.where(), p.PIIRules, paint.Dim("(approved policy)"))))
 	st.user = p.User
 	// With credentials = "vault" the user comes with the login (connect).
 	if st.user == "" && p.Engine != config.EngineSQLite && p.Credentials != config.CredentialsVault {
@@ -539,6 +642,11 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 			return nil, err
 		}
 	}
+	var proxy *proxycmd.Proxy
+	if len(p.ProxyCommand) > 0 {
+		proxy = proxycmd.New(p.ProxyCommand)
+		dial = proxy.Dial
+	}
 	// Every return without a session closes the tunnel opened for it; a
 	// session takes the tunnel over and closes it with itself.
 	connected := false
@@ -551,6 +659,12 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 		cctx, cancel := context.WithTimeout(ctx, connectTimeout)
 		defer cancel()
 		sess, err := eng.Connect(cctx, prof, secret, dial)
+		if proxy != nil {
+			if err != nil {
+				return nil, withProxyStderr(err, safeText(proxy.Stderr(), false))
+			}
+			return &proxiedSession{Session: sess, program: safeText(p.ProxyCommand[0], false), dbHost: p.Host}, nil
+		}
 		if err != nil || tun == nil {
 			return sess, err
 		}
@@ -641,8 +755,50 @@ func (st *starter) connectSecret(ctx context.Context, p config.Profile, open fun
 	return sess, nil
 }
 
-// vaultRead is secrets.VaultRead; tests replace it.
-var vaultRead = secrets.VaultRead
+// vaultRead is secrets.VaultReadToken; tests replace it.
+var vaultRead = secrets.VaultReadToken
+
+// vaultTokenTries is how many Vault tokens in a row may be refused before
+// a connection gives up.
+const vaultTokenTries = 3
+
+// vaultAddr is the Vault server the vault CLI talks to: VAULT_ADDR, or the
+// CLI's default.
+func vaultAddr() string {
+	if a := os.Getenv("VAULT_ADDR"); a != "" {
+		return a
+	}
+	return "https://127.0.0.1:8200"
+}
+
+// readVault reads the login at p.VaultPath with the Vault token of the
+// session, asked of the human the first time (no echo), and again when
+// Vault refuses the read up to vaultTokenTries times. Vault answers
+// "permission denied" alike for an expired or revoked token and for a
+// policy that may not read the path, so the warning names both. The
+// token goes to the vault CLI in its environment only, never its
+// arguments, a file, a log or the audit trail.
+func (st *starter) readVault(ctx context.Context, p config.Profile) (*secrets.VaultCredentials, error) {
+	for try := 1; ; try++ {
+		if st.vaultToken == nil {
+			tok, err := st.io.AskSecret(ctx, "Vault token for "+safeText(vaultAddr(), false)+": ")
+			if err != nil {
+				return nil, err
+			}
+			st.vaultToken = tok
+		}
+		c, err := vaultRead(ctx, p.VaultPath, st.vaultToken)
+		if err == nil || !errors.Is(err, secrets.ErrVaultAuth) {
+			return c, err
+		}
+		err = errors.New(secrets.Sanitize(err, st.vaultToken))
+		st.wipeVaultToken()
+		if try == vaultTokenTries {
+			return nil, fmt.Errorf("%w: %v", secrets.ErrVaultAuth, err)
+		}
+		st.io.Println(paint.Warn("Vault refused the read: " + err.Error() + ". Enter the token again, or a token whose policy may read " + safeText(p.VaultPath, false)))
+	}
+}
 
 // connectVault connects with the login read from Vault at p.VaultPath
 // (credentials = "vault"): at every connection, so a rotated or
@@ -652,7 +808,7 @@ var vaultRead = secrets.VaultRead
 // profile open connects with.
 func (st *starter) connectVault(ctx context.Context, p config.Profile, prof *config.Profile, open func([]byte) (engine.Session, error), first bool) (engine.Session, error) {
 	fetched := st.now()
-	c, err := vaultRead(ctx, p.VaultPath)
+	c, err := st.readVault(ctx, p)
 	if err != nil {
 		return nil, fmt.Errorf("console: credentials from Vault (%s): %w", safeText(p.VaultPath, false), err)
 	}
@@ -715,6 +871,16 @@ func (s *vaultSession) DBUser() string { return s.user }
 // CredentialsExpire is when the session must be replaced by one with a
 // fresh login; zero for never.
 func (s *vaultSession) CredentialsExpire() time.Time { return s.refreshAt }
+
+// ShadowedFunctions passes the lookup on (engine.FunctionShadows).
+func (s *vaultSession) ShadowedFunctions(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.ShadowedFunctions(ctx, s.Session, db, names)
+}
+
+// ShadowedOperators passes the lookup on (engine.FunctionShadows).
+func (s *vaultSession) ShadowedOperators(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.ShadowedOperators(ctx, s.Session, db, names)
+}
 
 // Notices passes on the session's transport notices.
 func (s *vaultSession) Notices() []string {

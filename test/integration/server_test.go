@@ -303,3 +303,94 @@ func TestPostgresPasswordAuth(t *testing.T) {
 		})
 	}
 }
+
+// TestDetectorsUnicodeAndFloatPG reads, through a console server with the
+// default detectors, the issue #17 cells as PostgreSQL returns them: a card
+// number in a float8 column, a Unicode e-mail address and NBSP-grouped
+// numbers. The agent sees none of them.
+func TestDetectorsUnicodeAndFloatPG(t *testing.T) {
+	const q = "SELECT 4111111111111111::float8 AS f, 'josé.dupont@exämple.de' AS e," +
+		" E'BE68\\u00a05390\\u00a00754\\u00a07034' AS i, E'0475\\u202f12\\u202f34\\u202f56' AS p, 1.5::float8 AS h LIMIT 1"
+	for _, v := range pgVersions() {
+		t.Run("postgres:"+v, func(t *testing.T) {
+			srv := startPostgres(t, v)
+			s := connectPG(t, srv, "ro", config.TierRead, 30*time.Second)
+			call := consoleServer(t, s, "app", pii.Rules{}, config.TierRead, config.DefaultDetectors())
+			rr, msg := agentRun(t, call, "app", q)
+			if msg != "" {
+				t.Fatal(msg)
+			}
+			all := fmt.Sprint(rr.Rows) + rr.Text
+			for _, leak := range []string{"4111111111111111", "4.111111111111111e+15", "dupont", "exämple", "7034", "12\u202f34\u202f56", "34\u202f56"} {
+				if strings.Contains(all, leak) {
+					t.Errorf("agent got %q: %.400s", leak, all)
+				}
+			}
+			if !strings.Contains(all, "1.5") {
+				t.Errorf("a non-integral float was masked: %.400s", all)
+			}
+		})
+	}
+}
+
+// TestShadowedFunctionPG creates public.lower(varchar), which PostgreSQL
+// picks over pg_catalog.lower(text) for a varchar argument: a read that
+// calls lower is refused before it runs, and lower stays usable once the
+// overload is gone.
+func TestShadowedFunctionPG(t *testing.T) {
+	for _, v := range pgVersions() {
+		t.Run("postgres:"+v, func(t *testing.T) {
+			srv := startPostgres(t, v)
+			psql := func(sql string) {
+				t.Helper()
+				if err := Exec(srv, sql, "psql", "-q", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "app"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			psql(`CREATE FUNCTION public.lower(varchar) RETURNS text LANGUAGE sql AS 'SELECT ''overload''';`)
+			s := connectPG(t, srv, "ro", config.TierRead, 30*time.Second)
+			fs, ok := s.(engine.FunctionShadows)
+			if !ok {
+				t.Fatal("the PostgreSQL session does not implement engine.FunctionShadows")
+			}
+			got, err := fs.ShadowedFunctions(context.Background(), "app", []string{"lower", "upper"})
+			if err != nil || len(got) != 1 || got[0] != "lower" {
+				t.Fatalf("ShadowedFunctions = %v, %v; want [lower]", got, err)
+			}
+			call := consoleServer(t, s, "app", pii.Rules{}, config.TierRead, nil)
+			const q = "SELECT lower('X'::varchar) AS x LIMIT 1"
+			if _, msg := agentRun(t, call, "app", q); !strings.Contains(msg, "outside pg_catalog") {
+				t.Fatalf("plan of %q: %q, want a refusal naming pg_catalog", q, msg)
+			}
+			psql(`DROP FUNCTION public.lower(varchar);`)
+			rr, msg := agentRun(t, call, "app", q)
+			if msg != "" || !strings.Contains(fmt.Sprint(rr.Rows), "x") {
+				t.Fatalf("after DROP: %v %q", rr.Rows, msg)
+			}
+
+			// A quoted name is another function in PostgreSQL ("LOWER" is
+			// not lower): refused whatever the catalog holds.
+			psql(`CREATE FUNCTION public."LOWER"(text) RETURNS text LANGUAGE sql AS 'SELECT ''overload''';`)
+			if _, msg := agentRun(t, call, "app", `SELECT "LOWER"('x') AS x LIMIT 1`); msg == "" {
+				t.Fatal(`"LOWER"('x') was planned`)
+			}
+
+			// Operators resolve like functions: public.||(varchar, varchar)
+			// beats pg_catalog.||(text, text).
+			psql(`CREATE FUNCTION public.cat(varchar, varchar) RETURNS text LANGUAGE sql AS 'SELECT ''overload''';
+				CREATE OPERATOR public.|| (LEFTARG = varchar, RIGHTARG = varchar, FUNCTION = public.cat);`)
+			ops, err := fs.ShadowedOperators(context.Background(), "app", []string{"||", "+"})
+			if err != nil || len(ops) != 1 || ops[0] != "||" {
+				t.Fatalf("ShadowedOperators = %v, %v; want [||]", ops, err)
+			}
+			const cq = "SELECT 'a'::varchar || 'b'::varchar AS x LIMIT 1"
+			if _, msg := agentRun(t, call, "app", cq); !strings.Contains(msg, "operator ||") {
+				t.Fatalf("plan of %q: %q, want a refusal naming operator ||", cq, msg)
+			}
+			psql(`DROP OPERATOR public.|| (varchar, varchar);`)
+			if rr, msg := agentRun(t, call, "app", cq); msg != "" || !strings.Contains(fmt.Sprint(rr.Rows), "ab") {
+				t.Fatalf("after DROP OPERATOR: %v %q", rr.Rows, msg)
+			}
+		})
+	}
+}
