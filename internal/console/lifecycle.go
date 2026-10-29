@@ -251,6 +251,10 @@ func Run(ctx context.Context, o Options) error {
 	if iso.desktop && iso.verifier == nil && o.ShowResults {
 		return fmt.Errorf("%w: level 1 does not accept --show-results: the agent's account can read this window", ErrConfig)
 	}
+	// Hub mode: lockhub decides, with its own auto mode.
+	if o.Hub.Enabled() && o.Auto {
+		return fmt.Errorf("%w: --auto is refused with --hub: lockhub decides", ErrConfig)
+	}
 	hardenErr := hardenProcess()
 	if hardenErr != nil {
 		o.IO.Println(paint.Warn(red + "could not disable core dumps: " + safeText(hardenErr.Error(), false) + reset))
@@ -273,6 +277,14 @@ func Run(ctx context.Context, o Options) error {
 			return err
 		}
 		o.StateDir = d
+	}
+	var hub *kconsole.Hub
+	if o.Hub.Enabled() {
+		// The flags, the pinned hub key and the instance key are checked
+		// before any prompt.
+		if hub, err = kconsole.OpenHub(product.P, o.Hub, o.StateDir, o.Now); err != nil {
+			return err
+		}
 	}
 
 	cfg, err := config.Load(o.Cwd)
@@ -473,7 +485,7 @@ func Run(ctx context.Context, o Options) error {
 		Policy: approved, RulesPath: rulesPath, StateDir: o.StateDir, ApprovedKey: key,
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Approver: st.approver, Fingerprint: iso.verifier != nil, Boundary: iso.boundary(), Now: o.Now,
 		Auto: o.Auto, AllowUnmask: o.AllowUnmask, ShowResults: o.ShowResults, Version: o.Version, LoadPolicy: loadPolicy,
-		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health,
+		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health, Hub: hub,
 	})
 	if err != nil {
 		ln.Close()
@@ -492,6 +504,15 @@ func Run(ctx context.Context, o Options) error {
 	var lines <-chan string
 	if ls, ok := o.IO.(LineSource); ok {
 		lines = ls.Lines()
+	}
+	if hub != nil {
+		// Decisions come from lockhub; this terminal keeps the console's own
+		// decisions (policy changes, :unmask).
+		s.approver = hub.Approver(s.approver)
+		wctx, stopWatch := context.WithCancel(ctx)
+		defer stopWatch()
+		go hub.Watch(wctx, o.IO)
+		s.println(paint.Step("hub mode: requests are decided in lockhub (instance " + safeText(o.Hub.Instance, false) + ")"))
 	}
 	serveErr := s.Serve(ctx, ln, lines)
 	if s.sess != nil {

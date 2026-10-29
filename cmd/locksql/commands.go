@@ -119,11 +119,18 @@ var clientCmds = map[string]clientCmd{
 		},
 	},
 	"run": {
-		usage: "locksql run --profile P [--json] PLAN_ID", min: 1, max: 1,
+		usage: "locksql run --profile P [--json] PLAN_ID|TICKET", min: 1, max: 1,
 		do: func(ctx context.Context, _ env, c *client.Client, o *opts) (any, func(io.Writer), error) {
 			// No timeout: the human may take up to the console's approval
-			// timeout to answer.
-			r, err := c.Run(ctx, o.args[0])
+			// timeout to answer. A ticket (hub mode) is a ULID, a plan id
+			// 16 hex digits.
+			var r ipc.RunResult
+			var err error
+			if isTicket(o.args[0]) {
+				r, err = c.RunTicket(ctx, o.args[0])
+			} else {
+				r, err = c.Run(ctx, o.args[0])
+			}
 			asJSON := r
 			asJSON.Text = "" // the rows are already there
 			return asJSON, func(w io.Writer) { client.FormatRun(w, r) }, err
@@ -422,4 +429,17 @@ func statusAll(e env, names []string, asJSON bool) int {
 		client.FormatProfiles(e.stdout, list)
 	}
 	return exitOK
+}
+
+// isTicket reports a lockhub ticket id: 26 characters of Crockford base32.
+func isTicket(s string) bool {
+	if len(s) != 26 {
+		return false
+	}
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789ABCDEFGHJKMNPQRSTVWXYZ", c) {
+			return false
+		}
+	}
+	return true
 }

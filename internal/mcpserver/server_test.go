@@ -70,6 +70,10 @@ func (f *fakeConn) Plan(_ context.Context, p ipc.PlanParams) (ipc.PlanResult, er
 		Class: "read", Verdict: "OK", Summary: "users lookup ~1 · est. 1 rows examined"}, nil
 }
 
+func (f *fakeConn) RunTicket(ctx context.Context, ticket string) (ipc.RunResult, error) {
+	return f.Run(ctx, "ticket:"+ticket)
+}
+
 func (f *fakeConn) Run(ctx context.Context, planID string) (ipc.RunResult, error) {
 	f.record("run " + planID)
 	if f.runWait > 0 {

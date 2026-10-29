@@ -56,6 +56,7 @@ type Conn interface {
 	Describe(ctx context.Context, db, table string) (engine.TableInfo, error)
 	Plan(ctx context.Context, p ipc.PlanParams) (ipc.PlanResult, error)
 	Run(ctx context.Context, planID string) (ipc.RunResult, error)
+	RunTicket(ctx context.Context, ticket string) (ipc.RunResult, error)
 	PIIList(ctx context.Context) (ipc.PIIListResult, error)
 	PIIAdd(ctx context.Context, pattern string) (ipc.PIIListResult, error)
 	Request(ctx context.Context, change string) (ipc.ChangeResult, error)
@@ -137,7 +138,8 @@ type (
 	}
 	RunIn struct {
 		Profile string `json:"profile,omitempty" jsonschema:"Profile name from the locksql config. Optional when the server was started with --profile or exactly one profile is configured."`
-		PlanID  string `json:"plan_id" jsonschema:"The plan_id returned by locksql_plan. One-shot, valid 10 minutes."`
+		PlanID  string `json:"plan_id,omitempty" jsonschema:"The plan_id returned by locksql_plan. One-shot, valid 10 minutes."`
+		Ticket  string `json:"ticket,omitempty" jsonschema:"Hub mode: the ticket a pending locksql_run returned, once you are told it is decided. Instead of plan_id."`
 	}
 	PIIListIn struct {
 		Profile string `json:"profile,omitempty" jsonschema:"Profile name from the locksql config. Optional when the server was started with --profile or exactly one profile is configured."`
@@ -167,6 +169,12 @@ type (
 		// Refusal is set, on an error result, when the console refused
 		// the run.
 		Refusal *refusal.Info `json:"refusal,omitempty"`
+		// Status is "pending" or "stale" in hub mode (the human decides in
+		// lockhub): run Ticket once told it is decided. Not an error.
+		Status      string `json:"status,omitempty"`
+		Ticket      string `json:"ticket,omitempty"`
+		Lock        string `json:"lock,omitempty"`
+		StaleTicket string `json:"stale_ticket,omitempty"`
 	}
 	// PlanOut is the plan, or on an error result the refusal.
 	PlanOut struct {
@@ -413,13 +421,17 @@ func (t *tools) plan(ctx context.Context, _ *mcp.CallToolRequest, in PlanIn) (*m
 }
 
 func (t *tools) run(ctx context.Context, req *mcp.CallToolRequest, in RunIn) (*mcp.CallToolResult, RunOut, error) {
-	if strings.TrimSpace(in.PlanID) == "" {
+	if strings.TrimSpace(in.PlanID) == "" && strings.TrimSpace(in.Ticket) == "" {
 		return nil, RunOut{}, errors.New("no plan_id given: call locksql_plan first")
 	}
 	stop := t.progress(ctx, req)
 	var r ipc.RunResult
 	err := t.with(in.Profile, func(c Conn) (err error) {
-		r, err = c.Run(ctx, in.PlanID)
+		if in.Ticket != "" {
+			r, err = c.RunTicket(ctx, in.Ticket)
+		} else {
+			r, err = c.Run(ctx, in.PlanID)
+		}
 		return err
 	})
 	stop()
@@ -429,7 +441,8 @@ func (t *tools) run(ctx context.Context, req *mcp.CallToolRequest, in RunIn) (*m
 	if err != nil {
 		return nil, RunOut{}, err
 	}
-	out := RunOut{Columns: nonNil(r.Columns), Rows: exactRows(r.Rows), Truncated: r.Truncated, CutCells: r.CutCells, Affected: r.Affected, DurationMS: r.DurationMS}
+	out := RunOut{Columns: nonNil(r.Columns), Rows: exactRows(r.Rows), Truncated: r.Truncated, CutCells: r.CutCells, Affected: r.Affected, DurationMS: r.DurationMS,
+		Status: r.Status, Ticket: r.Ticket, Lock: r.Lock, StaleTicket: r.StaleTicket}
 	return render(func(w *bytes.Buffer) {
 		w.WriteString(UntrustedPreamble + "\n")
 		var b bytes.Buffer
