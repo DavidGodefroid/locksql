@@ -54,7 +54,7 @@ func pendingTicket(t *testing.T, resp ipc.Response, status string) string {
 		t.Fatalf("query.run: %d %q", resp.Error.Code, resp.Error.Message)
 	}
 	var m map[string]string
-	if err := json.Unmarshal(resp.Result, &m); err != nil || m["status"] != status || m["ticket"] == "" || m["lock"] != "locksql" {
+	if err := json.Unmarshal(resp.Result, &m); err != nil || m["status"] != status || m["ticket"] == "" || m["lock"] != "locksql" || m["instance"] != hubInstanceName {
 		t.Fatalf("result %s, want %s with a ticket", resp.Result, status)
 	}
 	return m["ticket"]

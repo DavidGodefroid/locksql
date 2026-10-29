@@ -254,7 +254,7 @@ func (s *Server) hubStale(ctx context.Context, id int64, body hubPlan, old strin
 	if resp.Error != nil || json.Unmarshal(resp.Result, &p) != nil || p.Status != "pending" {
 		return resp
 	}
-	return okResp(id, map[string]string{"status": "stale", "ticket": p.Ticket, "lock": product.P.Name, "stale_ticket": old})
+	return okResp(id, map[string]string{"status": "stale", "ticket": p.Ticket, "lock": product.P.Name, "instance": s.cfg.Hub.Instance, "stale_ticket": old})
 }
 
 // withdraw ends the plan of a ticket that can no longer run.

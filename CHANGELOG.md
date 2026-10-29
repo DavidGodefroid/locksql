@@ -42,8 +42,8 @@ This file records the changes a user or an agent has to know about.
 - **Hub mode** (`locksql console --hub URL --hub-key-file PATH --instance
   NAME`, written by `lock up`; `locksql hub-key --instance NAME` prints the
   instance key to pin). The human decides in lockhub instead of this
-  terminal: `query.run` answers `{"status":"pending","ticket":…}` (a result,
-  not an error), the plan kept in lockkit's persistent plans store, bound to
+  terminal: `query.run` answers `{"status":"pending","ticket":…,"instance":…}` (a result,
+  not an error; over MCP, lockkit's standard pending answer), the plan kept in lockkit's persistent plans store, bound to
   the client's account, the policy fingerprint and the plan hash; the ticket
   carries the approval screen with every value of the statement masked.
   `locksql_run` with `ticket` (CLI: `locksql run TICKET`) runs it once the
