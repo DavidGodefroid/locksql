@@ -45,8 +45,11 @@ func withHub(t *testing.T, hub **hubtest.Hub) hopt {
 		c.Hub = h
 		c.Approver = h.Approver(newTypedApprover(c.IO))
 		ctx, cancel := context.WithCancel(context.Background())
-		t.Cleanup(cancel)
-		go h.Watch(ctx, c.IO)
+		done := make(chan struct{})
+		go func() { defer close(done); h.Watch(ctx, c.IO) }()
+		// Watch writes the hub state under the temporary directories: it
+		// ends before they are removed.
+		t.Cleanup(func() { cancel(); <-done })
 	}
 }
 
@@ -232,5 +235,35 @@ func TestHubModePolicyChangedIsStale(t *testing.T) {
 	pendingTicket(t, runTicket(t, h, tk), "stale")
 	if slices.Contains(h.sess.runs, selectUsers) {
 		t.Fatal("ran under another policy")
+	}
+}
+
+// A hidden refusal stays hidden through a stale resubmission: the new
+// ticket is refused after its decision too, without running.
+func TestHubModeHiddenRefusalSurvivesStale(t *testing.T) {
+	const q = "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1"
+	var hub *hubtest.Hub
+	h := newHarness(t, uatProfile(), withHub(t, &hub))
+	st := guarded(h)
+	h.sess.plan = heavyPlan()
+	pr := h.plan(t, q, false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	st.Objects[1].Def = "SELECT 2"
+	hub.Decide(tk, ticket.Approved, "")
+	next := pendingTicket(t, runTicket(t, h, tk), "stale")
+	// The new plan keeps the refusal waiting for its decision.
+	p, err := h.s.cfg.Hub.Store.ByTicket(next, hubCaller(context.Background()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body hubPlan
+	if err := json.Unmarshal(p.Body, &body); err != nil || !body.Refuse {
+		t.Fatalf("resubmitted plan body %s: the hidden refusal was dropped", p.Body)
+	}
+	hub.Decide(next, ticket.Approved, "")
+	r := runTicket(t, h, next)
+	wantCode(t, r, ipc.CodeRefused)
+	if r.Error.Message != hiddenWeightRefusal || slices.Contains(h.sess.runs, q) {
+		t.Fatalf("refusal %q, runs %q", r.Error.Message, h.sess.runs)
 	}
 }

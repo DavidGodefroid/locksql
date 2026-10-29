@@ -17,6 +17,7 @@ import (
 	"time"
 
 	kconsole "github.com/DavidGodefroid/lockkit/console"
+	"github.com/DavidGodefroid/lockkit/hubclient"
 	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/lockkit/tunnel"
 	"github.com/DavidGodefroid/lockkit/ui"
@@ -282,8 +283,12 @@ func Run(ctx context.Context, o Options) error {
 	if o.Hub.Enabled() {
 		// The flags, the pinned hub key and the instance key are checked
 		// before any prompt.
-		if o.Hub.KeyFile != "" {
-			if err := checkHubKeyFile(o.Hub.KeyFile); err != nil {
+		if o.Hub.KeyFile != "" && o.Hub.URL != "" && o.Hub.Instance != "" {
+			// The instance names the copy of the key: checked first.
+			if !hubclient.ValidInstance(o.Hub.Instance) {
+				return fmt.Errorf("%w: --instance %q is not a valid instance name", ErrConfig, o.Hub.Instance)
+			}
+			if o.Hub.KeyFile, err = pinHubKey(o.StateDir, o.Hub.Instance, o.Hub.KeyFile); err != nil {
 				return err
 			}
 		}
