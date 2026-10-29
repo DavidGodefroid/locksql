@@ -345,9 +345,39 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		t.Fatalf("rows: %s %v", raw, err)
 	}
 
+	// runs counts the runs of ticket tk in the console's audit log (its
+	// "run" records).
+	runs := func(tk string) int {
+		t.Helper()
+		n := 0
+		_ = filepath.WalkDir(filepath.Join(home, "state"), func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || d.Name() != "audit.log" {
+				return nil
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, l := range strings.Split(string(b), "\n") {
+				if strings.Contains(l, `"event":"run"`) && strings.Contains(l, `"ticket":"`+tk+`"`) {
+					n++
+				}
+			}
+			return nil
+		})
+		return n
+	}
+	if n := runs(p.Ticket); n != 1 {
+		t.Fatalf("the approved ticket is audited as run %d times, want 1", n)
+	}
+
 	t.Run("replayed decision refused", func(t *testing.T) {
-		if _, e := runTicket(p.Ticket); e == nil {
-			t.Fatal("the approved ticket ran twice")
+		_, e := runTicket(p.Ticket)
+		if e == nil || e.Code != ipc.CodeDenied || !strings.Contains(e.Message, "used") {
+			t.Fatalf("replay: want CodeDenied, plan already used; got %+v", e)
+		}
+		if n := runs(p.Ticket); n != 1 {
+			t.Fatalf("the replay ran: %d runs", n)
 		}
 	})
 
@@ -371,6 +401,15 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		var st pendingResult
 		if err := json.Unmarshal(raw, &st); err != nil || st.Status != "stale" || st.Ticket == "" || st.Ticket == s.Ticket || st.StaleTicket != s.Ticket {
 			t.Fatalf("want stale with a new ticket, got %s", raw)
+		}
+		var rows struct {
+			Rows []any `json:"rows"`
+		}
+		if json.Unmarshal(raw, &rows) != nil || rows.Rows != nil {
+			t.Fatalf("the stale answer carries rows: %s", raw)
+		}
+		if n := runs(s.Ticket); n != 0 {
+			t.Fatalf("the stale ticket ran: %d runs", n)
 		}
 	})
 
@@ -398,6 +437,9 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		}
 		if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: d.Ticket}, nil); e == nil {
 			t.Fatal("ran with the hub down")
+		}
+		if n := runs(d.Ticket); n != 0 {
+			t.Fatalf("ran with the hub down: %d runs", n)
 		}
 	})
 }
