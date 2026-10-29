@@ -172,7 +172,7 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string) 
 	var pl *plan
 	var body hubPlan
 	var planResp *ipc.Response
-	hp, err := h.Client.Begin(h.Store, ticketID, caller, func(p *plans.Plan) (string, string, error) {
+	hp, _, err := h.Client.Begin(h.Store, ticketID, caller, func(p *plans.Plan) (string, string, error) {
 		if err := json.Unmarshal(p.Body, &body); err != nil {
 			return "", "", err
 		}
