@@ -32,7 +32,7 @@ const (
 	EventLogout    = audit.EventLogout
 	// EventPending is a request handed to lockhub (hub mode): its ticket
 	// is in the reason.
-	EventPending = "pending"
+	EventPending = audit.EventPending
 	// EventConfigImport is a `locksql config import`, applied or refused.
 	EventConfigImport = "config_import"
 )

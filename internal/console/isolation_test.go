@@ -97,7 +97,7 @@ func TestIsolationSameUserRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("same-user mode accepted")
 	}
-	for _, want := range []string{"separate account", "sudo locksql install", "locksql doctor"} {
+	for _, want := range []string{"separate account", "through the launcher", "locksql doctor"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error lacks %q: %v", want, err)
 		}
