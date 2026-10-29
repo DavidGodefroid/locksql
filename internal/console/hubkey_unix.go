@@ -4,26 +4,59 @@ package console
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"syscall"
 )
 
-// checkHubKeyFile refuses a pinned hub key file another account could
-// replace: it must belong to root or to the console's account and be
-// writable by its owner only (the key decides whose decisions run).
-func checkHubKeyFile(path string) error {
-	fi, err := os.Stat(path)
+// maxHubKeyFile bounds the pinned hub key file (one base64 line).
+const maxHubKeyFile = 4096
+
+// readHubKeyFile reads the pinned hub key file, refusing one another
+// account could replace: a symbolic link, not a regular file, writable by
+// its group or others, owned by neither root nor the console's account,
+// or in a directory writable by group or others that is neither root's
+// nor the console's. The checks and the read go through one descriptor,
+// opened without following a link.
+func readHubKeyFile(path string) ([]byte, error) {
+	bad := func(format string, a ...any) error {
+		return fmt.Errorf("%w: --hub-key-file %s: %s", ErrConfig, path, fmt.Sprintf(format, a...))
+	}
+	trusted := func(fi os.FileInfo) bool {
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		return !ok || st.Uid == 0 || int(st.Uid) == os.Getuid()
+	}
+	if di, err := os.Stat(filepath.Dir(path)); err != nil {
+		return nil, bad("%v", err)
+	} else if di.Mode().Perm()&0o022 != 0 && !(di.Mode()&os.ModeSticky != 0 && trusted(di)) {
+		return nil, bad("its directory is writable by its group or by others (mode %#o)", di.Mode().Perm())
+	} else if !trusted(di) {
+		return nil, bad("its directory belongs to neither root nor the console's account")
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		return fmt.Errorf("%w: --hub-key-file: %v", ErrConfig, err)
+		return nil, bad("%v (a symbolic link is refused)", err)
 	}
-	if !fi.Mode().IsRegular() {
-		return fmt.Errorf("%w: --hub-key-file %s is not a regular file", ErrConfig, path)
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, bad("%v", err)
 	}
-	if fi.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("%w: --hub-key-file %s is writable by its group or by others (mode %#o): chmod go-w it", ErrConfig, path, fi.Mode().Perm())
+	switch {
+	case !fi.Mode().IsRegular():
+		return nil, bad("not a regular file")
+	case fi.Mode().Perm()&0o022 != 0:
+		return nil, bad("writable by its group or by others (mode %#o): chmod go-w it", fi.Mode().Perm())
+	case !trusted(fi):
+		return nil, bad("belongs to neither root nor the console's account")
 	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid != 0 && int(st.Uid) != os.Getuid() {
-		return fmt.Errorf("%w: --hub-key-file %s belongs to uid %d, neither root nor the console's account", ErrConfig, path, st.Uid)
+	b, err := io.ReadAll(io.LimitReader(f, maxHubKeyFile+1))
+	if err != nil {
+		return nil, bad("%v", err)
 	}
-	return nil
+	if len(b) > maxHubKeyFile {
+		return nil, bad("larger than %d bytes", maxHubKeyFile)
+	}
+	return b, nil
 }

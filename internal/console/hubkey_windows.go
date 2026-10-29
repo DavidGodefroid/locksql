@@ -2,19 +2,27 @@ package console
 
 import (
 	"fmt"
+	"io"
 	"os"
 )
 
-// checkHubKeyFile checks that the pinned hub key file is a regular file;
-// locksql runs its console in its Linux image, where the owner and mode
-// are checked too.
-func checkHubKeyFile(path string) error {
-	fi, err := os.Stat(path)
+// maxHubKeyFile bounds the pinned hub key file (one base64 line).
+const maxHubKeyFile = 4096
+
+// readHubKeyFile reads the pinned hub key file; locksql runs its console
+// in its Linux image, where its owner, mode and directory are checked too.
+func readHubKeyFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("%w: --hub-key-file: %v", ErrConfig, err)
+		return nil, fmt.Errorf("%w: --hub-key-file: %v", ErrConfig, err)
 	}
-	if !fi.Mode().IsRegular() {
-		return fmt.Errorf("%w: --hub-key-file %s is not a regular file", ErrConfig, path)
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: --hub-key-file %s is not a regular file", ErrConfig, path)
 	}
-	return nil
+	b, err := io.ReadAll(io.LimitReader(f, maxHubKeyFile+1))
+	if err != nil || len(b) > maxHubKeyFile {
+		return nil, fmt.Errorf("%w: --hub-key-file %s: unreadable or larger than %d bytes", ErrConfig, path, maxHubKeyFile)
+	}
+	return b, nil
 }
