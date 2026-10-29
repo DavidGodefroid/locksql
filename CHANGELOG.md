@@ -13,6 +13,13 @@ This file records the changes a user or an agent has to know about.
   same audit records): the screens are pinned byte for byte by golden tests
   (`internal/console/testdata/screens`). The upcoming hub mode then plugs
   into one place shared by every Lock.
+- **Chained audit log.** Each audit record now ends with `prev_hash`, the
+  hash of the line before it (lockkit's `audit.Verify`
+  checks the chain and names the first record edited, removed, inserted or
+  reordered). The line before it is the 0.8 line, byte for byte. Existing logs
+  are not rewritten: new records chain onto their last line. Records of
+  hub mode will also carry `ticket`, `approver`, `facade` and `hub_sig`.
+  `locksql stats` reads old and new logs alike.
 
 - **Plan hash.** `query.plan` answers a `plan_hash` (`sha256:…`) of the
   normalised statement, the profile, the policy fingerprint and, on

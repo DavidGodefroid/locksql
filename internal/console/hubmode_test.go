@@ -90,7 +90,7 @@ func TestHubModePendingThenRun(t *testing.T) {
 	if raw == nil || strings.Contains(string(raw), "alice@example.com") {
 		t.Fatalf("hub ticket %s", raw)
 	}
-	if !strings.Contains(h.auditLog(t), `"event":"pending"`) {
+	if log := h.auditLog(t); !strings.Contains(log, `"event":"pending"`) || !strings.Contains(log, `"ticket":"`+tk+`"`) {
 		t.Errorf("no pending record:\n%s", h.auditLog(t))
 	}
 	if r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: tk}); r.Error == nil {
