@@ -1166,6 +1166,7 @@ The retry rules:
 | `E_MASKED_SET_OP` | `UNION`, `INTERSECT`, `EXCEPT` or duplicate removal mixing a PII column with other values | rewrite | `UNION ALL` between PII columns, without `DISTINCT` |
 | `E_MASK_UNCERTAIN` | a result whose masking cannot be proven: an alias, a whole-row reference or a label the engine cannot trace, a result whose columns differ from the analysis | rewrite | PII columns by their plain name |
 | `E_MASKED_WRITE` | a write that copies a PII column or stores a value the agent chose into one | stop | none (a masked column may only be set to `NULL` or `DEFAULT`) |
+| `E_STALE` | the definitions the statement resolves to (functions, views, rules, triggers, row-level policies, grants, search path) changed between the plan and the run, or during the run | rewrite | plan the statement again; the human approves the new plan |
 | `E_POLICY` | a refusal no check named (fail-closed; should not happen) | stop | none: report it as a bug |
 
 `E_K_ANON` (fewer than `k_anonymity` rows behind a PII filter, group or

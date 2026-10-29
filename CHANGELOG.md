@@ -14,6 +14,19 @@ This file records the changes a user or an agent has to know about.
   (`internal/console/testdata/screens`). The upcoming hub mode then plugs
   into one place shared by every Lock.
 
+- **Plan hash.** `query.plan` answers a `plan_hash` (`sha256:…`) of the
+  normalised statement, the profile, the policy fingerprint and, on
+  PostgreSQL, the effective `search_path` and the definitions of every
+  object the statement resolves to: functions and operators (body,
+  settings, `SECURITY DEFINER`, grants), views (`pg_get_viewdef`), rules,
+  triggers and their functions, row-level policies and the row-level
+  security switches, grants, followed through views, rules, triggers and
+  policies. `query.run` checks it before the approval, then again in the
+  statement's own transaction just before and just after the statement: a
+  plan whose objects changed is refused with the new code `E_STALE` (the
+  statement rolled back when they changed during it). `CREATE OR REPLACE`
+  keeps the OIDs, so the definitions are hashed, not the OIDs.
+
 ### Fixed
 
 - **No widening switch while a prompt waits.** Shift+Tab (auto mode on),

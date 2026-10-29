@@ -13,6 +13,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/product"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
+	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
 // hostKeyAnswerOK accepts "yes", or on a production profile the last 8
@@ -214,4 +215,24 @@ func withProxyStderr(err error, stderr string) error {
 		return err
 	}
 	return fmt.Errorf("%w (proxy_command stderr: %s)", err, stderr)
+}
+
+// ObjectState passes the read on (engine.ObjectGuard).
+func (s *tunneledSession) ObjectState(ctx context.Context, db string, refs engine.ObjectRefs) (engine.ObjectState, error) {
+	return engine.ObjectStateOf(ctx, s.Session, db, refs)
+}
+
+// RunGuarded passes the guarded run on (engine.ObjectGuard).
+func (s *tunneledSession) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check func(engine.ObjectState, bool) error) (engine.Result, error) {
+	return engine.RunGuarded(ctx, s.Session, db, st, maxRows, refs, check)
+}
+
+// ObjectState passes the read on (engine.ObjectGuard).
+func (s *proxiedSession) ObjectState(ctx context.Context, db string, refs engine.ObjectRefs) (engine.ObjectState, error) {
+	return engine.ObjectStateOf(ctx, s.Session, db, refs)
+}
+
+// RunGuarded passes the guarded run on (engine.ObjectGuard).
+func (s *proxiedSession) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check func(engine.ObjectState, bool) error) (engine.Result, error) {
+	return engine.RunGuarded(ctx, s.Session, db, st, maxRows, refs, check)
 }
