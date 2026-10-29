@@ -282,6 +282,11 @@ func Run(ctx context.Context, o Options) error {
 	if o.Hub.Enabled() {
 		// The flags, the pinned hub key and the instance key are checked
 		// before any prompt.
+		if o.Hub.KeyFile != "" {
+			if err := checkHubKeyFile(o.Hub.KeyFile); err != nil {
+				return err
+			}
+		}
 		if hub, err = kconsole.OpenHub(product.P, o.Hub, o.StateDir, o.Now); err != nil {
 			return err
 		}

@@ -75,9 +75,7 @@ func (s *Server) hubScreen(pl *plan) render.MaskedScreen {
 		Header: fmt.Sprintf("%s / %s · tier %s", s.host(), db, s.profile.Tier),
 		Note:   pl.intent, Warnings: pl.warnings, Red: s.profile.Production || pl.st.Class != sqlclass.Read,
 	}
-	for _, l := range strings.Split(pl.st.SQL, "\n") {
-		src.Body = append(src.Body, statementLine(s.dialect, l))
-	}
+	src.Body = append(src.Body, statementLines(s.dialect, pl.st.SQL)...)
 	class := strings.ToUpper(pl.st.Class.String())
 	src.Body = append(src.Body, render.Structure(""), render.Structure(fmt.Sprintf("class %s · verdict %s", class, pl.level)))
 	if pl.unmask {
@@ -86,27 +84,52 @@ func (s *Server) hubScreen(pl *plan) render.MaskedScreen {
 	return render.MaskScreen(src, render.Masking{Detectors: s.detectors, Personal: func(string, string) bool { return true }})
 }
 
-// statementLine is one line of a statement in parts: its literals values,
-// the rest structure.
-func statementLine(d sqlclass.Dialect, line string) render.Line {
-	toks, err := sqlclass.Lex(d, line)
+// statementLines are the lines of a statement in parts: its literals
+// values, the rest structure. The statement is lexed whole, so that a
+// literal over several lines is a value on each of them; a statement that
+// does not lex is a value throughout.
+func statementLines(d sqlclass.Dialect, sql string) []render.Line {
+	toks, err := sqlclass.Lex(d, sql)
 	if err != nil {
-		return render.Line{{Text: line, Value: true, Column: "statement"}}
+		var out []render.Line
+		for _, l := range strings.Split(sql, "\n") {
+			out = append(out, render.Line{{Text: l, Value: true, Column: "statement"}})
+		}
+		return out
 	}
-	var out render.Line
-	pos := 0
+	// value[i] marks the bytes of sql inside a literal.
+	value := make([]bool, len(sql))
 	for _, t := range toks {
-		if t.Kind != sqlclass.TokString && t.Kind != sqlclass.TokNumber {
+		if t.Kind == sqlclass.TokString || t.Kind == sqlclass.TokNumber {
+			for i := t.Pos; i < t.End; i++ {
+				value[i] = true
+			}
+		}
+	}
+	var out []render.Line
+	var line render.Line
+	flush := func(from, to int, v bool) {
+		if to <= from {
+			return
+		}
+		part := render.Part{Text: sql[from:to]}
+		if v {
+			part.Value, part.Column = true, "literal"
+		}
+		line = append(line, part)
+	}
+	from := 0
+	for i := 0; i <= len(sql); i++ {
+		if i == len(sql) || sql[i] == '\n' {
+			flush(from, i, from < len(sql) && value[from])
+			out = append(out, line)
+			line, from = nil, i+1
 			continue
 		}
-		if t.Pos > pos {
-			out = append(out, render.Part{Text: line[pos:t.Pos]})
+		if value[i] != value[from] {
+			flush(from, i, value[from])
+			from = i
 		}
-		out = append(out, render.Part{Text: line[t.Pos:t.End], Value: true, Column: "literal"})
-		pos = t.End
-	}
-	if pos < len(line) {
-		out = append(out, render.Part{Text: line[pos:]})
 	}
 	return out
 }
@@ -205,10 +228,15 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string) 
 		return *r
 	}
 	class := pl.st.Class.String()
+	hidden, r := s.runChecks(ctx, id, pl)
+	if r != nil {
+		finish(false, "refused")
+		return *r
+	}
 	pl.warnings = s.warnings(ctx, sess, pl)
 	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask,
 		Warnings: pl.warnings, Intent: pl.intent})
-	if body.Refuse {
+	if body.Refuse || hidden != nil {
 		finish(false, "refused by the weight check")
 		return refusedResp(id, hiddenWeightRefusal, refusal.New(refusal.Cost, hiddenWeightRefusal).Info("", 0))
 	}
@@ -242,12 +270,16 @@ func (s *Server) hubStale(ctx context.Context, id int64, body hubPlan, old strin
 	if r != nil {
 		return *r
 	}
+	hidden, r := s.runChecks(ctx, id, pl)
+	if r != nil {
+		return *r
+	}
 	sess, r := s.session(ctx, id)
 	if r != nil {
 		return *r
 	}
 	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: pl.st.Class.String(), Verdict: pl.level, Unmasked: pl.unmask, Intent: pl.intent})
-	resp := s.hubSubmit(ctx, id, sess, pl, rec, nil)
+	resp := s.hubSubmit(ctx, id, sess, pl, rec, hidden)
 	var p struct {
 		Status, Ticket string
 	}

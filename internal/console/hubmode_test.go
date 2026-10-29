@@ -17,8 +17,10 @@ import (
 	"github.com/DavidGodefroid/lockkit/hubclient/hubtest"
 	"github.com/DavidGodefroid/lockkit/ticket"
 
+	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/product"
+	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
 const hubInstanceName = "sql-uat"
@@ -165,5 +167,70 @@ func TestHubModeRefusesPlaceholders(t *testing.T) {
 	wantCode(t, r, ipc.CodeRefused)
 	if hub.Pushed() != 0 || h.io.promptCount() != 0 {
 		t.Fatalf("pushed %d prompts %q", hub.Pushed(), h.io.prompts)
+	}
+}
+
+// A literal over several lines is masked on each of them: no line of it
+// leaves the lock in clear (review of #104).
+func TestHubScreenMultilineLiteral(t *testing.T) {
+	const q = "SELECT id FROM users WHERE note = 'x\nJohnSecretSmith lives MainStreet\ny' LIMIT 1"
+	for _, l := range statementLines(sqlclass.MySQL, q) {
+		for _, p := range l {
+			if strings.Contains(p.Text, "JohnSecretSmith") && !p.Value {
+				t.Fatalf("line %+v sends a literal as structure", l)
+			}
+		}
+	}
+	var hub *hubtest.Hub
+	h := newHarness(t, uatProfile(), withHub(t, &hub))
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{int64(1)}}}
+	pr := h.plan(t, q, false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	if raw := string(hub.Ticket(tk)); strings.Contains(raw, "JohnSecretSmith") || strings.Contains(raw, "MainStreet") {
+		t.Fatalf("hub ticket carries the literal: %s", raw)
+	}
+	// A statement that does not lex is a value throughout.
+	for _, l := range statementLines(sqlclass.MySQL, "SELECT 'unterminated\nsecret") {
+		for _, p := range l {
+			if !p.Value {
+				t.Fatalf("unlexed statement sent as structure: %+v", l)
+			}
+		}
+	}
+}
+
+// A weight refusal hidden under a PII filter goes to the hub like any
+// request and is refused only after the decision, without running.
+func TestHubModeHiddenRefusal(t *testing.T) {
+	const q = "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1"
+	var hub *hubtest.Hub
+	h := newHarness(t, uatProfile(), withHub(t, &hub))
+	h.sess.plan = heavyPlan()
+	pr := h.plan(t, q, false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	hub.Decide(tk, ticket.Approved, "")
+	r := runTicket(t, h, tk)
+	wantCode(t, r, ipc.CodeRefused)
+	if r.Error.Message != hiddenWeightRefusal || slices.Contains(h.sess.runs, q) {
+		t.Fatalf("refusal %q, runs %q", r.Error.Message, h.sess.runs)
+	}
+}
+
+// A policy change between the submission and the run makes the ticket
+// stale: its decision was taken under another policy.
+func TestHubModePolicyChangedIsStale(t *testing.T) {
+	var hub *hubtest.Hub
+	h := newHarness(t, uatProfile(), withHub(t, &hub))
+	pr := h.plan(t, selectUsers, false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	tight := h.s.approved
+	tight.Profile.Limits.MaxRows = 50
+	if err := h.s.adopt(tight, "tightened"); err != nil {
+		t.Fatal(err)
+	}
+	hub.Decide(tk, ticket.Approved, "")
+	pendingTicket(t, runTicket(t, h, tk), "stale")
+	if slices.Contains(h.sess.runs, selectUsers) {
+		t.Fatal("ran under another policy")
 	}
 }
