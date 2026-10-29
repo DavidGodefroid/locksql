@@ -119,7 +119,7 @@ refuses what would turn a masked column into an oracle. The checks are in
 
 ## k-anonymity counts
 
-A filter, grouping or aggregate on a PII column needs row counts, planned
+A filter, grouping, `DISTINCT` or aggregate on a PII column needs row counts, planned
 by the analyzer (`KCheck`) and run by the console before the approval
 prompt (`console.kCount`):
 
