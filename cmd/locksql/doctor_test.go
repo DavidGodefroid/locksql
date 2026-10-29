@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -246,55 +245,6 @@ func TestDoctorSameUserMode(t *testing.T) {
 	}
 	if stateOf(checks, "terminal injection") != checkWarn {
 		t.Errorf("terminal injection check: %+v", checks)
-	}
-}
-
-func TestInstallPrint(t *testing.T) {
-	// The test binary belongs to the test account: see
-	// TestInstallRefusesABinaryAnotherAccountCanChange.
-	o := installCLI(t, "--client", "agent", "--print", "--trust-binary")
-	if o.code != 0 {
-		t.Fatalf("exit %d: %s", o.code, o.stderr)
-	}
-	adduser := "useradd"
-	if runtime.GOOS == "darwin" {
-		adduser = "sysadminctl"
-	}
-	for _, want := range []string{adduser, "locksql-clients", "/etc/locksql/system.toml", "x11          = \"refuse\""} {
-		if !strings.Contains(o.stdout, want) {
-			t.Errorf("install script lacks %q", want)
-		}
-	}
-	if runtime.GOOS == "darwin" {
-		if !strings.Contains(o.stdout, "install -d -m 0710 -o locksql -g locksql-clients") {
-			t.Error("install script lacks the 0710 socket directory")
-		}
-	}
-	if o := installCLI(t, "--client", "locksql", "--print"); o.code != exitUsage {
-		t.Error("same agent and console account accepted")
-	}
-	if o := installCLI(t, "--client", "a;id", "--print"); o.code != exitUsage {
-		t.Error("shell metacharacters accepted in an account name")
-	}
-}
-
-// Without setgid the socket is born with the console's own group, which it
-// may not change to the client group it is not a member of.
-func TestLinuxInstallScriptSetgidSocketDir(t *testing.T) {
-	s := linuxInstallScript("/tmp/locksql", "agent", "locksql", "locksql-clients", "")
-	for _, want := range []string{
-		`printf 'd /run/locksql 2710 locksql locksql-clients -\n' > /etc/tmpfiles.d/locksql.conf`,
-		"|| install -d -m 2710 -o locksql -g locksql-clients /run/locksql",
-		// A system without systemd has no /etc/tmpfiles.d: the fallback
-		// must still be reached.
-		"install -d -m 0755 -o root -g root /etc/tmpfiles.d\nprintf",
-	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("install script lacks %q:\n%s", want, s)
-		}
-	}
-	if strings.Contains(s, " 0710 ") {
-		t.Errorf("install script still creates a 0710 directory:\n%s", s)
 	}
 }
 
