@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/DavidGodefroid/lockkit/audit"
+
 	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
@@ -35,11 +37,11 @@ func goldenRecords() []Record {
 	}
 }
 
-var tsRe = regexp.MustCompile(`^\{"ts":"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}(Z|[+-]\d\d:\d\d)",`)
+var tsRe = regexp.MustCompile(`^\{"ts":"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}(Z|[+-]\d\d:\d\d)","prev_hash":"(genesis|sha256:[0-9a-f]{64})",`)
 
 // The audit lines locksql writes are byte-identical to those of locksql
-// 0.8 (captured before lockkit), timestamp aside: existing logs keep one
-// format.
+// 0.8 (captured before lockkit), timestamp and lockkit's prev_hash aside:
+// the chain is additive, and the lines it links verify.
 func TestAuditLineUnchanged(t *testing.T) {
 	dir := t.TempDir()
 	l, err := Open(dir)
@@ -77,5 +79,48 @@ func TestAuditLineUnchanged(t *testing.T) {
 	}
 	if !bytes.Equal(got.Bytes(), want) {
 		t.Errorf("audit lines changed:\ngot:\n%s\nwant:\n%s", got.Bytes(), want)
+	}
+	if s, err := audit.Verify(bytes.NewReader(raw)); err != nil || s.Records != len(goldenRecords()) || s.Legacy != 0 {
+		t.Errorf("chain: %+v, %v", s, err)
+	}
+}
+
+// A log of locksql 0.8, before the chain, stays readable: new records
+// chain onto its last line, and the whole log verifies.
+func TestAuditChainExtendsAnOldLog(t *testing.T) {
+	dir := t.TempDir()
+	old, err := os.ReadFile(filepath.Join("testdata", "audit_golden.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old = bytes.ReplaceAll(old, []byte(`{"ts":"TS",`), []byte(`{"ts":"2025-06-01T10:00:00.000Z",`))
+	p := filepath.Join(dir, "locksql", "audit.log")
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range goldenRecords() {
+		if err := l.Append(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(goldenRecords())
+	if s, err := audit.Verify(bytes.NewReader(raw)); err != nil || s.Records != 2*n || s.Legacy != n {
+		t.Fatalf("chain: %+v, %v", s, err)
+	}
+	// An edited old line breaks the link of the first new one.
+	edited := bytes.Replace(raw, []byte(`"decision":"idle"`), []byte(`"decision":"none"`), 1)
+	if _, err := audit.Verify(bytes.NewReader(edited)); err == nil {
+		t.Fatal("an edited record verifies")
 	}
 }

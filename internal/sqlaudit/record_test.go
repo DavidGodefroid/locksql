@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DavidGodefroid/lockkit/ticket"
+
 	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
@@ -51,8 +53,8 @@ func TestOpenPath(t *testing.T) {
 // hold a password or row data; adding one must be a deliberate change here.
 func TestRecordFieldSet(t *testing.T) {
 	want := []string{
-		"affected", "allow_loosen", "approval", "class", "code", "db", "db_user", "decision", "duration_ms", "engine", "error",
-		"event", "host", "intent", "peer_pid", "peer_uid", "peer_user", "profile", "profiles", "reason", "rows", "scope", "span", "sql", "ssh_host", "ssh_host_key", "truncated", "ts",
+		"affected", "allow_loosen", "approval", "approver", "class", "code", "db", "db_user", "decision", "duration_ms", "engine", "error",
+		"event", "facade", "host", "hub_sig", "intent", "peer_pid", "peer_uid", "peer_user", "prev_hash", "profile", "profiles", "reason", "rows", "scope", "span", "sql", "ssh_host", "ssh_host_key", "ticket", "truncated", "ts",
 		"unmasked", "verdict", "warnings",
 	}
 	l, err := Open(t.TempDir())
@@ -66,6 +68,7 @@ func TestRecordFieldSet(t *testing.T) {
 		SSHHost: "b", SSHHostKey: "SHA256:k", PeerUID: new(int), PeerPID: 4, PeerUser: "agent",
 		Code: "E_NO_LIMIT", Span: &refusal.Span{Line: 1, Col: 2, Token: "FROM"},
 		Scope: "user", Profiles: []string{"p"}, AllowLoosen: true,
+		Ticket: "t", Approver: &ticket.Approver{ID: "u", Display: "d"}, Facade: "tty", HubSig: "s",
 	}
 	if err := l.Append(full); err != nil {
 		t.Fatal(err)
@@ -85,8 +88,8 @@ func TestRecordFieldSet(t *testing.T) {
 
 	// Compile-time shape: every Record field is accounted for.
 	rt := reflect.TypeOf(Record{})
-	if rt.NumField() != len(want)-1 { // ts is added by Append
-		t.Fatalf("Record has %d fields, want %d", rt.NumField(), len(want)-1)
+	if rt.NumField() != len(want)-2 { // ts and prev_hash are added by Append
+		t.Fatalf("Record has %d fields, want %d", rt.NumField(), len(want)-2)
 	}
 	for i := 0; i < rt.NumField(); i++ {
 		name := strings.ToLower(rt.Field(i).Name)

@@ -1,11 +1,14 @@
 // Package sqlaudit is locksql's audit record on lockkit's audit log: one
 // JSONL record per event, never secrets and never row data. The record
 // keeps locksql 0.8's fields in their order, so a line written today is
-// byte-identical to one written before lockkit for the same event.
+// the one written before lockkit for the same event, plus lockkit's
+// prev_hash after ts (the hash chain, see audit.Verify) and, in hub mode,
+// the hub fields at the end. Readers of the old format ignore both.
 package sqlaudit
 
 import (
 	"github.com/DavidGodefroid/lockkit/audit"
+	"github.com/DavidGodefroid/lockkit/ticket"
 
 	"github.com/DavidGodefroid/locksql/internal/product"
 	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
@@ -85,6 +88,13 @@ type Record struct {
 	Scope       string   `json:"scope,omitempty"`
 	Profiles    []string `json:"profiles,omitempty"`
 	AllowLoosen bool     `json:"allow_loosen,omitempty"`
+	// The hub's decision behind a record, in hub mode only (lockkit's
+	// audit.Base names): the ticket ID, who answered it and on which
+	// facade, and the hub's signature of the decision.
+	Ticket   string           `json:"ticket,omitempty"`
+	Approver *ticket.Approver `json:"approver,omitempty"`
+	Facade   string           `json:"facade,omitempty"`
+	HubSig   string           `json:"hub_sig,omitempty"`
 }
 
 // AuditEvent implements lockkit's audit.Record.
