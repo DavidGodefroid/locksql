@@ -13,6 +13,10 @@ This file records the changes a user or an agent has to know about.
   count of its `FROM`/`WHERE`, and warns under `k`. In a correlated
   subquery, a recursive CTE, a `SELECT` without `FROM` or a write, such a
   `DISTINCT` is now refused, as a grouping already was.
+- **`MIN` and `MAX` of a PII column are redacted like other aggregates.**
+  Their result is now plain `<redacted>` in every mode: no `partial` or
+  `email` mask, no cell reference, and it cannot be compared or joined.
+  `MIN`/`MAX` of an unmasked column and `ANY_VALUE` are unchanged.
 
 ## v0.9.0 (2026-10-28)
 

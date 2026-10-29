@@ -939,7 +939,7 @@ PII columns (columns under a mask rule) may be used as follows:
 | Allowed | Refused |
 |---|---|
 | plain in the select list (masked, also through aliases, CTEs, unions, `*`) | any expression or function over them, anywhere (`LOWER(email)`, `email \|\| ''`) |
-| `COUNT(col)` (not masked); `MIN`/`MAX` (masked in the column's mode); other aggregates (redacted) | `LIKE`, ranges (`<`, `BETWEEN`) and other comparisons |
+| `COUNT(col)` (not masked); other aggregates, `MIN`/`MAX` included (redacted) | `LIKE`, ranges (`<`, `BETWEEN`) and other comparisons |
 | `JOIN ... ON a.col = b.col`, `col IN (SELECT ...)`, `USING`, `NATURAL` between two PII columns | a join or `IN (subquery)` with a column that has no mask rule (add a rule for it, or compare with literals); constant comparisons in `JOIN ... ON` (put them in `WHERE`) |
 | `WHERE col = 'literal'`, `col IN ('a', 'b')`, `col IS NULL`, combined with `AND` | `<>`, `!=`, `NOT IN`, `IS NOT NULL`, `IS DISTINCT FROM`; a PII column compared with itself (`email = email`, or a self-join on it); a PII condition under `NOT`, `OR` or `XOR`; a scalar subquery returning a PII value as an operand; constant filters on a column of a view |
 | | `UNION`, `INTERSECT` or `EXCEPT` between a PII column and a literal (including `NULL`), an expression or an unmasked column (`UNION ALL` is allowed and gives plain `<redacted>`); `DISTINCT`, `COUNT(DISTINCT ...)` or `GROUP BY` over a column that mixes a PII column with such values |
@@ -1074,9 +1074,9 @@ The rules:
   source is under a mask rule gets references: a column that may hold a
   literal of the statement (`SELECT email ... UNION ALL SELECT 'x'`), a `UNION`
   arm of an unmasked column (`UNION ALL SELECT note`), an expression or an
-  aggregate other than `MIN`/`MAX` gets plain `<redacted>` on every row, since
-  the agent may know the value behind it. `MIN` and `MAX` return a real cell
-  value and keep their references.
+  aggregate gets plain `<redacted>` on every row, since the agent may know
+  the value behind it. `MIN` and `MAX` return a real cell, but which one
+  depends on how the values order, so they get plain `<redacted>` too.
 - A statement that compares a PII column with a literal the agent wrote
   (`email = 'x'`, `email IN ('x', ...)`, in `WHERE` or `HAVING`, in any `UNION`
   or `INTERSECT` arm, join or subquery) gives plain `<redacted>` on every
@@ -1161,7 +1161,7 @@ The retry rules:
 | `E_ENGINE` | the database could not plan the statement or its k-anonymity counts; the details stay on the console | stop | none: the human sees the database's message |
 | `E_PLACEHOLDER` | a placeholder or cell reference used outside `pii_col = '${...}'` in `WHERE`/`HAVING`, malformed, unknown, unusable, or in a write | rewrite | `col = '${name}'` or `col IN ('${a}', '${b}')` in the `WHERE` of a read |
 | `E_MASKED_FILTER` | a PII column filtered or joined other than by equality: `LIKE`, ranges, negations, `OR`, a comparison with a non-PII column, a filter in a `JOIN` condition, `EXPLAIN` of a PII filter | rewrite | filter on a non-PII key, or `=`, `IN` (literals or placeholders), `IS NULL` under `AND` |
-| `E_MASKED_EXPRESSION` | a function or expression over a PII column | rewrite | the plain column (masked), or `COUNT`/`MIN`/`MAX` |
+| `E_MASKED_EXPRESSION` | a function or expression over a PII column | rewrite | the plain column (masked), or `COUNT` |
 | `E_MASKED_ORDER` | a PII column in `ORDER BY`, `DISTINCT ON`, a window's `PARTITION BY`/`ORDER BY` | rewrite | order or partition by a non-PII column |
 | `E_MASKED_SET_OP` | `UNION`, `INTERSECT`, `EXCEPT` or duplicate removal mixing a PII column with other values | rewrite | `UNION ALL` between PII columns, without `DISTINCT` |
 | `E_MASK_UNCERTAIN` | a result whose masking cannot be proven: an alias, a whole-row reference or a label the engine cannot trace, a result whose columns differ from the analysis | rewrite | PII columns by their plain name |
@@ -1226,7 +1226,7 @@ finds the project's consoles.
   character and the domain (`a***@example.com`). `partial`, `email` and
   detector-masked cells carry no reference, nor does any column but a plain
   one whose every source is under a mask rule (a `UNION` with a constant or
-  an unmasked column, an expression or an aggregate other than `MIN`/`MAX`
+  an unmasked column, an expression or an aggregate (`MIN`/`MAX` included)
   gives `<redacted>`), nor any column of a statement that filters a PII
   column on a literal the agent wrote. Several rules with different modes on one
   column give `redact`. Masked binary cells in `partial` mode

@@ -1393,6 +1393,15 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 		if arg.Kind == KindConst || arg.Kind == KindCount {
 			return arg, nil
 		}
+		// MIN and MAX return a real cell, but the order of the values picks
+		// which one: over a PII column the result carries an ordering a
+		// plain reference does not, so it is an aggregate (plain
+		// <redacted>, no cell reference, no comparison). ANY_VALUE picks
+		// none by order.
+		if arg.Sensitive && !strings.EqualFold(f.Name, "ANY_VALUE") {
+			arg.Kind = max(arg.Kind, KindAggregate)
+			return arg, nil
+		}
 		arg.Kind = max(arg.Kind, KindIdentity)
 		return arg, nil
 	}

@@ -60,7 +60,7 @@ The core of `analyze.go` is `Prov`, the provenance of a value:
 | Field | Meaning |
 |---|---|
 | `Sources` | the base columns (`db.table.column`, `Source`) the value derives from |
-| `Kind` | how: `KindConst` (no column), `KindCount` (a row count), `KindIdentity` (a value of one source: a plain reference, through aliases, subqueries, CTEs and set operations, or `MIN`/`MAX`), `KindAggregate`, `KindExpr` |
+| `Kind` | how: `KindConst` (no column), `KindCount` (a row count), `KindIdentity` (a value of one source: a plain reference, through aliases, subqueries, CTEs and set operations, `ANY_VALUE`, or `MIN`/`MAX` of an unmasked column), `KindAggregate`, `KindExpr` |
 | `Sensitive` | a source is under a mask rule and the value reveals source values (identity, aggregate or expression) |
 | `Modes` | the mask modes of the sensitive sources |
 | `Lit` | some values may be literals of the statement (`UNION ALL SELECT 'x'`) |
@@ -83,8 +83,10 @@ The analyzer walks the query with scopes (`scope`, `relation`, `column`):
   must be on the per-dialect allowlist (`funcs.go`): pure functions on
   values, the usual aggregates and window functions, nothing that reads
   files, opens connections, sleeps, locks, changes the session or reads
-  server metadata. `COUNT` gives `KindCount`; `MIN`, `MAX` and `ANY_VALUE`
-  keep identity; other aggregates give `KindAggregate`.
+  server metadata. `COUNT` gives `KindCount`; `ANY_VALUE` keeps identity, and so
+  do `MIN` and `MAX` of an unmasked column; `MIN` and `MAX` of a PII column,
+  whose result depends on how the values order, and other aggregates give
+  `KindAggregate`.
 
 Each output column becomes an `Output` with its provenance, the label the
 engine must report (an alias or a plain column name, or `""` when the
