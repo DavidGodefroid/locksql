@@ -1,0 +1,18 @@
+== screen
+""
+"\x1b[1;31m╭─ \x1b[0m\x1b[1m\x1b[1;31mPROD\x1b[0m\x1b[2m · \x1b[0mdb.example.com / app\x1b[2m · \x1b[0muser alice\x1b[2m · \x1b[0mtier read \x1b[1;31m─────\x1b[0m"
+"\x1b[1;31m│\x1b[0m"
+"\x1b[1;31m│ \x1b[0m  SELECT id FROM users LIMIT 5"
+"\x1b[1;31m│\x1b[0m"
+"\x1b[1;31m│ \x1b[0mclass READ · EXPLAIN: users lookup ~1 · est. 1 rows examined · verdict OK"
+"\x1b[1;31m│ \x1b[0mreads: app.users"
+"\x1b[1;31m│ \x1b[0mreturns at most 5 rows"
+"\x1b[1;31m│ \x1b[0mPII: masked (1 column rules; detectors: email)"
+"<bell>"
+"? \x1b[1;31m╰─ \x1b[0m\x1b[1mType the profile name \"prod\" to approve: \x1b[0m"
+"\x1b[32m✓\x1b[0m done: 1 rows in N ms"
+== response
+ok rows=1 text="id\n1\n(1 rows)\n"
+== audit
+event=approved decision=approved approval=session class=read verdict=OK sql=SELECT id FROM users LIMIT 5
+event=run decision=ok approval=session class=read verdict=OK sql=SELECT id FROM users LIMIT 5
