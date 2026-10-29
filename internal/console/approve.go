@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"github.com/DavidGodefroid/lockkit/sanitize"
 	"github.com/DavidGodefroid/lockkit/ui"
 	"github.com/DavidGodefroid/locksql/internal/config"
@@ -367,7 +368,7 @@ func (s *Server) CheckPolicy() {
 		return
 	}
 	changes := config.Diff(s.approved, cur)
-	if !loosens(changes) {
+	if !kconsole.Loosens(changes) {
 		s.pending = nil
 		if err := s.adopt(cur, "tightened"); err != nil {
 			s.println("policy change not applied: " + safeText(err.Error(), false))
@@ -381,15 +382,6 @@ func (s *Server) CheckPolicy() {
 	}
 	s.pending = &cur
 	s.println(red + "pending policy change (loosening) — type :review to see it" + reset)
-}
-
-func loosens(changes []config.Change) bool {
-	for _, c := range changes {
-		if c.Loosens {
-			return true
-		}
-	}
-	return false
 }
 
 // adopt records p as the approved policy and enforces it. A change of the

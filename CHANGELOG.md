@@ -4,6 +4,25 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+### Changed
+
+- **Approvals are decided by lockkit's console.** The console closes its
+  approval screen with lockkit's `console.Asker` (same prompt, same answers,
+  same audit records): the screens are pinned byte for byte by golden tests
+  (`internal/console/testdata/screens`). The upcoming hub mode then plugs
+  into one place shared by every Lock.
+
+### Fixed
+
+- **No widening switch while a prompt waits.** Shift+Tab (auto mode on),
+  Ctrl-O (clear results on) and `:unmask` are refused, with a line saying to
+  answer the prompt first, while the console waits for an approval, a typed
+  value, a refusal to acknowledge or a reconnection; switching auto mode or
+  clear results off stays allowed. At level 2 a second finger prompt no
+  longer nests in the pending one (lockkit #2).
+
 ## v0.9.0 (2026-10-28)
 
 ### Changed

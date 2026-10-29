@@ -43,10 +43,24 @@ func (s *Server) Key(k Key) {
 	}
 }
 
+// widenRefused refuses a switch that widens while a prompt waits for the
+// human: the answer or the finger meant for that prompt must not decide
+// another decision nested in it. Narrowing stays allowed.
+func (s *Server) widenRefused(what string) bool {
+	if s.prompting == 0 {
+		return false
+	}
+	s.println(paint.Warn(what + ": not while a prompt waits; answer it first"))
+	return true
+}
+
 // toggleMode switches between manual and auto mode, and says so.
 func (s *Server) toggleMode() {
 	if s.profile.Production {
 		s.println(paint.Warn("auto mode is not available on a production profile: every statement is prompted"))
+		return
+	}
+	if !s.auto && s.widenRefused("auto mode") {
 		return
 	}
 	if !s.auto && s.cfg.Fingerprint {
@@ -84,6 +98,9 @@ func (s *Server) toggleResults() {
 		s.println(paint.Warn("results stay masked at level 1: the agent's account can read this window"))
 		return
 	}
+	if !s.showResults && s.widenRefused("clear results") {
+		return
+	}
 	s.showResults = !s.showResults
 	decision := "hidden"
 	if s.showResults {
@@ -112,6 +129,9 @@ func (s *Server) toggleUnmask(ctx context.Context) {
 		s.audit(audit.Record{Event: audit.EventUnmask, Decision: "off"})
 		s.println(paint.OK("unmask: off; clients get masked output only, and open unmask plans are refused"))
 		s.refreshStatus()
+		return
+	}
+	if s.widenRefused("unmask") {
 		return
 	}
 	warn := "allow clients to ask for unmasked PII output? Each such query is still approved here, never auto-approved"

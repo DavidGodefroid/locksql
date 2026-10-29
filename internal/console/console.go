@@ -210,6 +210,8 @@ type Server struct {
 	requests []string
 	// lastLoadErr avoids repeating the same config error every poll.
 	lastLoadErr string
+	// prompting counts the prompts waiting for the human (waiting).
+	prompting int
 
 	ended  bool
 	reason string
@@ -284,11 +286,6 @@ func (s *Server) host() string {
 	return s.profile.Host
 }
 
-// explainNoFinger tells the human why a finger did not approve.
-func explainNoFinger(println func(string), r Result) {
-	println(paint.Fail("denied: " + safeText(r.Err.Error(), false)))
-}
-
 // noFingerFields is the audit text of a refusal for want of a finger; it
 // is empty for any other outcome.
 func noFingerFields(r Result) (reason, errText string) {
@@ -298,18 +295,24 @@ func noFingerFields(r Result) (reason, errText string) {
 	return "no fingerprint", r.Err.Error()
 }
 
+// asker takes the human decisions of s (lockkit's console).
+func (s *Server) asker() kconsole.Asker {
+	return kconsole.Asker{IO: s.cfg.IO, Approver: s.approver, Profile: s.profile.Name, End: s.End, Waiting: s.waiting}
+}
+
+// waiting counts the prompts that wait for the human: a control key or a
+// command meanwhile never widens a switch (widenRefused).
+func (s *Server) waiting(on bool) {
+	if on {
+		s.prompting++
+	} else {
+		s.prompting--
+	}
+}
+
 // decide asks the approver and explains a missing finger. Too many
 // non-matching fingers end the console.
-func (s *Server) decide(ctx context.Context, d Decision) Result {
-	r := s.approver.Approve(ctx, d)
-	if r.Outcome == NoFinger {
-		explainNoFinger(s.println, r)
-		if errors.Is(r.Err, ErrTooManyNoMatch) {
-			s.End("fingerprint: three non-matching fingers")
-		}
-	}
-	return r
-}
+func (s *Server) decide(ctx context.Context, d Decision) Result { return s.asker().Decide(ctx, d) }
 
 // End stops the session after the current request.
 func (s *Server) End(reason string) {

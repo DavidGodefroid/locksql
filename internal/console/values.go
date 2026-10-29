@@ -77,7 +77,9 @@ func placeholderColumns(pl *plan, name string) string {
 func (s *Server) askValues(ctx context.Context, id int64, pl *plan, rec audit.Record, names []string) *ipc.Response {
 	for _, n := range names {
 		bell(s.cfg.IO)
+		s.waiting(true)
 		b, err := s.cfg.IO.AskSecret(ctx, paint.Paint(s.frameColour(), "│ ")+fmt.Sprintf("value for ${%s} (%s): ", n, safeText(placeholderColumns(pl, n), false)))
+		s.waiting(false)
 		v := string(b)
 		clear(b)
 		switch {
