@@ -8,6 +8,11 @@ This file records the changes a user or an agent has to know about.
 
 ### Changed
 
+- **Approvals are decided by lockkit's console.** The console closes its
+  approval screen with lockkit's `console.Asker` (same prompt, same answers,
+  same audit records): the screens are pinned byte for byte by golden tests
+  (`internal/console/testdata/screens`). The upcoming hub mode then plugs
+  into one place shared by every Lock.
 - **Chained audit log.** Each audit record now carries `prev_hash`, right
   after `ts`: the hash of the line before it (lockkit's `audit.Verify`
   checks the chain and names the first record edited, removed, inserted or
@@ -15,6 +20,15 @@ This file records the changes a user or an agent has to know about.
   are not rewritten: new records chain onto their last line. Records of
   hub mode will also carry `ticket`, `approver`, `facade` and `hub_sig`.
   `locksql stats` reads old and new logs alike.
+
+### Fixed
+
+- **No widening switch while a prompt waits.** Shift+Tab (auto mode on),
+  Ctrl-O (clear results on) and `:unmask` are refused, with a line saying to
+  answer the prompt first, while the console waits for an approval, a typed
+  value, a refusal to acknowledge or a reconnection; switching auto mode or
+  clear results off stays allowed. At level 2 a second finger prompt no
+  longer nests in the pending one (lockkit #2).
 
 ## v0.9.0 (2026-10-28)
 

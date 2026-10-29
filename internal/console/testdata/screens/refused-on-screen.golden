@@ -1,0 +1,25 @@
+== screen
+""
+"\x1b[38;5;99m╭─ \x1b[0m\x1b[1m\x1b[38;5;99mUAT\x1b[0m\x1b[2m · \x1b[0mdb.uat.example.com / app\x1b[2m · \x1b[0muser alice\x1b[2m · \x1b[0mtier read \x1b[38;5;99m─────\x1b[0m"
+"\x1b[38;5;99m│\x1b[0m"
+"\x1b[38;5;99m│ \x1b[0m  SELECT id FROM users WHERE \x1b[1;31memail\x1b[0m = 'alice@example.com' LIMIT 1"
+"\x1b[38;5;99m│\x1b[0m"
+"\x1b[38;5;99m│ \x1b[0mclass READ · EXPLAIN: users full ~50 000 000 · est. 50 000 000 rows examined · verdict \x1b[1;31mREFUSE\x1b[0m"
+"\x1b[38;5;99m│ \x1b[0m  - estimated rows examined 50 000 000 > 1 000 000"
+"\x1b[38;5;99m│ \x1b[0m  - full scan of users (~50 000 000 rows) > 1 000 000"
+"\x1b[38;5;99m│ \x1b[0mreads: app.users"
+"\x1b[38;5;99m│ \x1b[0mreturns at most 1 rows"
+"\x1b[38;5;99m│ \x1b[0m\x1b[1;31mPII columns touched: users.email (where)\x1b[0m"
+"\x1b[38;5;99m│ \x1b[0mk-anonymity count (k=5): SELECT COUNT(*) FROM `app`.`users` WHERE `app`.`users`.`email` = 'alice@example.com'"
+"\x1b[38;5;99m│ \x1b[0mk-anonymity count (k=5): SELECT COUNT(*) FROM users WHERE email = 'alice@example.com'"
+"\x1b[38;5;99m│ \x1b[0mrow estimates are hidden from the agent: the statement filters on a PII column"
+"\x1b[38;5;99m│ \x1b[0mPII: masked (1 column rules; detectors: email)"
+"\x1b[38;5;99m│ \x1b[0m\x1b[1;31mwarning: the agent received this value in clear (it is in its statement): next time, have it write a placeholder '${name}' and type the value here\x1b[0m"
+"\x1b[38;5;99m│ \x1b[0m\x1b[1;31mverdict REFUSE: this statement cannot be approved\x1b[0m"
+"<bell>"
+"? \x1b[38;5;99m╰─ \x1b[0m\x1b[1mPress Enter to refuse \x1b[0m"
+"\x1b[1;31m✗\x1b[0m refused [E_COST]: weight check: estimated rows examined 50 000 000 > 1 000 000; full scan of users (~50 000 000 rows) > 1 000 000"
+== response
+error -32001 "refused by the weight check (the details are shown on the console)"
+== audit
+event=refused error=weight check: estimated rows examined 50 000 000 > 1 000 000; full scan of users (~50 000 000 rows) > 1 000 000 code=E_COST class=read verdict=REFUSE warnings=[the agent received this value in clear (it is in its statement): next time, have it write a placeholder '${name}' and type the value here] sql=SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1
