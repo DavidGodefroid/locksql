@@ -37,11 +37,15 @@ func goldenRecords() []Record {
 	}
 }
 
-var tsRe = regexp.MustCompile(`^\{"ts":"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}(Z|[+-]\d\d:\d\d)","prev_hash":"(genesis|sha256:[0-9a-f]{64})",`)
+var (
+	tsRe    = regexp.MustCompile(`^\{"ts":"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}(Z|[+-]\d\d:\d\d)",`)
+	chainRe = regexp.MustCompile(`,"prev_hash":"(genesis|sha256:[0-9a-f]{64})"\}\n$`)
+)
 
 // The audit lines locksql writes are byte-identical to those of locksql
-// 0.8 (captured before lockkit), timestamp and lockkit's prev_hash aside:
-// the chain is additive, and the lines it links verify.
+// 0.8 (captured before lockkit), timestamp aside, up to lockkit's
+// prev_hash, which comes last: the 0.8 line is a byte-identical prefix,
+// and the lines the chain links verify.
 func TestAuditLineUnchanged(t *testing.T) {
 	dir := t.TempDir()
 	l, err := Open(dir)
@@ -62,9 +66,10 @@ func TestAuditLineUnchanged(t *testing.T) {
 		if len(line) == 0 {
 			continue
 		}
-		if !tsRe.Match(line) {
-			t.Fatalf("line without a leading timestamp: %s", line)
+		if !tsRe.Match(line) || !chainRe.Match(line) {
+			t.Fatalf("line without a leading timestamp or a trailing prev_hash: %s", line)
 		}
+		line = chainRe.ReplaceAll(line, []byte("}\n"))
 		got.Write(tsRe.ReplaceAll(line, []byte(`{"ts":"TS",`)))
 	}
 	golden := filepath.Join("testdata", "audit_golden.jsonl")

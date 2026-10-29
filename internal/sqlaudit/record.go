@@ -1,9 +1,9 @@
 // Package sqlaudit is locksql's audit record on lockkit's audit log: one
 // JSONL record per event, never secrets and never row data. The record
 // keeps locksql 0.8's fields in their order, so a line written today is
-// the one written before lockkit for the same event, plus lockkit's
-// prev_hash after ts (the hash chain, see audit.Verify) and, in hub mode,
-// the hub fields at the end. Readers of the old format ignore both.
+// the one written before lockkit for the same event, then, in hub mode,
+// the hub fields, and last lockkit's prev_hash (the hash chain, see
+// audit.Verify). Readers of the old format ignore both.
 package sqlaudit
 
 import (
