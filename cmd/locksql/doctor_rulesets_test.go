@@ -98,3 +98,100 @@ func TestProjectChecksSymlinkedRuleSets(t *testing.T) {
 	}
 	t.Error("no project .locksql/pii check")
 }
+
+// Under lock up the console keeps its PII rule sets in its own directory
+// (LOCKSQL_PII_DIR): the project's .locksql and .locksql/pii, owned by
+// the human, are a seed it reads, not a directory it must own (#130); the
+// directory in force is checked instead. Without it, and outside a lock up
+// workspace, the ownership check fails as before.
+func TestProjectChecksPIIDirInForce(t *testing.T) {
+	dir := func(mode fs.FileMode, uid int) ownedInfo {
+		return ownedInfo{fakeInfo{"d", fs.ModeDir | mode}, uid, uid}
+	}
+	const p = "/home/alice/proj/.locksql"
+	const inForce = "/home/locksql/pii-rules"
+	newFiles := func() map[string]ownedInfo {
+		return map[string]ownedInfo{
+			"/": dir(0o755, 0), "/home": dir(0o755, 0), "/home/alice": dir(0o755, 1000),
+			"/home/alice/proj":   dir(0o755, 1000),
+			p:                    dir(0o755, 1000),
+			p + "/config.toml":   {fakeInfo{"config.toml", 0o644}, 1000, 1000},
+			p + "/pii":           dir(0o755, 1000), // the human's
+			p + "/pii/shop.toml": {fakeInfo{"shop.toml", 0o644}, 1000, 1000},
+		}
+	}
+	svc := svcAccount{name: "locksql", uid: 900, gids: []int{900}}
+	run := func(files map[string]ownedInfo, env map[string]string) map[string]check {
+		var ran [][]string
+		d := accessDoctor(files, &ran)
+		d.getenv = func(k string) string { return env[k] }
+		out := map[string]check{}
+		for _, c := range projectChecks(d, "/home/alice/proj", svc, 1000) {
+			out[c.title] = c
+		}
+		return out
+	}
+	env := map[string]string{"LOCKSQL_PII_DIR": inForce}
+
+	// Not under lock up: as before.
+	if c := run(newFiles(), nil)["project .locksql/pii"]; c.state != checkFail || c.repair == nil {
+		t.Errorf("without LOCKSQL_PII_DIR: %+v", c)
+	}
+
+	// LOCKSQL_PII_DIR, not made yet: everything passes.
+	files := newFiles()
+	got := run(files, env)
+	for _, title := range []string{"project .locksql", "project .locksql/pii", "PII rule sets"} {
+		if c, ok := got[title]; !ok || c.state != checkOK {
+			t.Errorf("%s with LOCKSQL_PII_DIR: %+v (present %v)", title, c, ok)
+		}
+	}
+	if c := got["PII rule sets"]; !strings.Contains(c.detail, inForce) || !strings.Contains(c.detail, "not created yet") {
+		t.Errorf("PII rule sets: %+v", c)
+	}
+
+	// The directory in force, owned by the console: ok; by another: fail.
+	files[inForce] = dir(0o755, 900)
+	if c := run(files, env)["PII rule sets"]; c.state != checkOK || !strings.Contains(c.detail, "owned by locksql") {
+		t.Errorf("console-owned %s: %+v", inForce, c)
+	}
+	files[inForce] = dir(0o755, 1000)
+	if c := run(files, env)["PII rule sets"]; c.state != checkFail || !strings.Contains(c.fix, "chown 900") {
+		t.Errorf("%s owned by another: %+v", inForce, c)
+	}
+	files[inForce] = dir(0o775, 900)
+	if c := run(files, env)["PII rule sets"]; c.state != checkFail {
+		t.Errorf("group-writable %s: %+v", inForce, c)
+	}
+	delete(files, inForce)
+
+	// The seed must still be readable by the console.
+	files[p+"/pii"] = dir(0o700, 1000)
+	if c := run(files, env)["project .locksql/pii"]; c.state != checkFail || !strings.Contains(c.detail, "not readable") {
+		t.Errorf("unreadable seed: %+v", c)
+	}
+	files[p+"/pii"] = dir(0o755, 1000)
+
+	// A relative LOCKSQL_PII_DIR is a config error of the console.
+	if c := run(files, map[string]string{"LOCKSQL_PII_DIR": "pii-rules"})["PII rule sets"]; c.state != checkFail {
+		t.Errorf("relative LOCKSQL_PII_DIR: %+v", c)
+	}
+
+	// A lock up workspace, doctor run outside the console's container (no
+	// LOCKSQL_PII_DIR here): the same, in either layout.
+	for _, marker := range []string{"/home/alice/proj/.lockfamily", "/home/alice/proj/lockfamily.yaml"} {
+		f := newFiles()
+		if strings.HasSuffix(marker, ".yaml") {
+			f[marker] = ownedInfo{fakeInfo{"lockfamily.yaml", 0o644}, 1000, 1000}
+		} else {
+			f[marker] = dir(0o755, 1000)
+		}
+		got := run(f, nil)
+		if c := got["project .locksql/pii"]; c.state != checkOK {
+			t.Errorf("%s: project .locksql/pii %+v", marker, c)
+		}
+		if c := got["PII rule sets"]; c.state != checkOK || !strings.Contains(c.detail, "lock up") {
+			t.Errorf("%s: PII rule sets %+v", marker, c)
+		}
+	}
+}
