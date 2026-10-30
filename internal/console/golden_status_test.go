@@ -125,7 +125,12 @@ func TestGoldenStatusAndReview(t *testing.T) {
 				h.s.pending = new(config.Policy)
 				*h.s.pending = config.NewPolicy(next, mask, nil)
 			}
-			h.s.requests = tc.requests
+			for _, r := range tc.requests {
+				// Through the method: the console escapes them on intake.
+				if resp := h.call(t, ipc.MethodChangeRequest, ipc.ChangeParams{Change: r}); resp.Error != nil {
+					t.Fatal(resp.Error.Message)
+				}
+			}
 			recs := len(goldenRecords(t, h))
 			reset(h)
 			h.io.answers = []string{tc.answer}
