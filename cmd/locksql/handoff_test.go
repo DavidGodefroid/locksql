@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"github.com/DavidGodefroid/lockkit/sysconf"
 )
 
@@ -165,5 +167,30 @@ func TestConsoleProjectDefaultsToProjectRoot(t *testing.T) {
 	}
 	if got, _ := consoleProject(sub, "x"); !filepath.IsAbs(got) {
 		t.Errorf("--project not made absolute: %q", got)
+	}
+}
+
+// The handoff forwards every hub flag, --hub-plain-http included (#111):
+// the console-account command parses back to the same hub options.
+func TestHandoffForwardsHubPlainHTTP(t *testing.T) {
+	for _, plain := range []bool{false, true} {
+		hub := kconsole.HubOptions{URL: "http://lockhub:8443", KeyFile: "/home/u/.lockfamily/hub.pub", Instance: "sql-1", PlainHTTP: plain}
+		argv := consoleArgs{project: "/p", hub: hub}.argv()
+		if got := slices.Contains(argv, "--hub-plain-http"); got != plain {
+			t.Fatalf("plain %v: argv %q", plain, argv)
+		}
+		fs := flag.NewFlagSet("console", flag.ContinueOnError)
+		fs.String("project", "", "")
+		var back kconsole.HubOptions
+		back.Register(fs)
+		if err := fs.Parse(argv[1:]); err != nil {
+			t.Fatal(err)
+		}
+		if back != hub {
+			t.Fatalf("parsed back %+v, want %+v", back, hub)
+		}
+	}
+	if c := (consoleArgs{project: "/p", hub: kconsole.HubOptions{URL: "http://lockhub:8443", KeyFile: "/k", Instance: "i", PlainHTTP: true}}).command(); !strings.Contains(c, " --hub-plain-http") {
+		t.Fatalf("command %q", c)
 	}
 }
