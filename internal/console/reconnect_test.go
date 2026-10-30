@@ -258,6 +258,9 @@ func TestBecomingProductionReappliesStartRefusals(t *testing.T) {
 		if !strings.Contains(h.io.output(), "X11") {
 			t.Errorf("the refusal is not shown:\n%s", h.io.output())
 		}
+		if log := h.auditLog(t); !strings.Contains(log, `"error":"became production: console: refused: an X11 session`) {
+			t.Errorf("the refusal is not audited:\n%s", log)
+		}
 	}
 }
 

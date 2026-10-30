@@ -339,6 +339,9 @@ func (s *Server) review(ctx context.Context) {
 		s.println("policy change not applied: " + safeText(err.Error(), false))
 		return
 	}
+	if _, ended := s.Ended(); ended {
+		return
+	}
 	s.println("policy change applied")
 }
 
@@ -373,6 +376,9 @@ func (s *Server) CheckPolicy() {
 		s.pending = nil
 		if err := s.adopt(cur, "tightened"); err != nil {
 			s.println("policy change not applied: " + safeText(err.Error(), false))
+			return
+		}
+		if _, ended := s.Ended(); ended {
 			return
 		}
 		s.println("policy tightened:")
@@ -424,6 +430,7 @@ func (s *Server) adopt(p config.Policy, decision string) error {
 		// now too, whether or not a session is open.
 		if err := s.cfg.RefuseProduction(); err != nil {
 			s.println(red + "the profile is now production: " + safeText(err.Error(), false) + "; the session ends" + reset)
+			s.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: "became production: " + secrets.Sanitize(err)})
 			s.End("refused after the profile became production")
 			return nil
 		}
