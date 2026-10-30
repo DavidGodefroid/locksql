@@ -740,6 +740,18 @@ sends approvals to lockhub instead of asking on this terminal:
   covering them. The plan hash is checked in the same transaction, before
   and after the statement. No `LOCK TABLE` or `SERIALIZABLE`: the write
   takes only its own locks.
+- The bound counts the statement's own rows. Rows changed by triggers,
+  rules or foreign-key cascades are not counted: on PostgreSQL the ticket
+  names the triggers, rules and cascading foreign keys the write reaches. A
+  statement with a data-modifying statement inside it (`WITH d AS (DELETE
+  ...) UPDATE ...`) is refused in hub mode (`E_STATEMENT_KIND`): its count
+  would not cover its rows. On MySQL/MariaDB a write naming a table a
+  `ROLLBACK` cannot undo (MyISAM, Aria, MEMORY, ... or a view) is not run,
+  and a `ROLLBACK` that warns (a trigger into such a table) is reported as a
+  failure, never as rolled back.
+- The screen names the requester as the kernel reports it (uid, pid,
+  executable); the lea name the client sends is shown as its claim
+  (`claims lea agent "…"`), not verified.
 
 ### Policy changes
 

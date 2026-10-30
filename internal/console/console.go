@@ -183,6 +183,10 @@ type plan struct {
 	maxAffected int64
 	affected    int64
 	staleTicket string
+	// sideEffects are what changes rows beside the statement itself and
+	// so beside its rowcount: triggers, rules, foreign-key cascades (from
+	// the definitions read on PostgreSQL).
+	sideEffects []string
 }
 
 // Server serves client requests one at a time against one session. It is

@@ -66,7 +66,13 @@ This file records the changes a user or an agent has to know about.
   of the write, at least 10 more); the run counts the rows it changed in
   its own transaction before the commit, and past the bound rolls back and
   answers stale with a new ticket whose screen says how many rows it would
-  have changed. PostgreSQL, MySQL/MariaDB and SQLite.
+  have changed. PostgreSQL, MySQL/MariaDB and SQLite. The bound counts the
+  statement's own rows: the ticket names the triggers, rules and cascading
+  foreign keys it does not count (PostgreSQL); a data-modifying `WITH` is
+  refused in hub mode; on MySQL/MariaDB a write to a non-transactional table
+  or a view is not run, and a `ROLLBACK` that warns is a failure. The
+  screen names the requester by its kernel identity, the lea name as its
+  unverified claim.
 
 - Builds on lockkit v0.3.1 (hub support), was a commit of lockkit main.
 

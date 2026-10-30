@@ -246,6 +246,56 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		assertCountedRun(t, s, sqlclass.MySQL, "app", "UPDATE small SET label = CONCAT(label, 'x') WHERE id = 1", "SELECT label FROM small WHERE id = 1")
 	})
 
+	t.Run("counted run refuses what a ROLLBACK cannot undo", func(t *testing.T) {
+		admin := connectMySQL(t, m, srv, "rw", config.TierDDL, 5*time.Second)
+		ddl := func(q string) {
+			t.Helper()
+			if _, err := admin.Run(ctx, "app", sqlclass.Statement{Class: sqlclass.DDL, Kind: "ddl", SQL: q, Limit: -1}, 0); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+		}
+		ddl("CREATE TABLE rc_my (id INT PRIMARY KEY, label VARCHAR(20)) ENGINE=MyISAM")
+		ddl("CREATE TABLE rc_log (id INT) ENGINE=MyISAM")
+		ddl("CREATE TABLE rc_inno (id INT PRIMARY KEY, label VARCHAR(20)) ENGINE=InnoDB")
+		ddl("CREATE TRIGGER rc_trg AFTER UPDATE ON rc_inno FOR EACH ROW INSERT INTO rc_log VALUES (NEW.id)")
+		t.Cleanup(func() {
+			ddl("DROP TRIGGER IF EXISTS rc_trg")
+			ddl("DROP TABLE IF EXISTS rc_my, rc_log, rc_inno")
+		})
+		s := connectMySQL(t, m, srv, "rw", config.TierWrite, 30*time.Second)
+		for _, q := range []string{"INSERT INTO rc_my VALUES (1, 'a')", "INSERT INTO rc_inno VALUES (1, 'a')"} {
+			if _, err := s.Run(ctx, "app", sqlclass.Statement{Class: sqlclass.Write, Kind: "insert", SQL: q, Limit: -1}, 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write := func(q string) sqlclass.Statement {
+			st, err := sqlclass.Classify(sqlclass.MySQL, q, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return st
+		}
+		over := errors.New("over the bound")
+		// A MyISAM table named by the statement: refused before it runs.
+		checked := false
+		_, err := engine.RunCounted(ctx, s, "app", write("UPDATE rc_my SET label = 'z'"), 10, func(int64) error { checked = true; return over })
+		if err == nil || errors.Is(err, over) || checked || !strings.Contains(err.Error(), "rc_my") {
+			t.Fatalf("MyISAM write: %v (checked %v)", err, checked)
+		}
+		if r := mustRun(t, s, "SELECT label FROM rc_my"); fmt.Sprint(r.Rows) != "[[a]]" {
+			t.Fatalf("the MyISAM write ran: %v", r.Rows)
+		}
+		// A trigger writes to MyISAM: the ROLLBACK warns, and the run says
+		// it did not undo everything, never that it rolled back.
+		_, err = engine.RunCounted(ctx, s, "app", write("UPDATE rc_inno SET label = 'z'"), 10, func(int64) error { return over })
+		if err == nil || errors.Is(err, over) || !strings.Contains(err.Error(), "did not undo") {
+			t.Fatalf("trigger into MyISAM: %v", err)
+		}
+		if err := s.Ping(ctx); err != nil {
+			t.Fatalf("session lost: %v", err)
+		}
+	})
+
 	t.Run("databases hide system schemas", func(t *testing.T) {
 		s := connectMySQL(t, m, srv, "rw", config.TierRead, 5*time.Second)
 		dbs, err := s.Databases(ctx)

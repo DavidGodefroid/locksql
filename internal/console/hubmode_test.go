@@ -290,7 +290,7 @@ func TestHubModeWrongRequester(t *testing.T) {
 	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeWrongRequester)
 	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID, Requester: alice}), "pending")
 	raw := string(hub.Ticket(tk))
-	if !strings.Contains(raw, "dev-alice") || strings.Contains(raw, alice.Token) {
+	if !strings.Contains(raw, `claims lea agent \"dev-alice\"`) || strings.Contains(raw, alice.Token) {
 		t.Fatalf("ticket requester: %s", raw)
 	}
 	hub.Decide(tk, ticket.Approved, "")
@@ -423,5 +423,61 @@ func TestRowBound(t *testing.T) {
 		if got := rowBound(n); got != want {
 			t.Errorf("rowBound(%d) = %d, want %d", n, got, want)
 		}
+	}
+}
+
+// The screen names the peer as the kernel reports it; the lea name is the
+// client's unverified claim, labelled so, escaped and cut.
+func TestAgentNameIsAClaim(t *testing.T) {
+	ctx := context.Background()
+	peer := kconsole.PeerText(ctx)
+	if got := agentName(ctx, ipc.Requester{}); got != peer {
+		t.Fatalf("no claim: %q", got)
+	}
+	got := agentName(ctx, ipc.Requester{Agent: "lead\x1b[2Jroot" + strings.Repeat("é", 100)})
+	if !strings.HasPrefix(got, peer+" · claims lea agent ") || strings.Contains(got, "\x1b") || len([]rune(got)) > len([]rune(peer))+100 {
+		t.Fatalf("claim: %q", got)
+	}
+}
+
+func TestNestedDML(t *testing.T) {
+	for q, want := range map[string]bool{
+		"WITH d AS (DELETE FROM t RETURNING id) UPDATE u SET x = 1":                      true,
+		"WITH d AS (INSERT INTO t VALUES (1) RETURNING id) SELECT * FROM d":              true,
+		"WITH s AS (SELECT id FROM t) UPDATE u SET x = 1 WHERE id IN (SELECT id FROM s)": false,
+		"UPDATE u SET note = 'delete' WHERE id = 1":                                      false,
+		"INSERT INTO u SELECT * FROM t":                                                  false,
+	} {
+		if got := nestedDML(sqlclass.Postgres, q); got != want {
+			t.Errorf("nestedDML(%q) = %v", q, got)
+		}
+	}
+}
+
+func TestSideEffects(t *testing.T) {
+	st := engine.ObjectState{Objects: []engine.ObjectDef{
+		{Kind: "relation", Name: "app.users", Def: "r"},
+		{Kind: "trigger", Name: "app.users.audit", Def: "O"},
+		{Kind: "rule", Name: "app.users.r1", Def: "O"},
+		{Kind: "constraint", Name: "app.orders.fk", Def: "f\x1fFOREIGN KEY (uid) REFERENCES users(id) ON DELETE CASCADE"},
+		{Kind: "constraint", Name: "app.notes.fk", Def: "f\x1fFOREIGN KEY (uid) REFERENCES users(id)"},
+	}}
+	got := strings.Join(sideEffects(st), "|")
+	if got != "trigger app.users.audit|rule app.users.r1|foreign key app.orders.fk" {
+		t.Fatalf("side effects %q", got)
+	}
+}
+
+// A hub-mode write refuses a data-modifying statement inside it, and
+// names the triggers its bound does not count on its ticket.
+func TestHubModeWriteSideEffects(t *testing.T) {
+	var hub *hubtest.Hub
+	h := newHarness(t, writeProfile(), withHub(t, &hub))
+	st := guarded(h)
+	st.Objects = append(st.Objects, engine.ObjectDef{Kind: "trigger", Name: "app.users.audit", Def: "O"})
+	pr := h.plan(t, "UPDATE users SET note = 'x' WHERE id = 1", false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	if raw := string(hub.Ticket(tk)); !strings.Contains(raw, "trigger app.users.audit") {
+		t.Fatalf("ticket: %s", raw)
 	}
 }

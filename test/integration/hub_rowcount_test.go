@@ -86,7 +86,13 @@ func TestHubRowcountPG(t *testing.T) {
 	psql(`CREATE TABLE hr_t (id int PRIMARY KEY, label text);
 INSERT INTO hr_t SELECT n, 'a' FROM generate_series(1, 5) n;
 ANALYZE hr_t;
-GRANT SELECT, UPDATE ON hr_t TO rw;`)
+CREATE TABLE hr_log (id int);
+CREATE FUNCTION hr_trg() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN INSERT INTO hr_log VALUES (NEW.id); RETURN NEW; END';
+CREATE TABLE hr_trig (id int PRIMARY KEY, label text);
+CREATE TRIGGER hr_trig_log AFTER UPDATE ON hr_trig FOR EACH ROW EXECUTE FUNCTION hr_trg();
+INSERT INTO hr_trig VALUES (1, 'a');
+GRANT SELECT, UPDATE, DELETE ON hr_t, hr_trig TO rw;
+GRANT INSERT ON hr_log TO rw;`)
 	rw := connectPG(t, srv, "rw", config.TierWrite, 30*time.Second)
 	t.Run("counted run", func(t *testing.T) {
 		assertCountedRun(t, rw, sqlclass.Postgres, "app", "UPDATE hr_t SET label = label || 'x' WHERE id = 1", "SELECT label FROM hr_t WHERE id = 1")
@@ -201,4 +207,27 @@ GRANT SELECT, UPDATE ON hr_t TO rw;`)
 	if n := count(); n != "41" {
 		t.Fatalf("committed %s rows, want 41", n)
 	}
+
+	// A data-modifying WITH: its command tag counts only the outer
+	// statement, so it is refused before any ticket.
+	t.Run("data-modifying WITH refused", func(t *testing.T) {
+		pushed := hub.Pushed()
+		var pr ipc.PlanResult
+		e := call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "WITH d AS (DELETE FROM hr_t WHERE id > 40 RETURNING id) UPDATE hr_t SET label = 'c' WHERE id = 1", Requester: agent}, &pr)
+		if e == nil {
+			e = call(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID, Requester: agent}, nil)
+		}
+		if e == nil || e.Data == nil || e.Data.Code != "E_STATEMENT_KIND" || hub.Pushed() != pushed {
+			t.Fatalf("data-modifying WITH: %+v (pushed %d)", e, hub.Pushed()-pushed)
+		}
+	})
+
+	// A trigger changes rows the bound does not count: the ticket says so.
+	t.Run("trigger named on the ticket", func(t *testing.T) {
+		tk := submit("UPDATE hr_trig SET label = 'b' WHERE id = 1")
+		raw := string(hub.Ticket(tk))
+		if !strings.Contains(raw, "rows the bound does not count may change too") || !strings.Contains(raw, "hr_trig_log") || !strings.Contains(raw, "claims lea agent") {
+			t.Fatalf("ticket: %s", raw)
+		}
+	})
 }

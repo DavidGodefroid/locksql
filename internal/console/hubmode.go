@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,13 +66,62 @@ func sameRequester(a, b ipc.Requester) bool {
 	return subtle.ConstantTimeCompare([]byte(plans.HashToken(a.Token)), []byte(plans.HashToken(b.Token))) == 1
 }
 
-// agentName is the requesting agent as the screens name it: its lea name,
-// or the peer.
+// agentName is the requesting agent as the screens name it: the peer as
+// the kernel reports it, then the lea name the client sent, labelled as
+// its unverified claim (any agent of the account can send any name).
 func agentName(ctx context.Context, who ipc.Requester) string {
-	if who.Agent != "" {
-		return safeText(who.Agent, false)
+	peer := kconsole.PeerText(ctx)
+	if who.Agent == "" {
+		return peer
 	}
-	return kconsole.PeerText(ctx)
+	name := who.Agent
+	if r := []rune(name); len(r) > 64 {
+		name = string(r[:64]) + "…"
+	}
+	name = safeText(name, false)
+	return peer + " · claims lea agent " + strconv.Quote(name)
+}
+
+// nestedDML reports a statement with a data-modifying statement inside
+// it (PostgreSQL's WITH u AS (DELETE ...) ...): its command tag counts
+// only the outer statement's rows, so its rowcount bound would not hold.
+func nestedDML(d sqlclass.Dialect, sql string) bool {
+	toks, err := sqlclass.Lex(d, sql)
+	if err != nil {
+		return true
+	}
+	for _, t := range toks {
+		if t.Kind != sqlclass.TokWord || t.Depth == 0 {
+			continue
+		}
+		switch t.Text {
+		case "INSERT", "UPDATE", "DELETE", "MERGE":
+			return true
+		}
+	}
+	return false
+}
+
+// sideEffects lists, from the definitions a write resolves to, what
+// changes rows beside the statement itself: triggers, rules and foreign
+// keys that cascade (ON DELETE/UPDATE CASCADE, SET NULL, SET DEFAULT).
+func sideEffects(st engine.ObjectState) []string {
+	var out []string
+	for _, o := range st.Objects {
+		switch o.Kind {
+		case "trigger", "rule":
+			out = append(out, o.Kind+" "+o.Name)
+		case "constraint":
+			def := strings.ToUpper(o.Def)
+			for _, a := range []string{"CASCADE", "SET NULL", "SET DEFAULT"} {
+				if strings.Contains(def, "ON DELETE "+a) || strings.Contains(def, "ON UPDATE "+a) {
+					out = append(out, "foreign key "+o.Name)
+					break
+				}
+			}
+		}
+	}
+	return out
 }
 
 // rowSlack is the margin of a write's rowcount bound over its estimate.
@@ -130,7 +180,7 @@ func (s *Server) hubScreen(pl *plan) render.MaskedScreen {
 		src.Body = append(src.Body, render.Structure("PII: UNMASKED"))
 	}
 	if pl.maxAffected > 0 {
-		src.Body = append(src.Body, render.Structure(fmt.Sprintf("rows changed: at most %d (checked before the commit; more rolls back)", pl.maxAffected)))
+		src.Body = append(src.Body, render.Structure(fmt.Sprintf("rows changed: at most %d by the statement itself (checked before the commit; more rolls back); rows changed by triggers, rules or foreign-key cascades are not counted", pl.maxAffected)))
 	}
 	return render.MaskScreen(src, render.Masking{Detectors: s.detectors, Personal: func(string, string) bool { return true }})
 }
@@ -205,7 +255,14 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 		pl.warnings = append(pl.warnings, kw...)
 		rec.Warnings = pl.warnings
 	}
+	if pl.st.Class == sqlclass.Write && nestedDML(s.dialect, pl.st.SQL) {
+		return s.refuseRec(id, rec, pl.src, refusal.New(refusal.StatementKind, "a statement with a data-modifying statement inside it (WITH ... AS (INSERT/UPDATE/DELETE ...)) is not run in hub mode: its row count would not cover every row it changes; write one statement per change"))
+	}
 	if pl.st.Class == sqlclass.Write {
+		if len(pl.sideEffects) > 0 {
+			pl.warnings = append(pl.warnings, "rows the bound does not count may change too: "+strings.Join(pl.sideEffects, ", "))
+			rec.Warnings = pl.warnings
+		}
 		// The rows the write may change: about what the planner expects,
 		// or what a rolled-back run of an earlier ticket would have
 		// changed. The run checks it before its commit (H2).

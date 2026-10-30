@@ -581,6 +581,71 @@ func (s *session) RunCounted(ctx context.Context, db string, st sqlclass.Stateme
 	return s.run(ctx, db, st, maxRows, check)
 }
 
+// transactional are the storage engines whose writes a ROLLBACK undoes.
+var transactional = map[string]bool{"INNODB": true, "NDBCLUSTER": true, "NDB": true, "ROCKSDB": true, "TOKUDB": true}
+
+// nonTransactional returns the tables or views among the names q may write
+// to whose changes a ROLLBACK may not undo: a table of another storage
+// engine (MyISAM, Aria, MEMORY, CSV, ...) or a view (its tables are not
+// looked up). Names are every identifier and db.identifier of q: a word
+// that names no table is ignored. Called in the transaction, mu held.
+func (s *session) nonTransactional(q string) ([]string, error) {
+	toks, err := sqlclass.Lex(sqlclass.MySQL, q)
+	if err != nil {
+		return nil, err
+	}
+	name := func(i int) (string, bool) {
+		if i >= len(toks) {
+			return "", false
+		}
+		switch toks[i].Kind {
+		case sqlclass.TokWord:
+			return toks[i].Text, true
+		case sqlclass.TokQuotedIdent:
+			return toks[i].Text, true
+		}
+		return "", false
+	}
+	dot := func(i int) bool { return i < len(toks) && toks[i].Kind == sqlclass.TokPunct && toks[i].Text == "." }
+	var out []string
+	seen := map[string]bool{}
+	for i := range toks {
+		n, ok := name(i)
+		if !ok || i > 0 && dot(i-1) {
+			continue
+		}
+		schema, table := "", n
+		if dot(i+1) {
+			if t, ok := name(i + 2); ok {
+				schema, table = n, t
+			}
+		}
+		key := schema + "." + table
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		r, err := s.conn.Execute(`SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, COALESCE(ENGINE, '') FROM information_schema.TABLES
+			WHERE LOWER(TABLE_NAME) = LOWER(?) AND LOWER(TABLE_SCHEMA) = LOWER(COALESCE(NULLIF(?, ''), DATABASE()))`, table, schema)
+		if err != nil {
+			return nil, err
+		}
+		if r.Resultset == nil {
+			continue
+		}
+		for row := range r.RowNumber() {
+			sc, _ := r.GetString(row, 0)
+			tn, _ := r.GetString(row, 1)
+			typ, _ := r.GetString(row, 2)
+			eng, _ := r.GetString(row, 3)
+			if typ != "BASE TABLE" || !transactional[strings.ToUpper(eng)] {
+				out = append(out, fmt.Sprintf("%s.%s (%s)", sc, tn, strings.ToLower(strings.TrimSpace(typ+" "+eng))))
+			}
+		}
+	}
+	return out, nil
+}
+
 // run is Run, with check (when not nil) called on the rows the statement
 // changed before the commit; a check error rolls it back.
 func (s *session) run(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
@@ -595,6 +660,16 @@ func (s *session) run(ctx context.Context, db string, st sqlclass.Statement, max
 		begin = readOnlyTx
 	}
 	res, err := s.inTx(ctx, db, begin, func() (engine.Result, error) {
+		if check != nil && st.Class == sqlclass.Write {
+			// A ROLLBACK must undo what the check refuses.
+			nt, err := s.nonTransactional(st.SQL)
+			if err != nil {
+				return engine.Result{}, err
+			}
+			if len(nt) > 0 {
+				return engine.Result{}, checkErr{fmt.Errorf("%s: the write reaches tables a ROLLBACK may not undo: %s; its rows cannot be checked before a commit", s.flavor, strings.Join(nt, ", "))}
+			}
+		}
 		r, err := s.stream(st.SQL, maxRows)
 		if err == nil {
 			s.trustOrigins(st.SQL, r.Columns)
@@ -652,9 +727,16 @@ func (s *session) inTx(ctx context.Context, db, begin string, fn func() (engine.
 			s.flavor, s.timeout, context.DeadlineExceeded)
 	}
 	if ce := (checkErr{}); errors.As(err, &ce) {
-		// The run's own check refused it: roll back, the error as is.
-		if _, rerr := s.conn.Execute("ROLLBACK"); rerr != nil {
+		// The run's own check refused it: roll back, the error as is. A
+		// ROLLBACK with a warning (1196: some non-transactional changed
+		// tables could not be rolled back, through a trigger for one) did
+		// not undo everything: a hard failure, never "rolled back".
+		r, rerr := s.conn.Execute("ROLLBACK")
+		if rerr != nil {
 			return engine.Result{}, s.fail(ctx, rerr)
+		}
+		if r != nil && r.Warnings > 0 {
+			return engine.Result{}, fmt.Errorf("%s: the ROLLBACK did not undo every change (%d warnings, such as 1196: a non-transactional table was changed); refused by: %v", s.flavor, r.Warnings, ce.err)
 		}
 		return engine.Result{}, ce.err
 	}

@@ -478,6 +478,9 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 		return nil, ptr(s.failed(id, "plan", err))
 	}
 	pl.guarded = state != nil
+	if state != nil && st.Class == sqlclass.Write {
+		pl.sideEffects = sideEffects(*state)
+	}
 	if pl.hash, err = s.planHash(pl, state); err != nil {
 		return nil, ptr(s.failed(id, "plan", err))
 	}
