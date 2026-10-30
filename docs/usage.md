@@ -721,12 +721,38 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
 
 `locksql console --hub URL --hub-key-file PATH --instance NAME` (written by
 `lock up`; `locksql hub-key --instance NAME` prints the instance key to pin)
-sends approvals to lockhub instead of asking on this terminal:
+sends approvals to lockhub instead of asking on this terminal.
+
+Supported lockhub versions: locksql v0.11.x (lockkit v0.7.1) needs lockhub
+v0.2.1 or later, the first whose "Supported locks" (lockhub's CHANGELOG)
+lists locksql v0.11.0, with `devices: true`, reveals and renewals. Under
+`lock up`, use lockhub v0.2.2 or later: it sets `LOCKSQL_PII_DIR` (below)
+and its `lock add` refuses locksql releases before v0.11.0 (lockhub v0.2.0
+and v0.2.1 accept v0.10.0 or later, and their `lock up` refuses a
+`.locksql/` without a PII rule set). From locksql v0.11.1 the console's
+audit records of the hub's decisions carry the hub's signature
+(`hub_sig`): `lock audit verify --lock INSTANCE=PATH` compares them with
+the decisions the hub signed (its data directory and keys, `--data` and
+`--hub-key-file`: `hub-keys.pub` in lock up's state directory). The records of older consoles are reported as unsigned
+there and checked on ticket, outcome, approver and facade only; and as
+those consoles do not record the hub's denials nor the approvals that
+expired before their run, those show as decisions not in the log, not as
+problems.
+
+In hub mode:
 
 - `query.run` answers `{"status":"pending","ticket":…}`: the plan is kept in
   the console's plan store and its screen, every literal masked, goes to
   the hub in a signed ticket. `locksql run TICKET` (`locksql_run` with
   `ticket`) runs it once the human decided.
+- The audit log records the hub's decisions the console acts on, with the
+  ticket, the approver, the facade and the hub's signature (`hub_sig`): the
+  `approved` record before the run (the `run` record after it carries no
+  signature) and a `denied` record (with the human's reason). The run of an
+  expired ticket writes a `renew` record (renewed by the new ticket, also
+  when planned again as stale, or refused with why, the statement no
+  longer planning for one); it carries the approver, facade and `hub_sig` only when the
+  expired ticket had been approved (an approval the console could not use).
 - A plan and its ticket run only for the agent that asked for them: the
   client sends the agent's lea name and the hash of its `LEA_AGENT_TOKEN`
   (never the token), and another agent presenting the plan id or the
