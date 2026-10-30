@@ -167,13 +167,16 @@ func rowBound(n int64) int64 {
 }
 
 // writeEstimate is the planner's estimate of the rows a write changes
-// (EXPLAIN without running it), 0 when the engine gives none.
+// (EXPLAIN without running it), 0 when the engine gives none, and at least
+// the rows of its VALUES list (EXPLAIN gives none for them on MySQL and
+// SQLite).
 func (s *Server) writeEstimate(ctx context.Context, sess engine.Session, pl *plan) int64 {
+	n := sqlclass.ValuesRows(s.dialect, pl.st.SQL)
 	ep, err := sess.Explain(ctx, pl.db, pl.st.SQL)
 	if err != nil {
-		return 0
+		return n
 	}
-	return weight.Assess(ep, s.profile.Limits, s.profile.Production).EstimatedRows
+	return max(n, weight.Assess(ep, s.profile.Limits, s.profile.Production).EstimatedRows)
 }
 
 // hubRisk is the risk class of pl's ticket.
@@ -407,6 +410,10 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 		if d := resp.Error.Data; d != nil && d.Code == refusal.Stale {
 			finish(false, "stale")
 			return s.hubStale(ctx, id, body, ticketID, who, pl.affected)
+		}
+		if d := resp.Error.Data; d != nil && d.Code == refusal.StatementKind {
+			finish(false, "refused")
+			return resp
 		}
 		finish(false, "failed")
 		return resp

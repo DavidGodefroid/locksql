@@ -733,7 +733,9 @@ sends approvals to lockhub instead of asking on this terminal:
   another's ticket by mistake; agents of one account can read each other's
   token, so it is no security boundary (the workspace is).
 - A write carries a rowcount bound on its screen (`rows changed: at most
-  N`): twice the planner's estimate, at least 10 more. The run counts the
+  N`): twice the planner's estimate (for an `INSERT`/`REPLACE ... VALUES`,
+  at least its number of rows, twice that on MySQL/MariaDB for `REPLACE` or
+  `ON DUPLICATE KEY UPDATE`), at least 10 more. The run counts the
   rows it changed in its own transaction, before the commit; past the bound
   it rolls back and answers `{"status":"stale","ticket":<new>}`, the new
   ticket's screen saying how many rows it would have changed, its bound
@@ -742,11 +744,19 @@ sends approvals to lockhub instead of asking on this terminal:
   takes only its own locks.
 - The bound counts the statement's own rows. Rows changed by triggers, functions,
   rules or foreign-key cascades are not counted: on PostgreSQL the ticket
-  names the triggers, rules, volatile functions and cascading foreign keys the write reaches. A
+  names the triggers, rules, volatile functions and cascading foreign keys the write reaches;
+  on MySQL/MariaDB and SQLite, the triggers of the tables it names (on
+  MySQL/MariaDB only those of tables the account holds `TRIGGER` on;
+  listed for the human, not in the plan hash: a trigger created after the
+  approval does not make the ticket stale; under `ANSI_QUOTES` a table
+  named in double quotes gets none listed). A
   statement with a data-modifying statement inside it (`WITH d AS (DELETE
   ...) UPDATE ...`) is refused in hub mode (`E_STATEMENT_KIND`): its count
   would not cover its rows. On MySQL/MariaDB a write naming a table a
-  `ROLLBACK` cannot undo (MyISAM, Aria, MEMORY, ... or a view) is not run,
+  `ROLLBACK` cannot undo (MyISAM, Aria, MEMORY, ... or a view: of the
+  current database by its bare name, or of any schema with its schema) is
+  not run and refused with `E_STATEMENT_KIND` (as a DDL statement or
+  `VACUUM` would be: nothing ran, do not retry it as is),
   and a `ROLLBACK` that warns (a trigger into such a table) is reported as a
   failure, never as rolled back.
 - The screen names the requester as the kernel reports it (uid, pid,

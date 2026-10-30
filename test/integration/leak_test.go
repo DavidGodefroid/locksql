@@ -184,6 +184,11 @@ func (s nopClose) RunCounted(ctx context.Context, db string, st sqlclass.Stateme
 	return engine.RunCounted(ctx, s.Session, db, st, maxRows, check)
 }
 
+// Triggers passes the listing on (engine.TriggerLister).
+func (s nopClose) Triggers(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.TriggersOf(ctx, s.Session, db, names)
+}
+
 // leakQueries are the adversarial review round 2 and 3 cases, written
 // against the seeds (big.email under a rule, small(id, label)). Write cases
 // change no data, or only rows they insert themselves; they need a write

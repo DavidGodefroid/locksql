@@ -23,6 +23,20 @@ This file records the changes a user or an agent has to know about.
   an operator counts as one more level of the 8-level bound. Plan hash
   version 3: plans made by v0.10.0 are answered `E_STALE`.
 
+- **Hub-mode rowcount bound follow-ups** (#120). On MySQL/MariaDB and
+  SQLite the ticket of a write also names the triggers of the tables it
+  names. An `INSERT`/`REPLACE ... VALUES` is bounded by at least its
+  number of rows (EXPLAIN gives no estimate for them on MySQL and SQLite;
+  twice that for `REPLACE` and `ON DUPLICATE KEY UPDATE` on
+  MySQL/MariaDB). A write whose rows cannot be checked before a commit (a
+  non-transactional table on MySQL/MariaDB) is refused with
+  `E_STATEMENT_KIND` instead of the generic failure, so the agent does
+  not retry it. The MySQL/MariaDB check reads only the tables of the
+  current database and of the schemas the statement qualifies a name
+  with: a non-transactional table of another schema no longer refuses an
+  unrelated write that uses the same word, and the server's own schemas
+  are no longer exempt when named bare from within them.
+
 ## v0.10.0 (2026-10-30)
 
 ### Changed

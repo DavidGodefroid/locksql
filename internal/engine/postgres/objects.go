@@ -52,7 +52,7 @@ func (s *session) RunGuarded(ctx context.Context, db string, st sqlclass.Stateme
 // RunCounted implements engine.RowChecker.
 func (s *session) RunCounted(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
 	if needsNoTx(st) {
-		return engine.Result{}, fmt.Errorf("postgres: %s runs outside a transaction: its rows cannot be checked before a commit", strings.ToUpper(st.Kind))
+		return engine.Result{}, engine.Uncounted(fmt.Errorf("postgres: %s runs outside a transaction: its rows cannot be checked before a commit", strings.ToUpper(st.Kind)))
 	}
 	return s.run(ctx, db, st, maxRows, func(_ context.Context, _ *pgx.Conn, at engine.Step) error {
 		if !at.After {
