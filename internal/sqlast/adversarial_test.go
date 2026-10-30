@@ -317,6 +317,52 @@ func TestAdvDistinctNeedsCount(t *testing.T) {
 	}
 }
 
+// MIN and MAX return a real cell, but which cell depends on how the values
+// order: over rows the agent chose, the result tells which subject holds
+// the largest or smallest value, the ordering ORDER BY and ranges are
+// refused for. Their result is an aggregate: plain <redacted>, no cell
+// reference, no partial mode, and it cannot be compared or joined.
+func TestAdvMinMaxOrdering(t *testing.T) {
+	for _, d := range []sqlclass.Dialect{sqlclass.MySQL, sqlclass.Postgres, sqlclass.SQLite} {
+		for _, sql := range []string{
+			"SELECT MAX(salary) AS m FROM users WHERE id IN (57, 58, 59, 60, 61) LIMIT 1",
+			"SELECT MIN(salary) AS m FROM users WHERE id IN (57, 58) LIMIT 1",
+			"SELECT MAX(email) AS m FROM users WHERE id IN (57, 58) LIMIT 1",
+			"SELECT m FROM (SELECT MAX(email) AS m FROM users WHERE id IN (57, 58)) t LIMIT 1",
+			"WITH c AS (SELECT MIN(email) AS m FROM users) SELECT m FROM c LIMIT 1",
+			"SELECT (SELECT MAX(email) FROM users WHERE id IN (57, 58)) AS m FROM orders LIMIT 1",
+			"SELECT status, MAX(salary) AS m FROM users GROUP BY status LIMIT 10",
+		} {
+			a, err := analyze(t, d, sql)
+			if err != nil {
+				t.Errorf("%s %q: %v", d, sql, err)
+				continue
+			}
+			o := a.Outputs[len(a.Outputs)-1]
+			if o.Prov.Kind != KindAggregate || o.Mask != "redact" {
+				t.Errorf("%s %q: output kind %v, mask %q, want an aggregate under redact", d, sql, o.Prov.Kind, o.Mask)
+			}
+		}
+		for _, sql := range []string{
+			"SELECT id FROM users WHERE salary IN (SELECT MAX(salary) FROM users WHERE id IN (57, 58)) LIMIT 10",
+			"SELECT u.id FROM users u JOIN (SELECT MAX(email) AS m FROM users WHERE id IN (57, 58)) t ON u.email = t.m LIMIT 10",
+			"SELECT status FROM users GROUP BY status HAVING MAX(email) = 'x@example.com' LIMIT 10",
+		} {
+			wantRefused(t, d, sql)
+		}
+		// MIN or MAX of an unmasked column, a count or a constant is unchanged.
+		for _, sql := range []string{
+			"SELECT MAX(id) AS m FROM users LIMIT 1",
+			"SELECT MAX(n) AS m FROM (SELECT COUNT(email) AS n FROM users) t LIMIT 1",
+		} {
+			a, err := analyze(t, d, sql)
+			if err != nil || a.Outputs[0].Mask != "" {
+				t.Errorf("%s %q: %+v, %v", d, sql, a, err)
+			}
+		}
+	}
+}
+
 // A PII column compared with itself is IS NOT NULL in disguise: it selects
 // rows with no constant for the k-anonymity check to count. A self-join on
 // the column is the same probe, whatever the relation instances; a join
