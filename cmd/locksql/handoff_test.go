@@ -217,3 +217,35 @@ func TestHandoffForwardsEveryHubFlag(t *testing.T) {
 		}
 	})
 }
+
+// --allowed-uids reaches the console account as given (parsed), and an
+// account it names is the agent's side: it is not handed off.
+func TestHandoffAllowedUIDs(t *testing.T) {
+	h, ran := fakeHandoff(1500, "sudo")
+	e, out := handoffTestEnv(t, h)
+	if code := runEnv(e, []string{"console", "--allowed-uids", "4242,4242,4243"}); code != exitOK {
+		t.Fatalf("code %d\n%s", code, out)
+	}
+	if !hasArgs(*ran, "--allowed-uids", "4242,4243") {
+		t.Fatalf("argv %q lacks --allowed-uids 4242,4243", *ran)
+	}
+
+	h, ran = fakeHandoff(1500, "sudo")
+	h.clientAllowed = func(sys *sysconf.Config, uid int) bool { return uid == 1000 || slices.Contains(sys.AllowedUIDs, uid) }
+	e, out = handoffTestEnv(t, h)
+	if code := runEnv(e, []string{"console", "--allowed-uids", "1500"}); code != exitFail || *ran != nil {
+		t.Fatalf("an allowed uid's account: code %d, ran %v\n%s", code, *ran, out)
+	}
+	if !strings.Contains(out.String(), "--allowed-uids 1500") || !strings.Contains(out.String(), "the database password") {
+		t.Errorf("an allowed uid's account:\n%s", out)
+	}
+}
+
+func hasArgs(argv []string, seq ...string) bool {
+	for i := range argv {
+		if i+len(seq) <= len(argv) && slices.Equal(argv[i:i+len(seq)], seq) {
+			return true
+		}
+	}
+	return false
+}

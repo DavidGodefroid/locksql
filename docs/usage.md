@@ -516,6 +516,16 @@ on; both are switched while the console runs, with Shift+Tab and Ctrl-O
 (see [Keys and status line](#keys-and-status-line)). `--skip-permissions`
 is the older name of `--auto`.
 
+`--allowed-uids UID,...` lets these uids connect besides the members of
+`locksql-clients`, as `allowed_uids` in the image's
+`/etc/locksql/system.toml` does, for this console only: an agent in a
+container of its own whose uid has no account in the console's image
+([docker.md](docker.md#agent-in-its-own-container)). Comma-separated decimal
+uids; root (0), 65534 (nobody), leading zeros and the console's own uid are
+refused, and the console prints them at start. Only whoever starts the
+console sets it (you, through the launcher, or `lock up` from a lock's
+`allowed_uids`); no client or config file can.
+
 With the clear results on, the console prints, in clear, the result of each
 masked query it runs, as an aligned table under `result in clear (shown
 here only; the agent got it masked)`; the agent still gets the masked cells

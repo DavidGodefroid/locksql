@@ -4,6 +4,27 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+### Added
+
+- `locksql console --allowed-uids UID,...`: these uids may connect besides
+  the members of `locksql-clients`, as `allowed_uids` of the image's
+  `system.toml` (the `ALLOWED_UIDS` build argument) does, for that console
+  only, with the release image unchanged: an agent in a container of its own
+  whose uid has no account in the console's image (lea's agents run as the
+  host user's uid, #139). Set only by whoever starts the console (the human:
+  the launcher and the handoff to the console account pass it on; `lock up`
+  of lockhub v0.2.5 a lock's reviewed `allowed_uids`); root, leading zeros,
+  65534 (nobody) and the console's own uid are refused; every isolation
+  check sees the uids (a session or terminal of one is the agent's), and the
+  console prints them at start.
+
+### Changed
+
+- The `ALLOWED_UIDS` build argument refuses root (0), leading zeros, the
+  console account (10001) and 65534 (nobody); it took any digits before.
+
 ## v0.11.1 (2026-10-30)
 
 Supported lockhub: v0.2.1 or later; v0.2.2 or later under `lock up`

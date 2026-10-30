@@ -2,10 +2,13 @@ package console
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"os/user"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	kconsole "github.com/DavidGodefroid/lockkit/console"
@@ -75,6 +78,54 @@ func (e isolationEnv) kit() kconsole.IsolationEnv {
 		DesktopEnv: e.desktopEnv, DisplaySet: e.displaySet, ParentChain: e.parentChain, NewVerifier: e.newVerifier,
 		EnrolledTimeout: enrolledTimeout, AllowSameUser: allowSameUserForTests,
 	}
+}
+
+// allowUIDs returns env whose separated setup also lets uids connect, as
+// allowed_uids in the image's system.toml does (console --allowed-uids):
+// every check that reads the setup sees them (the peers served, and the
+// accounts whose session or terminal the console refuses). The setup read
+// is not changed in place. Without a separated setup it refuses.
+func allowUIDs(env isolationEnv, uids []int) isolationEnv {
+	if len(uids) == 0 {
+		return env
+	}
+	load := env.loadSys
+	env.loadSys = func() (*sysconf.Config, error) {
+		sys, err := load()
+		if err != nil {
+			return nil, err
+		}
+		if sys == nil {
+			return nil, errors.New("--allowed-uids needs the separated setup (" + product.SysconfPath() + ", as in the image)")
+		}
+		return WithAllowedUIDs(sys, uids), nil
+	}
+	return env
+}
+
+// WithAllowedUIDs returns a copy of sys whose allowed_uids also hold uids;
+// sys is not changed.
+func WithAllowedUIDs(sys *sysconf.Config, uids []int) *sysconf.Config {
+	if sys == nil || len(uids) == 0 {
+		return sys
+	}
+	c := *sys
+	c.AllowedUIDs = slices.Clone(sys.AllowedUIDs)
+	for _, u := range uids {
+		if !slices.Contains(c.AllowedUIDs, u) {
+			c.AllowedUIDs = append(c.AllowedUIDs, u)
+		}
+	}
+	return &c
+}
+
+// uidList prints uids as --allowed-uids takes them.
+func uidList(uids []int) string {
+	s := make([]string, len(uids))
+	for i, u := range uids {
+		s[i] = strconv.Itoa(u)
+	}
+	return strings.Join(s, ",")
 }
 
 // allowSameUserForTests lets the console run without a separated setup, in

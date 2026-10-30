@@ -326,7 +326,12 @@ func Run(ctx context.Context, o Options) error {
 	// Same-user mode, then any other isolation failure, is refused before
 	// any prompt or file write: nothing is audited, the state directory is
 	// not touched.
-	iso, err := checkIsolation(o.IO, newIsolationEnv(o.TTY))
+	env := newIsolationEnv(o.TTY)
+	if len(o.AllowedUIDs) > 0 {
+		env = allowUIDs(env, o.AllowedUIDs)
+		o.IO.Println("allowed uids besides " + product.P.ClientsGroup + " (--allowed-uids): " + uidList(o.AllowedUIDs))
+	}
+	iso, err := checkIsolation(o.IO, env)
 	if err != nil {
 		return err
 	}
