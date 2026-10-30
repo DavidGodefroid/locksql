@@ -90,22 +90,32 @@ func objectState(ctx context.Context, c *pgx.Conn, refs engine.ObjectRefs) (engi
 		return st, err
 	}
 	if len(refs.Operators) > 0 {
-		ops, err := defs(ctx, c, `SELECT 'operator', o.oid::regoperator::text,
-				concat(o.oprcode::regprocedure::text, E'\x1f', o.oprkind, E'\x1f', o.oprcom::regoperator::text, E'\x1f', o.oprnegate::regoperator::text)
-			FROM pg_catalog.pg_operator o JOIN pg_catalog.pg_namespace n ON n.oid = o.oprnamespace
-			WHERE o.oprname = ANY($1::text[]) AND `+userObject("n"), refs.Operators)
+		named := operatorClosure(`SELECT o.oid FROM pg_catalog.pg_operator o WHERE o.oprname = ANY($1::text[])`)
+		ops, err := defs(ctx, c, operatorDef+`
+			WHERE o.oid IN `+named+` AND `+userObject("n"), refs.Operators)
 		if err != nil {
 			return st, err
 		}
 		st.Objects = append(st.Objects, ops...)
 		codes, err := oids(ctx, c, `SELECT o.oprcode::oid FROM pg_catalog.pg_operator o JOIN pg_catalog.pg_namespace n ON n.oid = o.oprnamespace
-			WHERE o.oprname = ANY($1::text[]) AND `+userObject("n"), refs.Operators)
+			WHERE o.oid IN `+named+` AND o.oprcode <> 0 AND `+userObject("n"), refs.Operators)
 		if err != nil {
 			return st, err
 		}
 		funcs = append(funcs, codes...)
 	}
 
+	if refs.Cascade && len(rels) > 0 {
+		// DROP ... CASCADE and ALTER TABLE ... DROP COLUMN ... CASCADE drop
+		// what depends on the relations too (cascadeDependents), and in
+		// turn what depends on those. (Without CASCADE such a statement
+		// fails rather than drop them.)
+		dep, err := oidsOf(ctx, c, cascadeDependents, rels)
+		if err != nil {
+			return st, err
+		}
+		rels = append(rels, dep...)
+	}
 	if refs.DDL {
 		// Event triggers run on the DDL itself (ddl_command_start, ..., and
 		// sql_drop, table_rewrite): their definitions and functions.
@@ -130,10 +140,11 @@ func objectState(ctx context.Context, c *pgx.Conn, refs engine.ObjectRefs) (engi
 				return nil, nil, err
 			}
 			st.Objects = append(st.Objects, d...)
-			r, f, err := relationUses(ctx, c, rels, refs)
+			r, f, o, err := relationUses(ctx, c, rels, refs)
 			if err != nil {
 				return nil, nil, err
 			}
+			st.Objects = append(st.Objects, o...)
 			nextRels, nextFuncs = append(nextRels, r...), append(nextFuncs, f...)
 		}
 		if len(funcs) > 0 {
@@ -145,10 +156,11 @@ func objectState(ctx context.Context, c *pgx.Conn, refs engine.ObjectRefs) (engi
 			}
 			st.Objects = append(st.Objects, d...)
 			// A function body in BEGIN ATOMIC records what it uses.
-			r, f, err := uses(ctx, c, `d.classid = 'pg_catalog.pg_proc'::regclass AND d.objid = ANY($1::oid[])`, funcs)
+			r, f, o, err := uses(ctx, c, `d.classid = 'pg_catalog.pg_proc'::regclass AND d.objid = ANY($1::oid[])`, funcs)
 			if err != nil {
 				return nil, nil, err
 			}
+			st.Objects = append(st.Objects, o...)
 			nextRels, nextFuncs = append(nextRels, r...), append(nextFuncs, f...)
 		}
 		return nextRels, nextFuncs, nil
@@ -175,11 +187,12 @@ func userObject(n string) string {
 	return n + ".nspname NOT IN ('pg_catalog', 'information_schema') AND " + n + ".nspname NOT LIKE 'pg\\_toast%'"
 }
 
-// columnDomains selects the domains the columns of the relations $1 are
-// of: directly, through an array, a range or multirange, the attributes of
-// a composite type, or a domain over another one. (rngmultitypid is read
-// through to_jsonb: the column exists from PostgreSQL 14 on.)
-const columnDomains = `WITH RECURSIVE ty(oid) AS (
+// columnTypes selects the types the columns of the relations $1 are of
+// (directly, through an array, a range or multirange, the attributes of a
+// composite type, or a domain over another one), outside the server's own
+// schemas; it ends with "t.typtype ", for a condition on it to follow. (rngmultitypid is read through to_jsonb: the column exists from
+// PostgreSQL 14 on.)
+const columnTypes = `WITH RECURSIVE ty(oid) AS (
 		SELECT a.atttypid FROM pg_catalog.pg_attribute a WHERE a.attrelid = ANY($1::oid[]) AND a.attnum > 0 AND NOT a.attisdropped
 		UNION SELECT v.t FROM ty JOIN pg_catalog.pg_type t ON t.oid = ty.oid
 			LEFT JOIN pg_catalog.pg_range r ON r.rngtypid = t.oid OR (pg_catalog.to_jsonb(r) ->> 'rngmultitypid')::oid = t.oid
@@ -187,7 +200,41 @@ const columnDomains = `WITH RECURSIVE ty(oid) AS (
 			LATERAL (VALUES (t.typbasetype), (t.typelem), (r.rngsubtype), (ca.atttypid)) v(t) WHERE v.t <> 0
 	)
 	SELECT t.oid FROM ty JOIN pg_catalog.pg_type t ON t.oid = ty.oid JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
-	WHERE t.typtype = 'd' AND ` + "n.nspname NOT IN ('pg_catalog', 'information_schema')"
+	WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND t.typtype `
+
+// columnDomains selects the domains the columns of the relations $1 are
+// of (columnTypes).
+const columnDomains = columnTypes + `= 'd'`
+
+// cascadeDependents selects the relations a DDL statement with CASCADE on
+// the relations $1 drops or changes along with them: pg_depend is walked
+// in reverse, recursively, over every object that depends on them
+// (normally, automatically or as an internal part: inheritance children
+// and partitions, owned sequences, the row type, its array type and the
+// domains over it, functions, ...; an object dropped with a column only
+// when it depends on that column), with the object an internal part
+// belongs to (the view of a _RETURN rule). Each object found maps to its
+// relation: itself, the relation of a rule, policy, constraint, default or
+// trigger, the table of a column. Objects of the server's own schemas are
+// left out.
+const cascadeDependents = `WITH RECURSIVE obj(classid, objid, objsubid) AS (
+		SELECT 'pg_catalog.pg_class'::regclass::oid, x, 0 FROM unnest($1::oid[]) x
+		UNION SELECT y.classid, y.objid, y.objsubid FROM obj
+			JOIN pg_catalog.pg_depend d ON d.refclassid = obj.classid AND d.refobjid = obj.objid
+				AND (obj.objsubid = 0 OR d.refobjsubid = obj.objsubid) AND d.deptype IN ('n', 'a', 'i'),
+			LATERAL (SELECT d.classid, d.objid, d.objsubid
+				UNION ALL SELECT o.refclassid, o.refobjid, 0 FROM pg_catalog.pg_depend o
+					WHERE o.classid = d.classid AND o.objid = d.objid AND o.deptype = 'i') y(classid, objid, objsubid)
+	)
+	SELECT DISTINCT r.oid FROM obj,
+		LATERAL (SELECT obj.objid WHERE obj.classid = 'pg_catalog.pg_class'::regclass
+			UNION ALL SELECT w.ev_class FROM pg_catalog.pg_rewrite w WHERE obj.classid = 'pg_catalog.pg_rewrite'::regclass AND w.oid = obj.objid
+			UNION ALL SELECT p.polrelid FROM pg_catalog.pg_policy p WHERE obj.classid = 'pg_catalog.pg_policy'::regclass AND p.oid = obj.objid
+			UNION ALL SELECT k.conrelid FROM pg_catalog.pg_constraint k WHERE obj.classid = 'pg_catalog.pg_constraint'::regclass AND k.oid = obj.objid AND k.conrelid <> 0
+			UNION ALL SELECT a.adrelid FROM pg_catalog.pg_attrdef a WHERE obj.classid = 'pg_catalog.pg_attrdef'::regclass AND a.oid = obj.objid
+			UNION ALL SELECT g.tgrelid FROM pg_catalog.pg_trigger g WHERE obj.classid = 'pg_catalog.pg_trigger'::regclass AND g.oid = obj.objid) r(oid)
+		JOIN pg_catalog.pg_class c ON c.oid = r.oid JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+	WHERE NOT r.oid = ANY($1::oid[]) AND ` + "n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_toast%'"
 
 // relationDefs are the definitions of relations: kind, columns, row-level
 // security, grants, owner and, for a view, its query; their rules,
@@ -219,6 +266,15 @@ func relationDefs(ctx context.Context, c *pgx.Conn, rels []uint32) ([]engine.Obj
 			concat(pg_catalog.format_type(t.typbasetype, t.typtypmod), E'\x1f', t.typnotnull, E'\x1f', t.typdefault, E'\x1f', t.typcollation, E'\x1f',
 				(SELECT string_agg(concat(c.conname, ' ', c.convalidated, ' ', pg_catalog.pg_get_constraintdef(c.oid)), ', ' ORDER BY c.conname) FROM pg_catalog.pg_constraint c WHERE c.contypid = t.oid))
 		FROM pg_catalog.pg_type t WHERE t.oid IN (` + columnDomains + `)`,
+		// Their enum and composite types: an enum's labels in their sort
+		// order (ALTER TYPE ... ADD/RENAME VALUE changes comparisons), a
+		// composite's attributes (ALTER TYPE ... ADD/ALTER/DROP ATTRIBUTE).
+		`SELECT 'type', t.oid::regtype::text,
+			concat(t.typtype, E'\x1f', CASE t.typtype
+				WHEN 'e' THEN (SELECT string_agg(e.enumlabel, E'\x1f' ORDER BY e.enumsortorder) FROM pg_catalog.pg_enum e WHERE e.enumtypid = t.oid)
+				ELSE (SELECT string_agg(concat(a.attname, ' ', pg_catalog.format_type(a.atttypid, a.atttypmod), ' ', a.attcollation), ', ' ORDER BY a.attnum)
+					FROM pg_catalog.pg_attribute a WHERE a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped) END)
+		FROM pg_catalog.pg_type t WHERE t.oid IN (` + columnTypes + `IN ('e', 'c'))`,
 		`SELECT 'inherits', i.inhrelid::regclass::text || ' < ' || i.inhparent::regclass::text, i.inhseqno::text
 		FROM pg_catalog.pg_inherits i WHERE i.inhrelid = ANY($1::oid[]) OR i.inhparent = ANY($1::oid[])`,
 		`SELECT 'policy', p.polrelid::regclass::text || '.' || p.polname,
@@ -241,8 +297,8 @@ func relationDefs(ctx context.Context, c *pgx.Conn, rels []uint32) ([]engine.Obj
 // DDL, every referencing table). A PL/pgSQL body records nothing in
 // pg_depend: the functions it calls are not followed (only its own source
 // is hashed), nor are the objects dynamic SQL reaches.
-func relationUses(ctx context.Context, c *pgx.Conn, rels []uint32, refs engine.ObjectRefs) (relOut, funcOut []uint32, err error) {
-	r, f, err := uses(ctx, c, `(d.classid = 'pg_catalog.pg_rewrite'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_rewrite WHERE ev_class = ANY($1::oid[])))
+func relationUses(ctx context.Context, c *pgx.Conn, rels []uint32, refs engine.ObjectRefs) (relOut, funcOut []uint32, ops []engine.ObjectDef, err error) {
+	r, f, ops, err := uses(ctx, c, `(d.classid = 'pg_catalog.pg_rewrite'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_rewrite WHERE ev_class = ANY($1::oid[])))
 		OR (d.classid = 'pg_catalog.pg_policy'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_policy WHERE polrelid = ANY($1::oid[])))
 		OR (d.classid = 'pg_catalog.pg_trigger'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_trigger WHERE tgrelid = ANY($1::oid[]) AND NOT tgisinternal))
 		OR (d.classid = 'pg_catalog.pg_class'::regclass AND d.objid = ANY($1::oid[]))
@@ -251,7 +307,7 @@ func relationUses(ctx context.Context, c *pgx.Conn, rels []uint32, refs engine.O
 		OR (d.classid = 'pg_catalog.pg_constraint'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_constraint WHERE contypid IN (`+columnDomains+`)))
 		OR (d.classid = 'pg_catalog.pg_type'::regclass AND d.objid IN (`+columnDomains+`))`, rels)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// The tables a statement on rels reaches too: their partitions and
 	// inheritance children and parents, and the tables whose foreign keys
@@ -274,7 +330,7 @@ func relationUses(ctx context.Context, c *pgx.Conn, rels []uint32, refs engine.O
 			AND (c.confdeltype NOT IN ('a', 'r') OR c.confupdtype NOT IN ('a', 'r'))`
 	}
 	more, err := oidsOf(ctx, c, q, rels)
-	return append(r, more...), f, err
+	return append(r, more...), f, ops, err
 }
 
 func oidsOf(ctx context.Context, c *pgx.Conn, q string, arg []uint32) ([]uint32, error) {
@@ -285,34 +341,63 @@ func oidsOf(ctx context.Context, c *pgx.Conn, q string, arg []uint32) ([]uint32,
 	return pgx.CollectRows(rows, pgx.RowTo[uint32])
 }
 
-// uses are the relations and functions outside the server's own schemas
-// that the pg_depend rows matching cond (on alias d) refer to.
-func uses(ctx context.Context, c *pgx.Conn, cond string, arg []uint32) (rels, funcs []uint32, err error) {
-	rows, err := c.Query(ctx, `SELECT DISTINCT d.refclassid = 'pg_catalog.pg_proc'::regclass, d.refobjid
+// uses are the relations, functions and operators outside the server's
+// own schemas that the pg_depend rows matching cond (on alias d) refer to.
+// An operator a view, rule, policy, default or CHECK uses is recorded
+// against pg_operator, not its function: its definition is hashed and its
+// function (oprcode) followed, with its commutator's and negator's (the
+// planner may run them instead: operatorClosure).
+func uses(ctx context.Context, c *pgx.Conn, cond string, arg []uint32) (rels, funcs []uint32, ops []engine.ObjectDef, err error) {
+	used := operatorClosure(`SELECT d.refobjid FROM pg_catalog.pg_depend d WHERE (` + cond + `) AND d.refclassid = 'pg_catalog.pg_operator'::regclass`)
+	rows, err := c.Query(ctx, `SELECT DISTINCT d.refclassid = 'pg_catalog.pg_class'::regclass, d.refobjid
 		FROM pg_catalog.pg_depend d
 		LEFT JOIN pg_catalog.pg_class rc ON d.refclassid = 'pg_catalog.pg_class'::regclass AND rc.oid = d.refobjid
 		LEFT JOIN pg_catalog.pg_proc rp ON d.refclassid = 'pg_catalog.pg_proc'::regclass AND rp.oid = d.refobjid
 		JOIN pg_catalog.pg_namespace n ON n.oid = coalesce(rc.relnamespace, rp.pronamespace)
 		WHERE (`+cond+`) AND d.refclassid IN ('pg_catalog.pg_class'::regclass, 'pg_catalog.pg_proc'::regclass)
-		  AND `+userObject("n"), arg)
+		  AND `+userObject("n")+`
+		UNION SELECT false, ro.oprcode::oid
+		FROM pg_catalog.pg_operator ro JOIN pg_catalog.pg_namespace n ON n.oid = ro.oprnamespace
+		WHERE ro.oid IN `+used+` AND ro.oprcode <> 0 AND `+userObject("n"), arg)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var fn bool
+		var rel bool
 		var oid uint32
-		if err := rows.Scan(&fn, &oid); err != nil {
-			return nil, nil, err
+		if err := rows.Scan(&rel, &oid); err != nil {
+			return nil, nil, nil, err
 		}
-		if fn {
-			funcs = append(funcs, oid)
-		} else {
+		if rel {
 			rels = append(rels, oid)
+		} else {
+			funcs = append(funcs, oid)
 		}
 	}
-	return rels, funcs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+	ops, err = defs(ctx, c, operatorDef+`
+		WHERE o.oid IN `+used+` AND `+userObject("n"), arg)
+	return rels, funcs, ops, err
 }
+
+// operatorClosure is the subquery of the operators base selects with,
+// recursively, their commutators and negators: the planner rewrites
+// NOT (a === b) into a !== b and b === a into a === b with the other
+// operand order, and then runs that operator's function.
+func operatorClosure(base string) string {
+	return `(WITH RECURSIVE op(oid) AS (` + base + `
+		UNION SELECT x.oid FROM op JOIN pg_catalog.pg_operator o ON o.oid = op.oid,
+			LATERAL (VALUES (o.oprcom), (o.oprnegate)) x(oid) WHERE x.oid <> 0)
+	SELECT oid FROM op)`
+}
+
+// operatorDef selects the definition of the operators o (namespace n).
+const operatorDef = `SELECT 'operator', o.oid::regoperator::text,
+		concat(o.oprcode::regprocedure::text, E'\x1f', o.oprkind, E'\x1f', o.oprcom::regoperator::text, E'\x1f', o.oprnegate::regoperator::text)
+	FROM pg_catalog.pg_operator o JOIN pg_catalog.pg_namespace n ON n.oid = o.oprnamespace`
 
 func oids(ctx context.Context, c *pgx.Conn, q string, arg []string) ([]uint32, error) {
 	if len(arg) == 0 {

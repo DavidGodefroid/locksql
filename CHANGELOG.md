@@ -8,6 +8,25 @@ This file records the changes a user or an agent has to know about.
 
 ### Changed
 
+- **Plan hash coverage** (#119). The plan hash also covers the operators
+  a view, rule, policy, default or `CHECK` (of a table or a domain) uses,
+  with their functions and those of their commutators and negators
+  (`pg_depend` records them against the operator, not its function), the
+  enum labels in their sort order and the attributes of the composite
+  types of the columns, and, for a `DROP` or `ALTER` with `CASCADE`, every
+  relation `pg_depend` says it would drop or change along with its
+  relations (views over them, policies, constraints, defaults and
+  triggers that use them, inheritance children, owned sequences and their
+  users, columns of their row type, recursively; the functions and
+  domains it would drop are not hashed, and `DROP FUNCTION/DOMAIN/SCHEMA
+  ... CASCADE` or `DROP TYPE` of an enum are not walked). The function of
+  an operator counts as one more level of the 8-level bound. Plan hash
+  version 3: plans made by v0.10.0 are answered `E_STALE`.
+
+## v0.10.0 (2026-10-30)
+
+### Changed
+
 - **Approvals are decided by lockkit's console.** The console closes its
   approval screen with lockkit's `console.Asker` (same prompt, same answers,
   same audit records): the screens are pinned byte for byte by golden tests
@@ -16,7 +35,7 @@ This file records the changes a user or an agent has to know about.
 - **Chained audit log.** Each audit record now ends with `prev_hash`, the
   hash of the line before it (lockkit's `audit.Verify`
   checks the chain and names the first record edited, removed, inserted or
-  reordered). The line before it is the 0.8 line, byte for byte. Existing logs
+  reordered). Apart from `prev_hash` a record is the 0.9 line, byte for byte. Existing logs
   are not rewritten: new records chain onto their last line. Records of
   hub mode will also carry `ticket`, `approver`, `facade` and `hub_sig`.
   `locksql stats` reads old and new logs alike.
@@ -94,7 +113,7 @@ This file records the changes a user or an agent has to know about.
   the same word, and the server's own schemas are no longer exempt when
   named bare from within them.
 
-- Builds on lockkit v0.3.1 (hub support), was a commit of lockkit main.
+- Pinned to the lockkit v0.3.1 release (hub support) instead of a commit of lockkit main.
 
 ### Fixed
 

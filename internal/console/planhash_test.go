@@ -132,3 +132,28 @@ func TestObjectRefsDDL(t *testing.T) {
 		}
 	}
 }
+
+// Only a DDL statement that says CASCADE reads what depends on its
+// relations (#119).
+func TestObjectRefsCascade(t *testing.T) {
+	for _, c := range []struct {
+		sql   string
+		class sqlclass.Class
+		want  bool
+	}{
+		{"DROP TABLE t CASCADE", sqlclass.DDL, true},
+		{"ALTER TABLE t DROP COLUMN c CASCADE", sqlclass.DDL, true},
+		{"DROP TABLE t", sqlclass.DDL, false},
+		{"COMMENT ON TABLE t IS 'CASCADE'", sqlclass.DDL, false},
+		{"DELETE FROM cascade WHERE id = 1", sqlclass.Write, false},
+		{"ALTER TABLE c ADD FOREIGN KEY (t) REFERENCES t ON DELETE CASCADE ON UPDATE CASCADE", sqlclass.DDL, false},
+		{"CREATE TABLE c (t int REFERENCES t ON DELETE CASCADE)", sqlclass.DDL, false},
+		{"TRUNCATE t CASCADE", sqlclass.DDL, false},
+		{"REVOKE SELECT ON t FROM r CASCADE", sqlclass.Admin, false},
+		{"drop view v cascade", sqlclass.DDL, true},
+	} {
+		if got := objectRefs(sqlclass.Postgres, &plan{st: sqlclass.Statement{SQL: c.sql, Class: c.class}}).Cascade; got != c.want {
+			t.Errorf("%s: Cascade %v", c.sql, got)
+		}
+	}
+}

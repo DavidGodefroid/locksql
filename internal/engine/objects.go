@@ -24,6 +24,9 @@ type ObjectRefs struct {
 	// DDL: the statement changes the schema; the event triggers that fire
 	// on it are read too.
 	DDL bool `json:"ddl,omitempty"`
+	// Cascade: a DDL statement that says CASCADE; what depends on its
+	// relations (views over them, ...) is read too, since it drops them.
+	Cascade bool `json:"cascade,omitempty"`
 }
 
 // ObjectDef is the definition of one object a statement resolves to, as
