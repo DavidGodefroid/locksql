@@ -4,6 +4,41 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## v0.11.1 (2026-10-30)
+
+Supported lockhub: v0.2.1 or later; v0.2.2 or later under `lock up`
+([docs/usage.md](docs/usage.md#approving-in-lockhub-hub-mode), #135).
+
+### Upgrading
+
+- Records written by consoles before v0.11.1 stay unsigned under
+  `lock audit verify --lock`; their hub denials and the approvals that
+  expired before their run show there as decisions not in the log, not as
+  problems.
+
+### Fixed
+
+- **Hub decisions are audited with the hub's signature** (#118, #133).
+  The `approved` record of a ticket decided in lockhub now carries
+  `hub_sig` (the `run` record after it does not), so that lockhub's
+  `lock audit verify --lock INSTANCE=PATH` checks it against the decision
+  the hub signed instead of reporting it unsigned. The hub's denials are
+  now audited too (`denied`, with the reason, approver, facade and
+  `hub_sig`), and so is the agent-side renewal (the run of an expired
+  ticket, not audited before; renewals asked in lockhub already were): a
+  `renew` record for every answer, the new ticket (also when planned again
+  as stale) or refused with why (#136, #137). That record carries the
+  approver, facade and `hub_sig` when an approval came with the expiry (an
+  approval the console could not use; only the first run of the ticket).
+- **`locksql doctor` in a `lock up` workspace** (#130, #134). In a project
+  whose `lockfamily.yaml` lock up reads (`.lockfamily/`, or the root when
+  there is no `.lockfamily`), a `.locksql/` or `.locksql/pii/` the console
+  account does not own (but can read) now warns instead of failing with a
+  `chown` repair: lock up's console keeps its PII rule sets in its own
+  volume (`LOCKSQL_PII_DIR`). Unreadable by the console account, writable
+  by group or others (now with a `chmod go-w` repair), or a symbolic link
+  still fails; outside a lock up workspace nothing changes.
+
 ## v0.11.0 (2026-10-30)
 
 ### Added
