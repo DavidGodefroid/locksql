@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
+	"github.com/DavidGodefroid/locksql/internal/console"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 )
 
@@ -203,9 +204,16 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 	}
 
 	// 2. The .locksql directory, and pii in it: the console writes the PII
-	// rule sets there.
+	// rule sets there, unless it keeps them in a directory of its own
+	// (LOCKSQL_PII_DIR, as lock up runs it). In a lock up workspace, a
+	// .locksql or .locksql/pii the console does not own is a
+	// warning, not a failure: doctor cannot know that every console of the
+	// project runs that way, and a console without the variable writes and
+	// trusts these directories. Writable by group or others still fails:
+	// they are the seed of the console's sets.
 	dir := filepath.Join(root, ".locksql")
 	sets := filepath.Join(dir, pii.SetsDir)
+	why := lockUpWorkspace(d, root)
 	ownDir := func(title, path string) bool {
 		if d.lstat != nil {
 			if fi, err := d.lstat(path); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
@@ -219,6 +227,22 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 			perm := fi.Mode().Perm()
 			switch {
 			case !ok:
+			case why != "" && perm&0o022 != 0:
+				r := &repair{what: "make " + path + " writable by its owner only (chmod go-w)", root: inDirScript(path, "chmod go-w .")}
+				if uid == me {
+					mode := fi.Mode() & (fs.ModePerm | fs.ModeSetgid | fs.ModeSticky) &^ 0o022
+					r.root, r.apply = "", func() error { return os.Chmod(path, mode) }
+				}
+				add(checkFail, title, fmt.Sprintf("%s: %04o: writable by group or others; the console reads the PII rule sets there", path, perm),
+					"chmod go-w "+shellQuote(path), r)
+			case why != "" && uid != svc.uid:
+				if p, _, ok := perms(path); ok && p&5 != 5 {
+					add(checkFail, title, fmt.Sprintf("%s: %04o, owner uid %d: %s cannot list and enter it, and the console reads its config and PII rule sets there", path, perm, uid, svc.name),
+						"chmod 0755 "+shellQuote(path)+" (or give "+svc.name+" read and search access by an ACL)", nil)
+					break
+				}
+				add(checkWarn, title, fmt.Sprintf("%s: %04o, owner uid %d; %s. A console started with %s keeps its PII rule sets in its own directory and does not need to own this one. A console of this project started without it writes them here and needs it owned by %s (uid %d).", path, perm, uid, why, console.PIIDirEnv, svc.name, svc.uid),
+					fmt.Sprintf("only for a console without %s: sudo chown %d %s && sudo chmod 0755 %s", console.PIIDirEnv, svc.uid, shellQuote(path), shellQuote(path)), nil)
 			case uid != svc.uid || perm&0o022 != 0 || perm&0o005 != 0o005:
 				// The uid, not the name: in Docker the console account exists
 				// only in the image.
@@ -235,6 +259,9 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 		return out
 	}
 	setsOK := ownDir("project .locksql/pii", sets)
+	if why != "" {
+		add(checkOK, "PII rule sets", "not checked here: lock up runs the console with "+console.PIIDirEnv+", which keeps them in its own volume, seeded from (and new masks merged from) the reviewed copy of "+sets+" that lock up gives it", "", nil)
+	}
 
 	// 3. The files both accounts read: the config, a legacy pii.toml, and
 	// the rule set of every project profile.
@@ -261,6 +288,30 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 		}
 	}
 	return out
+}
+
+// lockUpWorkspace says why doctor takes it that the project's consoles
+// keep their PII rule sets out of the project ("": it does not): a lock
+// up workspace, whose consoles lock up runs with LOCKSQL_PII_DIR. Its
+// lockfamily.yaml is found as lock up finds it: in .lockfamily/ as soon
+// as that exists, else (the layout before it) at the project's root.
+// Doctor's own environment says nothing of the console's: the console
+// started from this account is handed off to the console account with
+// a fresh environment.
+func lockUpWorkspace(d doctorEnv, root string) string {
+	lf := filepath.Join(root, ".lockfamily")
+	f := filepath.Join(lf, "lockfamily.yaml")
+	lstat := d.lstat
+	if lstat == nil {
+		lstat = d.stat
+	}
+	if _, err := lstat(lf); err != nil {
+		f = filepath.Join(root, "lockfamily.yaml")
+	}
+	if fi, err := d.stat(f); err == nil && fi.Mode().IsRegular() {
+		return "a lock up workspace (" + f + ")"
+	}
+	return ""
 }
 
 // projectRuleSets are the PII rule sets the project's profiles use, and

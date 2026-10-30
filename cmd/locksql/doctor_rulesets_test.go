@@ -98,3 +98,128 @@ func TestProjectChecksSymlinkedRuleSets(t *testing.T) {
 	}
 	t.Error("no project .locksql/pii check")
 }
+
+// Under lock up the console keeps its PII rule sets in its own directory
+// (LOCKSQL_PII_DIR): in a lock up workspace, a .locksql and .locksql/pii
+// the console does not own but can read are a warning, not a failure
+// (#130). Otherwise, and whatever doctor's own environment holds (the
+// console it starts gets a fresh one), the ownership check fails as
+// before; unreadable or writable by others fails either way.
+func TestProjectChecksLockUpWorkspace(t *testing.T) {
+	dir := func(mode fs.FileMode, uid int) ownedInfo {
+		return ownedInfo{fakeInfo{"d", fs.ModeDir | mode}, uid, uid}
+	}
+	file := func(mode fs.FileMode, uid int) ownedInfo {
+		return ownedInfo{fakeInfo{"f", mode}, uid, uid}
+	}
+	const proj = "/home/alice/proj"
+	const p = proj + "/.locksql"
+	const marker = proj + "/.lockfamily/lockfamily.yaml"
+	newFiles := func() map[string]ownedInfo {
+		return map[string]ownedInfo{
+			"/": dir(0o755, 0), "/home": dir(0o755, 0), "/home/alice": dir(0o755, 1000),
+			proj:                  dir(0o755, 1000),
+			p:                     dir(0o755, 1000),
+			p + "/config.toml":    file(0o644, 1000),
+			p + "/pii":            dir(0o755, 1000), // the human's
+			p + "/pii/shop.toml":  file(0o644, 1000),
+			proj + "/.lockfamily": dir(0o755, 1000),
+			marker:                file(0o644, 1000),
+		}
+	}
+	svc := svcAccount{name: "locksql", uid: 900, gids: []int{900}}
+	var links map[string]bool
+	run := func(files map[string]ownedInfo) map[string]check {
+		var ran [][]string
+		d := accessDoctor(files, &ran)
+		d.lstat = func(path string) (os.FileInfo, error) {
+			if links[path] {
+				return ownedInfo{fakeInfo{"l", fs.ModeSymlink | 0o777}, 1000, 1000}, nil
+			}
+			return d.stat(path)
+		}
+		d.getenv = func(k string) string {
+			if k == "LOCKSQL_PII_DIR" {
+				return "/home/locksql/pii-rules"
+			}
+			return ""
+		}
+		out := map[string]check{}
+		for _, c := range projectChecks(d, proj, svc, 1000) {
+			out[c.title] = c
+		}
+		return out
+	}
+
+	// A lock up workspace: warnings naming why, no repair; the rule sets
+	// reported as not checked.
+	files := newFiles()
+	got := run(files)
+	for _, title := range []string{"project .locksql", "project .locksql/pii"} {
+		if c := got[title]; c.state != checkWarn || c.repair != nil || !strings.Contains(c.detail, "lock up workspace") {
+			t.Errorf("%s: %+v", title, c)
+		}
+	}
+	if c := got["PII rule sets"]; c.state != checkOK || !strings.Contains(c.detail, "not checked here") {
+		t.Errorf("PII rule sets: %+v", c)
+	}
+
+	// The layout before .lockfamily: lockfamily.yaml at the root.
+	f := newFiles()
+	delete(f, marker)
+	delete(f, proj+"/.lockfamily")
+	f[proj+"/lockfamily.yaml"] = file(0o644, 1000)
+	if c := run(f)["project .locksql/pii"]; c.state != checkWarn {
+		t.Errorf("root lockfamily.yaml: %+v", c)
+	}
+	// Not a lock up workspace: a bare .lockfamily/; a root lockfamily.yaml
+	// beside a .lockfamily (a directory or anything else), which lock up
+	// never reads; nothing at all, LOCKSQL_PII_DIR in doctor's environment
+	// notwithstanding.
+	f[proj+"/.lockfamily"] = file(0o644, 1000)
+	if c := run(f)["project .locksql/pii"]; c.state != checkFail || c.repair == nil {
+		t.Errorf("root lockfamily.yaml beside a .lockfamily file: %+v", c)
+	}
+	f[proj+"/.lockfamily"] = dir(0o755, 1000)
+	if c := run(f)["project .locksql/pii"]; c.state != checkFail {
+		t.Errorf("root lockfamily.yaml beside .lockfamily/: %+v", c)
+	}
+	delete(f, proj+"/lockfamily.yaml")
+	if c := run(f)["project .locksql/pii"]; c.state != checkFail {
+		t.Errorf("bare .lockfamily/: %+v", c)
+	}
+	delete(f, proj+"/.lockfamily")
+	got = run(f)
+	if c := got["project .locksql/pii"]; c.state != checkFail || c.repair == nil {
+		t.Errorf("no workspace: %+v", c)
+	}
+	if _, ok := got["PII rule sets"]; ok {
+		t.Error("PII rule sets reported outside a lock up workspace")
+	}
+
+	// In the workspace: a seed writable by others fails, with a repair.
+	files[p+"/pii"] = dir(0o777, 1000)
+	if c := run(files)["project .locksql/pii"]; c.state != checkFail || !strings.Contains(c.fix, "go-w") || c.repair == nil || c.repair.apply == nil {
+		t.Errorf("world-writable seed: %+v", c)
+	}
+	files[p+"/pii"] = dir(0o777, 900)
+	if c := run(files)["project .locksql/pii"]; c.state != checkFail || c.repair == nil || !strings.Contains(c.repair.root, "chmod go-w") {
+		t.Errorf("world-writable console-owned seed: %+v", c)
+	}
+	// A seed the console cannot read fails.
+	files[p+"/pii"] = dir(0o700, 1000)
+	if c := run(files)["project .locksql/pii"]; c.state != checkFail || !strings.Contains(c.detail, "cannot list") {
+		t.Errorf("unreadable seed: %+v", c)
+	}
+	// Owned by the console but closed to others: the usual failure.
+	files[p+"/pii"] = dir(0o700, 900)
+	if c := run(files)["project .locksql/pii"]; c.state != checkFail || c.repair == nil || !strings.Contains(c.detail, "every account read it") {
+		t.Errorf("console-owned 0700 seed: %+v", c)
+	}
+	files[p+"/pii"] = dir(0o755, 1000)
+	// A linked seed still fails.
+	links = map[string]bool{p + "/pii": true}
+	if c := run(files)["project .locksql/pii"]; c.state != checkFail || !strings.Contains(c.detail, "symbolic link") {
+		t.Errorf("linked seed: %+v", c)
+	}
+}
