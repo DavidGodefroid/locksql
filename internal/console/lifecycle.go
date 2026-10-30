@@ -290,7 +290,7 @@ func piiDirNotice(profileDir, set, rulesPath string) string {
 	if err1 == nil && err2 == nil && pii.SameRules(tr, mr) {
 		return ""
 	}
-	return fmt.Sprintf("note: the PII rule set %q of the profile (%s) differs from this console's (%s), which is in force: its new mask rules were added here, but nothing that would loosen the console's set (an allow rule, a removed mask, another mode); change those at this console, or remove its copy to take the profile's again at the next start", set, theirs, rulesPath)
+	return fmt.Sprintf("note: the PII rule set %q of the profile (%s) differs from this console's (%s), which is in force: the profile's new mask rules are added here at each start, nothing else of it (allow rules, removed masks, mode changes); make those changes at this console (a mask the profile still has comes back: remove it there too), or remove the console's copy to take the profile's again at the next start", set, theirs, rulesPath)
 }
 
 // newIsolationEnv builds what Run's isolation checks read; tests replace it.
@@ -452,7 +452,11 @@ func Run(ctx context.Context, o Options) error {
 			return fmt.Errorf("%w: %v", ErrConfig, err)
 		}
 		if added > 0 {
-			o.IO.Println(safeText(fmt.Sprintf("note: %d mask rules of the profile's PII rule set %q added to this console's (%s)", added, ruleSet, rulesPath), false))
+			rules := "rules"
+			if added == 1 {
+				rules = "rule"
+			}
+			o.IO.Println(safeText(fmt.Sprintf("note: %d mask %s of the profile's PII rule set %q added to this console's (%s)", added, rules, ruleSet, rulesPath), false))
 		}
 	}
 	if n := piiDirNotice(profileRules, ruleSet, rulesPath); n != "" {

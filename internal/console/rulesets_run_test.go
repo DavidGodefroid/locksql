@@ -172,7 +172,7 @@ func TestRunPIIDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	io, _ = run(piiDir)
-	if !strings.Contains(io.output(), "1 mask rules of the profile") || !strings.Contains(io.output(), "differs from this console's") {
+	if !strings.Contains(io.output(), "1 mask rule of the profile") || !strings.Contains(io.output(), "differs from this console's") {
 		t.Fatalf("no merge or drift notice:\n%s", io.output())
 	}
 	got, err := pii.LoadRulesFile(mine)
