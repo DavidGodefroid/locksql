@@ -746,7 +746,9 @@ sends approvals to lockhub instead of asking on this terminal:
   rules or foreign-key cascades are not counted: on PostgreSQL the ticket
   names the triggers, rules, volatile functions and cascading foreign keys the write reaches;
   on MySQL/MariaDB and SQLite, the triggers of the tables it names (on
-  MySQL/MariaDB only those of tables the account holds `TRIGGER` on). A
+  MySQL/MariaDB only those of tables the account holds `TRIGGER` on;
+  listed for the human, not in the plan hash: a trigger created after the
+  approval does not make the ticket stale). A
   statement with a data-modifying statement inside it (`WITH d AS (DELETE
   ...) UPDATE ...`) is refused in hub mode (`E_STATEMENT_KIND`): its count
   would not cover its rows. On MySQL/MariaDB a write naming a table a

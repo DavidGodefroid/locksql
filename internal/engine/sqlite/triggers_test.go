@@ -23,7 +23,8 @@ func TestTriggers(t *testing.T) {
 		`CREATE TABLE log (id INT)`,
 		`CREATE TRIGGER items_log AFTER UPDATE ON items BEGIN INSERT INTO log VALUES (NEW.id); END`,
 		`CREATE TRIGGER "Items Ins" INSTEAD OF INSERT ON emails BEGIN SELECT 1; END`,
-		`CREATE TRIGGER big_del DELETE ON big BEGIN SELECT 1; END`,
+		`CREATE TRIGGER big_del DELETE ON big BEGIN SELECT 1; -- a comment
+END`,
 	} {
 		if _, err := db.Exec(q); err != nil {
 			t.Fatal(err)
@@ -37,7 +38,7 @@ func TestTriggers(t *testing.T) {
 	if err != nil || !slices.Equal(got, want) {
 		t.Fatalf("triggers %q, %v; want %q", got, err, want)
 	}
-	if got, err := engine.TriggersOf(ctx, s, "", []string{"uniq", "log"}); err != nil || len(got) != 0 {
+	if got, err := engine.TriggersOf(ctx, s, "", []string{"items_log", "log"}); err != nil || len(got) != 0 {
 		t.Fatalf("no triggers: %q, %v", got, err)
 	}
 	if _, err := engine.TriggersOf(ctx, s, "nope", []string{"items"}); err == nil {
@@ -54,5 +55,18 @@ func TestRunCountedVacuumUncounted(t *testing.T) {
 	}
 	if _, err := engine.RunCounted(context.Background(), s, "", st, 10, func(int64) error { return nil }); !errors.Is(err, engine.ErrUncounted) {
 		t.Fatalf("VACUUM: %v", err)
+	}
+}
+
+func TestTriggerWhen(t *testing.T) {
+	for def, want := range map[string]string{
+		"CREATE TRIGGER x AFTER UPDATE OF a ON t BEGIN SELECT 1; END":          "after update",
+		"CREATE TRIGGER beginning INSERT ON t BEGIN SELECT 1; -- c\nEND":       "before insert",
+		"create temp trigger if not exists x instead of delete on v begin end": "instead of delete",
+		"CREATE TRIGGER x ON t": "timing unknown",
+	} {
+		if got := triggerWhen(def); got != want {
+			t.Errorf("triggerWhen(%q) = %q, want %q", def, got, want)
+		}
 	}
 }

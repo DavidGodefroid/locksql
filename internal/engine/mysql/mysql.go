@@ -592,7 +592,7 @@ func (s *session) RunCounted(ctx context.Context, db string, st sqlclass.Stateme
 // server's own schemas count like any other (the current database may be
 // mysql). Called in the transaction, mu held.
 func (s *session) nonTransactional(q string) ([]string, error) {
-	text := strings.ToLower(q)
+	text := matchText(q)
 	r, err := s.conn.Execute(`SELECT SCHEMA_NAME, DATABASE() FROM information_schema.SCHEMATA`)
 	if err != nil {
 		return nil, err
@@ -638,6 +638,21 @@ func (s *session) nonTransactional(q string) ([]string, error) {
 		out = append(out, fmt.Sprintf("%s.%s (%s)", sc, tn, strings.ToLower(strings.TrimSpace(typ+" "+eng))))
 	}
 	return out, nil
+}
+
+// matchText is q as nonTransactional matches names in it: lower case,
+// every blank the server accepts (\r, \f, \v too) a space, and a doubled
+// backtick inside a quoted name single, so that "other\r.t" and
+// "`a``b`.t" show their schema to qualifier and qualified.
+func matchText(q string) string {
+	text := strings.Map(func(r rune) rune {
+		switch r {
+		case '\r', '\f', '\v':
+			return ' '
+		}
+		return r
+	}, strings.ToLower(q))
+	return strings.ReplaceAll(text, "``", "`")
 }
 
 // qualifier reports whether text names schema as a qualifier: the whole

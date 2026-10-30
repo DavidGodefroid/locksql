@@ -301,13 +301,15 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		// A non-transactional table of another schema counts only when the
 		// statement names it with its schema (#120): the same word in an
 		// unrelated write does not refuse it.
-		for _, q := range []string{"UPDATE other.rc_oth SET label = 'z'", "UPDATE `other`.`rc_oth` SET label = 'z'"} {
+		for _, q := range []string{"UPDATE other.rc_oth SET label = 'z'", "UPDATE `other`.`rc_oth` SET label = 'z'", "UPDATE other\r.rc_oth SET label = 'z'", "UPDATE other\f.\vrc_oth SET label = 'z'"} {
 			if _, err := engine.RunCounted(ctx, s, "app", write(q), 10, func(int64) error { checked = true; return over }); !errors.Is(err, engine.ErrUncounted) || checked {
 				t.Fatalf("%s: %v (checked %v)", q, err, checked)
 			}
 		}
-		if _, err := engine.RunCounted(ctx, s, "app", write("UPDATE small SET label = 'rc_oth' WHERE id = 1"), 10, func(int64) error { return over }); !errors.Is(err, over) {
-			t.Fatalf("a word naming a table of another schema refused the write: %v", err)
+		for _, q := range []string{"UPDATE small SET label = 'rc_oth' WHERE id = 1", "UPDATE small AS rc_oth SET rc_oth.label = 'z' WHERE rc_oth.id = 1"} {
+			if _, err := engine.RunCounted(ctx, s, "app", write(q), 10, func(int64) error { return over }); !errors.Is(err, over) {
+				t.Fatalf("%s: a word naming a table of another schema refused the write: %v", q, err)
+			}
 		}
 		// From the other schema, the bare name counts.
 		if _, err := engine.RunCounted(ctx, s, "other", write("UPDATE rc_oth SET label = 'z'"), 10, func(int64) error { checked = true; return over }); !errors.Is(err, engine.ErrUncounted) || checked {

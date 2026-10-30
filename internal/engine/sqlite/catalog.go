@@ -331,11 +331,13 @@ func (s *session) Triggers(ctx context.Context, db string, names []string) ([]st
 }
 
 // triggerWhen is the timing and event of a CREATE TRIGGER statement
-// ("before update", "instead of insert"), "" when it does not lex.
+// ("before update", "instead of insert"), read from its header (its body
+// may hold what the lexer refuses, a comment for one).
 func triggerWhen(def string) string {
-	toks, err := sqlclass.Lex(sqlclass.SQLite, def)
+	const unknown = "timing unknown"
+	toks, err := sqlclass.Lex(sqlclass.SQLite, triggerHeader(def))
 	if err != nil {
-		return ""
+		return unknown
 	}
 	var timing string
 	for _, t := range toks {
@@ -354,5 +356,27 @@ func triggerWhen(def string) string {
 			return timing + " " + strings.ToLower(t.Text)
 		}
 	}
-	return ""
+	return unknown
+}
+
+// triggerHeader is def up to the BEGIN of its body, matched as a word in
+// any case: what precedes it holds the timing and event.
+func triggerHeader(def string) string {
+	up := strings.ToUpper(def)
+	for i := 0; ; {
+		k := strings.Index(up[i:], "BEGIN")
+		if k < 0 {
+			return def
+		}
+		k += i
+		end := k + len("BEGIN")
+		if (k == 0 || !wordByte(up[k-1])) && (end == len(up) || !wordByte(up[end])) {
+			return def[:k]
+		}
+		i = k + 1
+	}
+}
+
+func wordByte(b byte) bool {
+	return b == '_' || b == '$' || b >= '0' && b <= '9' || b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' || b >= 0x80
 }

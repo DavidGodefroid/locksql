@@ -50,9 +50,25 @@ func TestQualifier(t *testing.T) {
 		{"update another.t set x = 1", false},
 		{"update other_x.t set x = 1", false},
 		{"update t set other = 1", false},
+		{"update other\r.t set x = 1", true},
+		{"update other\f.t set x = 1", true},
+		{"update other\v.t set x = 1", true},
+		{"update other\r\n. t set x = 1", true},
+		{"update `oth``er`.t set x = 1", true},
 	} {
-		if got := qualifier(c.text, "other"); got != c.want {
+		if got := qualifier(matchText(c.text), "other") || qualifier(matchText(c.text), "oth`er"); got != c.want {
 			t.Errorf("qualifier(%q) = %v", c.text, got)
 		}
+	}
+}
+
+func TestQualifiedBlanks(t *testing.T) {
+	for _, q := range []string{"UPDATE other\r.rc_oth SET x = 1", "UPDATE other\f.rc_oth SET x = 1", "UPDATE other\v.\vrc_oth SET x = 1", "UPDATE `other`\r\n.`rc_oth` SET x = 1"} {
+		if !qualified(matchText(q), "other", "rc_oth") || !qualifier(matchText(q), "other") {
+			t.Errorf("%q: not qualified", q)
+		}
+	}
+	if !qualified(matchText("UPDATE `a``b`.t SET x = 1"), "a`b", "t") {
+		t.Error("a schema with a doubled backtick")
 	}
 }
