@@ -182,6 +182,20 @@ type plan struct {
 	hash string
 	// guarded: the engine read the definitions, and the run checks them.
 	guarded bool
+	// requester is the agent that planned it: its lea name and token (as
+	// its client sent it; compared, never shown or written).
+	requester ipc.Requester
+	// maxAffected bounds the rows a hub-mode write may change (0: no
+	// bound): more rolls it back in its own transaction, as stale.
+	// affected is what such a rolled-back run would have changed, and
+	// staleTicket its ticket (hubmode.go).
+	maxAffected int64
+	affected    int64
+	staleTicket string
+	// sideEffects are what changes rows beside the statement itself and
+	// so beside its rowcount: triggers, rules, foreign-key cascades (from
+	// the definitions read on PostgreSQL).
+	sideEffects []string
 }
 
 // Server serves client requests one at a time against one session. It is

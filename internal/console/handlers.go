@@ -259,6 +259,7 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		return *r
 	}
 	db, class := pl.db, pl.st.Class.String()
+	pl.requester = p.Requester
 	s.prunePlans()
 	pl.id = newID()
 	s.plans[pl.id] = pl
@@ -373,6 +374,9 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 		return nil, ptr(s.failed(id, "plan", err))
 	}
 	pl.guarded = state != nil
+	if state != nil && st.Class == sqlclass.Write {
+		pl.sideEffects = sideEffects(*state)
+	}
 	if pl.hash, err = s.planHash(pl, state); err != nil {
 		return nil, ptr(s.failed(id, "plan", err))
 	}
@@ -452,9 +456,13 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		return *r
 	}
 	if p.Ticket != "" {
-		return s.queryRunTicket(ctx, req.ID, p.Ticket)
+		return s.queryRunTicket(ctx, req.ID, p.Ticket, p.Requester)
 	}
 	pl, ok := s.plans[p.PlanID]
+	if ok && !sameRequester(pl.requester, p.Requester) {
+		// Another agent's plan: refused, and left to the agent that made it.
+		return errResp(req.ID, ipc.CodeWrongRequester, wrongRequester)
+	}
 	delete(s.plans, p.PlanID) // one-shot, whatever happens next
 	if !ok || s.now().Sub(pl.created) > PlanTTL {
 		return errResp(req.ID, ipc.CodeNoSuchPlan, "no such plan: it is unknown, already used or expired; plan the query again")
@@ -660,14 +668,22 @@ func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session,
 		if pl.an != nil {
 			st.SQL = pl.runSQL
 		}
-		if pl.guarded {
+		switch {
+		case pl.guarded:
 			res, err = engine.RunGuarded(rctx, sess, pl.db, st, s.profile.Limits.MaxRows, pl.refs, s.staleCheck(pl))
-		} else {
+		case pl.maxAffected > 0:
+			res, err = engine.RunCounted(rctx, sess, pl.db, st, s.profile.Limits.MaxRows, pl.rowCheck)
+		default:
 			res, err = sess.Run(rctx, pl.db, st, s.profile.Limits.MaxRows)
 		}
 	}
 	if stale := (errStale{}); errors.As(err, &stale) {
 		return s.refuseWarned(ctx, id, pl, class, refusal.New(refusal.Stale, stale.Error()))
+	}
+	if rc := (errRowcount{}); errors.As(err, &rc) {
+		pl.affected = rc.affected
+		s.println(paint.Warn(rc.Error() + ": rolled back"))
+		return s.refuseWarned(ctx, id, pl, class, refusal.New(refusal.Stale, rc.Error()+": rolled back"))
 	}
 	rec.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
