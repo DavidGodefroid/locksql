@@ -8,6 +8,17 @@ This file records the changes a user or an agent has to know about.
 
 ### Changed
 
+- **The console runs on lockkit's console** (#96). The request loop, the
+  live switches (Shift+Tab, Ctrl-O, `:unmask`), `:status`, `:review` and
+  the policy polling, the session limits and the reconnection are
+  lockkit's `console.Server`; locksql is its backend (the SQL methods, the
+  approval screen, the masking). What the human sees and what clients get
+  is unchanged and pinned by the golden screens, the `status` answer
+  included. Differences: a change request beyond the 20 queued is refused
+  ("too many pending change requests") instead of dropping the oldest; a
+  request handler that panics answers an internal error and the session
+  goes on; at level 2 the fingerprint prompt names what it decides ("to
+  apply the policy changes"). Builds on lockkit vNEXT.
 - **Approvals are decided by lockkit's console.** The console closes its
   approval screen with lockkit's `console.Asker` (same prompt, same answers,
   same audit records): the screens are pinned byte for byte by golden tests

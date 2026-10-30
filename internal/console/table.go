@@ -216,16 +216,3 @@ func cutRunes(s string, w int) string {
 	}
 	return b.String()
 }
-
-// keyValues aligns "key  value" lines, keys padded to the longest.
-func keyValues(pairs [][2]string) []string {
-	w := 0
-	for _, p := range pairs {
-		w = max(w, runeLen(p[0]))
-	}
-	out := make([]string, len(pairs))
-	for i, p := range pairs {
-		out[i] = "  " + paint.Dim(p[0]+strings.Repeat(" ", w-runeLen(p[0]))) + "  " + p[1]
-	}
-	return out
-}

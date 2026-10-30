@@ -170,8 +170,7 @@ func TestReviewWarnsAboutSkipPermissions(t *testing.T) {
 	h := newHarness(t, p, func(c *ServerConfig) { c.Auto = true })
 	next := p
 	next.Production = false
-	h.s.pending = new(config.Policy)
-	*h.s.pending = config.NewPolicy(next, []string{"app.users.email"}, nil)
+	h.s.setPending(config.NewPolicy(next, []string{"app.users.email"}, nil))
 	h.io.answers = []string{"n"}
 	h.s.Command(context.Background(), ":review")
 	if !strings.Contains(h.io.output(), "without a prompt") {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	kconsole "github.com/DavidGodefroid/lockkit/console"
+	"github.com/DavidGodefroid/lockkit/secrets"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
@@ -137,6 +138,9 @@ type ServerConfig struct {
 	PeerAllowed func(ipc.Cred) bool
 	// Health is reported in status for locksql doctor.
 	Health *ipc.Health
+	// Refused is the fingerprint of a loosening the human refused at start,
+	// not announced again until the files change.
+	Refused string
 	// Hub is the hub mode (nil: the human decides on this terminal); the
 	// Approver is then its asynchronous approver.
 	Hub *kconsole.Hub
@@ -182,18 +186,25 @@ type plan struct {
 
 // Server serves client requests one at a time against one session. It is
 // not safe for concurrent use: Serve runs every request on one goroutine.
+//
+// The request loop, the live switches, :status, :review and the policy
+// polling, the session limits and the reconnection are lockkit's console
+// (k); Server is its backend (kserver.go): the SQL methods, the approval
+// screen, the masking and what locksql shows in its own words.
 type Server struct {
 	cfg ServerConfig
-	// auditFails counts consecutive audit write failures (maxAuditFails).
-	auditFails int
-	approver   Approver
-	approved   config.Policy
-	profile    config.Profile
-	rules      pii.Rules
-	detectors  []pii.Detector
-	dialect    sqlclass.Dialect
-	sess       engine.Session
-	now        func() time.Time
+	k   *kconsole.Server
+	// approved and profile are the policy in force (kept by ApplyPolicy),
+	// rules, detectors and dialect compiled from it.
+	approved  config.Policy
+	profile   config.Profile
+	rules     pii.Rules
+	detectors []pii.Detector
+	dialect   sqlclass.Dialect
+	// sess is the last session the console handed out, for the database
+	// user of the audit records.
+	sess engine.Session
+	now  func() time.Time
 
 	// refs keeps the values behind the references of redacted cells.
 	refs refStore
@@ -205,36 +216,12 @@ type Server struct {
 	// keys caches whether "db.table.column" is a one-column unique key.
 	keys map[string]bool
 
-	plans    map[string]*plan
-	started  time.Time
-	lastSeen time.Time
+	plans map[string]*plan
 
 	// catalogCache holds the column catalog per database for the analyser.
 	catalogCache map[string][]engine.ColumnInfo
 	// quantum levels response times (ResponseQuantum; 0 in tests).
 	quantum time.Duration
-	// auto, showResults and allowUnmask are the live switches (modes.go),
-	// started from the config and changed from the console's keyboard only.
-	auto        bool
-	showResults bool
-	allowUnmask bool
-	// connected is when the current connection was opened (credentials_ttl).
-	connected time.Time
-
-	// pending is a loosening policy read from the files that awaits :review.
-	pending *config.Policy
-	// refused is the fingerprint of the last loosening the human refused, so
-	// that it is not announced again until the files change.
-	refused string
-	// requests are change.request proposals from clients.
-	requests []string
-	// lastLoadErr avoids repeating the same config error every poll.
-	lastLoadErr string
-	// prompting counts the prompts waiting for the human (waiting).
-	prompting int
-
-	ended  bool
-	reason string
 }
 
 // NewServer checks cfg and returns a server enforcing cfg.Policy.
@@ -249,37 +236,66 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		cfg.Approver = newTypedApprover(cfg.IO)
 	}
 	cfg.Databases = servedDatabases(cfg.Policy.Profile.Database, cfg.Databases)
-	s := &Server{cfg: cfg, approver: cfg.Approver, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, probes: map[int]map[string]bool{}, keys: map[string]bool{}, quantum: cfg.Quantum,
-		auto: cfg.Auto, showResults: cfg.ShowResults && cfg.Boundary == "", allowUnmask: cfg.AllowUnmask}
-	if err := s.apply(cfg.Policy); err != nil {
+	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, probes: map[int]map[string]bool{}, keys: map[string]bool{}, quantum: cfg.Quantum}
+	// The security level: 2 with the fingerprint approver, 1 on the
+	// desktop with typed approvals, 0 in a session of the console account.
+	level := 0
+	switch {
+	case cfg.Fingerprint:
+		level = 2
+	case cfg.Boundary != "":
+		level = 1
+	}
+	p := product.P
+	p.Version = cfg.Version
+	kc := kconsole.ServerConfig{
+		Product: p, Backend: s, Policy: kpolicy{cfg.Policy}, StateDir: cfg.StateDir, ApprovedKey: cfg.ApprovedKey,
+		Session: cfg.Session, Audit: cfg.Audit, IO: cfg.IO, Approver: cfg.Approver, Level: level, Boundary: cfg.Boundary,
+		Now: cfg.Now, Auto: cfg.Auto, AllowUnmask: cfg.AllowUnmask, ShowResults: cfg.ShowResults && level == 0,
+		Quantum: cfg.Quantum, PeerAllowed: cfg.PeerAllowed, Refused: cfg.Refused, Hub: cfg.Hub,
+	}
+	if refuseProd := cfg.RefuseProduction; refuseProd != nil {
+		// What a production profile is refused at start-up is refused when
+		// the policy in force becomes production too, and audited.
+		kc.RefuseProduction = func() error {
+			err := refuseProd()
+			if err != nil {
+				s.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: "became production: " + secrets.Sanitize(err)})
+			}
+			return err
+		}
+	}
+	if cfg.Reconnect != nil {
+		kc.ReconnectPolicy = s.reconnect
+	}
+	k, err := kconsole.NewServer(kc)
+	if err != nil {
 		return nil, err
 	}
-	s.started = s.now()
-	s.lastSeen = s.started
-	s.connected = s.started
-	if s.autoApprove() {
-		s.println(paint.Yellow("auto mode: statements allowed by the tier and the weight check run without a prompt (Shift+Tab: manual)"))
-	}
-	s.refreshStatus()
+	s.k = k
 	return s, nil
 }
 
-// apply makes p the enforced policy.
-func (s *Server) apply(p config.Policy) error {
-	d, err := sqlclass.DialectFor(p.Profile.Engine)
-	if err != nil {
-		return err
+// reconnect opens a new session under the policy in force (lockkit's
+// Env.Session calls it after a lost connection or an expired login). The
+// reconnection may prompt (a password, a host key, the privilege audit):
+// it counts as a prompt, so a switch pressed meanwhile never widens.
+func (s *Server) reconnect(ctx context.Context, p kconsole.Policy) (kconsole.Session, error) {
+	if w := s.k.Asker().Waiting; w != nil {
+		w(true)
+		defer w(false)
 	}
-	ds, err := pii.Detectors(p.Profile.Detectors)
-	if err != nil {
-		return err
+	sess, err := s.cfg.Reconnect(ctx, p.(kpolicy).p.Profile)
+	switch {
+	case err == nil:
+		s.sess = sess
+		return sess, nil
+	case errors.Is(err, errPrivilegeAudit):
+		return nil, &kconsole.EndError{Reason: "privilege audit failed after reconnect", Err: err}
+	case errors.Is(err, errLockedOut):
+		return nil, &kconsole.EndError{Reason: "fingerprint: three non-matching fingers", Err: err}
 	}
-	s.approved = p
-	s.profile = p.Profile
-	s.rules = pii.Rules{Mask: append([]string(nil), p.PIIMask...), Allow: append([]string(nil), p.PIIAllow...), Modes: p.PIIModes}
-	s.detectors = ds
-	s.dialect = d
-	return nil
+	return nil, err
 }
 
 // println writes one console line.
@@ -289,13 +305,13 @@ func (s *Server) println(line string) { s.cfg.IO.Println(line) }
 // writeAudit).
 func (s *Server) audit(rec audit.Record) { _ = s.writeAudit(rec) }
 
-// maxAuditFails consecutive audit write failures end the session: a
-// console that cannot record its decisions stops taking requests.
-const maxAuditFails = 3
-
 // writeAudit writes rec and returns the failure, which the caller of an
-// approval turns into a refusal (fail closed).
-func (s *Server) writeAudit(rec audit.Record) error {
+// approval turns into a refusal (fail closed). Consecutive failures end
+// the session (lockkit's console counts them).
+func (s *Server) writeAudit(rec audit.Record) error { return s.k.WriteAudit(s.stamp(rec)) }
+
+// stamp fills the profile, the database and its user of rec.
+func (s *Server) stamp(rec audit.Record) audit.Record {
 	rec.Profile = s.profile.Name
 	rec.Engine = s.profile.Engine
 	rec.Host = s.host()
@@ -304,16 +320,7 @@ func (s *Server) writeAudit(rec audit.Record) error {
 	if u, ok := s.sess.(interface{ DBUser() string }); ok && u.DBUser() != "" {
 		rec.DBUser = u.DBUser()
 	}
-	if err := s.cfg.Audit.Append(rec); err != nil {
-		s.auditFails++
-		s.cfg.IO.Println(paint.Fail("audit log write failed: " + safeText(err.Error(), false)))
-		if s.auditFails >= maxAuditFails {
-			s.End("the audit log cannot be written")
-		}
-		return err
-	}
-	s.auditFails = 0
-	return nil
+	return rec
 }
 
 func (s *Server) host() string {
@@ -323,56 +330,57 @@ func (s *Server) host() string {
 	return s.profile.Host
 }
 
-// noFingerFields is the audit text of a refusal for want of a finger; it
-// is empty for any other outcome.
-func noFingerFields(r Result) (reason, errText string) {
-	if r.Outcome != NoFinger {
-		return "", ""
-	}
-	return "no fingerprint", r.Err.Error()
-}
-
 // asker takes the human decisions of s (lockkit's console).
-func (s *Server) asker() kconsole.Asker {
-	return kconsole.Asker{IO: s.cfg.IO, Approver: s.approver, Profile: s.profile.Name, Lock: product.P.Name, End: s.End, Waiting: s.waiting}
-}
+func (s *Server) asker() kconsole.Asker { return s.k.Asker() }
 
-// waiting counts the prompts that wait for the human: a control key or a
-// command meanwhile never widens a switch (widenRefused).
+// waiting counts a prompt that waits for the human: a control key or a
+// command meanwhile never widens a switch.
 func (s *Server) waiting(on bool) {
-	if on {
-		s.prompting++
-	} else {
-		s.prompting--
+	if w := s.k.Asker().Waiting; w != nil {
+		w(on)
 	}
 }
-
-// decide asks the approver and explains a missing finger. Too many
-// non-matching fingers end the console.
-func (s *Server) decide(ctx context.Context, d Decision) Result { return s.asker().Decide(ctx, d) }
 
 // End stops the session after the current request.
-func (s *Server) End(reason string) {
-	if !s.ended {
-		s.ended, s.reason = true, reason
-	}
-}
+func (s *Server) End(reason string) { s.k.End(reason) }
 
 // Ended reports whether the session is over, and why.
-func (s *Server) Ended() (string, bool) { return s.reason, s.ended }
+func (s *Server) Ended() (string, bool) { return s.k.Ended() }
 
 // Tick ends the session on idle or maximum session timeout, as set by the
 // policy in force: a policy change applies from the next tick.
-func (s *Server) Tick() {
-	now := s.now()
-	l := s.profile.Limits
-	switch {
-	case now.Sub(s.started) >= l.MaxSession:
-		s.End("maximum session length")
-	case now.Sub(s.lastSeen) >= l.IdleTimeout:
-		s.End("idle timeout")
+func (s *Server) Tick() { s.k.Tick() }
+
+// Handle serves one request. It is the whole client surface of the console:
+// none of the methods loosens the policy.
+func (s *Server) Handle(ctx context.Context, req ipc.Request) ipc.Response {
+	return s.k.Handle(ctx, req)
+}
+
+// Command runs a console command typed by the human between requests.
+func (s *Server) Command(ctx context.Context, line string) { s.k.Command(ctx, line) }
+
+// Key handles a control key pressed in the console.
+func (s *Server) Key(k Key) { s.k.Key(k) }
+
+// CheckPolicy re-reads the policy from the config files. Changes that only
+// tighten are applied at once; a loosening waits for :review, and plans are
+// refused with CodePolicyPending meanwhile.
+// Without LoadPolicy (tests) there is nothing to poll.
+func (s *Server) CheckPolicy() {
+	if s.cfg.LoadPolicy != nil {
+		s.k.CheckPolicy()
 	}
 }
+
+// The live switches and the policy review, as lockkit's console holds them.
+func (s *Server) autoApprove() bool   { return s.k.Auto() }
+func (s *Server) showResults() bool   { return s.k.ShowResults() }
+func (s *Server) allowUnmask() bool   { return s.k.UnmaskAllowed() }
+func (s *Server) pendingPolicy() bool { return s.k.PolicyPending() }
+
+// Close closes the session.
+func (s *Server) Close() { s.k.Close() }
 
 // Serve accepts clients on ln and serves their requests one at a time until
 // ctx ends or the session ends (logout, timeouts, :quit). lines are the
@@ -380,11 +388,8 @@ func (s *Server) Tick() {
 // come from the IO when it is a KeySource. ln is closed on return, which
 // removes the socket. It is lockkit's request loop.
 func (s *Server) Serve(ctx context.Context, ln net.Listener, lines <-chan string) error {
-	l := kconsole.Loop{
-		IO: s.cfg.IO, Handle: s.Handle, Command: s.Command, Key: s.Key, Tick: s.Tick, Poll: s.CheckPolicy,
-		Ended: func() bool { _, ended := s.Ended(); return ended }, End: s.End,
-		Refresh: s.refreshStatus, Clear: s.clearStatus, PeerAllowed: s.cfg.PeerAllowed,
-	}
+	l := s.k.Loop()
+	l.Poll = s.CheckPolicy
 	return l.Serve(ctx, ln, lines)
 }
 

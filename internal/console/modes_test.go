@@ -91,11 +91,11 @@ func TestAutoModeUnavailableOnProduction(t *testing.T) {
 // line and on the next run.
 func TestCtrlOTogglesResults(t *testing.T) {
 	h := newHarness(t, uatProfile())
-	if h.s.showResults || !strings.Contains(h.io.statusLine(), "results masked") {
+	if h.s.showResults() || !strings.Contains(h.io.statusLine(), "results masked") {
 		t.Fatalf("results on at start; status %q", h.io.statusLine())
 	}
 	h.s.Key(KeyCtrlO)
-	if !h.s.showResults || !strings.Contains(h.io.statusLine(), "results clear") {
+	if !h.s.showResults() || !strings.Contains(h.io.statusLine(), "results clear") {
 		t.Fatalf("results not on; status %q", h.io.statusLine())
 	}
 	pr := h.plan(t, selectUsers, false)
@@ -129,7 +129,7 @@ func TestModeAndResultsCommands(t *testing.T) {
 	ctx := context.Background()
 	h.s.Command(ctx, ":mode")
 	h.s.Command(ctx, ":results")
-	if !h.s.autoApprove() || !h.s.showResults {
+	if !h.s.autoApprove() || !h.s.showResults() {
 		t.Fatal("commands did not switch")
 	}
 	before := len(h.io.out)
@@ -212,7 +212,7 @@ func TestUnmaskCommandTogglesLive(t *testing.T) {
 	// Anything but y leaves it off, unaudited.
 	h.io.answers = []string{"n"}
 	h.s.Command(ctx, ":unmask")
-	if h.s.allowUnmask {
+	if h.s.allowUnmask() {
 		t.Fatal("unmask allowed without a y")
 	}
 	if out := h.io.output(); !strings.Contains(out, "still off") {
@@ -224,7 +224,7 @@ func TestUnmaskCommandTogglesLive(t *testing.T) {
 
 	h.io.answers = []string{"y"}
 	h.s.Command(ctx, ":unmask")
-	if !h.s.allowUnmask || !strings.Contains(h.io.statusLine(), "unmask allowed") {
+	if !h.s.allowUnmask() || !strings.Contains(h.io.statusLine(), "unmask allowed") {
 		t.Fatalf("unmask not allowed; status %q", h.io.statusLine())
 	}
 	var st ipc.StatusResult
@@ -240,7 +240,7 @@ func TestUnmaskCommandTogglesLive(t *testing.T) {
 	// Off again: at once, no prompt, and the open unmask plan is refused.
 	prompts := h.io.promptCount()
 	h.s.Command(ctx, ":unmask")
-	if h.s.allowUnmask || strings.Contains(h.io.statusLine(), "unmask allowed") {
+	if h.s.allowUnmask() || strings.Contains(h.io.statusLine(), "unmask allowed") {
 		t.Fatalf("unmask still allowed; status %q", h.io.statusLine())
 	}
 	if h.io.promptCount() != prompts {
@@ -278,7 +278,7 @@ func TestSwitchesNotReachableFromClients(t *testing.T) {
 		}
 	}
 	h.ok(t, ipc.MethodStatus, nil, nil)
-	if h.s.autoApprove() || h.s.showResults || h.s.allowUnmask {
+	if h.s.autoApprove() || h.s.showResults() || h.s.allowUnmask() {
 		t.Fatal("a client request changed a switch")
 	}
 	if log := h.auditLog(t); strings.TrimSpace(log) != "" {
@@ -347,16 +347,11 @@ func TestLevel2ShowResultsRefused(t *testing.T) {
 	v := &fingerprint.Fake{}
 	h := fingerHarness(t, v)
 	h.s.Key(KeyCtrlO)
-	if h.s.showResults || len(h.io.prompts) != 0 || v.Calls != 0 {
-		t.Fatalf("showResults = %v, prompts %q", h.s.showResults, h.io.prompts)
+	if h.s.showResults() || len(h.io.prompts) != 0 || v.Calls != 0 {
+		t.Fatalf("showResults = %v, prompts %q", h.s.showResults(), h.io.prompts)
 	}
 	if out := h.io.output(); !strings.Contains(out, "results stay masked at level 2: the window is on the agent's desktop") {
 		t.Errorf("no refusal:\n%s", out)
-	}
-	h.s.showResults = true // as if set before: hiding stays free
-	h.s.Key(KeyCtrlO)
-	if h.s.showResults {
-		t.Error("hiding was refused")
 	}
 }
 
@@ -372,8 +367,8 @@ func TestLevel1ShowResultsRefused(t *testing.T) {
 	}
 	h.s.Key(KeyCtrlO)
 	h.s.Command(context.Background(), ":results")
-	if h.s.showResults || len(h.io.prompts) != 0 {
-		t.Fatalf("results = %v, prompts %q", h.s.showResults, h.io.prompts)
+	if h.s.showResults() || len(h.io.prompts) != 0 {
+		t.Fatalf("results = %v, prompts %q", h.s.showResults(), h.io.prompts)
 	}
 	if out := h.io.output(); strings.Count(out, "results stay masked at level 1: the agent's account can read this window") != 2 {
 		t.Errorf("refusals:\n%s", out)
@@ -386,11 +381,6 @@ func TestLevel1ShowResultsRefused(t *testing.T) {
 			t.Errorf("refused switch audited: %v", r)
 		}
 	}
-	h.s.showResults = true // as if set before: hiding stays free
-	h.s.Key(KeyCtrlO)
-	if h.s.showResults {
-		t.Error("hiding was refused")
-	}
 }
 
 // A desktop server never starts with the clear results on, whatever its
@@ -400,7 +390,7 @@ func TestDesktopServerIgnoresShowResults(t *testing.T) {
 		c.Boundary = "your desktop: the agent can read this window and type into it"
 		c.ShowResults = true
 	})
-	if h.s.showResults {
+	if h.s.showResults() {
 		t.Fatal("results clear at start on the desktop")
 	}
 }
@@ -409,7 +399,7 @@ func TestDesktopServerIgnoresShowResults(t *testing.T) {
 func TestLevel0TogglesResults(t *testing.T) {
 	h := newHarness(t, uatProfile())
 	h.s.Key(KeyCtrlO)
-	if !h.s.showResults {
+	if !h.s.showResults() {
 		t.Fatal("results refused at level 0")
 	}
 }

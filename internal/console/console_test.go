@@ -1279,7 +1279,7 @@ func TestPolicyFromFilesKeepsMaskModes(t *testing.T) {
 	prompts := h.io.promptCount()
 	writeRules(t, root, "[[mask]]\ncolumn = \"app.users.email\"\n")
 	h.s.CheckPolicy()
-	if h.s.pending != nil || h.io.promptCount() != prompts {
+	if h.s.pendingPolicy() || h.io.promptCount() != prompts {
 		t.Fatal("a change back to redact waited for the human")
 	}
 	if _, ok := h.s.approved.PIIModes["app.users.email"]; ok {

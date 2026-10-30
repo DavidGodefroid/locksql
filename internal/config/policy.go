@@ -39,6 +39,10 @@ func (p Policy) WithModes(m map[string]string) Policy {
 // DefaultMaskMode is the mode of a mask rule that sets none.
 const DefaultMaskMode = "redact"
 
+// Canonical is p in its canonical form: sorted lists, defaults applied.
+// Its JSON is what is saved as the approved policy and fingerprinted.
+func Canonical(p Policy) Policy { return canonical(p) }
+
 func canonical(p Policy) Policy {
 	p.Profile.Detectors = kconfig.SortedSet(p.Profile.Detectors)
 	p.PIIMask = kconfig.SortedSet(p.PIIMask)

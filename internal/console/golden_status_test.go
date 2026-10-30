@@ -65,8 +65,7 @@ func TestGoldenStatusAndReview(t *testing.T) {
 			if tc.pending {
 				next := tc.profile()
 				next.Limits.MaxRows = 5000
-				h.s.pending = new(config.Policy)
-				*h.s.pending = config.NewPolicy(next, []string{"app.users.email"}, nil)
+				h.s.setPending(config.NewPolicy(next, []string{"app.users.email"}, nil))
 			}
 			resp := h.call(t, ipc.MethodStatus, nil)
 			if resp.Error != nil {
@@ -122,8 +121,7 @@ func TestGoldenStatusAndReview(t *testing.T) {
 				if tc.mask != nil {
 					mask = tc.mask
 				}
-				h.s.pending = new(config.Policy)
-				*h.s.pending = config.NewPolicy(next, mask, nil)
+				h.s.setPending(config.NewPolicy(next, mask, nil))
 			}
 			for _, r := range tc.requests {
 				// Through the method: the console escapes them on intake.

@@ -32,42 +32,10 @@ import (
 const (
 	// maxPlans bounds the one-shot plans kept at once.
 	maxPlans = 64
-	// maxRequests bounds the queued change requests, maxRequestLen their size.
-	maxRequests   = 20
-	maxRequestLen = 500
 	// runGrace is added to the statement timeout as a client-side guard on
 	// top of the engine's own server-side timeout.
 	runGrace = 5 * time.Second
 )
-
-// Handle serves one request. It is the whole client surface of the console:
-// none of the methods loosens the policy.
-func (s *Server) Handle(ctx context.Context, req ipc.Request) ipc.Response {
-	s.lastSeen = s.now()
-	switch req.Method {
-	case ipc.MethodHello:
-		return s.hello(req)
-	case ipc.MethodStatus:
-		return okResp(req.ID, s.status())
-	case ipc.MethodCatalogList, ipc.MethodCatalogDescribe:
-		return s.catalog(ctx, req)
-	case ipc.MethodQueryPlan:
-		return s.queryPlan(ctx, req)
-	case ipc.MethodQueryRun:
-		return s.queryRun(ctx, req)
-	case ipc.MethodPIIList:
-		return okResp(req.ID, ipc.PIIListResult{Mask: nonNil(s.rules.Mask), Allow: nonNil(s.rules.Allow)})
-	case ipc.MethodPIIAdd:
-		return s.piiAdd(req)
-	case ipc.MethodChangeRequest:
-		return s.changeRequest(req)
-	case ipc.MethodLogout:
-		s.println("logout requested by a client")
-		s.End("logout")
-		return okResp(req.ID, map[string]bool{"ok": true})
-	}
-	return errResp(req.ID, ipc.CodeMethodNotFound, fmt.Sprintf("unknown method %q", req.Method))
-}
 
 func nonNil(s []string) []string {
 	out := append([]string{}, s...)
@@ -89,101 +57,29 @@ func decode(req ipc.Request, v any) *ipc.Response {
 	return nil
 }
 
-func (s *Server) hello(req ipc.Request) ipc.Response {
-	var p ipc.HelloParams
-	if r := decode(req, &p); r != nil {
-		return *r
-	}
-	if !ipc.Compatible(p.ProtocolMajor) {
-		return errResp(req.ID, ipc.CodeInvalidRequest, fmt.Sprintf(
-			"protocol mismatch: client speaks %d, console speaks %d; use the same locksql version on both sides",
-			p.ProtocolMajor, ipc.ProtocolMajor))
-	}
-	return okResp(req.ID, ipc.HelloResult{ProtocolMajor: ipc.ProtocolMajor, ConsoleVersion: s.cfg.Version, Profile: s.profile.Name})
-}
-
-func (s *Server) status() ipc.StatusResult {
-	left := s.profile.Limits.MaxSession - s.now().Sub(s.started)
-	if left < 0 {
-		left = 0
-	}
-	return ipc.StatusResult{
-		Profile:        s.profile.Name,
-		Engine:         s.profile.Engine,
-		Host:           s.host(),
-		HostConfirmed:  true, // the host is part of the approved policy
-		Production:     s.profile.Production,
-		AutoApprove:    s.autoApprove(),
-		AllowUnmask:    s.allowUnmask,
-		ShowResults:    s.showResults,
-		Tier:           s.profile.Tier.String(),
-		Databases:      nonNil(s.cfg.Databases),
-		Limits:         s.profile.Limits,
-		IdleTimeoutInS: int(s.profile.Limits.IdleTimeout / time.Second),
-		SessionEndsInS: int(left / time.Second),
-		Health:         s.cfg.Health,
-	}
-}
-
-// credentialsExpirer is a session whose login expires (vaultSession).
-type credentialsExpirer interface{ CredentialsExpire() time.Time }
-
-// session returns the live session, reconnecting after a lost connection.
+// session returns the live session, reconnecting first when the login
+// expired (credentials_ttl, a Vault lease) or the connection was lost
+// (lockkit's console decides; reconnect opens the new one).
 func (s *Server) session(ctx context.Context, id int64) (engine.Session, *ipc.Response) {
-	expired := ""
-	if ttl := s.profile.CredentialsTTL; s.sess != nil && ttl > 0 && s.now().Sub(s.connected) >= ttl {
-		// A short-lived secret (a vault lease) has expired: close the
-		// connection and ask for a fresh one.
-		expired = fmt.Sprintf("credentials_ttl (%s) reached: the connection is closed and the secret asked again", ttl)
-		if s.profile.Credentials == config.CredentialsVault {
-			expired = fmt.Sprintf("credentials_ttl (%s) reached: the connection is closed and a fresh login read from Vault", ttl)
-		}
-	} else if e, ok := s.sess.(credentialsExpirer); ok && !e.CredentialsExpire().IsZero() && !s.now().Before(e.CredentialsExpire()) {
-		// The Vault lease of the login nears its end.
-		expired = "the Vault lease of the login is ending: the connection is closed and a fresh login read from Vault"
+	ks, err := s.k.Session(ctx)
+	if err != nil {
+		r := errResp(id, ipc.CodeConnLost, err.Error())
+		return nil, &r
 	}
-	if expired != "" {
-		s.println(expired)
-		_ = s.sess.Close()
-		s.sess = nil
-		if s.cfg.Reconnect == nil {
-			s.End("credentials expired")
-		}
+	sess, ok := kconsole.Unwrap(ks).(engine.Session)
+	if !ok {
+		r := errResp(id, ipc.CodeInternal, "internal error in the console: not a database session")
+		return nil, &r
 	}
-	if s.sess != nil {
-		return s.sess, nil
-	}
-	if s.cfg.Reconnect != nil {
-		s.println("reconnecting to the database…")
-		// The reconnection may prompt (a password, a host key, the checks).
-		s.waiting(true)
-		sess, err := s.cfg.Reconnect(ctx, s.profile) // the policy in force now, not the start-up one
-		s.waiting(false)
-		if err == nil {
-			s.sess = sess
-			s.connected = s.now()
-			return sess, nil
-		}
-		s.println("reconnect failed: " + safeText(secrets.Sanitize(err), false))
-		if errors.Is(err, errPrivilegeAudit) {
-			s.End("privilege audit failed after reconnect")
-		}
-		if errors.Is(err, errLockedOut) {
-			s.End("fingerprint: three non-matching fingers")
-		}
-	}
-	r := errResp(id, ipc.CodeConnLost, "the database connection is lost; the human must restart the console")
-	return nil, &r
+	s.sess = sess
+	return sess, nil
 }
 
 // failed maps an engine error to a response, dropping the session on a
 // lost connection.
 func (s *Server) failed(id int64, what string, err error) ipc.Response {
 	if errors.Is(err, engine.ErrConnLost) {
-		if s.sess != nil {
-			_ = s.sess.Close()
-			s.sess = nil
-		}
+		s.k.Lost()
 		s.println("database connection lost")
 		if s.cfg.Reconnect == nil {
 			s.End("connection lost")
@@ -342,7 +238,7 @@ func shifted(err error, base int) *refusal.Error {
 func lead(sql string) int { return len(sql) - len(strings.TrimLeftFunc(sql, unicode.IsSpace)) }
 
 func (s *Server) policyPending(id int64) *ipc.Response {
-	if s.pending == nil {
+	if !s.pendingPolicy() {
 		return nil
 	}
 	r := errResp(id, ipc.CodePolicyPending,
@@ -395,7 +291,7 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 	}
 	auditSQL := capSQL(p.SQL)
 	base := lead(p.SQL)
-	if p.Unmask && !s.allowUnmask {
+	if p.Unmask && !s.allowUnmask() {
 		return nil, ptr(s.refuse(ctx, id, p.Intent, db, auditSQL, "", "", p.SQL, refusal.New(refusal.UnmaskOff, "unmasked output is off in this console: run the query masked, or ask the human to allow it in the console (:unmask, or --allow-unmask at start)")))
 	}
 	inner, explain, off := splitExplain(s.dialect, p.SQL)
@@ -502,7 +398,7 @@ func (s *Server) assess(pl *plan) *refusal.Error {
 }
 
 func (s *Server) noteRefused(pl *plan) {
-	if s.refused != "" {
+	if s.k.PolicyRefused() {
 		pl.reasons = append(pl.reasons, "a policy change in the config files was refused by the human; the last approved policy applies")
 	}
 }
@@ -650,7 +546,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 				return *r
 			}
 		}
-		rec.Event, rec.Decision, rec.Approval = audit.EventApproved, "approved", s.approver.Mode()
+		rec.Event, rec.Decision, rec.Approval = audit.EventApproved, "approved", s.cfg.Approver.Mode()
 	}
 	return s.runApproved(ctx, req.ID, sess, pl, rec, class, start)
 }
@@ -668,7 +564,7 @@ func (s *Server) runChecks(ctx context.Context, id int64, pl *plan) (hidden *ref
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier)))
 	}
 	// Unmasked output may have been turned off (:unmask) since query.plan.
-	if pl.unmask && !s.allowUnmask {
+	if pl.unmask && !s.allowUnmask() {
 		return nil, ptr(s.refuse(ctx, id, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, refusal.New(refusal.UnmaskOff, "unmasked output was turned off in this console since the plan: run the query masked")))
 	}
 	// The limits may have changed since query.plan (a tightening is applied
@@ -788,7 +684,7 @@ func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session,
 		return errResp(id, ipc.CodeInternal, genericFailure)
 	}
 	var clear *engine.Result
-	if s.showResults && !pl.unmask && len(res.Columns) > 0 {
+	if s.showResults() && !pl.unmask && len(res.Columns) > 0 {
 		c := cloneResult(res)
 		clear = &c
 	}
@@ -947,61 +843,4 @@ func (s *Server) result(res engine.Result) (ipc.RunResult, error) {
 		j.Rows = [][]any{}
 	}
 	return ipc.RunResult{Columns: j.Columns, Rows: j.Rows, Truncated: j.Truncated, CutCells: j.CutCells, Affected: res.Affected, Text: tb.String()}, nil
-}
-
-func (s *Server) piiAdd(req ipc.Request) ipc.Response {
-	var p ipc.PIIAddParams
-	if r := decode(req, &p); r != nil {
-		return *r
-	}
-	var probe pii.Rules
-	if err := probe.Add(p.Pattern); err != nil {
-		return errResp(req.ID, ipc.CodeInvalidParams, err.Error())
-	}
-	pattern := probe.Mask[0]
-	// Add to the file as it is on disk, so that unconfirmed edits of the
-	// human are neither lost nor applied.
-	onDisk, err := pii.LoadRulesFile(s.cfg.RulesPath)
-	if err != nil {
-		return errResp(req.ID, ipc.CodeInternal, err.Error())
-	}
-	if err := onDisk.Add(pattern); err != nil {
-		return errResp(req.ID, ipc.CodeInvalidParams, err.Error())
-	}
-	if err := pii.SaveRulesFile(s.cfg.RulesPath, onDisk); err != nil {
-		return errResp(req.ID, ipc.CodeInternal, err.Error())
-	}
-	next := s.approved
-	next.PIIMask = append(append([]string(nil), next.PIIMask...), pattern)
-	next = config.NewPolicy(next.Profile, next.PIIMask, next.PIIAllow).WithModes(next.PIIModes)
-	if err := s.adopt(next, "tightened"); err != nil {
-		return errResp(req.ID, ipc.CodeInternal, err.Error())
-	}
-	if s.pending != nil {
-		// The pending loosening was read before this rule reached the file:
-		// applying it as is from :review would drop the rule.
-		p := *s.pending
-		p = config.NewPolicy(p.Profile, append(append([]string(nil), p.PIIMask...), pattern), p.PIIAllow).WithModes(p.PIIModes)
-		s.pending = &p
-	}
-	s.println("PII rule added by a client: mask " + safeText(pattern, false))
-	return okResp(req.ID, ipc.PIIListResult{Mask: nonNil(s.rules.Mask), Allow: nonNil(s.rules.Allow)})
-}
-
-func (s *Server) changeRequest(req ipc.Request) ipc.Response {
-	var p ipc.ChangeParams
-	if r := decode(req, &p); r != nil {
-		return *r
-	}
-	change := strings.TrimSpace(p.Change)
-	if change == "" || len(change) > maxRequestLen || !utf8.ValidString(change) {
-		return errResp(req.ID, ipc.CodeInvalidParams, fmt.Sprintf("change must be 1 to %d bytes of text", maxRequestLen))
-	}
-	change = escapeControls(change)
-	if len(s.requests) >= maxRequests {
-		s.requests = s.requests[1:]
-	}
-	s.requests = append(s.requests, change)
-	s.println("change requested by a client: " + change + " — type :review to see it")
-	return okResp(req.ID, ipc.ChangeResult{Queued: true})
 }
