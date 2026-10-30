@@ -53,7 +53,11 @@ func DockerAvailable() bool {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return false
 	}
-	return exec.Command("docker", "info", "--format", "{{.ServerVersion}}").Run() == nil
+	if exec.Command("docker", "info", "--format", "{{.ServerVersion}}").Run() == nil {
+		return true
+	}
+	// Podman's docker shim has no ServerVersion in its info.
+	return exec.Command("docker", "info", "--format", "{{.Host.Arch}}").Run() == nil
 }
 
 // Start returns the container for image, starting it on first use. env are

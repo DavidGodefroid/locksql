@@ -40,6 +40,20 @@ var buildLocksql = sync.OnceValues(func() (string, error) {
 	return bin, nil
 })
 
+// consoleCommand runs bin with args. On a host with a separated setup
+// (/etc/locksql/system.toml), the test console would be handed off or
+// refused like a real one: it runs in a user and mount namespace of its
+// own where /etc/locksql is an empty tmpfs, as the same user.
+func consoleCommand(bin string, args []string) *exec.Cmd {
+	if _, err := os.Stat("/etc/locksql/system.toml"); err == nil {
+		if unshare, err := exec.LookPath("unshare"); err == nil {
+			return exec.Command(unshare, append([]string{"-U", "-m", "--map-current-user", "--keep-caps",
+				"sh", "-c", `mount -t tmpfs none /etc/locksql && exec "$0" "$@"`, bin}, args...)...)
+		}
+	}
+	return exec.Command(bin, args...)
+}
+
 // consoleProc is a `locksql console` running in a pseudo-terminal.
 type consoleProc struct {
 	t    *testing.T
@@ -57,7 +71,7 @@ func startConsole(t *testing.T, project string, env []string, args ...string) *c
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(bin, append([]string{"console"}, args...)...)
+	cmd := consoleCommand(bin, append([]string{"console"}, args...))
 	cmd.Dir = project
 	cmd.Env = env
 	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 50, Cols: 200})
