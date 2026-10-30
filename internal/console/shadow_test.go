@@ -57,6 +57,7 @@ func (s *shadowSession) ShadowedFunctions(_ context.Context, _ string, names []s
 func withShadows(ss *shadowSession) hopt {
 	return func(c *ServerConfig) {
 		ss.fakeSession = c.Session.(*fakeSession)
+		ss.objects = &engine.ObjectState{SearchPath: "public", Objects: []engine.ObjectDef{}}
 		c.Session = ss
 	}
 }

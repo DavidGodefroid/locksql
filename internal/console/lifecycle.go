@@ -27,6 +27,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/product"
 	"github.com/DavidGodefroid/locksql/internal/proxycmd"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
+	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
 // ErrConfig marks usage and configuration errors (exit code 3). It is
@@ -1193,4 +1194,14 @@ func servedDatabases(profileDB string, listed []string) []string {
 		return []string{profileDB}
 	}
 	return listed
+}
+
+// ObjectState passes the read on (engine.ObjectGuard).
+func (s *vaultSession) ObjectState(ctx context.Context, db string, refs engine.ObjectRefs) (engine.ObjectState, error) {
+	return engine.ObjectStateOf(ctx, s.Session, db, refs)
+}
+
+// RunGuarded passes the guarded run on (engine.ObjectGuard).
+func (s *vaultSession) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check func(engine.ObjectState, bool) error) (engine.Result, error) {
+	return engine.RunGuarded(ctx, s.Session, db, st, maxRows, refs, check)
 }

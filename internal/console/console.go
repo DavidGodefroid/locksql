@@ -160,6 +160,12 @@ type plan struct {
 	// shadow are the functions and operators checkShadows looks up again
 	// just before the run (nil: none to check).
 	shadow *shadowNames
+	// refs are the objects the statement names, and hash the plan hash:
+	// the run checks it again in its own transaction (planhash.go).
+	refs engine.ObjectRefs
+	hash string
+	// guarded: the engine read the definitions, and the run checks them.
+	guarded bool
 }
 
 // Server serves client requests one at a time against one session. It is

@@ -56,7 +56,11 @@ GRANT SELECT ON t TO ro, rw;
 
 func pgVersions() []string { return Versions("LOCKSQL_IT_POSTGRES", "13", "17") }
 
-func startPostgres(t *testing.T, version string) Server {
+func startPostgres(t *testing.T, version string) Server { return startPostgresVariant(t, version, "") }
+
+// startPostgresVariant is startPostgres for a container of its own, told
+// apart by variant: for a test that changes the seeded schema.
+func startPostgresVariant(t *testing.T, version, variant string) Server {
 	env := []string{"POSTGRES_PASSWORD=" + RootPassword, "POSTGRES_DB=app"}
 	ready := func(ctx context.Context, host string, port int) error {
 		c, err := pgx.Connect(ctx, fmt.Sprintf("host=%s port=%d user=postgres password=%s dbname=app sslmode=disable",
@@ -67,7 +71,7 @@ func startPostgres(t *testing.T, version string) Server {
 		defer c.Close(context.Background())
 		return c.Ping(ctx)
 	}
-	return Start(t, "postgres:"+version, 5432, env, ready, func(s Server) error {
+	return StartVariant(t, variant, "postgres:"+version, 5432, env, nil, nil, ready, func(s Server) error {
 		return Exec(s, postgresSeed, "psql", "-q", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "app")
 	})
 }
