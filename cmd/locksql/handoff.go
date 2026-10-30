@@ -116,6 +116,9 @@ func (a consoleArgs) argv() []string {
 	}
 	if a.hub.Enabled() {
 		out = append(out, "--hub", a.hub.URL, "--hub-key-file", a.hub.KeyFile, "--instance", a.hub.Instance)
+		if a.hub.PlainHTTP {
+			out = append(out, "--hub-plain-http")
+		}
 	}
 	return out
 }
