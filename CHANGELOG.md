@@ -59,6 +59,13 @@ This file records the changes a user or an agent has to know about.
 
 ### Fixed
 
+- **Becoming production at runtime re-applies the start-up refusals**
+  (#93, as lockkit#34). When the policy in force becomes production while
+  the console runs (a tightening, applied at once), an X11 session or core
+  dumps that could not be disabled now end the session (`refused after the
+  profile became production`), as they refuse a production profile at
+  start-up; before, only the privilege audit was run again.
+
 - **Audit writes fail closed** (lockkit #5). An approved or
   auto-approved query whose approval record cannot be written runs
   nothing: the agent gets `CodeInternal` ("the console could not record
