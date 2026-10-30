@@ -642,8 +642,8 @@ func (s *session) nonTransactional(q string) ([]string, error) {
 
 // matchText is q as nonTransactional matches names in it: lower case,
 // every blank the server accepts (\r, \f, \v too) a space, and a doubled
-// backtick inside a quoted name single, so that "other\r.t" and
-// "`a``b`.t" show their schema to qualifier and qualified.
+// backtick inside a quoted name single, so that "other\r.t" and a schema
+// name holding a backtick show their schema to qualifier and qualified.
 func matchText(q string) string {
 	text := strings.Map(func(r rune) rune {
 		switch r {
