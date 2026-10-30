@@ -206,10 +206,25 @@ func TestProjectChecksPIIDirInForce(t *testing.T) {
 	}
 	statErr = nil
 
-	// A seed writable by others fails: the console seeds its sets from it.
+	// A seed writable by others fails, with a repair: the console seeds
+	// its sets from it.
 	files[p+"/pii"] = dir(0o777, 1000)
-	if c := run(files, env)["project .locksql/pii"]; c.state != checkFail || !strings.Contains(c.fix, "go-w") {
+	if c := run(files, env)["project .locksql/pii"]; c.state != checkFail || !strings.Contains(c.fix, "go-w") || c.repair == nil || c.repair.apply == nil {
 		t.Errorf("world-writable seed: %+v", c)
+	}
+	files[p+"/pii"] = dir(0o777, 900)
+	if c := run(files, env)["project .locksql/pii"]; c.state != checkFail || c.repair == nil || !strings.Contains(c.repair.root, "chmod go-w") {
+		t.Errorf("world-writable console-owned seed: %+v", c)
+	}
+	// A seed the console cannot read fails: it reads its config there.
+	files[p+"/pii"] = dir(0o700, 1000)
+	if c := run(files, env)["project .locksql/pii"]; c.state != checkFail || !strings.Contains(c.detail, "cannot list") {
+		t.Errorf("unreadable seed: %+v", c)
+	}
+	// Owned by the console but closed to others: the usual failure.
+	files[p+"/pii"] = dir(0o700, 900)
+	if c := run(files, env)["project .locksql/pii"]; c.state != checkFail || c.repair == nil || !strings.Contains(c.detail, "every account read it") {
+		t.Errorf("console-owned 0700 seed: %+v", c)
 	}
 	files[p+"/pii"] = dir(0o755, 1000)
 
@@ -223,6 +238,9 @@ func TestProjectChecksPIIDirInForce(t *testing.T) {
 	for _, marker := range []string{"/home/alice/proj/.lockfamily/lockfamily.yaml", "/home/alice/proj/lockfamily.yaml"} {
 		f := newFiles()
 		f[marker] = ownedInfo{fakeInfo{"lockfamily.yaml", 0o644}, 1000, 1000}
+		if strings.Contains(marker, ".lockfamily/") {
+			f["/home/alice/proj/.lockfamily"] = dir(0o755, 1000)
+		}
 		got := run(f, nil)
 		if c := got["project .locksql/pii"]; c.state != checkWarn || !strings.Contains(c.detail, "lock up workspace") {
 			t.Errorf("%s: project .locksql/pii %+v", marker, c)
@@ -235,5 +253,11 @@ func TestProjectChecksPIIDirInForce(t *testing.T) {
 	f["/home/alice/proj/.lockfamily"] = dir(0o755, 1000)
 	if c := run(f, nil)["project .locksql/pii"]; c.state != checkFail {
 		t.Errorf("bare .lockfamily/: %+v", c)
+	}
+	// A root lockfamily.yaml beside a .lockfamily/ is never read by lock
+	// up: not a signal.
+	f["/home/alice/proj/lockfamily.yaml"] = ownedInfo{fakeInfo{"lockfamily.yaml", 0o644}, 1000, 1000}
+	if c := run(f, nil)["project .locksql/pii"]; c.state != checkFail {
+		t.Errorf("root lockfamily.yaml beside .lockfamily/: %+v", c)
 	}
 }

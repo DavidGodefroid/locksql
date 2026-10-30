@@ -230,10 +230,19 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 			switch {
 			case !ok:
 			case why != "" && perm&0o022 != 0:
+				r := &repair{what: "make " + path + " writable by its owner only (chmod go-w)", root: inDirScript(path, "chmod go-w .")}
+				if uid == me {
+					r.root, r.apply = "", func() error { return os.Chmod(path, perm&^0o022) }
+				}
 				add(checkFail, title, fmt.Sprintf("%s: %04o: writable by group or others; the console reads the PII rule sets there", path, perm),
-					"chmod go-w "+shellQuote(path), nil)
-			case why != "" && (uid != svc.uid || perm&0o005 != 0o005):
-				add(checkWarn, title, fmt.Sprintf("%s: %04o, owner uid %d; %s: a console started with %s keeps its PII rule sets in its own directory and needs not own this one, but a console of this project started without it writes the rule sets here and needs it owned by %s (uid %d)", path, perm, uid, why, console.PIIDirEnv, svc.name, svc.uid),
+					"chmod go-w "+shellQuote(path), r)
+			case why != "" && uid != svc.uid:
+				if p, _, ok := perms(path); ok && p&5 != 5 {
+					add(checkFail, title, fmt.Sprintf("%s: %04o, owner uid %d: %s cannot list and enter it, and the console reads its config and PII rule sets there", path, perm, uid, svc.name),
+						"chmod 0755 "+shellQuote(path)+" (or give "+svc.name+" read and search access by an ACL)", nil)
+					break
+				}
+				add(checkWarn, title, fmt.Sprintf("%s: %04o, owner uid %d; %s. A console started with %s keeps its PII rule sets in its own directory and does not need to own this one. A console of this project started without it writes them here and needs it owned by %s (uid %d).", path, perm, uid, why, console.PIIDirEnv, svc.name, svc.uid),
 					fmt.Sprintf("only for a console without %s: sudo chown %d %s && sudo chmod 0755 %s", console.PIIDirEnv, svc.uid, shellQuote(path), shellQuote(path)), nil)
 			case uid != svc.uid || perm&0o022 != 0 || perm&0o005 != 0o005:
 				// The uid, not the name: in Docker the console account exists
@@ -294,10 +303,15 @@ func piiDirInForce(d doctorEnv, root string) (dir, why string) {
 			return dir, console.PIIDirEnv + " is set here"
 		}
 	}
-	for _, f := range []string{filepath.Join(root, ".lockfamily", "lockfamily.yaml"), filepath.Join(root, "lockfamily.yaml")} {
-		if fi, err := d.stat(f); err == nil && fi.Mode().IsRegular() {
-			return "", "a lock up workspace (" + f + ")"
-		}
+	// As lock up reads it: the root file only when there is no
+	// .lockfamily/ (a planted one is never read once it exists).
+	lf := filepath.Join(root, ".lockfamily")
+	f := filepath.Join(lf, "lockfamily.yaml")
+	if fi, err := d.stat(lf); err != nil || !fi.IsDir() {
+		f = filepath.Join(root, "lockfamily.yaml")
+	}
+	if fi, err := d.stat(f); err == nil && fi.Mode().IsRegular() {
+		return "", "a lock up workspace (" + f + ")"
 	}
 	return "", ""
 }
@@ -309,7 +323,7 @@ func piiDirInForce(d doctorEnv, root string) (dir, why string) {
 func piiDirChecks(d doctorEnv, dir, seed string, svc svcAccount, add func(state, title, detail, fix string, r *repair)) {
 	const title = "PII rule sets"
 	if dir == "" {
-		add(checkOK, title, "lock up runs the console with "+console.PIIDirEnv+": it keeps them in its own volume, seeded from (and new masks merged from) the reviewed copy of "+seed+" that lock up gives it", "", nil)
+		add(checkOK, title, "not checked here: lock up runs the console with "+console.PIIDirEnv+", which keeps them in its own volume, seeded from (and new masks merged from) the reviewed copy of "+seed+" that lock up gives it", "", nil)
 		return
 	}
 	if !filepath.IsAbs(dir) {
@@ -319,7 +333,11 @@ func piiDirChecks(d doctorEnv, dir, seed string, svc svcAccount, add func(state,
 	for _, path := range []string{dir, filepath.Join(dir, pii.SetsDir)} {
 		if d.lstat != nil {
 			if fi, err := d.lstat(path); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
-				add(checkFail, title, path+" ("+console.PIIDirEnv+") is a symbolic link: the console refuses it", "replace it with a directory", nil)
+				why := "the console refuses it"
+				if path == dir {
+					why = "doctor refuses it (the console would follow it out of its own directory)"
+				}
+				add(checkFail, title, path+" ("+console.PIIDirEnv+") is a symbolic link: "+why, "replace it with a directory", nil)
 				return
 			}
 		}
