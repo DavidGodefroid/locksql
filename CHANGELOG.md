@@ -4,7 +4,10 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## Unreleased
+## v0.11.2 (2026-10-31)
+
+Supported lockhub: as v0.11.1; `allowed_uids` on a locksql lock under
+`lock up` needs lockhub v0.2.5 or later (#139).
 
 ### Added
 
