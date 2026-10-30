@@ -85,20 +85,29 @@ func agentName(ctx context.Context, who ipc.Requester) string {
 // nestedDML reports a statement with a data-modifying statement inside
 // it (PostgreSQL's WITH u AS (DELETE ...) ...): its command tag counts
 // only the outer statement's rows, so its rowcount bound would not hold.
+// Only PostgreSQL has them, and only as the body of a WITH query: the
+// word right after "AS (" or "[NOT] MATERIALIZED (".
 func nestedDML(d sqlclass.Dialect, sql string) bool {
+	if d != sqlclass.Postgres {
+		return false
+	}
 	toks, err := sqlclass.Lex(d, sql)
 	if err != nil {
 		return true
 	}
+	word := func(i int, w string) bool {
+		return i >= 0 && toks[i].Kind == sqlclass.TokWord && toks[i].Text == w
+	}
 	for i, t := range toks {
-		if t.Kind != sqlclass.TokWord || t.Depth == 0 {
+		if t.Kind != sqlclass.TokWord || i < 2 {
 			continue
-		}
-		if t.Text == "UPDATE" && i > 0 && toks[i-1].Kind == sqlclass.TokWord && (toks[i-1].Text == "FOR" || toks[i-1].Text == "KEY") {
-			continue // a locking clause: SELECT ... FOR [NO KEY] UPDATE
 		}
 		switch t.Text {
 		case "INSERT", "UPDATE", "DELETE", "MERGE":
+		default:
+			continue
+		}
+		if toks[i-1].Kind == sqlclass.TokPunct && toks[i-1].Text == "(" && (word(i-2, "AS") || word(i-2, "MATERIALIZED")) {
 			return true
 		}
 	}
@@ -116,9 +125,8 @@ func sideEffects(st engine.ObjectState) []string {
 			out = append(out, o.Kind+" "+o.Name)
 		case "function":
 			// A volatile function may write; its rows are not the
-			// statement's. provolatile is the 7th field from the end
-			// (the source, first, may hold anything).
-			if f := strings.Split(o.Def, "\x1f"); len(f) >= 11 && f[len(f)-7] == "v" {
+			// statement's. provolatile is the first field, one letter.
+			if vol, _, _ := strings.Cut(o.Def, "\x1f"); vol == "v" {
 				out = append(out, "function "+o.Name)
 			}
 		case "constraint":

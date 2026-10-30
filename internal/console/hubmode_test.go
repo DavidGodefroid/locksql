@@ -444,15 +444,24 @@ func TestAgentNameIsAClaim(t *testing.T) {
 
 func TestNestedDML(t *testing.T) {
 	for q, want := range map[string]bool{
-		"WITH d AS (DELETE FROM t RETURNING id) UPDATE u SET x = 1":                      true,
-		"WITH d AS (INSERT INTO t VALUES (1) RETURNING id) SELECT * FROM d":              true,
-		"WITH s AS (SELECT id FROM t) UPDATE u SET x = 1 WHERE id IN (SELECT id FROM s)": false,
-		"UPDATE u SET note = 'delete' WHERE id = 1":                                      false,
-		"INSERT INTO u SELECT * FROM t":                                                  false,
+		"WITH d AS (DELETE FROM t RETURNING id) UPDATE u SET x = 1":                               true,
+		"WITH d AS (INSERT INTO t VALUES (1) RETURNING id) SELECT * FROM d":                       true,
+		"WITH d AS MATERIALIZED (MERGE INTO t USING s ON true WHEN MATCHED THEN DELETE) SELECT 1": true,
+		"WITH d AS NOT MATERIALIZED (UPDATE t SET x = 1 RETURNING x) SELECT * FROM d":             true,
+		"WITH s AS (SELECT id FROM t) UPDATE u SET x = 1 WHERE id IN (SELECT id FROM s)":          false,
+		"UPDATE u SET note = 'delete' WHERE id = 1":                                               false,
+		"INSERT INTO u SELECT * FROM t":                                                           false,
+		"INSERT INTO b (id, update) VALUES (1, 2)":                                                false,
+		"DELETE FROM q WHERE id IN (SELECT id FROM q LIMIT 5 FOR UPDATE SKIP LOCKED)":             false,
+		"DELETE FROM q WHERE id IN (SELECT id FROM q FOR NO KEY UPDATE)":                          false,
+		"WITH d AS (SELECT 1) SELECT * FROM (WITH e AS (DELETE FROM t RETURNING 1) SELECT 1) x":   true,
 	} {
 		if got := nestedDML(sqlclass.Postgres, q); got != want {
 			t.Errorf("nestedDML(%q) = %v", q, got)
 		}
+	}
+	if nestedDML(sqlclass.MySQL, "UPDATE t SET s = CONCAT(INSERT(s, 1, 1, 'X'), 'y')") {
+		t.Error("MySQL's INSERT() function taken for a nested write")
 	}
 }
 
@@ -502,7 +511,7 @@ func TestBindRows(t *testing.T) {
 
 func TestSideEffectsVolatileFunction(t *testing.T) {
 	fn := func(vol string) engine.ObjectDef {
-		return engine.ObjectDef{Kind: "function", Name: "app.f(integer)", Def: strings.Join([]string{"BEGIN \x1f weird END", "", "", "f", vol, "f", "plpgsql", "integer", "integer", "", "alice"}, "\x1f")}
+		return engine.ObjectDef{Kind: "function", Name: "app.f(integer)", Def: strings.Join([]string{vol, "BEGIN \x1f weird END", "", "", "f", "f", "plpgsql", "integer", "integer", "", "alice"}, "\x1f")}
 	}
 	if got := sideEffects(engine.ObjectState{Objects: []engine.ObjectDef{fn("v")}}); len(got) != 1 || got[0] != "function app.f(integer)" {
 		t.Fatalf("volatile: %q", got)

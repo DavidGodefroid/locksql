@@ -24,6 +24,7 @@ import (
 	"math"
 	"net"
 	"strconv"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -581,66 +582,88 @@ func (s *session) RunCounted(ctx context.Context, db string, st sqlclass.Stateme
 	return s.run(ctx, db, st, maxRows, check)
 }
 
-// transactional are the storage engines whose writes a ROLLBACK undoes.
-var transactional = map[string]bool{"INNODB": true, "NDBCLUSTER": true, "NDB": true, "ROCKSDB": true, "TOKUDB": true}
-
-// nonTransactional returns the tables or views among the names q may write
-// to whose changes a ROLLBACK may not undo: a table of another storage
-// engine (MyISAM, Aria, MEMORY, CSV, ...) or a view (its tables are not
-// looked up). Names are every identifier and db.identifier of q: a word
-// that names no table is ignored. Called in the transaction, mu held.
+// nonTransactional returns the tables and views q may write to whose
+// changes a ROLLBACK may not undo: a table of another storage engine
+// (MyISAM, Aria, MEMORY, CSV, ...) or a view (its tables are not looked
+// up). It reads every such table of the server in one query and looks
+// for its name in q as a whole word, quoted or not, whatever the lexer
+// makes of it (a name may start with a digit): a word that only happens
+// to equal such a name refuses more, never less. Called in the
+// transaction, mu held.
 func (s *session) nonTransactional(q string) ([]string, error) {
-	toks, err := sqlclass.Lex(sqlclass.MySQL, q)
+	r, err := s.conn.Execute(`SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, COALESCE(ENGINE, '') FROM information_schema.TABLES
+		WHERE TABLE_TYPE <> 'BASE TABLE' OR UPPER(COALESCE(ENGINE, '')) NOT IN ('INNODB', 'NDBCLUSTER', 'NDB', 'ROCKSDB', 'TOKUDB')`)
 	if err != nil {
 		return nil, err
 	}
-	// The name a token may stand for: a word, a `quoted` name, or a
-	// "double-quoted" one (ANSI_QUOTES), unquoted and folded.
-	name := func(i int) (string, bool) {
-		if i >= len(toks) {
-			return "", false
-		}
-		n := toks[i].NameIn(sqlclass.MySQL)
-		return n, n != ""
+	if r.Resultset == nil {
+		return nil, nil
 	}
-	dot := func(i int) bool { return i < len(toks) && toks[i].Kind == sqlclass.TokPunct && toks[i].Text == "." }
+	text := strings.ToLower(q)
 	var out []string
-	seen := map[string]bool{}
-	for i := range toks {
-		n, ok := name(i)
-		if !ok || i > 0 && dot(i-1) {
+	for row := range r.RowNumber() {
+		sc, _ := r.GetString(row, 0)
+		tn, _ := r.GetString(row, 1)
+		typ, _ := r.GetString(row, 2)
+		eng, _ := r.GetString(row, 3)
+		if typ == "SYSTEM VIEW" && strings.EqualFold(sc, "information_schema") {
+			continue // read-only
+		}
+		name := strings.ToLower(tn)
+		// The server's own schemas count only when the statement names
+		// them with their schema.
+		if slices.Contains(systemSchemas, strings.ToLower(sc)) && !qualified(text, strings.ToLower(sc), name) || !wordIn(text, name) {
 			continue
 		}
-		schema, table := "", n
-		if dot(i+1) {
-			if t, ok := name(i + 2); ok {
-				schema, table = n, t
-			}
-		}
-		key := schema + "." + table
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		r, err := s.conn.Execute(`SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, COALESCE(ENGINE, '') FROM information_schema.TABLES
-			WHERE LOWER(TABLE_NAME) = LOWER(?) AND LOWER(TABLE_SCHEMA) = LOWER(COALESCE(NULLIF(?, ''), DATABASE()))`, table, schema)
-		if err != nil {
-			return nil, err
-		}
-		if r.Resultset == nil {
-			continue
-		}
-		for row := range r.RowNumber() {
-			sc, _ := r.GetString(row, 0)
-			tn, _ := r.GetString(row, 1)
-			typ, _ := r.GetString(row, 2)
-			eng, _ := r.GetString(row, 3)
-			if typ != "BASE TABLE" || !transactional[strings.ToUpper(eng)] {
-				out = append(out, fmt.Sprintf("%s.%s (%s)", sc, tn, strings.ToLower(strings.TrimSpace(typ+" "+eng))))
-			}
-		}
+		out = append(out, fmt.Sprintf("%s.%s (%s)", sc, tn, strings.ToLower(strings.TrimSpace(typ+" "+eng))))
 	}
 	return out, nil
+}
+
+// identChar reports a byte of an unquoted MySQL identifier.
+func identChar(b byte) bool {
+	return b == '_' || b == '$' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= 0x80
+}
+
+// wordIn reports whether name occurs in text as a whole word.
+func wordIn(text, name string) bool {
+	for i := 0; name != "" && i <= len(text)-len(name); {
+		k := strings.Index(text[i:], name)
+		if k < 0 {
+			return false
+		}
+		k += i
+		end := k + len(name)
+		if (k == 0 || !identChar(text[k-1])) && (end == len(text) || !identChar(text[end])) {
+			return true
+		}
+		i = k + 1
+	}
+	return false
+}
+
+// qualified reports whether text names schema.name (quoted or not, blanks
+// around the dot allowed).
+func qualified(text, schema, name string) bool {
+	for i := 0; i < len(text); {
+		k := strings.Index(text[i:], name)
+		if k < 0 {
+			return false
+		}
+		k += i
+		j := k - 1
+		for j >= 0 && (text[j] == '`' || text[j] == '"' || text[j] == ' ' || text[j] == '\t' || text[j] == '\n') {
+			j--
+		}
+		if j >= 0 && text[j] == '.' {
+			before := strings.TrimRight(text[:j], " \t\n`\"")
+			if strings.HasSuffix(before, schema) {
+				return true
+			}
+		}
+		i = k + 1
+	}
+	return false
 }
 
 // run is Run, with check (when not nil) called on the rows the statement

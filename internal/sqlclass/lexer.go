@@ -54,16 +54,15 @@ func (t Token) Name() string {
 // as an identifier. Use it wherever a name must be caught whatever the
 // server's sql_mode (forbidden calls, guarded settings); a false match only
 // makes locksql refuse more.
-// NameIn is Name in dialect d: on MySQL a double-quoted token (a string
-// to the lexer) names an identifier under ANSI_QUOTES, and counts as one.
-func (t Token) NameIn(d Dialect) string { return t.nameIn(d) }
-
 func (t Token) nameIn(d Dialect) string {
 	if d == MySQL && t.Kind == TokString && len(t.Text) >= 2 && t.Text[0] == '"' {
 		return fold(strings.ReplaceAll(t.Text[1:len(t.Text)-1], `""`, `"`))
 	}
 	return t.Name()
 }
+
+// NameIn is nameIn, for other packages.
+func (t Token) NameIn(d Dialect) string { return t.nameIn(d) }
 
 // fold upper-cases s for keyword and name comparisons. Lower-casing first
 // also folds characters such as the Kelvin sign (U+212A) that servers with

@@ -262,11 +262,12 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		}
 		ddl("CREATE TABLE rc_my (id INT PRIMARY KEY, label VARCHAR(20)) ENGINE=MyISAM")
 		ddl("CREATE TABLE rc_log (id INT) ENGINE=MyISAM")
+		ddl("CREATE TABLE 1rc_my (id INT PRIMARY KEY, label VARCHAR(20)) ENGINE=MyISAM")
 		ddl("CREATE TABLE rc_inno (id INT PRIMARY KEY, label VARCHAR(20)) ENGINE=InnoDB")
 		ddl("CREATE TRIGGER rc_trg AFTER UPDATE ON rc_inno FOR EACH ROW INSERT INTO rc_log VALUES (NEW.id)")
 		t.Cleanup(func() {
 			ddl("DROP TRIGGER IF EXISTS rc_trg")
-			ddl("DROP TABLE IF EXISTS rc_my, rc_log, rc_inno")
+			ddl("DROP TABLE IF EXISTS rc_my, rc_log, rc_inno, 1rc_my")
 		})
 		s := connectMySQL(t, m, srv, "rw", config.TierWrite, 30*time.Second)
 		for _, q := range []string{"INSERT INTO rc_my VALUES (1, 'a')", "INSERT INTO rc_inno VALUES (1, 'a')"} {
@@ -288,7 +289,7 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		if err == nil || errors.Is(err, over) || checked || !strings.Contains(err.Error(), "rc_my") {
 			t.Fatalf("MyISAM write: %v (checked %v)", err, checked)
 		}
-		for _, q := range []string{"UPDATE `rc_my` SET label = 'z'", "UPDATE `app`.`RC_MY` SET label = 'z'", "UPDATE app.rc_my SET label = 'z'"} {
+		for _, q := range []string{"UPDATE `rc_my` SET label = 'z'", "UPDATE `app`.`RC_MY` SET label = 'z'", "UPDATE app.rc_my SET label = 'z'", "UPDATE 1rc_my SET label = 'z'", "UPDATE app.1rc_my SET label = 'z'"} {
 			if _, err := engine.RunCounted(ctx, s, "app", write(q), 10, func(int64) error { checked = true; return over }); err == nil || errors.Is(err, over) || checked {
 				t.Fatalf("%s: %v (checked %v)", q, err, checked)
 			}

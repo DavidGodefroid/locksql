@@ -124,7 +124,7 @@ func objectState(ctx context.Context, c *pgx.Conn, refs engine.ObjectRefs) (engi
 		}
 		if len(funcs) > 0 {
 			d, err := defs(ctx, c, `SELECT 'function', p.oid::regprocedure::text,
-					concat(p.prosrc, E'\x1f', p.probin, E'\x1f', p.proconfig::text, E'\x1f', p.prosecdef, E'\x1f', p.provolatile, E'\x1f', p.proleakproof, E'\x1f', (SELECT l.lanname FROM pg_catalog.pg_language l WHERE l.oid = p.prolang), E'\x1f', pg_catalog.pg_get_function_result(p.oid), E'\x1f', pg_catalog.pg_get_function_arguments(p.oid), E'\x1f', p.proacl::text, E'\x1f', pg_catalog.pg_get_userbyid(p.proowner))
+					concat(p.provolatile, E'\x1f', p.prosrc, E'\x1f', p.probin, E'\x1f', p.proconfig::text, E'\x1f', p.prosecdef, E'\x1f', p.proleakproof, E'\x1f', (SELECT l.lanname FROM pg_catalog.pg_language l WHERE l.oid = p.prolang), E'\x1f', pg_catalog.pg_get_function_result(p.oid), E'\x1f', pg_catalog.pg_get_function_arguments(p.oid), E'\x1f', p.proacl::text, E'\x1f', pg_catalog.pg_get_userbyid(p.proowner))
 				FROM pg_catalog.pg_proc p WHERE p.oid = ANY($1::oid[])`, funcs)
 			if err != nil {
 				return st, err
