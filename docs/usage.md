@@ -747,7 +747,9 @@ the decisions the hub signed (its data directory and keys, `--data` and
 there and checked on ticket, outcome, approver and facade only; and as
 those consoles do not record the hub's denials nor the approvals that
 expired before their run, those show as decisions not in the log, not as
-problems.
+problems. From locksql v0.11.2, a lock's `allowed_uids` (passed
+as `console --allowed-uids`, for lea's agents) needs lockhub v0.2.5 or
+later on a locksql lock: earlier releases refuse the key there.
 
 In hub mode:
 
