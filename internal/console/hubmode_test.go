@@ -49,7 +49,13 @@ func withHub(t *testing.T, hub **hubtest.Hub) hopt {
 		go func() { defer close(done); h.Watch(ctx, c.IO) }()
 		// Watch writes the hub state under the temporary directories: it
 		// ends before they are removed.
-		t.Cleanup(func() { cancel(); <-done })
+		t.Cleanup(func() {
+			cancel()
+			<-done
+			if err := h.Close(); err != nil {
+				t.Error(err)
+			}
+		})
 	}
 }
 

@@ -295,6 +295,9 @@ func Run(ctx context.Context, o Options) error {
 		if hub, err = kconsole.OpenHub(product.P, o.Hub, o.StateDir, o.Now); err != nil {
 			return err
 		}
+		// The plans store holds a lock file: closed on every return, after
+		// the watch has stopped (deferred later, so run first).
+		defer hub.Close()
 	}
 
 	cfg, err := config.Load(o.Cwd)
@@ -520,8 +523,9 @@ func Run(ctx context.Context, o Options) error {
 		// decisions (policy changes, :unmask).
 		s.approver = hub.Approver(s.approver)
 		wctx, stopWatch := context.WithCancel(ctx)
-		defer stopWatch()
-		go hub.Watch(wctx, o.IO)
+		watched := make(chan struct{})
+		go func() { defer close(watched); hub.Watch(wctx, o.IO) }()
+		defer func() { stopWatch(); <-watched }()
 		s.println(paint.Step("hub mode: requests are decided in lockhub (instance " + safeText(o.Hub.Instance, false) + ")"))
 	}
 	serveErr := s.Serve(ctx, ln, lines)
