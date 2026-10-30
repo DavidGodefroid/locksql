@@ -96,12 +96,20 @@ func (s *Server) auditHubRequest(b kaudit.Base) {
 // chain, same body), and it gets the full recompute as well. A renewal
 // asked for in lockhub, or a recompute this run could not make, takes the
 // session-free path of hubRecompute: unchecked inputs, never one click.
-func (s *Server) hubRenew(ctx context.Context, id int64, tk string, caller plans.Caller, who ipc.Requester) ipc.Response {
+func (s *Server) hubRenew(ctx context.Context, id int64, tk string, caller plans.Caller, who ipc.Requester, dec *ticket.Decision) ipc.Response {
 	h := s.cfg.Hub
+	var stored hubPlan
+	prev := "" // the renewal made already, if any
 	if p, err := h.Store.ExpiredByTicket(tk, caller); err == nil {
 		var body hubPlan
 		if err := json.Unmarshal(p.Body, &body); err != nil {
 			return errResp(id, ipc.CodeInternal, "plan store: "+err.Error())
+		}
+		stored = body
+		if p.RenewedBy != "" {
+			if n, err := h.Store.RenewalOf(p.ID); err == nil {
+				prev = n.Ticket
+			}
 		}
 		pl, r := s.buildPlan(ctx, id, ipc.PlanParams{DB: body.DB, SQL: body.SQL, Unmask: body.Unmask, Intent: body.Intent})
 		if r != nil {
@@ -138,7 +146,38 @@ func (s *Server) hubRenew(ctx context.Context, id int64, tk string, caller plans
 	if resp.Error == nil {
 		s.println(paint.Warn("ticket " + safeText(tk, false) + " expired before its run: asked again in lockhub"))
 	}
+	s.auditRenewal(ctx, tk, stored, prev, dec, resp)
 	return resp
+}
+
+// auditRenewal records the renewal of expired ticket tk by the agent's
+// run (resp, Hub.RenewResp's answer): the new ticket, or why it could not
+// be asked again, with the statement of the stored plan. An approval that
+// aged before its run (dec, the hub's decision) is recorded with who gave
+// it on which facade and the hub's signature, so that `lock audit verify
+// --lock` finds the decision acted on; a ticket that expired pending has
+// none. A ticket renewed already (prev) answers its renewal again,
+// recorded once.
+func (s *Server) auditRenewal(ctx context.Context, tk string, stored hubPlan, prev string, dec *ticket.Decision, resp ipc.Response) {
+	rec := audit.Record{Event: audit.EventRenew, Decision: "renewed", Approval: kconsole.HubApproval, Ticket: tk,
+		DB: stored.DB, SQL: stored.SQL, Unmasked: stored.Unmask, Intent: stored.Intent}
+	if resp.Error != nil {
+		rec.Decision, rec.Error = "refused", safeText(resp.Error.Message, false)
+	} else {
+		var p struct {
+			Ticket string `json:"ticket"`
+		}
+		if json.Unmarshal(resp.Result, &p) == nil {
+			if prev != "" && p.Ticket == prev {
+				return
+			}
+			rec.Reason = "renewed by ticket " + p.Ticket
+		}
+	}
+	if dec != nil {
+		rec.Approver, rec.Facade, rec.HubSig = &dec.Approver, dec.Facade, dec.Sig
+	}
+	s.audit(withPeerRecord(ctx, rec))
 }
 
 // hubRecompute is the hub client's Recompute: the policy fingerprint, plan

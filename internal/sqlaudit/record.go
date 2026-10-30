@@ -36,6 +36,9 @@ const (
 	// EventPending is a request handed to lockhub (hub mode): its ticket
 	// is in the reason.
 	EventPending = audit.EventPending
+	// EventRenew is an expired ticket asked again (hub mode): renewed by
+	// a new ticket, named in the reason, or refused.
+	EventRenew = audit.EventRenew
 	// EventConfigImport is a `locksql config import`, applied or refused.
 	EventConfigImport = "config_import"
 )

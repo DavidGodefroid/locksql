@@ -574,3 +574,89 @@ func TestSideEffectsVolatileFunction(t *testing.T) {
 		t.Fatalf("immutable/stable: %q", got)
 	}
 }
+
+// auditRecords are the records of the harness's audit log with event
+// (any event when empty) on ticket tk.
+func auditRecords(t *testing.T, h *harness, event, tk string) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, l := range strings.Split(strings.TrimSpace(h.auditLog(t)), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(l), &m); err != nil {
+			t.Fatalf("audit line %q: %v", l, err)
+		}
+		if m["ticket"] == tk && (event == "" || m["event"] == event) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// decideSigned decides ticket tk at the hub and returns the decision as
+// the hub signed it; mod, when not nil, changes it before signing.
+func decideSigned(t *testing.T, hub *hubtest.Hub, tk string, out ticket.Outcome, reason string, mod func(*ticket.Decision)) *ticket.Decision {
+	t.Helper()
+	var d *ticket.Decision
+	hub.DecideWith(tk, out, reason, nil, func(x *ticket.Decision) {
+		if mod != nil {
+			mod(x)
+		}
+		d = x
+	})
+	raw, err := d.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ticket.VerifyDecision(hub.Pub, raw); err != nil || d.Sig == "" {
+		t.Fatalf("the hub's decision does not verify: %v", err)
+	}
+	return d
+}
+
+// wantHubSigned checks that rec records decision d of the hub: its
+// signature, who answered and on which facade, as lockhub's `lock audit
+// verify --lock` matches them.
+func wantHubSigned(t *testing.T, rec map[string]any, d *ticket.Decision) {
+	t.Helper()
+	ap, _ := rec["approver"].(map[string]any)
+	if rec["hub_sig"] != d.Sig || rec["approval"] != kconsole.HubApproval || ap["id"] != d.Approver.ID || rec["facade"] != d.Facade {
+		t.Fatalf("record %v, want the hub's signature %s, approver %s on %s", rec, d.Sig, d.Approver.ID, d.Facade)
+	}
+}
+
+// The hub's decisions are audited with the hub's signature (#118): the
+// approval (not the run that follows it) and the denial, once each.
+func TestHubModeDecisionsCarryHubSig(t *testing.T) {
+	var hub *hubtest.Hub
+	h := newHarness(t, uatProfile(), withHub(t, &hub))
+	pr := h.plan(t, selectUsers, false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	d := decideSigned(t, hub, tk, ticket.Approved, "", nil)
+	if r := runTicket(t, h, tk); r.Error != nil {
+		t.Fatalf("run of the approved ticket: %q", r.Error.Message)
+	}
+	approved := auditRecords(t, h, "approved", tk)
+	if len(approved) != 1 || approved[0]["decision"] != "approved" {
+		t.Fatalf("approval records %v", approved)
+	}
+	wantHubSigned(t, approved[0], d)
+	runs := auditRecords(t, h, "run", tk)
+	if len(runs) != 1 || runs[0]["hub_sig"] != nil {
+		t.Fatalf("run records %v, want one without the hub's signature", runs)
+	}
+
+	pr = h.plan(t, "SELECT id FROM users WHERE id = 2 LIMIT 10", false)
+	dt := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	dd := decideSigned(t, hub, dt, ticket.Denied, "too wide", nil)
+	wantCode(t, runTicket(t, h, dt), ipc.CodeDenied)
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: dt}), ipc.CodeDenied)
+	denied := auditRecords(t, h, "denied", dt)
+	if len(denied) != 1 || denied[0]["decision"] != "denied" || denied[0]["reason"] != "too wide" ||
+		denied[0]["sql"] != "SELECT id FROM users WHERE id = 2 LIMIT 10" || denied[0]["db"] == nil {
+		t.Fatalf("denial records %v, want one with the statement and the reason", denied)
+	}
+	wantHubSigned(t, denied[0], dd)
+	if h.sess.runCount() != 1 {
+		t.Fatalf("runs %d", h.sess.runCount())
+	}
+}
