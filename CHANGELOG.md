@@ -4,6 +4,16 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+### Fixed
+
+- **`DISTINCT` over a PII column is counted.** Like `GROUP BY`, a
+  `SELECT DISTINCT` that outputs a PII column now runs the k-anonymity row
+  count of its `FROM`/`WHERE`, and warns under `k`. In a correlated
+  subquery, a recursive CTE, a `SELECT` without `FROM` or a write, such a
+  `DISTINCT` is now refused, as a grouping already was.
+
 ## v0.9.0 (2026-10-28)
 
 ### Changed
