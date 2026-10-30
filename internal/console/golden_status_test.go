@@ -50,13 +50,24 @@ func TestGoldenStatusAndReview(t *testing.T) {
 		name    string
 		profile func() config.Profile
 		opts    []hopt
+		pending bool
 	}{
 		{name: "status-uat", profile: uatProfile},
 		{name: "status-production", profile: prodProfile},
 		{name: "status-auto-unmask", profile: uatProfile, opts: []hopt{skip, allowUnmask}},
+		{name: "status-desktop-health-pending", profile: uatProfile, opts: []hopt{func(c *ServerConfig) {
+			c.Boundary = "level 1: the agent's account can read this window"
+			c.Health = &ipc.Health{Separated: true, Display: "wayland", Privileges: []string{"INSERT on app.users"}, ExplainOK: true}
+		}}, pending: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, tc.profile(), tc.opts...)
+			if tc.pending {
+				next := tc.profile()
+				next.Limits.MaxRows = 5000
+				h.s.pending = new(config.Policy)
+				*h.s.pending = config.NewPolicy(next, []string{"app.users.email"}, nil)
+			}
 			resp := h.call(t, ipc.MethodStatus, nil)
 			if resp.Error != nil {
 				t.Fatal(resp.Error.Message)
@@ -73,23 +84,48 @@ func TestGoldenStatusAndReview(t *testing.T) {
 
 	for _, tc := range []struct {
 		name   string
+		start  func() config.Profile
+		opts   []hopt
 		answer string
 		change func(*config.Profile)
+		// mask is the pending policy's mask rules (nil: unchanged).
+		mask []string
+		// none: no pending change.
+		none bool
+		// requests are change.request proposals from clients.
+		requests []string
 	}{
-		{name: "review-applied", answer: "y", change: func(p *config.Profile) { p.Limits.MaxRows = 5000; p.Tier = config.TierWrite }},
-		{name: "review-refused", answer: "n", change: func(p *config.Profile) { p.Limits.MaxRows = 5000 }},
-		{name: "review-production-off", answer: "y", change: func(p *config.Profile) { p.Production = false }},
+		{name: "review-applied", start: uatProfile, answer: "y", change: func(p *config.Profile) { p.Limits.MaxRows = 5000; p.Tier = config.TierWrite }},
+		{name: "review-refused", start: uatProfile, answer: "n", change: func(p *config.Profile) { p.Limits.MaxRows = 5000 }},
+		{name: "review-production-off", start: prodProfile, answer: "y", change: func(p *config.Profile) { p.Production = false }},
+		// lockkit's FormatChanges, :review wording and adopt differ here:
+		// "- " only for PII rules and detectors, the auto-mode warning, and
+		// the wider connection-change check (tls, ssh, proxy_command).
+		{name: "review-removals-auto-connection", answer: "y", mask: []string{},
+			start: func() config.Profile {
+				p := prodProfile()
+				p.Detectors, p.TLSCA = []string{"email", "iban"}, "/etc/ca.pem"
+				return p
+			},
+			opts:   []hopt{skip},
+			change: func(p *config.Profile) { p.Detectors, p.TLSCA, p.Production = []string{"email"}, "", false }},
+		{name: "review-nothing", start: uatProfile, none: true},
+		{name: "review-requests", start: uatProfile, none: true, requests: []string{"allow unmask on app.users.note", "raise max_rows to \x1b[2J500"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			start := uatProfile()
-			if tc.name == "review-production-off" {
-				start = prodProfile()
+			start := tc.start()
+			h := newHarness(t, start, tc.opts...)
+			if !tc.none {
+				next := start
+				tc.change(&next)
+				mask := []string{"app.users.email"}
+				if tc.mask != nil {
+					mask = tc.mask
+				}
+				h.s.pending = new(config.Policy)
+				*h.s.pending = config.NewPolicy(next, mask, nil)
 			}
-			h := newHarness(t, start)
-			next := start
-			tc.change(&next)
-			h.s.pending = new(config.Policy)
-			*h.s.pending = config.NewPolicy(next, []string{"app.users.email"}, nil)
+			h.s.requests = tc.requests
 			recs := len(goldenRecords(t, h))
 			reset(h)
 			h.io.answers = []string{tc.answer}
@@ -97,6 +133,19 @@ func TestGoldenStatusAndReview(t *testing.T) {
 			compareGolden(t, tc.name, "== :review\n"+transcript(h)+"== audit\n"+audit(h, recs))
 		})
 	}
+
+	// A tightening read from the files applies at once.
+	t.Run("tightened", func(t *testing.T) {
+		next := uatProfile()
+		next.Limits.MaxRows = 50
+		h := newHarness(t, uatProfile(), func(c *ServerConfig) {
+			c.LoadPolicy = func() (config.Policy, error) { return config.NewPolicy(next, []string{"app.users.email"}, nil), nil }
+		})
+		recs := len(goldenRecords(t, h))
+		reset(h)
+		h.s.CheckPolicy()
+		compareGolden(t, "tightened", "== poll\n"+transcript(h)+"== audit\n"+audit(h, recs))
+	})
 }
 
 func jsonText(v any) string {

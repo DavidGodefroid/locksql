@@ -1,0 +1,5 @@
+== :review
+"change requests from clients (edit the config files to apply one; locksql then asks you to confirm):"
+"  - allow unmask on app.users.note"
+"  - raise max_rows to \x1b[2J500"
+== audit
