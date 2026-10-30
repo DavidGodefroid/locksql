@@ -175,8 +175,13 @@ func (s nopClose) ObjectState(ctx context.Context, db string, refs engine.Object
 	return engine.ObjectStateOf(ctx, s.Session, db, refs)
 }
 
-func (s nopClose) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check func(engine.ObjectState, bool) error) (engine.Result, error) {
+func (s nopClose) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check engine.GuardCheck) (engine.Result, error) {
 	return engine.RunGuarded(ctx, s.Session, db, st, maxRows, refs, check)
+}
+
+// RunCounted passes the counted run on (engine.RowChecker).
+func (s nopClose) RunCounted(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
+	return engine.RunCounted(ctx, s.Session, db, st, maxRows, check)
 }
 
 // leakQueries are the adversarial review round 2 and 3 cases, written

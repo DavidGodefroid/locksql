@@ -48,12 +48,47 @@ type ObjectState struct {
 // ObjectGuard is implemented by an engine that can read the definitions a
 // statement resolves to (PostgreSQL), and check them around the statement:
 // RunGuarded runs st like Run, calling check with the state read in the
-// statement's own transaction just before the statement (after false) and
-// again just after it, before the commit (after true). A check error ends the transaction with a
+// statement's own transaction just before the statement (Step.After false)
+// and again just after it, before the commit (Step.After true, with the
+// rows a write changed). A check error ends the transaction with a
 // ROLLBACK and is returned as is.
 type ObjectGuard interface {
 	ObjectState(ctx context.Context, db string, refs ObjectRefs) (ObjectState, error)
-	RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs ObjectRefs, check func(st ObjectState, after bool) error) (Result, error)
+	RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs ObjectRefs, check GuardCheck) (Result, error)
+}
+
+// Step is where a guarded run calls its check: before the statement, or
+// after it (After), before the commit, with the rows a write-class
+// statement changed (Affected).
+type Step struct {
+	After    bool
+	Affected int64
+}
+
+// GuardCheck is the check of a guarded run (ObjectGuard.RunGuarded).
+type GuardCheck func(st ObjectState, at Step) error
+
+// RowChecker is implemented by an engine that can check the rows a
+// write-class statement changed in its own transaction: RunCounted runs st
+// like Run and calls check with Result.Affected once the statement ran,
+// before the commit. A check error ends the transaction with a ROLLBACK
+// and is returned as is. A statement that runs outside a transaction is
+// refused.
+type RowChecker interface {
+	RunCounted(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(affected int64) error) (Result, error)
+}
+
+// ErrNoRowCheck is the error of a session wrapper whose session does not
+// implement RowChecker.
+var ErrNoRowCheck = errors.New("engine: this session cannot check the rows a write changes before its commit")
+
+// RunCounted passes the counted run on to s, for session wrappers.
+func RunCounted(ctx context.Context, s Session, db string, st sqlclass.Statement, maxRows int, check func(affected int64) error) (Result, error) {
+	g, ok := s.(RowChecker)
+	if !ok {
+		return Result{}, ErrNoRowCheck
+	}
+	return g.RunCounted(ctx, db, st, maxRows, check)
 }
 
 // ErrNoObjectGuard is the error of a session wrapper whose session does not
@@ -70,7 +105,7 @@ func ObjectStateOf(ctx context.Context, s Session, db string, refs ObjectRefs) (
 }
 
 // RunGuarded passes the guarded run on to s, for session wrappers.
-func RunGuarded(ctx context.Context, s Session, db string, st sqlclass.Statement, maxRows int, refs ObjectRefs, check func(st ObjectState, after bool) error) (Result, error) {
+func RunGuarded(ctx context.Context, s Session, db string, st sqlclass.Statement, maxRows int, refs ObjectRefs, check GuardCheck) (Result, error) {
 	g, ok := s.(ObjectGuard)
 	if !ok {
 		return Result{}, ErrNoObjectGuard

@@ -38,15 +38,28 @@ func (s *session) ObjectState(ctx context.Context, db string, refs engine.Object
 // just after it, before the commit. A statement PostgreSQL only runs
 // outside a transaction is checked before and after all the same, without
 // a ROLLBACK to undo it.
-func (s *session) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check func(engine.ObjectState, bool) error) (engine.Result, error) {
-	guard := func(ctx context.Context, c *pgx.Conn, after bool) error {
+func (s *session) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check engine.GuardCheck) (engine.Result, error) {
+	guard := func(ctx context.Context, c *pgx.Conn, at engine.Step) error {
 		os, err := objectState(ctx, c, refs)
 		if err != nil {
 			return err
 		}
-		return check(os, after)
+		return check(os, at)
 	}
 	return s.run(ctx, db, st, maxRows, guard)
+}
+
+// RunCounted implements engine.RowChecker.
+func (s *session) RunCounted(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
+	if needsNoTx(st) {
+		return engine.Result{}, fmt.Errorf("postgres: %s runs outside a transaction: its rows cannot be checked before a commit", strings.ToUpper(st.Kind))
+	}
+	return s.run(ctx, db, st, maxRows, func(_ context.Context, _ *pgx.Conn, at engine.Step) error {
+		if !at.After {
+			return nil
+		}
+		return check(at.Affected)
+	})
 }
 
 // objectState reads the effective search path and the definitions of the
@@ -125,7 +138,7 @@ func objectState(ctx context.Context, c *pgx.Conn, refs engine.ObjectRefs) (engi
 		}
 		if len(funcs) > 0 {
 			d, err := defs(ctx, c, `SELECT 'function', p.oid::regprocedure::text,
-					concat(p.prosrc, E'\x1f', p.probin, E'\x1f', p.proconfig::text, E'\x1f', p.prosecdef, E'\x1f', p.provolatile, E'\x1f', p.proleakproof, E'\x1f', (SELECT l.lanname FROM pg_catalog.pg_language l WHERE l.oid = p.prolang), E'\x1f', pg_catalog.pg_get_function_result(p.oid), E'\x1f', pg_catalog.pg_get_function_arguments(p.oid), E'\x1f', p.proacl::text, E'\x1f', pg_catalog.pg_get_userbyid(p.proowner))
+					concat(p.provolatile, E'\x1f', p.prosrc, E'\x1f', p.probin, E'\x1f', p.proconfig::text, E'\x1f', p.prosecdef, E'\x1f', p.proleakproof, E'\x1f', (SELECT l.lanname FROM pg_catalog.pg_language l WHERE l.oid = p.prolang), E'\x1f', pg_catalog.pg_get_function_result(p.oid), E'\x1f', pg_catalog.pg_get_function_arguments(p.oid), E'\x1f', p.proacl::text, E'\x1f', pg_catalog.pg_get_userbyid(p.proowner))
 				FROM pg_catalog.pg_proc p WHERE p.oid = ANY($1::oid[])`, funcs)
 			if err != nil {
 				return nil, nil, err

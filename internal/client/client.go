@@ -12,6 +12,7 @@ import (
 	"context"
 
 	kclient "github.com/DavidGodefroid/lockkit/client"
+	"github.com/DavidGodefroid/lockkit/mcpkit"
 
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
@@ -82,9 +83,17 @@ func (c *Client) Describe(ctx context.Context, db, table string) (engine.TableIn
 	return r, err
 }
 
+// Requester is the agent behind the plan and run requests: from lea's
+// environment (mcpkit.RequesterFromEnv), empty outside lea. A plan or
+// ticket runs only for the agent that asked for it.
+var Requester = mcpkit.RequesterFromEnv
+
 // Plan validates and weighs a statement and returns a one-shot plan.
 func (c *Client) Plan(ctx context.Context, p ipc.PlanParams) (ipc.PlanResult, error) {
 	var r ipc.PlanResult
+	if p.Requester == (ipc.Requester{}) {
+		p.Requester = Requester()
+	}
 	err := c.Call(ctx, ipc.MethodQueryPlan, p, &r)
 	return r, err
 }
@@ -93,14 +102,14 @@ func (c *Client) Plan(ctx context.Context, p ipc.PlanParams) (ipc.PlanResult, er
 // long as the console does: there is no client-side timeout.
 func (c *Client) Run(ctx context.Context, planID string) (ipc.RunResult, error) {
 	var r ipc.RunResult
-	err := c.Call(ctx, ipc.MethodQueryRun, ipc.RunParams{PlanID: planID}, &r)
+	err := c.Call(ctx, ipc.MethodQueryRun, ipc.RunParams{PlanID: planID, Requester: Requester()}, &r)
 	return r, err
 }
 
 // RunTicket runs the plan of a ticket decided in lockhub (hub mode).
 func (c *Client) RunTicket(ctx context.Context, ticket string) (ipc.RunResult, error) {
 	var r ipc.RunResult
-	err := c.Call(ctx, ipc.MethodQueryRun, ipc.RunParams{Ticket: ticket}, &r)
+	err := c.Call(ctx, ipc.MethodQueryRun, ipc.RunParams{Ticket: ticket, Requester: Requester()}, &r)
 	return r, err
 }
 

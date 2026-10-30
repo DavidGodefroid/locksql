@@ -409,6 +409,14 @@ func Run(ctx context.Context, o Options) error {
 	}
 	p = approved.Profile
 	st.profile = p
+	// The start-up refusals of a production profile, applied again by the
+	// server when the policy in force becomes production (#93).
+	refuseProduction := func() error {
+		if err := hardenRefusal(hardenErr, true); err != nil {
+			return err
+		}
+		return iso.refuseX11IfProduction(config.Profile{Production: true})
+	}
 	if err := hardenRefusal(hardenErr, p.Production); err != nil {
 		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
 		return err
@@ -516,6 +524,7 @@ func Run(ctx context.Context, o Options) error {
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Approver: st.approver, Fingerprint: iso.verifier != nil, Boundary: iso.boundary(), Now: o.Now,
 		Auto: o.Auto, AllowUnmask: o.AllowUnmask, ShowResults: o.ShowResults, Version: o.Version, LoadPolicy: loadPolicy,
 		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health, Hub: hub,
+		RefuseProduction: refuseProduction,
 	})
 	if err != nil {
 		ln.Close()
@@ -1237,6 +1246,11 @@ func (s *vaultSession) ObjectState(ctx context.Context, db string, refs engine.O
 }
 
 // RunGuarded passes the guarded run on (engine.ObjectGuard).
-func (s *vaultSession) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check func(engine.ObjectState, bool) error) (engine.Result, error) {
+func (s *vaultSession) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check engine.GuardCheck) (engine.Result, error) {
 	return engine.RunGuarded(ctx, s.Session, db, st, maxRows, refs, check)
+}
+
+// RunCounted passes the counted run on (engine.RowChecker).
+func (s *vaultSession) RunCounted(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
+	return engine.RunCounted(ctx, s.Session, db, st, maxRows, check)
 }

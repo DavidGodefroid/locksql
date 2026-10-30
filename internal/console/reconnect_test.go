@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -230,5 +231,58 @@ func TestReconnectLockoutEndsConsole(t *testing.T) {
 	wantCode(t, h.call(t, ipc.MethodCatalogList, ipc.TablesParams{DB: "app"}), ipc.CodeConnLost)
 	if reason, ended := h.s.Ended(); !ended || !strings.Contains(reason, "fingerprint") {
 		t.Fatalf("not ended by the lockout: %q %v", reason, ended)
+	}
+}
+
+// Becoming production at runtime re-applies the start-up refusals of a
+// production profile (an X11 session, core dumps not disabled): one that
+// fails ends the session, with or without an open database session (#93).
+func TestBecomingProductionReappliesStartRefusals(t *testing.T) {
+	for _, noSession := range []bool{false, true} {
+		calls := 0
+		h := newHarness(t, uatProfile(), func(c *ServerConfig) {
+			c.RefuseProduction = func() error { calls++; return errors.New("console: refused: an X11 session on a production profile") }
+		})
+		if noSession {
+			h.s.sess = nil
+		}
+		prod := uatProfile()
+		prod.Production = true
+		if err := h.s.adopt(config.NewPolicy(prod, []string{"app.users.email"}, nil), "tightened"); err != nil {
+			t.Fatal(err)
+		}
+		reason, ended := h.s.Ended()
+		if !ended || reason != "refused after the profile became production" || calls != 1 {
+			t.Fatalf("no session %v: ended %v %q after %d calls", noSession, ended, reason, calls)
+		}
+		if !strings.Contains(h.io.output(), "X11") {
+			t.Errorf("the refusal is not shown:\n%s", h.io.output())
+		}
+		if log := h.auditLog(t); !strings.Contains(log, `"error":"became production: console: refused: an X11 session`) {
+			t.Errorf("the refusal is not audited:\n%s", log)
+		}
+	}
+}
+
+// Staying production, or another tightening, does not run the refusals
+// again; one that passes keeps the session.
+func TestProductionRefusalsOnlyWhenBecomingProduction(t *testing.T) {
+	calls := 0
+	refuse := func(c *ServerConfig) { c.RefuseProduction = func() error { calls++; return nil } }
+	h := newHarness(t, uatProfile(), refuse)
+	prod := uatProfile()
+	prod.Production = true
+	if err := h.s.adopt(config.NewPolicy(prod, []string{"app.users.email"}, nil), "tightened"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ended := h.s.Ended(); ended || calls != 1 {
+		t.Fatalf("passing refusals: ended %v after %d calls", ended, calls)
+	}
+	prod.Limits.MaxRows = 10
+	if err := h.s.adopt(config.NewPolicy(prod, []string{"app.users.email"}, nil), "tightened"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("ran again while staying production: %d", calls)
 	}
 }

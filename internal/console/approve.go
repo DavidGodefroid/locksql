@@ -339,6 +339,9 @@ func (s *Server) review(ctx context.Context) {
 		s.println("policy change not applied: " + safeText(err.Error(), false))
 		return
 	}
+	if _, ended := s.Ended(); ended {
+		return
+	}
 	s.println("policy change applied")
 }
 
@@ -373,6 +376,9 @@ func (s *Server) CheckPolicy() {
 		s.pending = nil
 		if err := s.adopt(cur, "tightened"); err != nil {
 			s.println("policy change not applied: " + safeText(err.Error(), false))
+			return
+		}
+		if _, ended := s.Ended(); ended {
 			return
 		}
 		s.println("policy tightened:")
@@ -419,6 +425,16 @@ func (s *Server) adopt(p config.Policy, decision string) error {
 		s.audit(rec)
 	}
 	n := p.Profile
+	if n.Production && !old.Production && s.cfg.RefuseProduction != nil {
+		// What a production profile is refused at start-up is refused
+		// now too, whether or not a session is open.
+		if err := s.cfg.RefuseProduction(); err != nil {
+			s.println(red + "the profile is now production: " + safeText(err.Error(), false) + "; the session ends" + reset)
+			s.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: "became production: " + secrets.Sanitize(err)})
+			s.End("refused after the profile became production")
+			return nil
+		}
+	}
 	if n.Production && !old.Production && s.sess != nil {
 		// The start-up privilege audit accepted extra grants with a typed
 		// "continue"; a production profile refuses them (spec §6 step 5).

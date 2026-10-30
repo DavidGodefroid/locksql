@@ -1,0 +1,5 @@
+== poll
+"policy tightened:"
+"\x1b[32m  ~ limits.max_rows: 200 → 50\x1b[0m"
+== audit
+event=policy decision=tightened

@@ -488,7 +488,7 @@ func (s *session) Run(ctx context.Context, db string, st sqlclass.Statement, max
 // run is Run, with guard (when set) called on the statement's connection,
 // in its transaction, just before the statement and just after it: an
 // error ends the transaction with a ROLLBACK and is returned as is.
-func (s *session) run(ctx context.Context, db string, st sqlclass.Statement, maxRows int, guard func(ctx context.Context, c *pgx.Conn, after bool) error) (engine.Result, error) {
+func (s *session) run(ctx context.Context, db string, st sqlclass.Statement, maxRows int, guard func(ctx context.Context, c *pgx.Conn, at engine.Step) error) (engine.Result, error) {
 	if int(st.Class) > int(s.tier) {
 		return engine.Result{}, fmt.Errorf("postgres: a %s statement exceeds tier %s", st.Class, s.tier)
 	}
@@ -512,14 +512,14 @@ func (s *session) run(ctx context.Context, db string, st sqlclass.Statement, max
 		return engine.Result{}, err
 	}
 	// A check error is the guard's own (local), not a lost connection.
-	check := func(ctx context.Context, after bool) error {
+	check := func(ctx context.Context, at engine.Step) error {
 		if guard == nil {
 			return nil
 		}
-		return local(ctx, dc, guard(ctx, dc.conn, after))
+		return local(ctx, dc, guard(ctx, dc.conn, at))
 	}
 	res, err := s.inTx(ctx, dc, begin, st.Class != sqlclass.Read, func(ctx context.Context) (engine.Result, error) {
-		if err := check(ctx, false); err != nil {
+		if err := check(ctx, engine.Step{}); err != nil {
 			return engine.Result{}, err
 		}
 		res, keys, err := s.stream(ctx, dc, st.SQL, maxRows)
@@ -529,7 +529,7 @@ func (s *session) run(ctx context.Context, db string, st sqlclass.Statement, max
 		if err := local(ctx, dc, s.resolveOrigins(ctx, dc, res.Columns, keys)); err != nil {
 			return res, err
 		}
-		return res, check(ctx, true)
+		return res, check(ctx, engine.Step{After: true, Affected: res.Affected})
 	})
 	if err != nil {
 		return engine.Result{}, err
