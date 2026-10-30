@@ -31,7 +31,7 @@ This file records the changes a user or an agent has to know about.
     the policy changes");
   - credentials that expire without a way to reconnect end the session as
     "connection lost" (was "credentials expired").
-  Builds on lockkit v0.7.0.
+  Builds on lockkit v0.7.1.
 - **Approvals are decided by lockkit's console.** The console closes its
   approval screen with lockkit's `console.Asker` (same prompt, same answers,
   same audit records): the screens are pinned byte for byte by golden tests
