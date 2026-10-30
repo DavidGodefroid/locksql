@@ -23,6 +23,20 @@ This file records the changes a user or an agent has to know about.
   an operator counts as one more level of the 8-level bound. Plan hash
   version 3: plans made by v0.10.0 are answered `E_STALE`.
 
+- **Hub-mode rowcount bound follow-ups** (#120). On MySQL/MariaDB and
+  SQLite the ticket of a write also names the triggers of the tables it
+  names. An `INSERT`/`REPLACE ... VALUES` is bounded by at least its
+  number of rows (EXPLAIN gives no estimate for them on MySQL and SQLite;
+  twice that for `REPLACE` and `ON DUPLICATE KEY UPDATE` on
+  MySQL/MariaDB). A write whose rows cannot be checked before a commit (a
+  non-transactional table on MySQL/MariaDB) is refused with
+  `E_STATEMENT_KIND` instead of the generic failure, so the agent does
+  not retry it. The MySQL/MariaDB check reads only the tables of the
+  current database and of the schemas the statement qualifies a name
+  with: a non-transactional table of another schema no longer refuses an
+  unrelated write that uses the same word, and the server's own schemas
+  are no longer exempt when named bare from within them.
+
 ## v0.10.0 (2026-10-30)
 
 ### Changed
@@ -100,18 +114,6 @@ This file records the changes a user or an agent has to know about.
   or a view is not run, and a `ROLLBACK` that warns is a failure. The
   screen names the requester by its kernel identity, the lea name as its
   unverified claim.
-  Follow-ups (#120): on MySQL/MariaDB and SQLite the ticket also names the
-  triggers of the tables the write names; an `INSERT`/`REPLACE ... VALUES`
-  is bounded by at least its number of rows (EXPLAIN gives no estimate
-  for them on MySQL and SQLite; twice that for `REPLACE` and `ON
-  DUPLICATE KEY UPDATE` on MySQL/MariaDB); a write whose rows cannot be
-  checked before a commit (a non-transactional table, DDL, `VACUUM`) is
-  refused with `E_STATEMENT_KIND` instead of the generic failure. The
-  MySQL/MariaDB check reads only the tables of the current database and of
-  the schemas the statement qualifies a name with: a non-transactional
-  table of another schema no longer refuses an unrelated write that uses
-  the same word, and the server's own schemas are no longer exempt when
-  named bare from within them.
 
 - Pinned to the lockkit v0.3.1 release (hub support) instead of a commit of lockkit main.
 
