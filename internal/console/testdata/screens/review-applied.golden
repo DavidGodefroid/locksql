@@ -1,0 +1,9 @@
+== :review
+"pending policy change for profile uat:"
+"\x1b[1;31m  ~ tier: read → write  (loosens)\x1b[0m"
+"\x1b[1;31m  ~ limits.max_rows: 200 → 5000  (loosens)\x1b[0m"
+"<bell>"
+"? Apply these changes? [y/N] "
+"policy change applied"
+== audit
+event=policy decision=applied approval=session
