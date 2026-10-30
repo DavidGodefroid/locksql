@@ -752,6 +752,14 @@ sends approvals to lockhub instead of asking on this terminal:
 - The screen names the requester as the kernel reports it (uid, pid,
   executable); the lea name the client sends is shown as its claim
   (`claims lea agent "…"`), not verified.
+- PII rule sets under `lock up`: the profile directory is a read-only copy
+  there, so `lock up` sets `LOCKSQL_PII_DIR` to a directory of the console's
+  own volume. The console keeps its rule sets there (`pii/<set>.toml`): the
+  first-run PII proposal, `pii add` and later proposals write there. A set it
+  lacks is first copied, once, from the profile's `.locksql/pii/<set>.toml`
+  (or the legacy `.locksql/pii.toml` as the `default` set); from then on the
+  console's copy is in force, and a profile set that differs from it is
+  told at start (remove the console's copy to take the profile's again).
 
 ### Policy changes
 

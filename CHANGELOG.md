@@ -6,6 +6,16 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
+### Added
+
+- **`LOCKSQL_PII_DIR`** (lockhub#41). With it, the console keeps its PII
+  rule sets in that directory instead of the profile's: `lock up` sets it
+  to the console's own volume, its copy of the profile being read-only, so
+  a first start no longer needs a rule set written beforehand by locksql's
+  own launcher. The profile's sets are copied in once; from then on the
+  console's copy is in force (a drift from the profile's set is told at
+  start).
+
 ### Changed
 
 - **Plan hash coverage** (#119). The plan hash also covers the operators

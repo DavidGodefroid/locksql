@@ -219,6 +219,25 @@ func legacyRulesNotice(cwd, projectRoot, rulesPath string) string {
 	return fmt.Sprintf("note: %s is no longer read outside a project; PII rules now live in %s (copy it there to keep its rules)", old, rulesPath)
 }
 
+// PIIDirEnv names the directory where the console keeps its PII rule
+// sets (pii/<set>.toml) instead of the profile's directory: lock up sets
+// it to the console's own volume, its profile copy being read-only.
+const PIIDirEnv = "LOCKSQL_PII_DIR"
+
+// piiDirNotice is one line when the profile's directory profileDir (""
+// without Options.PIIDir) holds the rule set set with other content than
+// the console's copy at rulesPath, the one in force; "" otherwise.
+func piiDirNotice(profileDir, set, rulesPath string) string {
+	if profileDir == "" {
+		return ""
+	}
+	theirs, err := pii.SetPath(profileDir, set)
+	if err != nil || !pii.SetExists(profileDir, set) || pii.SameSet(theirs, rulesPath) {
+		return ""
+	}
+	return fmt.Sprintf("note: the PII rule set %q of the profile (%s) differs from this console's (%s), which is in force: the console's copy was seeded once and is edited here (pii add, the PII proposals); remove it from the console's volume to take the profile's again", set, theirs, rulesPath)
+}
+
 // newIsolationEnv builds what Run's isolation checks read; tests replace it.
 var newIsolationEnv = realIsolationEnv
 
@@ -337,6 +356,22 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 	rulesDir := rulesDirFor(cfg.ProjectRoot, ucp)
+	// The profile's own directory, when the console keeps its rule sets
+	// elsewhere (Options.PIIDir): the sets it holds seed the console's.
+	profileRules := ""
+	if o.PIIDir != "" {
+		if !filepath.IsAbs(o.PIIDir) {
+			return fmt.Errorf("%w: %s must be an absolute path, got %q", ErrConfig, PIIDirEnv, o.PIIDir)
+		}
+		profileRules, rulesDir = rulesDir, o.PIIDir
+		seeded, err := pii.SeedSets(profileRules, rulesDir)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrConfig, err)
+		}
+		for _, f := range seeded {
+			o.IO.Println(safeText(fmt.Sprintf("note: PII rule set %s copied from the profile into %s, where this console keeps and edits its rule sets", filepath.Base(f), rulesDir), false))
+		}
+	}
 	key := config.ApprovedKey(cfg.ProjectRoot, p.Name)
 	n, err := migrateRules(rulesDir)
 	if err != nil {
@@ -355,6 +390,9 @@ func Run(ctx context.Context, o Options) error {
 	}
 	if n := legacyRulesNotice(o.Cwd, cfg.ProjectRoot, rulesPath); n != "" {
 		o.IO.Println(safeText(n, false))
+	}
+	if n := piiDirNotice(profileRules, ruleSet, rulesPath); n != "" {
+		o.IO.Println(paint.Warn(safeText(n, false)))
 	}
 	if n := implicitSharingNotice(p, ruleSet, cfg.Profiles); n != "" {
 		o.IO.Println(paint.Warn(safeText(n, false)))
