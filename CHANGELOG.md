@@ -39,6 +39,22 @@ This file records the changes a user or an agent has to know about.
   statement rolled back when they changed during it). `CREATE OR REPLACE`
   keeps the OIDs, so the definitions are hashed, not the OIDs.
 
+- **Hub mode** (`locksql console --hub URL --hub-key-file PATH --instance
+  NAME`, written by `lock up`; `locksql hub-key --instance NAME` prints the
+  instance key to pin). The human decides in lockhub instead of this
+  terminal: `query.run` answers `{"status":"pending","ticket":…,"instance":…}` (a result,
+  not an error; over MCP, lockkit's standard pending answer), the plan kept in lockkit's persistent plans store, bound to
+  the client's account, the policy fingerprint and the plan hash; the ticket
+  carries the approval screen with every value of the statement masked.
+  `locksql_run` with `ticket` (CLI: `locksql run TICKET`) runs it once the
+  hub's signed decision approves it: the statement is planned again from
+  its stored text and its plan hash compared before anything runs, then
+  checked again in the statement's transaction. A changed plan answers
+  `{"status":"stale","ticket":<new>}` with a new ticket; a denial carries the
+  human's reason. `--auto` is refused with `--hub`, Shift+Tab does not turn
+  auto mode on, and statements with `${placeholders}` are refused (values
+  are typed in the console).
+
 ### Fixed
 
 - **Audit writes fail closed** (lockkit #5). An approved or

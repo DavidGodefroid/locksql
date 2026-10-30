@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"os"
 	"os/exec"
 	"os/user"
@@ -92,6 +93,7 @@ func trustedBinary() (string, error) {
 type consoleArgs struct {
 	profile, project               string
 	auto, allowUnmask, showResults bool
+	hub                            kconsole.HubOptions
 	// noUpdateCheck forwards LOCKSQL_NO_UPDATE_CHECK, which the helper
 	// does not pass on, as an internal flag.
 	noUpdateCheck bool
@@ -111,6 +113,9 @@ func (a consoleArgs) argv() []string {
 	}
 	if a.showResults {
 		out = append(out, "--show-results")
+	}
+	if a.hub.Enabled() {
+		out = append(out, "--hub", a.hub.URL, "--hub-key-file", a.hub.KeyFile, "--instance", a.hub.Instance)
 	}
 	return out
 }

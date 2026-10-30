@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/DavidGodefroid/lockkit/hubclient"
 	"io"
 	"os"
 	"strings"
@@ -53,7 +54,7 @@ var helpSections = []helpSection{
 		{"tables", "--profile P --db D", ""},
 		{"describe", "--profile P --db D TABLE", ""},
 		{"plan", `--profile P --db D [--unmask] "SQL" | -`, ""},
-		{"run", "--profile P PLAN_ID", ""},
+		{"run", "--profile P PLAN_ID|TICKET", ""},
 		{"pii", "list|add --profile P [COLUMN]", ""},
 		{"request", `--profile P "tier=write" | "limits.max_rows=500" | "allow=app.t.c"`, ""},
 		{"logout", "--profile P", ""},
@@ -155,6 +156,14 @@ func runEnv(e env, args []string) int {
 		return exitOK
 	case "console":
 		return runConsole(e, args[1:])
+	case "hub-key":
+		// The instance's public key, for lock up to pin at the hub; the
+		// key itself stays in the console account's home.
+		if err := hubclient.HubKeyCommand(stdout, "", args[1:]); err != nil {
+			fmt.Fprintln(stderr, "locksql hub-key:", err)
+			return exitUsage
+		}
+		return exitOK
 	case "status":
 		return runStatus(e, args[1:])
 	case "forget":
