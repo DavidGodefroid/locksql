@@ -19,6 +19,7 @@ import (
 	"github.com/DavidGodefroid/lockkit/plans"
 	"github.com/DavidGodefroid/lockkit/ticket"
 
+	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/product"
 )
@@ -353,5 +354,46 @@ func TestHubModeRenewalIsAudited(t *testing.T) {
 	renew = auditRecords(t, h, "renew", next)
 	if len(renew) != 1 || renew[0]["reason"] != "renewed by ticket "+last || renew[0]["hub_sig"] != nil || renew[0]["approver"] != nil {
 		t.Fatalf("renewal records of an expired pending ticket %v", renew)
+	}
+}
+
+// The run of an expired ticket whose statement no longer plans is refused
+// and audited as a refused renewal, the hub's signature on it when an
+// approval came with the expiry (#136); each run is recorded, the
+// signature on the first only (the next ones find the plan expired, with
+// no decision).
+func TestHubModeRefusedRenewalIsAudited(t *testing.T) {
+	var hub *hubtest.Hub
+	clock := &testClock{at: time.Now()}
+	h := newHarness(t, writeProfile(), withHubAt(t, &hub, t.TempDir(), clock.now, nil))
+	guarded(h)
+	pr := h.plan(t, hubWrite, false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	d := decideSigned(t, hub, tk, ticket.Approved, "", func(d *ticket.Decision) {
+		d.At = clock.now().Add(10 * time.Minute).UTC().Truncate(time.Millisecond)
+	})
+	// The tier tightened to read while it waited: the write no longer
+	// plans.
+	tight := h.s.approved
+	tight.Profile.Tier = config.TierRead
+	if err := h.s.adopt(tight, "tightened"); err != nil {
+		t.Fatal(err)
+	}
+	if r := runTicket(t, h, tk); r.Error == nil || h.sess.runCount() != 0 {
+		t.Fatalf("run of an expired ticket that no longer plans: %s, runs %d", r.Result, h.sess.runCount())
+	}
+	if r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: tk}); r.Error == nil {
+		t.Fatalf("second run: %s", r.Result)
+	}
+	renew := auditRecords(t, h, "renew", tk)
+	if len(renew) != 2 || renew[0]["decision"] != "refused" || renew[0]["error"] == nil || renew[0]["sql"] != hubWrite {
+		t.Fatalf("renewal records %v", renew)
+	}
+	wantHubSigned(t, renew[0], d)
+	if renew[1]["decision"] != "refused" || renew[1]["hub_sig"] != nil {
+		t.Fatalf("second renewal record %v", renew[1])
+	}
+	if len(hub.Tickets()) != 1 {
+		t.Fatalf("tickets pushed %v, want none asked again", hub.Tickets())
 	}
 }
