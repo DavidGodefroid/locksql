@@ -134,9 +134,25 @@ func TestLiveFingerprintFollowsThePolicy(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 	looser := h.s.approved
 	looser.Profile.Limits.MaxRows *= 4
-	_ = h.s.adopt(looser, "applied")
+	if err := h.s.adopt(looser, "applied"); err == nil {
+		t.Fatal("a loosening adopted although its save failed")
+	}
 	if h.s.live.Load().fp != fp1 || inForce() != fp1 {
 		t.Fatal("unsaved loosening published to the hub")
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A tightening locksql cannot compile ends the session; the hub stays
+	// on the policy in force.
+	bad := h.s.approved
+	bad.Profile.Detectors = append(append([]string(nil), bad.Profile.Detectors...), "no-such-detector")
+	_ = h.s.adopt(bad, "tightened")
+	if _, ended := h.s.Ended(); !ended {
+		t.Fatal("refused tightening: the session goes on")
+	}
+	if h.s.live.Load().fp != fp1 || inForce() != fp1 {
+		t.Fatal("refused tightening published to the hub")
 	}
 }
 
