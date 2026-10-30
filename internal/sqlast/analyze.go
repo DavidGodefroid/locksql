@@ -667,6 +667,11 @@ func (an *analyzer) selectCore(s *Select, parent *scope) ([]column, *scope, erro
 			if err := an.dedupe(c.prov, "DISTINCT"); err != nil {
 				return nil, nil, err
 			}
+			// Removing duplicates compares the rows of the column with
+			// each other: like GROUP BY, the rows it covers are counted.
+			if c.prov.Sensitive && an.env.Masking {
+				node.needK = true
+			}
 		}
 	}
 	// GROUP BY.
