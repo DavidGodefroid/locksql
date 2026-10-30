@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -206,16 +205,15 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 
 	// 2. The .locksql directory, and pii in it: the console writes the PII
 	// rule sets there, unless it keeps them in a directory of its own
-	// (LOCKSQL_PII_DIR, as lock up runs it). When doctor sees that this
-	// may be so (why: the variable in its environment, or a lock up
-	// workspace), a .locksql or .locksql/pii the console does not own is a
+	// (LOCKSQL_PII_DIR, as lock up runs it). In a lock up workspace, a
+	// .locksql or .locksql/pii the console does not own is a
 	// warning, not a failure: doctor cannot know that every console of the
 	// project runs that way, and a console without the variable writes and
 	// trusts these directories. Writable by group or others still fails:
 	// they are the seed of the console's sets.
 	dir := filepath.Join(root, ".locksql")
 	sets := filepath.Join(dir, pii.SetsDir)
-	inForce, why := piiDirInForce(d, root)
+	why := lockUpWorkspace(d, root)
 	ownDir := func(title, path string) bool {
 		if d.lstat != nil {
 			if fi, err := d.lstat(path); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
@@ -232,7 +230,8 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 			case why != "" && perm&0o022 != 0:
 				r := &repair{what: "make " + path + " writable by its owner only (chmod go-w)", root: inDirScript(path, "chmod go-w .")}
 				if uid == me {
-					r.root, r.apply = "", func() error { return os.Chmod(path, perm&^0o022) }
+					mode := fi.Mode() & (fs.ModePerm | fs.ModeSetgid | fs.ModeSticky) &^ 0o022
+					r.root, r.apply = "", func() error { return os.Chmod(path, mode) }
 				}
 				add(checkFail, title, fmt.Sprintf("%s: %04o: writable by group or others; the console reads the PII rule sets there", path, perm),
 					"chmod go-w "+shellQuote(path), r)
@@ -261,7 +260,7 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 	}
 	setsOK := ownDir("project .locksql/pii", sets)
 	if why != "" {
-		piiDirChecks(d, inForce, sets, svc, add)
+		add(checkOK, "PII rule sets", "not checked here: lock up runs the console with "+console.PIIDirEnv+", which keeps them in its own volume, seeded from (and new masks merged from) the reviewed copy of "+sets+" that lock up gives it", "", nil)
 	}
 
 	// 3. The files both accounts read: the config, a legacy pii.toml, and
@@ -291,82 +290,28 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 	return out
 }
 
-// piiDirInForce is the PII rule-set directory of a console started with
-// doctor's environment (LOCKSQL_PII_DIR, "" without it), and why doctor
-// takes it that the console may keep its sets out of the project ("":
-// it does not): the variable, or a lock up workspace (lockfamily.yaml in
-// .lockfamily/ or, the layout before it, at the project's root), whose
-// consoles lock up runs with it.
-func piiDirInForce(d doctorEnv, root string) (dir, why string) {
-	if d.getenv != nil {
-		if dir = d.getenv(console.PIIDirEnv); dir != "" {
-			return dir, console.PIIDirEnv + " is set here"
-		}
-	}
-	// As lock up reads it: the root file only when there is no
-	// .lockfamily/ (a planted one is never read once it exists).
+// lockUpWorkspace says why doctor takes it that the project's consoles
+// keep their PII rule sets out of the project ("": it does not): a lock
+// up workspace, whose consoles lock up runs with LOCKSQL_PII_DIR. Its
+// lockfamily.yaml is found as lock up finds it: in .lockfamily/ as soon
+// as that exists, else (the layout before it) at the project's root.
+// Doctor's own environment says nothing of the console's: the console
+// started from this account is handed off to the console account with
+// a fresh environment.
+func lockUpWorkspace(d doctorEnv, root string) string {
 	lf := filepath.Join(root, ".lockfamily")
 	f := filepath.Join(lf, "lockfamily.yaml")
-	if fi, err := d.stat(lf); err != nil || !fi.IsDir() {
+	lstat := d.lstat
+	if lstat == nil {
+		lstat = d.stat
+	}
+	if _, err := lstat(lf); err != nil {
 		f = filepath.Join(root, "lockfamily.yaml")
 	}
 	if fi, err := d.stat(f); err == nil && fi.Mode().IsRegular() {
-		return "", "a lock up workspace (" + f + ")"
+		return "a lock up workspace (" + f + ")"
 	}
-	return "", ""
-}
-
-// piiDirChecks reports where the console keeps the PII rule sets when not
-// in the project (seed: the project's sets it seeds them from and merges
-// new masks from): dir and its pii/, which the console account must own,
-// or, dir unknown, lock up's console volume.
-func piiDirChecks(d doctorEnv, dir, seed string, svc svcAccount, add func(state, title, detail, fix string, r *repair)) {
-	const title = "PII rule sets"
-	if dir == "" {
-		add(checkOK, title, "not checked here: lock up runs the console with "+console.PIIDirEnv+", which keeps them in its own volume, seeded from (and new masks merged from) the reviewed copy of "+seed+" that lock up gives it", "", nil)
-		return
-	}
-	if !filepath.IsAbs(dir) {
-		add(checkFail, title, console.PIIDirEnv+"="+dir+": not an absolute path (the console refuses to start)", "set "+console.PIIDirEnv+" to an absolute path", nil)
-		return
-	}
-	for _, path := range []string{dir, filepath.Join(dir, pii.SetsDir)} {
-		if d.lstat != nil {
-			if fi, err := d.lstat(path); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
-				why := "the console refuses it"
-				if path == dir {
-					why = "doctor refuses it (the console would follow it out of its own directory)"
-				}
-				add(checkFail, title, path+" ("+console.PIIDirEnv+") is a symbolic link: "+why, "replace it with a directory", nil)
-				return
-			}
-		}
-		fi, err := d.stat(path)
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			if path == dir {
-				add(checkOK, title, dir+" ("+console.PIIDirEnv+"): not created yet; the console makes it at its first rule set, seeded from "+seed, "", nil)
-				return
-			}
-			continue
-		case err != nil:
-			add(checkWarn, title, path+" ("+console.PIIDirEnv+"): not checked, this account cannot see it ("+err.Error()+")", "run doctor from an account that can, or check it from the console account", nil)
-			return
-		}
-		uid, _, ok := d.ownerOf(fi)
-		perm := fi.Mode().Perm()
-		switch {
-		case !ok:
-		case !fi.IsDir():
-			add(checkFail, title, path+" ("+console.PIIDirEnv+") is not a directory", "remove it, or set "+console.PIIDirEnv+" to a directory", nil)
-			return
-		case uid != svc.uid || perm&0o022 != 0:
-			add(checkFail, title, fmt.Sprintf("%s (%s): %04o, owner uid %d; the console account (%s, uid %d) must own it (it writes the PII rule sets there), writable by no one else", path, console.PIIDirEnv, perm, uid, svc.name, svc.uid),
-				fmt.Sprintf("sudo chown %d %s && sudo chmod go-w %s", svc.uid, shellQuote(path), shellQuote(path)), nil)
-			return
-		}
-	}
-	add(checkOK, title, fmt.Sprintf("%s (%s), owned by %s; seeded from %s", dir, console.PIIDirEnv, svc.name, seed), "", nil)
+	return ""
 }
 
 // projectRuleSets are the PII rule sets the project's profiles use, and
