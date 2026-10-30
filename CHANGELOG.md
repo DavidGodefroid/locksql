@@ -7,7 +7,14 @@ This file records the changes a user or an agent has to know about.
 ## v0.11.1 (2026-10-30)
 
 Supported lockhub: v0.2.1 or later; v0.2.2 or later under `lock up`
-(docs/usage.md, "Approving in lockhub (hub mode)", #135).
+([docs/usage.md](docs/usage.md#approving-in-lockhub-hub-mode), #135).
+
+### Upgrading
+
+- Records written by consoles before v0.11.1 stay unsigned under
+  `lock audit verify --lock`; their hub denials and the approvals that
+  expired before their run show there as decisions not in the log, not as
+  problems.
 
 ### Fixed
 
@@ -17,11 +24,12 @@ Supported lockhub: v0.2.1 or later; v0.2.2 or later under `lock up`
   `lock audit verify --lock INSTANCE=PATH` checks it against the decision
   the hub signed instead of reporting it unsigned. The hub's denials are
   now audited too (`denied`, with the reason, approver, facade and
-  `hub_sig`), and the run of an expired ticket writes a `renew` record
-  for every answer: the new ticket (also when planned again as stale), or
-  refused with why (#136, #137). It carries the approver, facade and
-  `hub_sig` when an approval came with the expiry (an approval the console
-  could not use).
+  `hub_sig`), and so is the agent-side renewal (the run of an expired
+  ticket, not audited before; renewals asked in lockhub already were): a
+  `renew` record for every answer, the new ticket (also when planned again
+  as stale) or refused with why (#136, #137). That record carries the
+  approver, facade and `hub_sig` when an approval came with the expiry (an
+  approval the console could not use; only the first run of the ticket).
 - **`locksql doctor` in a `lock up` workspace** (#130, #134). In a project
   whose `lockfamily.yaml` lock up reads (`.lockfamily/`, or the root when
   there is no `.lockfamily`), a `.locksql/` or `.locksql/pii/` the console
