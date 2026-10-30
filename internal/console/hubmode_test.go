@@ -5,6 +5,8 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,8 +17,10 @@ import (
 	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"github.com/DavidGodefroid/lockkit/hubclient"
 	"github.com/DavidGodefroid/lockkit/hubclient/hubtest"
+	"github.com/DavidGodefroid/lockkit/plans"
 	"github.com/DavidGodefroid/lockkit/ticket"
 
+	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/product"
@@ -258,7 +262,7 @@ func TestHubModeHiddenRefusalSurvivesStale(t *testing.T) {
 	hub.Decide(tk, ticket.Approved, "")
 	next := pendingTicket(t, runTicket(t, h, tk), "stale")
 	// The new plan keeps the refusal waiting for its decision.
-	p, err := h.s.cfg.Hub.Store.ByTicket(next, hubCaller(context.Background()))
+	p, err := h.s.cfg.Hub.Store.ByTicket(next, hubCaller(context.Background(), ipc.Requester{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,5 +275,248 @@ func TestHubModeHiddenRefusalSurvivesStale(t *testing.T) {
 	wantCode(t, r, ipc.CodeRefused)
 	if r.Error.Message != hiddenWeightRefusal || slices.Contains(h.sess.runs, q) {
 		t.Fatalf("refusal %q, runs %q", r.Error.Message, h.sess.runs)
+	}
+}
+
+// A plan and its ticket run only for the agent that asked for them (its
+// lea token, decision H3): another agent's token is refused, and the plan
+// stays the requester's.
+func TestHubModeWrongRequester(t *testing.T) {
+	var hub *hubtest.Hub
+	h := newHarness(t, uatProfile(), withHub(t, &hub))
+	alice := ipc.Requester{Agent: "dev-alice", Token: "hash-of-alice-token"}
+	bob := ipc.Requester{Agent: "dev-bob", Token: "hash-of-bob-token"}
+	var pr ipc.PlanResult
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Requester: alice}, &pr)
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID, Requester: bob}), ipc.CodeWrongRequester)
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeWrongRequester)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID, Requester: alice}), "pending")
+	raw := string(hub.Ticket(tk))
+	if !strings.Contains(raw, `claims lea agent \"dev-alice\"`) || strings.Contains(raw, alice.Token) {
+		t.Fatalf("ticket requester: %s", raw)
+	}
+	hub.Decide(tk, ticket.Approved, "")
+	run := func(who ipc.Requester) ipc.Response {
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: tk, Requester: who})
+			if r.Error == nil || !strings.Contains(r.Error.Message, "no decision") || time.Now().After(deadline) {
+				return r
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	for _, who := range []ipc.Requester{bob, {}, {Agent: "dev-alice", Token: "forged"}} {
+		wantCode(t, run(who), ipc.CodeWrongRequester)
+	}
+	if slices.Contains(h.sess.runs, selectUsers) {
+		t.Fatal("another agent's ticket ran")
+	}
+	if r := run(alice); r.Error != nil {
+		t.Fatalf("the requester's run: %q", r.Error.Message)
+	}
+	if strings.Contains(h.auditLog(t), alice.Token) {
+		t.Error("the token is in the audit log")
+	}
+}
+
+// Outside hub mode a plan id runs only for its requester too.
+func TestPlanIDWrongRequester(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	var pr ipc.PlanResult
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Requester: ipc.Requester{Token: "a"}}, &pr)
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID, Requester: ipc.Requester{Token: "b"}}), ipc.CodeWrongRequester)
+	if h.io.promptCount() != 0 {
+		t.Fatal("asked the human for another agent's plan")
+	}
+}
+
+func writeProfile() config.Profile {
+	p := uatProfile()
+	p.Tier = config.TierWrite
+	return p
+}
+
+// A write that changes more rows than its approval allows is rolled back
+// in its own transaction and answered stale with a new ticket, whose bound
+// covers what it would have changed (decision H2); approved again, it runs.
+// Both on an engine that checks the definitions (guarded) and one that
+// only counts the rows.
+func TestHubModeRowcountRecheck(t *testing.T) {
+	for _, withGuard := range []bool{true, false} {
+		name := "counted"
+		if withGuard {
+			name = "guarded"
+		}
+		t.Run(name, func(t *testing.T) {
+			const q = "UPDATE users SET note = 'x' WHERE id = 1"
+			var hub *hubtest.Hub
+			h := newHarness(t, writeProfile(), withHub(t, &hub))
+			if withGuard {
+				guarded(h)
+			}
+			pr := h.plan(t, q, false)
+			tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+			body := hubBody(t, h, tk)
+			if body.MaxAffected <= 0 || body.MaxAffected >= 500 {
+				t.Fatalf("bound %d", body.MaxAffected)
+			}
+			if raw := string(hub.Ticket(tk)); !strings.Contains(raw, "rows changed: at most") {
+				t.Fatalf("the screen does not show the bound: %s", raw)
+			}
+			h.sess.result = engine.Result{Affected: 500}
+			hub.Decide(tk, ticket.Approved, "")
+			next := pendingTicket(t, runTicket(t, h, tk), "stale")
+			if !slices.Contains(h.sess.rolledBack, q) {
+				t.Fatalf("not rolled back: %q", h.sess.rolledBack)
+			}
+			nb := hubBody(t, h, next)
+			if nb.MaxAffected < 500 {
+				t.Fatalf("the new bound %d does not cover the 500 rows", nb.MaxAffected)
+			}
+			if raw := string(hub.Ticket(next)); !strings.Contains(raw, "would have changed 500 rows") {
+				t.Fatalf("the new screen does not say why: %s", raw)
+			}
+			hub.Decide(next, ticket.Approved, "")
+			r := runTicket(t, h, next)
+			if r.Error != nil {
+				t.Fatalf("run of the new ticket: %q", r.Error.Message)
+			}
+			var rr ipc.RunResult
+			if err := json.Unmarshal(r.Result, &rr); err != nil || rr.Affected != 500 || len(h.sess.rolledBack) != 1 {
+				t.Fatalf("result %s, rolled back %q", r.Result, h.sess.rolledBack)
+			}
+			if withGuard && h.sess.countedRuns != 0 || !withGuard && h.sess.countedRuns != 2 {
+				t.Errorf("counted runs %d", h.sess.countedRuns)
+			}
+		})
+	}
+}
+
+// A write within its bound commits at once.
+func TestHubModeRowcountWithinBound(t *testing.T) {
+	const q = "DELETE FROM users WHERE id = 1"
+	var hub *hubtest.Hub
+	h := newHarness(t, writeProfile(), withHub(t, &hub))
+	h.sess.result = engine.Result{Affected: 1}
+	pr := h.plan(t, q, false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	hub.Decide(tk, ticket.Approved, "")
+	if r := runTicket(t, h, tk); r.Error != nil || len(h.sess.rolledBack) != 0 || !hub.Consumed(tk) {
+		t.Fatalf("run %+v, rolled back %q", r.Error, h.sess.rolledBack)
+	}
+}
+
+func hubBody(t *testing.T, h *harness, tk string) hubPlan {
+	t.Helper()
+	p, err := h.s.cfg.Hub.Store.ByTicket(tk, hubCaller(context.Background(), ipc.Requester{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body hubPlan
+	if err := json.Unmarshal(p.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestRowBound(t *testing.T) {
+	for n, want := range map[int64]int64{-1: 10, 0: 10, 1: 11, 10: 20, 500: 1000, math.MaxInt64: math.MaxInt64} {
+		if got := rowBound(n); got != want {
+			t.Errorf("rowBound(%d) = %d, want %d", n, got, want)
+		}
+	}
+}
+
+// The screen names the peer as the kernel reports it; the lea name is the
+// client's unverified claim, labelled so, escaped and cut.
+func TestAgentNameIsAClaim(t *testing.T) {
+	ctx := context.Background()
+	peer := kconsole.PeerText(ctx)
+	if got := agentName(ctx, ipc.Requester{}); got != peer {
+		t.Fatalf("no claim: %q", got)
+	}
+	got := agentName(ctx, ipc.Requester{Agent: "lead\x1b[2Jroot" + strings.Repeat("é", 100)})
+	if !strings.HasPrefix(got, peer+" · claims lea agent ") || strings.Contains(got, "\x1b") || len([]rune(got)) > len([]rune(peer))+100 {
+		t.Fatalf("claim: %q", got)
+	}
+}
+
+func TestNestedDML(t *testing.T) {
+	for q, want := range map[string]bool{
+		"WITH d AS (DELETE FROM t RETURNING id) UPDATE u SET x = 1":                               true,
+		"WITH d AS (INSERT INTO t VALUES (1) RETURNING id) SELECT * FROM d":                       true,
+		"WITH d AS MATERIALIZED (MERGE INTO t USING s ON true WHEN MATCHED THEN DELETE) SELECT 1": true,
+		"WITH d AS NOT MATERIALIZED (UPDATE t SET x = 1 RETURNING x) SELECT * FROM d":             true,
+		"WITH s AS (SELECT id FROM t) UPDATE u SET x = 1 WHERE id IN (SELECT id FROM s)":          false,
+		"UPDATE u SET note = 'delete' WHERE id = 1":                                               false,
+		"INSERT INTO u SELECT * FROM t":                                                           false,
+		"INSERT INTO b (id, update) VALUES (1, 2)":                                                false,
+		"DELETE FROM q WHERE id IN (SELECT id FROM q LIMIT 5 FOR UPDATE SKIP LOCKED)":             false,
+		"DELETE FROM q WHERE id IN (SELECT id FROM q FOR NO KEY UPDATE)":                          false,
+		"WITH d AS (SELECT 1) SELECT * FROM (WITH e AS (DELETE FROM t RETURNING 1) SELECT 1) x":   true,
+	} {
+		if got := nestedDML(sqlclass.Postgres, q); got != want {
+			t.Errorf("nestedDML(%q) = %v", q, got)
+		}
+	}
+	if nestedDML(sqlclass.MySQL, "UPDATE t SET s = CONCAT(INSERT(s, 1, 1, 'X'), 'y')") {
+		t.Error("MySQL's INSERT() function taken for a nested write")
+	}
+}
+
+func TestSideEffects(t *testing.T) {
+	st := engine.ObjectState{Objects: []engine.ObjectDef{
+		{Kind: "relation", Name: "app.users", Def: "r"},
+		{Kind: "trigger", Name: "app.users.audit", Def: "O"},
+		{Kind: "rule", Name: "app.users.r1", Def: "O"},
+		{Kind: "constraint", Name: "app.orders.fk", Def: "f\x1fFOREIGN KEY (uid) REFERENCES users(id) ON DELETE CASCADE"},
+		{Kind: "constraint", Name: "app.notes.fk", Def: "f\x1fFOREIGN KEY (uid) REFERENCES users(id)"},
+	}}
+	got := strings.Join(sideEffects(st), "|")
+	if got != "trigger app.users.audit|rule app.users.r1|foreign key app.orders.fk" {
+		t.Fatalf("side effects %q", got)
+	}
+}
+
+// A hub-mode write refuses a data-modifying statement inside it, and
+// names the triggers its bound does not count on its ticket.
+func TestHubModeWriteSideEffects(t *testing.T) {
+	var hub *hubtest.Hub
+	h := newHarness(t, writeProfile(), withHub(t, &hub))
+	st := guarded(h)
+	st.Objects = append(st.Objects, engine.ObjectDef{Kind: "trigger", Name: "app.users.audit", Def: "O"})
+	pr := h.plan(t, "UPDATE users SET note = 'x' WHERE id = 1", false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	if raw := string(hub.Ticket(tk)); !strings.Contains(raw, "trigger app.users.audit") {
+		t.Fatalf("ticket: %s", raw)
+	}
+}
+
+// A write plan stored without a rowcount bound (an older console) never
+// runs unbounded: it is stale.
+func TestBindRows(t *testing.T) {
+	w := &plan{st: sqlclass.Statement{Class: sqlclass.Write}}
+	if err := w.bindRows(hubPlan{}); !errors.Is(err, plans.ErrStale) {
+		t.Fatalf("unbounded write: %v", err)
+	}
+	if err := w.bindRows(hubPlan{MaxAffected: 12}); err != nil || w.maxAffected != 12 {
+		t.Fatalf("bounded write: %v %d", err, w.maxAffected)
+	}
+	r := &plan{st: sqlclass.Statement{Class: sqlclass.Read}}
+	if err := r.bindRows(hubPlan{}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+}
+
+func TestSideEffectsVolatileFunction(t *testing.T) {
+	fn := func(vol string) engine.ObjectDef {
+		return engine.ObjectDef{Kind: "function", Name: "app.f(integer)", Def: strings.Join([]string{vol, "BEGIN \x1f weird END", "", "", "f", "f", "plpgsql", "integer", "integer", "", "alice"}, "\x1f")}
+	}
+	if got := sideEffects(engine.ObjectState{Objects: []engine.ObjectDef{fn("v")}}); len(got) != 1 || got[0] != "function app.f(integer)" {
+		t.Fatalf("volatile: %q", got)
+	}
+	if got := sideEffects(engine.ObjectState{Objects: []engine.ObjectDef{fn("i"), fn("s")}}); len(got) != 0 {
+		t.Fatalf("immutable/stable: %q", got)
 	}
 }

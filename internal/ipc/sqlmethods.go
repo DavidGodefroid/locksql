@@ -84,6 +84,9 @@ const (
 	CodeNoSuchPlan    = kipc.CodeNoSuchPlan
 	CodeConnLost      = kipc.CodeConnLost
 	CodePolicyPending = kipc.CodePolicyPending
+	// CodeWrongRequester: a plan or ticket presented by another agent than
+	// the one that made it (Requester.Token).
+	CodeWrongRequester = kipc.CodeWrongRequester
 
 	CodeParseError     = kipc.CodeParseError
 	CodeInvalidRequest = kipc.CodeInvalidRequest
@@ -100,6 +103,12 @@ type (
 	PIIAddParams  = kipc.PIIAddParams
 	ChangeParams  = kipc.ChangeParams
 	ChangeResult  = kipc.ChangeResult
+	// Requester is the agent behind a plan or run request: its lea name and
+	// the hash of its lea token (mcpkit.RequesterFromEnv). A plan or ticket
+	// runs only for the token that asked for it. Agents of one account can
+	// read each other's token: it catches mistakes, it is no security
+	// boundary.
+	Requester = kipc.Requester
 )
 
 // PlanParams asks for a plan (classification, EXPLAIN, weight, approval).
@@ -111,6 +120,8 @@ type PlanParams struct {
 	// shown to the human on the approval screen and audited. It is
 	// untrusted text of at most MaxIntent bytes.
 	Intent string `json:"intent,omitempty"`
+	// Requester is the agent asking (the plan runs only for its token).
+	Requester Requester `json:"requester,omitzero"`
 }
 
 // MaxIntent bounds PlanParams.Intent.
@@ -143,6 +154,8 @@ type RunParams struct {
 	// Ticket runs the plan of a ticket decided in lockhub (hub mode), in
 	// place of PlanID.
 	Ticket string `json:"ticket,omitempty"`
+	// Requester is the agent asking: the token that planned it.
+	Requester Requester `json:"requester,omitzero"`
 }
 
 // RunResult is a capped, masked result. Text is the rendered TSV.
