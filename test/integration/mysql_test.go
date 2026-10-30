@@ -243,6 +243,12 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 
 	t.Run("counted run rolls back", func(t *testing.T) {
 		s := connectMySQL(t, m, srv, "rw", config.TierWrite, 30*time.Second)
+		// The seed is shared: the committed change is undone.
+		t.Cleanup(func() {
+			if _, err := s.Run(ctx, "app", sqlclass.Statement{Class: sqlclass.Write, Kind: "update", SQL: "UPDATE small SET label = 'a' WHERE id = 1", Limit: -1}, 0); err != nil {
+				t.Error(err)
+			}
+		})
 		assertCountedRun(t, s, sqlclass.MySQL, "app", "UPDATE small SET label = CONCAT(label, 'x') WHERE id = 1", "SELECT label FROM small WHERE id = 1")
 	})
 
