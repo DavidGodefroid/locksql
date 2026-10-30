@@ -194,3 +194,26 @@ func TestHandoffForwardsHubPlainHTTP(t *testing.T) {
 		t.Fatalf("command %q", c)
 	}
 }
+
+// Every flag lockkit's HubOptions registers reaches the console account:
+// a flag lockkit adds later fails here rather than being dropped (#111).
+func TestHandoffForwardsEveryHubFlag(t *testing.T) {
+	fs := flag.NewFlagSet("hub", flag.ContinueOnError)
+	var hub kconsole.HubOptions
+	hub.Register(fs)
+	fs.VisitAll(func(f *flag.Flag) {
+		v := "x"
+		if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+			v = "true"
+		}
+		if err := fs.Set(f.Name, v); err != nil {
+			t.Fatal(err)
+		}
+	})
+	argv := consoleArgs{project: "/p", hub: hub}.argv()
+	fs.VisitAll(func(f *flag.Flag) {
+		if !slices.Contains(argv, "--"+f.Name) {
+			t.Errorf("--%s is not forwarded: %q", f.Name, argv)
+		}
+	})
+}
