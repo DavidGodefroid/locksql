@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -249,52 +248,58 @@ func TestDoctorSameUserMode(t *testing.T) {
 	}
 }
 
-func TestInstallPrint(t *testing.T) {
-	// The test binary belongs to the test account: see
-	// TestInstallRefusesABinaryAnotherAccountCanChange.
-	o := installCLI(t, "--client", "agent", "--print", "--trust-binary")
-	if o.code != 0 {
-		t.Fatalf("exit %d: %s", o.code, o.stderr)
+// The image refuses locksql install: no fix may send the human there.
+func TestDoctorFixesNameNoHostInstall(t *testing.T) {
+	missing := func(d *doctorEnv) {
+		d.lookupUser = func(string) (*user.User, error) { return nil, errors.New("no such user") }
 	}
-	adduser := "useradd"
-	if runtime.GOOS == "darwin" {
-		adduser = "sysadminctl"
-	}
-	for _, want := range []string{adduser, "locksql-clients", "/etc/locksql/system.toml", "x11          = \"refuse\""} {
-		if !strings.Contains(o.stdout, want) {
-			t.Errorf("install script lacks %q", want)
+	noSocketDir := func(d *doctorEnv) {
+		stat := d.stat
+		d.stat = func(p string) (os.FileInfo, error) {
+			if p == "/run/locksql" {
+				return nil, fs.ErrNotExist
+			}
+			return stat(p)
 		}
 	}
-	if runtime.GOOS == "darwin" {
-		if !strings.Contains(o.stdout, "install -d -m 0710 -o locksql -g locksql-clients") {
-			t.Error("install script lacks the 0710 socket directory")
+	noSetgid := func(d *doctorEnv) {
+		stat := d.stat
+		d.stat = func(p string) (os.FileInfo, error) {
+			if p == "/run/locksql" {
+				return fakeInfo{"locksql", fs.ModeDir | 0o710}, nil
+			}
+			return stat(p)
 		}
 	}
-	if o := installCLI(t, "--client", "locksql", "--print"); o.code != exitUsage {
-		t.Error("same agent and console account accepted")
+	writable := func(d *doctorEnv) { d.ownerOf = func(os.FileInfo) (int, int, bool) { return 1000, 1000, true } }
+	badSys := func(d *doctorEnv) {
+		d.loadSys = func() (*sysconf.Config, error) { return nil, errors.New("bad system.toml") }
 	}
-	if o := installCLI(t, "--client", "a;id", "--print"); o.code != exitUsage {
-		t.Error("shell metacharacters accepted in an account name")
-	}
-}
-
-// Without setgid the socket is born with the console's own group, which it
-// may not change to the client group it is not a member of.
-func TestLinuxInstallScriptSetgidSocketDir(t *testing.T) {
-	s := linuxInstallScript("/tmp/locksql", "agent", "locksql", "locksql-clients", "")
-	for _, want := range []string{
-		`printf 'd /run/locksql 2710 locksql locksql-clients -\n' > /etc/tmpfiles.d/locksql.conf`,
-		"|| install -d -m 2710 -o locksql -g locksql-clients /run/locksql",
-		// A system without systemd has no /etc/tmpfiles.d: the fallback
-		// must still be reached.
-		"install -d -m 0755 -o root -g root /etc/tmpfiles.d\nprintf",
+	for name, c := range map[string]struct {
+		sys    *sysconf.Config
+		mutate func(*doctorEnv)
+		title  string
+	}{
+		"same-user":            {nil, func(*doctorEnv) {}, "separation"},
+		"same-user binary":     {nil, writable, "binary"},
+		"bad system config":    {separatedSys(), badSys, "system setup"},
+		"no console account":   {separatedSys(), missing, "console account"},
+		"writable binary":      {separatedSys(), writable, "binary"},
+		"no socket directory":  {separatedSys(), noSocketDir, "socket directory"},
+		"socket dir no setgid": {separatedSys(), noSetgid, "socket directory"},
 	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("install script lacks %q:\n%s", want, s)
+		d := fakeDoctor(c.sys)
+		c.mutate(&d)
+		found := false
+		for _, ch := range doctor(d, doctorProject(t, "ask"), "") {
+			if strings.Contains(ch.fix, "locksql install") || strings.Contains(ch.detail, "locksql install") {
+				t.Errorf("%s: %s: %q", name, ch.title, ch.fix)
+			}
+			found = found || ch.title == c.title && ch.fix != ""
 		}
-	}
-	if strings.Contains(s, " 0710 ") {
-		t.Errorf("install script still creates a 0710 directory:\n%s", s)
+		if !found {
+			t.Errorf("%s: no %q check with a fix", name, c.title)
+		}
 	}
 }
 

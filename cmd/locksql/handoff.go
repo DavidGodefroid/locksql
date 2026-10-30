@@ -85,7 +85,7 @@ func trustedBinary() (string, error) {
 	if msg, err := installSourceRefusal(installedBinary); err == nil && msg == "" {
 		return installedBinary, nil
 	}
-	return "", errors.New("no root-owned locksql binary to run as the console account: run sudo locksql install (it copies locksql to " + installedBinary + ")")
+	return "", errors.New("no root-owned locksql binary to run as the console account: " + imageHint)
 }
 
 // consoleArgs are the console flags passed on to the console account.
