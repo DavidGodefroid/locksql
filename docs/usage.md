@@ -722,17 +722,20 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
 `lock up`; `locksql hub-key --instance NAME` prints the instance key to pin)
 sends approvals to lockhub instead of asking on this terminal.
 
-Supported lockhub versions (lockhub's CHANGELOG lists the same under
-"Supported locks"): locksql v0.11.x (lockkit v0.7.1) needs lockhub v0.2.1
-or later, the first that takes its `devices: true`, reveals and renewals.
-Under `lock up`, use lockhub v0.2.2 or later: it sets `LOCKSQL_PII_DIR`
-(below), and its `lock add` pins locksql v0.11.0 or later (lockhub v0.2.0
-and v0.2.1 pin v0.10.0, whose console needs a PII rule set written before
-its first start). From locksql v0.11.1 the console's audit records of the
-hub's decisions carry the hub's signature (`hub_sig`), which
-`lock audit verify --lock INSTANCE=PATH` checks against the hub's key;
-it reports the records of older consoles as unsigned and checks them on
-ticket, outcome, approver and facade only.
+Supported lockhub versions: locksql v0.11.x (lockkit v0.7.1) needs lockhub
+v0.2.1 or later, the first whose "Supported locks" (lockhub's CHANGELOG)
+lists locksql v0.11.0, with `devices: true`, reveals and renewals. Under
+`lock up`, use lockhub v0.2.2 or later: it sets `LOCKSQL_PII_DIR` (below)
+and its `lock add` refuses locksql releases before v0.11.0 (lockhub v0.2.0
+and v0.2.1 accept v0.10.0 or later, and their `lock up` refuses a
+`.locksql/` without a PII rule set). From locksql v0.11.1 the console's
+audit records of the hub's decisions carry the hub's signature
+(`hub_sig`): `lock audit verify --lock INSTANCE=PATH` compares them with
+the decisions the hub signed (its data directory and key, `--data` and
+`--hub-key-file`). The records of older consoles are reported as unsigned
+there and checked on ticket, outcome, approver and facade only; and as
+those consoles do not record the hub's denials, the denials show as
+decisions not in the log, not as problems.
 
 In hub mode:
 
@@ -740,11 +743,13 @@ In hub mode:
   the console's plan store and its screen, every literal masked, goes to
   the hub in a signed ticket. `locksql run TICKET` (`locksql_run` with
   `ticket`) runs it once the human decided.
-- The audit log records each hub decision the console acts on, with the
+- The audit log records the hub's decisions the console acts on, with the
   ticket, the approver, the facade and the hub's signature (`hub_sig`): the
   `approved` record before the run (the `run` record after it carries no
-  signature), a `denied` record (with the human's reason), and a `renew`
-  record when the run of an expired ticket asks for it again.
+  signature) and a `denied` record (with the human's reason). The run of an
+  expired ticket writes a `renew` record (renewed by the new ticket, or
+  refused); it carries the approver, facade and `hub_sig` only when the
+  expired ticket had been approved (an approval the console could not use).
 - A plan and its ticket run only for the agent that asked for them: the
   client sends the agent's lea name and the hash of its `LEA_AGENT_TOKEN`
   (never the token), and another agent presenting the plan id or the
