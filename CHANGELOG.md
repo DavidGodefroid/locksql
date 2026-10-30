@@ -11,12 +11,13 @@ Supported lockhub: as v0.11.2.
 ### Changed
 
 - The SQLite engine embeds SQLite 3.54.1 (`modernc.org/sqlite` v1.61.0,
-  `modernc.org/libc` v1.79.0; was 3.53.4, #107). A query cancelled while
-  waiting under `busy_timeout` now stops at once instead of waiting out the
-  2 s timeout; nothing else changes for locksql (no shared cache, no prepared
-  statements). Release signing is unchanged: the release workflow updates
-  `sigstore/cosign-installer` to v4.1.2 and still installs cosign v2.6.1
-  (#108).
+  `modernc.org/libc` v1.79.0; was 3.53.4, #107). A statement cancelled, or
+  past its timeout, while it waits for a lock under `busy_timeout` now stops
+  then instead of waiting out the 2 s, and one whose context is done before
+  it starts stops within 1000 VM steps instead of running to completion; a
+  write's COMMIT blocked by a reader (rollback journal) still waits the 2 s.
+- Release signing is unchanged: CI and the release workflow use
+  `sigstore/cosign-installer` v4.1.2, still pinned to cosign v2.6.1 (#108).
 
 ## v0.11.2 (2026-10-31)
 
