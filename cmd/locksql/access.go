@@ -13,7 +13,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/pii"
 )
 
-// repair is a change `locksql doctor --fix` (and `locksql setup`) can make
+// repair is a change `locksql doctor --fix` can make
 // to fix a check: small, idempotent and never a loosening beyond what the
 // separated setup itself needs.
 type repair struct {

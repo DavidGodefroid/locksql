@@ -50,6 +50,52 @@ type fakeSession struct {
 	colsErr error               // answers the catalog Columns calls
 	// explainErr answers the EXPLAIN calls.
 	explainErr error
+	// objects, when set, makes the session an engine.ObjectGuard reading
+	// that state; duringRun runs between a guarded run's two checks.
+	objects     *engine.ObjectState
+	objectRefs  []engine.ObjectRefs
+	duringRun   func()
+	guardedRuns int
+}
+
+func (f *fakeSession) ObjectState(_ context.Context, _ string, refs engine.ObjectRefs) (engine.ObjectState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.objects == nil {
+		return engine.ObjectState{}, engine.ErrNoObjectGuard
+	}
+	f.objectRefs = append(f.objectRefs, refs)
+	return cloneState(*f.objects), nil
+}
+
+func (f *fakeSession) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check func(engine.ObjectState, bool) error) (engine.Result, error) {
+	before, err := f.ObjectState(ctx, db, refs)
+	if err != nil {
+		return engine.Result{}, err
+	}
+	f.mu.Lock()
+	f.guardedRuns++
+	f.mu.Unlock()
+	if err := check(before, false); err != nil {
+		return engine.Result{}, err
+	}
+	res, err := f.Run(ctx, db, st, maxRows)
+	if err != nil {
+		return res, err
+	}
+	if f.duringRun != nil {
+		f.duringRun()
+	}
+	after, _ := f.ObjectState(ctx, db, refs)
+	if err := check(after, true); err != nil {
+		return engine.Result{}, err
+	}
+	return res, nil
+}
+
+func cloneState(s engine.ObjectState) engine.ObjectState {
+	s.Objects = slices.Clone(s.Objects)
+	return s
 }
 
 func (f *fakeSession) ServerVersion() string { return "11.4.0-MariaDB" }
@@ -147,6 +193,9 @@ type fakeIO struct {
 	bells int
 	// status is the last status line set (StatusLine).
 	status string
+	// transcript is everything the human sees, in order: lines, prompts
+	// ("? " and "?secret "), bells ("<bell>"). The golden screens compare it.
+	transcript []string
 }
 
 func (f *fakeIO) SetStatus(s string) {
@@ -165,17 +214,20 @@ func (f *fakeIO) Bell() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bells++
+	f.transcript = append(f.transcript, "<bell>")
 }
 
 func (f *fakeIO) Println(s string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.out = append(f.out, s)
+	f.transcript = append(f.transcript, s)
 }
 
 func (f *fakeIO) Ask(ctx context.Context, prompt string, _ time.Duration) (string, bool) {
 	f.mu.Lock()
 	f.prompts = append(f.prompts, prompt)
+	f.transcript = append(f.transcript, "? "+prompt)
 	if f.block {
 		ch := f.blocked
 		f.mu.Unlock()
@@ -204,6 +256,7 @@ func (f *fakeIO) AskSecret(_ context.Context, prompt string) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.prompts = append(f.prompts, prompt)
+	f.transcript = append(f.transcript, "?secret "+prompt)
 	if len(f.secrets) == 0 {
 		return nil, errors.New("no answer")
 	}

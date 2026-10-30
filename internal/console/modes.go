@@ -43,10 +43,31 @@ func (s *Server) Key(k Key) {
 	}
 }
 
+// widenRefused refuses a switch that widens while a prompt waits for the
+// human: the answer or the finger meant for that prompt must not decide
+// another decision nested in it. Narrowing stays allowed.
+func (s *Server) widenRefused(what string) bool {
+	if s.prompting == 0 {
+		return false
+	}
+	s.println(paint.Warn(what + ": not while a prompt waits; answer it first"))
+	return true
+}
+
+// notRecorded tells the human that a widening stays off: its audit record
+// could not be written, and a widening takes effect only once recorded.
+func (s *Server) notRecorded(what string) {
+	s.println(paint.Fail(what + ": not recorded in the audit log, so it stays off"))
+	s.refreshStatus()
+}
+
 // toggleMode switches between manual and auto mode, and says so.
 func (s *Server) toggleMode() {
 	if s.profile.Production {
 		s.println(paint.Warn("auto mode is not available on a production profile: every statement is prompted"))
+		return
+	}
+	if !s.auto && s.widenRefused("auto mode") {
 		return
 	}
 	if !s.auto && s.cfg.Fingerprint {
@@ -61,8 +82,14 @@ func (s *Server) toggleMode() {
 			return
 		}
 	}
+	if !s.auto && s.writeAudit(audit.Record{Event: audit.EventMode, Decision: "auto"}) != nil {
+		s.notRecorded("auto mode")
+		return
+	}
 	s.auto = !s.auto
-	s.audit(audit.Record{Event: audit.EventMode, Decision: s.modeName()})
+	if !s.auto {
+		s.audit(audit.Record{Event: audit.EventMode, Decision: s.modeName()})
+	}
 	if s.auto {
 		s.println(paint.Yellow(ui.MarkWarn + " auto mode: statements allowed by the tier and the weight check run without a prompt; unmasked queries and REFUSE verdicts are still prompted or refused (Shift+Tab: back to manual)"))
 	} else {
@@ -84,12 +111,17 @@ func (s *Server) toggleResults() {
 		s.println(paint.Warn("results stay masked at level 1: the agent's account can read this window"))
 		return
 	}
-	s.showResults = !s.showResults
-	decision := "hidden"
-	if s.showResults {
-		decision = "shown"
+	if !s.showResults && s.widenRefused("clear results") {
+		return
 	}
-	s.audit(audit.Record{Event: audit.EventResults, Decision: decision})
+	if !s.showResults && s.writeAudit(audit.Record{Event: audit.EventResults, Decision: "shown"}) != nil {
+		s.notRecorded("clear results")
+		return
+	}
+	s.showResults = !s.showResults
+	if !s.showResults {
+		s.audit(audit.Record{Event: audit.EventResults, Decision: "hidden"})
+	}
 	if s.showResults {
 		msg := "results: the result of each query is printed here in clear, PII included; the agent still gets it masked (Ctrl-O: hide)"
 		if s.profile.Production {
@@ -114,6 +146,9 @@ func (s *Server) toggleUnmask(ctx context.Context) {
 		s.refreshStatus()
 		return
 	}
+	if s.widenRefused("unmask") {
+		return
+	}
 	warn := "allow clients to ask for unmasked PII output? Each such query is still approved here, never auto-approved"
 	if s.profile.Production {
 		warn += " (PRODUCTION data)"
@@ -126,8 +161,11 @@ func (s *Server) toggleUnmask(ctx context.Context) {
 		s.println("unmask: still off")
 		return
 	}
+	if s.writeAudit(audit.Record{Event: audit.EventUnmask, Decision: "allowed", Approval: s.approver.Mode()}) != nil {
+		s.notRecorded("unmask")
+		return
+	}
 	s.allowUnmask = true
-	s.audit(audit.Record{Event: audit.EventUnmask, Decision: "allowed", Approval: s.approver.Mode()})
 	s.println(red + "unmask: allowed; clients may ask for unmasked output, approved here each time (:unmask: off)" + reset)
 	s.refreshStatus()
 }

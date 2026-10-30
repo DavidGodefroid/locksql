@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"github.com/DavidGodefroid/lockkit/sanitize"
+	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/lockkit/ui"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
@@ -367,7 +369,7 @@ func (s *Server) CheckPolicy() {
 		return
 	}
 	changes := config.Diff(s.approved, cur)
-	if !loosens(changes) {
+	if !kconsole.Loosens(changes) {
 		s.pending = nil
 		if err := s.adopt(cur, "tightened"); err != nil {
 			s.println("policy change not applied: " + safeText(err.Error(), false))
@@ -383,34 +385,39 @@ func (s *Server) CheckPolicy() {
 	s.println(red + "pending policy change (loosening) — type :review to see it" + reset)
 }
 
-func loosens(changes []config.Change) bool {
-	for _, c := range changes {
-		if c.Loosens {
-			return true
-		}
-	}
-	return false
-}
-
 // adopt records p as the approved policy and enforces it. A change of the
 // connection settings, the transport (the tls settings, the ssh table,
 // proxy_command) included, ends the session: the open connection no longer
 // matches the policy.
 func (s *Server) adopt(p config.Policy, decision string) error {
+	rec := audit.Record{Event: audit.EventPolicy, Decision: decision}
+	if decision == "applied" {
+		// A loosening takes effect only once recorded: the record comes
+		// first, and a failed write leaves the last approved policy.
+		rec.Approval = s.approver.Mode()
+		if err := s.writeAudit(rec); err != nil {
+			return fmt.Errorf("the approval could not be recorded in the audit log: %w", err)
+		}
+	}
+	// failed records that an applied change did not happen.
+	failed := func(err error) error {
+		if decision == "applied" {
+			s.audit(audit.Record{Event: audit.EventPolicy, Decision: "failed", Error: secrets.Sanitize(err)})
+		}
+		return err
+	}
 	if s.cfg.StateDir != "" && s.cfg.ApprovedKey != "" {
 		if err := config.SaveApproved(s.cfg.StateDir, s.cfg.ApprovedKey, p); err != nil {
-			return err
+			return failed(err)
 		}
 	}
 	old := s.profile
 	if err := s.apply(p); err != nil {
-		return err
+		return failed(err)
 	}
-	rec := audit.Record{Event: audit.EventPolicy, Decision: decision}
-	if decision == "applied" {
-		rec.Approval = s.approver.Mode()
+	if decision != "applied" {
+		s.audit(rec)
 	}
-	s.audit(rec)
 	n := p.Profile
 	if n.Production && !old.Production && s.sess != nil {
 		// The start-up privilege audit accepted extra grants with a typed

@@ -160,20 +160,28 @@ type plan struct {
 	// shadow are the functions and operators checkShadows looks up again
 	// just before the run (nil: none to check).
 	shadow *shadowNames
+	// refs are the objects the statement names, and hash the plan hash:
+	// the run checks it again in its own transaction (planhash.go).
+	refs engine.ObjectRefs
+	hash string
+	// guarded: the engine read the definitions, and the run checks them.
+	guarded bool
 }
 
 // Server serves client requests one at a time against one session. It is
 // not safe for concurrent use: Serve runs every request on one goroutine.
 type Server struct {
-	cfg       ServerConfig
-	approver  Approver
-	approved  config.Policy
-	profile   config.Profile
-	rules     pii.Rules
-	detectors []pii.Detector
-	dialect   sqlclass.Dialect
-	sess      engine.Session
-	now       func() time.Time
+	cfg ServerConfig
+	// auditFails counts consecutive audit write failures (maxAuditFails).
+	auditFails int
+	approver   Approver
+	approved   config.Policy
+	profile    config.Profile
+	rules      pii.Rules
+	detectors  []pii.Detector
+	dialect    sqlclass.Dialect
+	sess       engine.Session
+	now        func() time.Time
 
 	// refs keeps the values behind the references of redacted cells.
 	refs refStore
@@ -210,6 +218,8 @@ type Server struct {
 	requests []string
 	// lastLoadErr avoids repeating the same config error every poll.
 	lastLoadErr string
+	// prompting counts the prompts waiting for the human (waiting).
+	prompting int
 
 	ended  bool
 	reason string
@@ -263,7 +273,17 @@ func (s *Server) apply(p config.Policy) error {
 // println writes one console line.
 func (s *Server) println(line string) { s.cfg.IO.Println(line) }
 
-func (s *Server) audit(rec audit.Record) {
+// audit writes rec; a failure is told to the human and counted (see
+// writeAudit).
+func (s *Server) audit(rec audit.Record) { _ = s.writeAudit(rec) }
+
+// maxAuditFails consecutive audit write failures end the session: a
+// console that cannot record its decisions stops taking requests.
+const maxAuditFails = 3
+
+// writeAudit writes rec and returns the failure, which the caller of an
+// approval turns into a refusal (fail closed).
+func (s *Server) writeAudit(rec audit.Record) error {
 	rec.Profile = s.profile.Name
 	rec.Engine = s.profile.Engine
 	rec.Host = s.host()
@@ -273,8 +293,15 @@ func (s *Server) audit(rec audit.Record) {
 		rec.DBUser = u.DBUser()
 	}
 	if err := s.cfg.Audit.Append(rec); err != nil {
-		s.cfg.IO.Println("audit log write failed: " + err.Error())
+		s.auditFails++
+		s.cfg.IO.Println(paint.Fail("audit log write failed: " + safeText(err.Error(), false)))
+		if s.auditFails >= maxAuditFails {
+			s.End("the audit log cannot be written")
+		}
+		return err
 	}
+	s.auditFails = 0
+	return nil
 }
 
 func (s *Server) host() string {
@@ -282,11 +309,6 @@ func (s *Server) host() string {
 		return s.profile.Path
 	}
 	return s.profile.Host
-}
-
-// explainNoFinger tells the human why a finger did not approve.
-func explainNoFinger(println func(string), r Result) {
-	println(paint.Fail("denied: " + safeText(r.Err.Error(), false)))
 }
 
 // noFingerFields is the audit text of a refusal for want of a finger; it
@@ -298,18 +320,24 @@ func noFingerFields(r Result) (reason, errText string) {
 	return "no fingerprint", r.Err.Error()
 }
 
+// asker takes the human decisions of s (lockkit's console).
+func (s *Server) asker() kconsole.Asker {
+	return kconsole.Asker{IO: s.cfg.IO, Approver: s.approver, Profile: s.profile.Name, End: s.End, Waiting: s.waiting}
+}
+
+// waiting counts the prompts that wait for the human: a control key or a
+// command meanwhile never widens a switch (widenRefused).
+func (s *Server) waiting(on bool) {
+	if on {
+		s.prompting++
+	} else {
+		s.prompting--
+	}
+}
+
 // decide asks the approver and explains a missing finger. Too many
 // non-matching fingers end the console.
-func (s *Server) decide(ctx context.Context, d Decision) Result {
-	r := s.approver.Approve(ctx, d)
-	if r.Outcome == NoFinger {
-		explainNoFinger(s.println, r)
-		if errors.Is(r.Err, ErrTooManyNoMatch) {
-			s.End("fingerprint: three non-matching fingers")
-		}
-	}
-	return r
-}
+func (s *Server) decide(ctx context.Context, d Decision) Result { return s.asker().Decide(ctx, d) }
 
 // End stops the session after the current request.
 func (s *Server) End(reason string) {

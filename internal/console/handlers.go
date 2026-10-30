@@ -14,6 +14,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	kaudit "github.com/DavidGodefroid/lockkit/audit"
+	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
@@ -153,7 +155,10 @@ func (s *Server) session(ctx context.Context, id int64) (engine.Session, *ipc.Re
 	}
 	if s.cfg.Reconnect != nil {
 		s.println("reconnecting to the database…")
+		// The reconnection may prompt (a password, a host key, the checks).
+		s.waiting(true)
 		sess, err := s.cfg.Reconnect(ctx, s.profile) // the policy in force now, not the start-up one
+		s.waiting(false)
 		if err == nil {
 			s.sess = sess
 			s.connected = s.now()
@@ -442,6 +447,16 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		s.noteRefused(pl)
 	}
 
+	pl.refs = objectRefs(s.dialect, pl)
+	state, err := s.planState(ctx, sess, pl)
+	if err != nil {
+		return s.failed(req.ID, "plan", err)
+	}
+	pl.guarded = state != nil
+	if pl.hash, err = s.planHash(pl, state); err != nil {
+		return s.failed(req.ID, "plan", err)
+	}
+
 	s.prunePlans()
 	pl.id = newID()
 	s.plans[pl.id] = pl
@@ -453,7 +468,7 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	return okResp(req.ID, ipc.PlanResult{
 		PlanID: pl.id, Profile: s.profile.Name, Host: s.host(), DB: db, SQL: pl.st.SQL,
 		Class: class, Verdict: verdict, Summary: summary, Reasons: reasons, Unmask: pl.unmask,
-		Values: s.typedNames(),
+		Values: s.typedNames(), PlanHash: pl.hash,
 	})
 }
 
@@ -565,6 +580,20 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	if r != nil {
 		return *r
 	}
+	// What the plan resolves to may have changed since query.plan: refuse
+	// before the human is asked. The run checks again, in its transaction.
+	if pl.guarded {
+		state, err := s.planState(ctx, sess, pl)
+		if err != nil {
+			return s.failedPlan(req.ID, "plan", err, pl)
+		}
+		if h, err := s.planHash(pl, state); err != nil || h != pl.hash {
+			if err != nil {
+				return s.failedPlan(req.ID, "plan", err, pl)
+			}
+			return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, refusal.New(refusal.Stale, errStale{}.Error()))
+		}
+	}
 	pl.warnings = s.warnings(ctx, sess, pl)
 	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask, Warnings: pl.warnings, Intent: pl.intent})
 
@@ -630,8 +659,12 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	}
 	// The decision is on record before anything runs: a console stopped
 	// between the approval and the end of the run still leaves a trace of
-	// what was approved. The run record follows, with the outcome.
-	s.audit(rec)
+	// what was approved. The run record follows, with the outcome. An
+	// approval that cannot be recorded runs nothing.
+	if s.writeAudit(rec) != nil {
+		s.println(paint.Fail("refused: the approval could not be recorded in the audit log"))
+		return errResp(req.ID, ipc.CodeInternal, "the console could not record the approval in its audit log, so the query was not run; ask the user to check the console")
+	}
 	rec.Event, rec.Decision = audit.EventRun, "ok"
 	// The prompts may have waited: check the TTL again, so that an
 	// approval or a value landing after it runs nothing.
@@ -684,12 +717,19 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	switch {
 	case pl.isExplain:
 		res = explainResult(pl.explain)
-	case pl.an != nil:
-		st := pl.st
-		st.SQL = pl.runSQL
-		res, err = sess.Run(rctx, pl.db, st, s.profile.Limits.MaxRows)
 	default:
-		res, err = sess.Run(rctx, pl.db, pl.st, s.profile.Limits.MaxRows)
+		st := pl.st
+		if pl.an != nil {
+			st.SQL = pl.runSQL
+		}
+		if pl.guarded {
+			res, err = engine.RunGuarded(rctx, sess, pl.db, st, s.profile.Limits.MaxRows, pl.refs, s.staleCheck(pl))
+		} else {
+			res, err = sess.Run(rctx, pl.db, st, s.profile.Limits.MaxRows)
+		}
+	}
+	if stale := (errStale{}); errors.As(err, &stale) {
+		return s.refuseWarned(ctx, req.ID, pl, class, refusal.New(refusal.Stale, stale.Error()))
 	}
 	rec.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
@@ -772,77 +812,32 @@ func cloneResult(res engine.Result) engine.Result {
 	return c
 }
 
-// approve shows the prompt and waits for the human. It returns nil when
-// approved, the error response otherwise (audited). retype reports that the
-// human asked to type again the values the plan reuses.
+// approve closes the approval screen with the prompt and waits for the
+// human (lockkit's console decides). It returns nil when approved, the
+// error response otherwise (audited). retype reports that the human asked
+// to type again the values the plan reuses. The approval itself is audited
+// by queryRun, once the values are in.
 func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Record) (resp *ipc.Response, retype bool) {
-	expected, prompt := "y", "Approve? [y/N] "
-	if s.profile.Production {
-		expected = s.profile.Name
-		prompt = fmt.Sprintf("Type the profile name %q to approve: ", s.profile.Name)
-	}
-	_, reused := s.placeholders(pl)
+	q := kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production}
 	// "r" retypes, unless it is the approval answer itself (a production
-	// profile named r).
-	canRetype := len(reused) > 0 && expected != "r"
-	if canRetype {
-		prompt = "(r to retype ${" + strings.Join(reused, "}, ${") + "}) " + prompt
+	// profile named r): the Asker does not offer it then.
+	if _, reused := s.placeholders(pl); len(reused) > 0 {
+		q.Retype, q.RetypeNote = "r", " ${"+strings.Join(reused, "}, ${")+"}"
 	}
-	bell(s.cfg.IO)
-	d := Decision{Prompt: s.frameEnd(paint.Bold(prompt)), Expected: expected, Production: s.profile.Production}
-	if canRetype {
-		d.Retype = "r"
-	}
-	res := s.decide(ctx, d)
-	switch res.Outcome {
-	case RetypeRequested:
-		return nil, true
-	case Unanswered:
-		return s.unanswered(ctx, id, rec), false
-	case Approved:
-		return nil, false
-	case NoFinger:
-		rec.Event, rec.Decision, rec.Reason, rec.Error = audit.EventDenied, "denied", "no fingerprint", res.Err.Error()
-		rec.Approval = s.approver.Mode()
-		s.audit(rec)
-		resp := errResp(id, ipc.CodeDenied, "denied by the human: no fingerprint; do not retry unless asked")
-		return &resp, false
-	}
-	ans := res.Answer
-	rec.Event, rec.Decision = audit.EventDenied, "denied"
-	msg := "denied by the human; do not retry unless asked"
-	if reason := denyReason(ans); reason != "" {
-		rec.Reason = reason
-		msg = "denied by the human: " + reason + "; do not retry unless asked"
-		s.println(paint.Fail("denied: " + reason))
-	} else {
-		s.println(paint.Fail("denied"))
-	}
-	s.audit(rec)
-	r := errResp(id, ipc.CodeDenied, msg)
-	return &r, false
-}
-
-// maxDenyReason bounds the reason given with a denial.
-const maxDenyReason = 200
-
-// denyReason is the reason of an answer "n <text>" or "no <text>" (n and
-// no in any case), trimmed, cut at maxDenyReason bytes and escaped; ""
-// for any other answer.
-func denyReason(ans string) string {
-	word, text, ok := strings.Cut(strings.TrimSpace(ans), " ")
-	if !ok || (!strings.EqualFold(word, "n") && !strings.EqualFold(word, "no")) {
-		return ""
-	}
-	text = strings.TrimSpace(text)
-	if len(text) > maxDenyReason {
-		cut := maxDenyReason
-		for cut > 0 && !utf8.RuneStart(text[cut]) {
-			cut--
+	a := s.asker().Ask(ctx, id, q, func(b kaudit.Base) {
+		if b.Event == audit.EventApproved {
+			return
 		}
-		text = text[:cut]
+		rec.Event, rec.Decision, rec.Reason, rec.Error, rec.Approval = b.Event, b.Decision, b.Reason, b.Error, b.Approval
+		s.audit(rec)
+	})
+	switch {
+	case a.Retype:
+		return nil, true
+	case a.Approved:
+		return nil, false
 	}
-	return safeText(text, false)
+	return &a.Refusal, false
 }
 
 // unanswered audits and answers a prompt left without an answer: the
@@ -874,7 +869,10 @@ func (s *Server) refuseOnScreen(ctx context.Context, id int64, rec audit.Record,
 	bell(s.cfg.IO)
 	// Kept when the prompt goes unanswered too.
 	rec.Error, rec.Code = r.Reason, string(r.Code)
-	if _, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold("Press Enter to refuse ")), ApprovalTimeout); !ok {
+	s.waiting(true)
+	_, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold("Press Enter to refuse ")), ApprovalTimeout)
+	s.waiting(false)
+	if !ok {
 		return *s.unanswered(ctx, id, rec)
 	}
 	rec.Event = audit.EventRefused
