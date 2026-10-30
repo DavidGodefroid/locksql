@@ -4,7 +4,7 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## Unreleased
+## v0.10.0 (2026-10-30)
 
 ### Changed
 
@@ -16,7 +16,7 @@ This file records the changes a user or an agent has to know about.
 - **Chained audit log.** Each audit record now ends with `prev_hash`, the
   hash of the line before it (lockkit's `audit.Verify`
   checks the chain and names the first record edited, removed, inserted or
-  reordered). The line before it is the 0.8 line, byte for byte. Existing logs
+  reordered). Apart from `prev_hash` a record is the 0.9 line, byte for byte. Existing logs
   are not rewritten: new records chain onto their last line. Records of
   hub mode will also carry `ticket`, `approver`, `facade` and `hub_sig`.
   `locksql stats` reads old and new logs alike.
@@ -82,7 +82,7 @@ This file records the changes a user or an agent has to know about.
   screen names the requester by its kernel identity, the lea name as its
   unverified claim.
 
-- Builds on lockkit v0.3.1 (hub support), was a commit of lockkit main.
+- Pinned to the lockkit v0.3.1 release (hub support) instead of a commit of lockkit main.
 
 ### Fixed
 
