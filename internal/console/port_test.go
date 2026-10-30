@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	kaudit "github.com/DavidGodefroid/lockkit/audit"
 	kipc "github.com/DavidGodefroid/lockkit/ipc"
+	"github.com/DavidGodefroid/lockkit/ticket"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 )
@@ -80,4 +82,83 @@ func TestBecomingProductionPrivilegeAuditError(t *testing.T) {
 	if !strings.Contains(h.io.output(), "privileges beyond tier read: the session ends") {
 		t.Fatalf("not told:\n%s", h.io.output())
 	}
+}
+
+// The hub goroutine's audit failures end the session through the request
+// loop's tick (Serve's loop), not only a direct Tick.
+func TestHubAuditFailuresEndTheSession(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	readOnlyLog(t, h.state)
+	for range maxAuditFails {
+		h.s.auditHubRequest(kaudit.Base{Event: "reveal", Decision: "ok"})
+	}
+	h.s.loop().Tick()
+	if reason, ended := h.s.Ended(); !ended || reason != "the audit log cannot be written" {
+		t.Fatalf("ended %v %q", ended, reason)
+	}
+}
+
+// The fingerprint the hub goroutine checks tickets against follows the
+// policy in force: a tightening moves it, a refused tightening and a
+// loosening whose save failed leave it on the policy in force.
+func TestLiveFingerprintFollowsThePolicy(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root writes a read-only directory")
+	}
+	h := newHarness(t, uatProfile())
+	inForce := func() string {
+		fp, err := ticket.HashOf(h.s.approved)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fp
+	}
+	fp0 := h.s.live.Load().fp
+	if fp0 != inForce() {
+		t.Fatal("start fingerprint")
+	}
+	next := h.s.approved
+	next.Profile.Limits.MaxRows /= 2
+	if err := h.s.adopt(next, "tightened"); err != nil {
+		t.Fatal(err)
+	}
+	if fp := h.s.live.Load().fp; fp == fp0 || fp != inForce() {
+		t.Fatal("tightening not published")
+	}
+	fp1 := inForce()
+	// A loosening whose save fails is rolled back.
+	dir := filepath.Join(h.state, "locksql", "approved")
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	looser := h.s.approved
+	looser.Profile.Limits.MaxRows *= 4
+	_ = h.s.adopt(looser, "applied")
+	if h.s.live.Load().fp != fp1 || inForce() != fp1 {
+		t.Fatal("unsaved loosening published to the hub")
+	}
+}
+
+// The hub goroutine reads the snapshot and writes its records while the
+// request goroutine changes the policy (go test -race).
+func TestHubGoroutineAlongsidePolicyChanges(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 50 {
+			h.s.auditHubRequest(kaudit.Base{Event: "renew", Decision: "ok"})
+			_ = h.s.live.Load().fp
+		}
+	}()
+	for i := range 20 {
+		next := h.s.approved
+		next.Profile.Limits.MaxRows = 100 - i
+		if err := h.s.adopt(next, "tightened"); err != nil {
+			t.Fatal(err)
+		}
+		h.s.Tick()
+	}
+	<-done
 }

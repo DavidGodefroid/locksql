@@ -74,6 +74,16 @@ This file records the changes a user or an agent has to know about.
     the policy changes");
   - credentials that expire without a way to reconnect end the session as
     "connection lost" (was "credentials expired").
+  - a change request is no longer checked for valid UTF-8 (it is escaped
+    for the console either way);
+  - `pii.add`: a rule the on-disk rule file refuses answers
+    `CodeInternal` (was `CodeInvalidParams`), and error texts go through
+    the sanitiser;
+  - in hub mode, three failed writes in a row of the hub's own records
+    (reveals, renewals) end the session, counted apart from the console's
+    own records; while a loosening approved at `:review` is being saved, a
+    renewal asked from lockhub may see its fingerprint, and goes stale at
+    the run if the save fails.
   Builds on lockkit v0.7.1.
 
 - **Plan hash coverage** (#119). The plan hash also covers the operators

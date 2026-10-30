@@ -275,7 +275,7 @@ func (s *Server) Words() kconsole.Words {
 // AuditRecord turns the console's own records (modes, policy, login) into
 // locksql's, stamped with the database and its user.
 func (s *Server) AuditRecord(b kaudit.Base) kaudit.Record {
-	return s.stamp(audit.Record{Event: b.Event, Profile: b.Profile, Decision: b.Decision, Error: b.Error, Code: b.Code, Span: b.Span,
+	return s.stamp(audit.Record{Event: b.Event, Profile: b.Profile, Decision: b.Decision, Error: secrets.SanitizeString(b.Error), Code: b.Code, Span: b.Span,
 		Warnings: b.Warnings, Intent: b.Intent, Reason: b.Reason, Approval: b.Approval, PeerUID: b.PeerUID, PeerPID: b.PeerPID,
 		PeerUser: b.PeerUser, Ticket: b.Ticket, Approver: b.Approver, Facade: b.Facade, HubSig: b.HubSig})
 }

@@ -444,9 +444,15 @@ func (s *Server) Close() { s.k.Close() }
 // come from the IO when it is a KeySource. ln is closed on return, which
 // removes the socket. It is lockkit's request loop.
 func (s *Server) Serve(ctx context.Context, ln net.Listener, lines <-chan string) error {
+	return s.loop().Serve(ctx, ln, lines)
+}
+
+// loop is lockkit's request loop with locksql's policy poll and tick.
+func (s *Server) loop() *kconsole.Loop {
 	l := s.k.Loop()
 	l.Poll = s.CheckPolicy
-	return l.Serve(ctx, ln, lines)
+	l.Tick = s.Tick // the hub goroutine's audit failures too
+	return l
 }
 
 func errResp(id int64, code int, msg string) ipc.Response { return kconsole.ErrResp(id, code, msg) }
