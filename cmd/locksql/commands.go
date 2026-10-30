@@ -30,11 +30,6 @@ type env struct {
 	agentEnv func() (agentinit.Env, error)
 	// sys loads the separated-mode setup; nil means same-user mode.
 	sys func() (*sysconf.Config, error)
-	// install runs `locksql install` with args; nil means runInstall.
-	install func(args []string) int
-	// installer runs the install step of `locksql setup`; nil means
-	// doInstall.
-	installer func(o installOpts) (code int, ran bool)
 	// root runs a shell script as root; nil means sudo sh -c.
 	root func(script string) error
 	// handoff is how `locksql console` reaches the console account from
@@ -43,9 +38,6 @@ type env struct {
 	// doc is what locksql doctor reads from the system; nil means the
 	// real one.
 	doc *doctorEnv
-	// upd is what locksql update reads from the system; nil means the
-	// real one.
-	upd *updateEnv
 	// chk is what the new-version notice of console and doctor reads from
 	// the system; nil means the real one.
 	chk *updateCheckEnv

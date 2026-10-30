@@ -178,15 +178,17 @@ type plan struct {
 // Server serves client requests one at a time against one session. It is
 // not safe for concurrent use: Serve runs every request on one goroutine.
 type Server struct {
-	cfg       ServerConfig
-	approver  Approver
-	approved  config.Policy
-	profile   config.Profile
-	rules     pii.Rules
-	detectors []pii.Detector
-	dialect   sqlclass.Dialect
-	sess      engine.Session
-	now       func() time.Time
+	cfg ServerConfig
+	// auditFails counts consecutive audit write failures (maxAuditFails).
+	auditFails int
+	approver   Approver
+	approved   config.Policy
+	profile    config.Profile
+	rules      pii.Rules
+	detectors  []pii.Detector
+	dialect    sqlclass.Dialect
+	sess       engine.Session
+	now        func() time.Time
 
 	// refs keeps the values behind the references of redacted cells.
 	refs refStore
@@ -278,7 +280,17 @@ func (s *Server) apply(p config.Policy) error {
 // println writes one console line.
 func (s *Server) println(line string) { s.cfg.IO.Println(line) }
 
-func (s *Server) audit(rec audit.Record) {
+// audit writes rec; a failure is told to the human and counted (see
+// writeAudit).
+func (s *Server) audit(rec audit.Record) { _ = s.writeAudit(rec) }
+
+// maxAuditFails consecutive audit write failures end the session: a
+// console that cannot record its decisions stops taking requests.
+const maxAuditFails = 3
+
+// writeAudit writes rec and returns the failure, which the caller of an
+// approval turns into a refusal (fail closed).
+func (s *Server) writeAudit(rec audit.Record) error {
 	rec.Profile = s.profile.Name
 	rec.Engine = s.profile.Engine
 	rec.Host = s.host()
@@ -288,8 +300,15 @@ func (s *Server) audit(rec audit.Record) {
 		rec.DBUser = u.DBUser()
 	}
 	if err := s.cfg.Audit.Append(rec); err != nil {
-		s.cfg.IO.Println("audit log write failed: " + err.Error())
+		s.auditFails++
+		s.cfg.IO.Println(paint.Fail("audit log write failed: " + safeText(err.Error(), false)))
+		if s.auditFails >= maxAuditFails {
+			s.End("the audit log cannot be written")
+		}
+		return err
 	}
+	s.auditFails = 0
+	return nil
 }
 
 func (s *Server) host() string {
