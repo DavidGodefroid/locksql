@@ -117,7 +117,7 @@ func objectState(ctx context.Context, c *pgx.Conn, refs engine.ObjectRefs) (engi
 				return nil, nil, err
 			}
 			st.Objects = append(st.Objects, d...)
-			r, f, err := relationUses(ctx, c, rels, refs.Writes)
+			r, f, err := relationUses(ctx, c, rels, refs)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -163,10 +163,15 @@ func userObject(n string) string {
 }
 
 // columnDomains selects the domains the columns of the relations $1 are
-// of: directly, through an array, or through a domain over another one.
+// of: directly, through an array, a range or multirange, the attributes of
+// a composite type, or a domain over another one. (rngmultitypid is read
+// through to_jsonb: the column exists from PostgreSQL 14 on.)
 const columnDomains = `WITH RECURSIVE ty(oid) AS (
 		SELECT a.atttypid FROM pg_catalog.pg_attribute a WHERE a.attrelid = ANY($1::oid[]) AND a.attnum > 0 AND NOT a.attisdropped
-		UNION SELECT v.t FROM ty JOIN pg_catalog.pg_type t ON t.oid = ty.oid, LATERAL (VALUES (t.typbasetype), (t.typelem)) v(t) WHERE v.t <> 0
+		UNION SELECT v.t FROM ty JOIN pg_catalog.pg_type t ON t.oid = ty.oid
+			LEFT JOIN pg_catalog.pg_range r ON r.rngtypid = t.oid OR (pg_catalog.to_jsonb(r) ->> 'rngmultitypid')::oid = t.oid
+			LEFT JOIN pg_catalog.pg_attribute ca ON t.typrelid <> 0 AND ca.attrelid = t.typrelid AND ca.attnum > 0 AND NOT ca.attisdropped,
+			LATERAL (VALUES (t.typbasetype), (t.typelem), (r.rngsubtype), (ca.atttypid)) v(t) WHERE v.t <> 0
 	)
 	SELECT t.oid FROM ty JOIN pg_catalog.pg_type t ON t.oid = ty.oid JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
 	WHERE t.typtype = 'd' AND ` + "n.nspname NOT IN ('pg_catalog', 'information_schema')"
@@ -222,14 +227,15 @@ func relationDefs(ctx context.Context, c *pgx.Conn, rels []uint32) ([]engine.Obj
 // foreign keys reference them. A PL/pgSQL body records nothing in
 // pg_depend: the functions it calls are not followed (only its own source
 // is hashed), nor are the objects dynamic SQL reaches.
-func relationUses(ctx context.Context, c *pgx.Conn, rels []uint32, writes bool) (relOut, funcOut []uint32, err error) {
+func relationUses(ctx context.Context, c *pgx.Conn, rels []uint32, refs engine.ObjectRefs) (relOut, funcOut []uint32, err error) {
 	r, f, err := uses(ctx, c, `(d.classid = 'pg_catalog.pg_rewrite'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_rewrite WHERE ev_class = ANY($1::oid[])))
 		OR (d.classid = 'pg_catalog.pg_policy'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_policy WHERE polrelid = ANY($1::oid[])))
 		OR (d.classid = 'pg_catalog.pg_trigger'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_trigger WHERE tgrelid = ANY($1::oid[]) AND NOT tgisinternal))
 		OR (d.classid = 'pg_catalog.pg_class'::regclass AND d.objid = ANY($1::oid[]))
 		OR (d.classid = 'pg_catalog.pg_attrdef'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_attrdef WHERE adrelid = ANY($1::oid[])))
 		OR (d.classid = 'pg_catalog.pg_constraint'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_constraint WHERE conrelid = ANY($1::oid[])))
-		OR (d.classid = 'pg_catalog.pg_constraint'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_constraint WHERE contypid IN (`+columnDomains+`)))`, rels)
+		OR (d.classid = 'pg_catalog.pg_constraint'::regclass AND d.objid IN (SELECT oid FROM pg_catalog.pg_constraint WHERE contypid IN (`+columnDomains+`)))
+		OR (d.classid = 'pg_catalog.pg_type'::regclass AND d.objid IN (`+columnDomains+`))`, rels)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -243,7 +249,13 @@ func relationUses(ctx context.Context, c *pgx.Conn, rels []uint32, writes bool) 
 	// the plan stale.
 	q := `SELECT i.inhrelid FROM pg_catalog.pg_inherits i WHERE i.inhparent = ANY($1::oid[])
 		UNION SELECT i.inhparent FROM pg_catalog.pg_inherits i WHERE i.inhrelid = ANY($1::oid[])`
-	if writes {
+	switch {
+	case refs.DDL:
+		// TRUNCATE ... CASCADE empties every referencing table whatever
+		// the key's action (and runs its ON TRUNCATE triggers): all of
+		// them, and the keys onto them.
+		q += ` UNION SELECT c.conrelid FROM pg_catalog.pg_constraint c WHERE c.contype = 'f' AND c.confrelid = ANY($1::oid[])`
+	case refs.Writes:
 		q += ` UNION SELECT c.conrelid FROM pg_catalog.pg_constraint c WHERE c.contype = 'f' AND c.confrelid = ANY($1::oid[])
 			AND (c.confdeltype NOT IN ('a', 'r') OR c.confupdtype NOT IN ('a', 'r'))`
 	}

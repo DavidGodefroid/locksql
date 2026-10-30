@@ -139,6 +139,23 @@ GRANT SELECT ON ph_w, ph_part TO ro;`)
 				t.Error("a change in a table a cascade reaches: the state did not change")
 			}
 
+			// TRUNCATE ... CASCADE empties every referencing table, whatever
+			// its key's action: a DDL statement follows them all.
+			trefs := engine.ObjectRefs{Relations: []string{"ph_w"}, Functions: []string{}, Operators: []string{}, Writes: true, DDL: true}
+			tprev := writeState(t, s, trefs)
+			for _, c := range []struct{ name, sql string }{
+				{"ON TRUNCATE trigger on a RESTRICT referencing table", `CREATE FUNCTION ph_ttrg() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NULL; END';
+CREATE TRIGGER ph_ttr AFTER TRUNCATE ON ph_ref0 FOR EACH STATEMENT EXECUTE FUNCTION ph_ttrg()`},
+				{"new key onto a referencing table", `CREATE TABLE ph_ref0_child (id int, r int); ALTER TABLE ph_ref0 ADD PRIMARY KEY (id); ALTER TABLE ph_ref0_child ADD FOREIGN KEY (r) REFERENCES ph_ref0 (id)`},
+			} {
+				psql(c.sql)
+				cur := writeState(t, s, trefs)
+				if reflect.DeepEqual(tprev, cur) {
+					t.Errorf("TRUNCATE CASCADE, %s: the state did not change", c.name)
+				}
+				tprev = cur
+			}
+
 			// Domains of the columns: ALTER DOMAIN changes their CHECK in
 			// place (#105), through a domain over a domain too. (A domain an
 			// array column uses cannot be altered.)
@@ -167,6 +184,31 @@ ALTER DOMAIN ph_pos ADD CONSTRAINT ph_pos_f CHECK (ph_dck(VALUE));`)
 			psql(`CREATE OR REPLACE FUNCTION ph_dck(int) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT $1 < 50'`)
 			if cur := writeState(t, s, drefs); reflect.DeepEqual(dprev, cur) {
 				t.Error("the function of a domain CHECK replaced: the state did not change")
+			}
+
+			// A function in a domain DEFAULT runs on an INSERT that omits the
+			// column; domains reached through a composite type or a range.
+			psql(`CREATE FUNCTION ph_ddef() RETURNS int LANGUAGE sql VOLATILE AS 'SELECT 1';
+CREATE DOMAIN ph_defd AS int DEFAULT ph_ddef();
+CREATE DOMAIN ph_cd AS int CHECK (VALUE > 0);
+CREATE TYPE ph_comp AS (x ph_cd);
+CREATE DOMAIN ph_rd AS int CHECK (VALUE < 100);
+CREATE TYPE ph_rng AS RANGE (subtype = ph_rd);
+CREATE TABLE ph_dom2 (id int, d ph_defd, c ph_comp, r ph_rng);
+GRANT SELECT ON ph_dom2 TO ro;`)
+			d2refs := engine.ObjectRefs{Relations: []string{"ph_dom2"}, Functions: []string{}, Operators: []string{}, Writes: true}
+			d2prev := writeState(t, s, d2refs)
+			for _, c := range []struct{ name, sql string }{
+				{"function of a domain DEFAULT replaced", `CREATE OR REPLACE FUNCTION ph_ddef() RETURNS int LANGUAGE sql VOLATILE AS 'SELECT 2'`},
+				{"domain of a composite attribute", `ALTER DOMAIN ph_cd ADD CONSTRAINT ph_cd2 CHECK (VALUE < 10) NOT VALID`},
+				{"domain of a range subtype", `ALTER DOMAIN ph_rd ADD CONSTRAINT ph_rd2 CHECK (VALUE > -5) NOT VALID`},
+			} {
+				psql(c.sql)
+				cur := writeState(t, s, d2refs)
+				if reflect.DeepEqual(d2prev, cur) {
+					t.Errorf("%s: the state did not change", c.name)
+				}
+				d2prev = cur
 			}
 
 			// Event triggers run on DDL: their definitions and functions are
