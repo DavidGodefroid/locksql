@@ -206,28 +206,35 @@ const columnTypes = `WITH RECURSIVE ty(oid) AS (
 // of (columnTypes).
 const columnDomains = columnTypes + `= 'd'`
 
-// cascadeDependents selects the relations whose rules (a view's query
-// among them), row-level policies, constraints, column defaults or
-// triggers depend on the relations $1 (or on their row type), and those
-// with a column of their row type, recursively: what a DDL statement with
-// CASCADE drops along with them. Not followed: the functions that depend
-// on them (a BEGIN ATOMIC body, an argument of their row type) and what
-// depends on those. Objects of the server's own schemas are left out.
-const cascadeDependents = `WITH RECURSIVE dep(oid) AS (
-		SELECT unnest($1::oid[])
-		UNION SELECT r.oid FROM dep
-			JOIN pg_catalog.pg_class dc ON dc.oid = dep.oid
-			JOIN pg_catalog.pg_depend d ON d.refclassid = 'pg_catalog.pg_class'::regclass AND d.refobjid = dep.oid
-				OR d.refclassid = 'pg_catalog.pg_type'::regclass AND d.refobjid = dc.reltype AND dc.reltype <> 0,
-			LATERAL (SELECT w.ev_class FROM pg_catalog.pg_rewrite w WHERE d.classid = 'pg_catalog.pg_rewrite'::regclass AND w.oid = d.objid
-				UNION ALL SELECT p.polrelid FROM pg_catalog.pg_policy p WHERE d.classid = 'pg_catalog.pg_policy'::regclass AND p.oid = d.objid
-				UNION ALL SELECT k.conrelid FROM pg_catalog.pg_constraint k WHERE d.classid = 'pg_catalog.pg_constraint'::regclass AND k.oid = d.objid AND k.conrelid <> 0
-				UNION ALL SELECT a.adrelid FROM pg_catalog.pg_attrdef a WHERE d.classid = 'pg_catalog.pg_attrdef'::regclass AND a.oid = d.objid
-				UNION ALL SELECT g.tgrelid FROM pg_catalog.pg_trigger g WHERE d.classid = 'pg_catalog.pg_trigger'::regclass AND g.oid = d.objid
-				UNION ALL SELECT d.objid WHERE d.classid = 'pg_catalog.pg_class'::regclass AND d.objsubid <> 0) r(oid)
+// cascadeDependents selects the relations a DDL statement with CASCADE on
+// the relations $1 drops or changes along with them: pg_depend is walked
+// in reverse, recursively, over every object that depends on them
+// (normally, automatically or as an internal part: inheritance children
+// and partitions, owned sequences, the row type, its array type and the
+// domains over it, functions, ...; an object dropped with a column only
+// when it depends on that column), with the object an internal part
+// belongs to (the view of a _RETURN rule). Each object found maps to its
+// relation: itself, the relation of a rule, policy, constraint, default or
+// trigger, the table of a column. Objects of the server's own schemas are
+// left out.
+const cascadeDependents = `WITH RECURSIVE obj(classid, objid, objsubid) AS (
+		SELECT 'pg_catalog.pg_class'::regclass::oid, x, 0 FROM unnest($1::oid[]) x
+		UNION SELECT y.classid, y.objid, y.objsubid FROM obj
+			JOIN pg_catalog.pg_depend d ON d.refclassid = obj.classid AND d.refobjid = obj.objid
+				AND (obj.objsubid = 0 OR d.refobjsubid = obj.objsubid) AND d.deptype IN ('n', 'a', 'i'),
+			LATERAL (SELECT d.classid, d.objid, d.objsubid
+				UNION ALL SELECT o.refclassid, o.refobjid, 0 FROM pg_catalog.pg_depend o
+					WHERE o.classid = d.classid AND o.objid = d.objid AND o.deptype = 'i') y(classid, objid, objsubid)
 	)
-	SELECT dep.oid FROM dep JOIN pg_catalog.pg_class c ON c.oid = dep.oid JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-	WHERE NOT dep.oid = ANY($1::oid[]) AND ` + "n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_toast%'"
+	SELECT DISTINCT r.oid FROM obj,
+		LATERAL (SELECT obj.objid WHERE obj.classid = 'pg_catalog.pg_class'::regclass
+			UNION ALL SELECT w.ev_class FROM pg_catalog.pg_rewrite w WHERE obj.classid = 'pg_catalog.pg_rewrite'::regclass AND w.oid = obj.objid
+			UNION ALL SELECT p.polrelid FROM pg_catalog.pg_policy p WHERE obj.classid = 'pg_catalog.pg_policy'::regclass AND p.oid = obj.objid
+			UNION ALL SELECT k.conrelid FROM pg_catalog.pg_constraint k WHERE obj.classid = 'pg_catalog.pg_constraint'::regclass AND k.oid = obj.objid AND k.conrelid <> 0
+			UNION ALL SELECT a.adrelid FROM pg_catalog.pg_attrdef a WHERE obj.classid = 'pg_catalog.pg_attrdef'::regclass AND a.oid = obj.objid
+			UNION ALL SELECT g.tgrelid FROM pg_catalog.pg_trigger g WHERE obj.classid = 'pg_catalog.pg_trigger'::regclass AND g.oid = obj.objid) r(oid)
+		JOIN pg_catalog.pg_class c ON c.oid = r.oid JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+	WHERE NOT r.oid = ANY($1::oid[]) AND ` + "n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_toast%'"
 
 // relationDefs are the definitions of relations: kind, columns, row-level
 // security, grants, owner and, for a view, its query; their rules,

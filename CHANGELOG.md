@@ -50,12 +50,14 @@ This file records the changes a user or an agent has to know about.
   (of a table or a domain) uses, with their functions and those of their
   commutators and negators (`pg_depend` records them against the
   operator, not its function), the enum labels in their sort order and
-  the attributes of the composite types of the columns, and, for a DDL
-  statement that says `CASCADE`, what it would drop along with its
-  relations: the relations whose views, rules, policies, constraints,
-  defaults or triggers depend on them or that have a column of their row
-  type, recursively (not the functions that depend on them) (#119). Plan
-  hash version 3.
+  the attributes of the composite types of the columns, and, for a `DROP`
+  or `ALTER` with `CASCADE`, every relation `pg_depend` says it would drop
+  or change along with its relations (views over them, policies,
+  constraints, defaults and triggers that use them, inheritance children,
+  owned sequences and their users, columns of their row type,
+  recursively; `DROP FUNCTION/TYPE/DOMAIN/SCHEMA ... CASCADE` are not
+  walked) (#119). The function of an operator counts as one more level of
+  the 8-level bound. Plan hash version 3.
 
 - **Hub mode** (`locksql console --hub URL --hub-key-file PATH --instance
   NAME`, written by `lock up`; `locksql hub-key --instance NAME` prints the

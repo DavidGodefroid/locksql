@@ -97,7 +97,7 @@ func objectRefs(d sqlclass.Dialect, pl *plan) engine.ObjectRefs {
 	}
 	refs.Writes = pl.st.Class != sqlclass.Read
 	refs.DDL = pl.st.Class != sqlclass.Read && pl.st.Class != sqlclass.Write
-	refs.Cascade = refs.DDL && slices.ContainsFunc(toks, func(t sqlclass.Token) bool { return t.Kind == sqlclass.TokWord && t.Text == "CASCADE" })
+	refs.Cascade = refs.DDL && dropsCascade(toks)
 	if pl.shadow != nil {
 		refs.Functions = append(refs.Functions, pl.shadow.funcs...)
 		refs.Operators = append(refs.Operators, pl.shadow.ops...)
@@ -191,4 +191,21 @@ func (pl *plan) rowCheck(affected int64) error {
 		return errRowcount{affected: affected, max: pl.maxAffected}
 	}
 	return nil
+}
+
+// dropsCascade reports a DROP or ALTER statement that says CASCADE other
+// than as a foreign key's action (ON DELETE/UPDATE CASCADE): it drops what
+// depends on what it drops. (TRUNCATE ... CASCADE follows the referencing
+// tables by itself; REVOKE ... CASCADE drops no object.)
+func dropsCascade(toks []sqlclass.Token) bool {
+	if len(toks) == 0 || toks[0].Kind != sqlclass.TokWord || toks[0].Text != "DROP" && toks[0].Text != "ALTER" {
+		return false
+	}
+	for i, t := range toks {
+		if t.Kind == sqlclass.TokWord && t.Text == "CASCADE" &&
+			(i == 0 || toks[i-1].Kind != sqlclass.TokWord || toks[i-1].Text != "DELETE" && toks[i-1].Text != "UPDATE") {
+			return true
+		}
+	}
+	return false
 }

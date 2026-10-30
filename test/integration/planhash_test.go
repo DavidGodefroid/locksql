@@ -282,11 +282,23 @@ CREATE OPERATOR !=== (LEFTARG = int, RIGHTARG = int, FUNCTION = ph_opn, NEGATOR 
 					t.Errorf("the function of the negator of an operator in a %s replaced: the state did not change", k)
 				}
 			}
+			psql(`CREATE FUNCTION ph_opcm(int, int) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT $1 = $2';
+CREATE OPERATOR ==== (LEFTARG = int, RIGHTARG = int, FUNCTION = ph_opcm, COMMUTATOR = ===);`)
+			for k, r := range opRefs {
+				opPrev[k] = writeState(t, s, r)
+			}
+			psql(`CREATE OR REPLACE FUNCTION ph_opcm(int, int) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT false'`)
+			for k, r := range opRefs {
+				if reflect.DeepEqual(opPrev[k], writeState(t, s, r)) {
+					t.Errorf("the function of the commutator of an operator in a %s replaced: the state did not change", k)
+				}
+			}
 
 			// DDL with CASCADE drops what depends on its relation: the
 			// views over it (and over those), the policies and constraints
 			// of other tables that use it (#119).
-			psql(`CREATE TABLE ph_cas (id int PRIMARY KEY, label text);
+			psql(`CREATE TABLE ph_cas (id int PRIMARY KEY, label text, n serial);
+CREATE TABLE ph_cas_kid () INHERITS (ph_cas);
 CREATE TABLE ph_cas_other (id int);
 GRANT SELECT ON ph_cas, ph_cas_other TO ro;`)
 			crefs := engine.ObjectRefs{Relations: []string{"ph_cas"}, Functions: []string{}, Operators: []string{}, Writes: true, DDL: true, Cascade: true}
@@ -305,8 +317,15 @@ GRANT SELECT ON ph_cas, ph_cas_other TO ro;`)
 				{"view over the view", `CREATE VIEW ph_casv2 AS SELECT id FROM ph_casv`},
 				{"view over the view replaced", `CREATE OR REPLACE VIEW ph_casv2 AS SELECT id FROM ph_casv WHERE id > 0`},
 				{"policy of another table reading it", `CREATE POLICY ph_cas_p ON ph_cas_other USING (id IN (SELECT id FROM ph_cas))`},
-				{"trigger on a table with a column of its row type", `CREATE TABLE ph_cas_row (id int, r ph_cas);
-CREATE TRIGGER ph_cas_rtr BEFORE INSERT ON ph_cas_row FOR EACH ROW EXECUTE FUNCTION ph_trg()`},
+				{"column of its row type in another table", `CREATE TABLE ph_cas_row (id int, r ph_cas)`},
+				{"column of its array type in another table", `CREATE TABLE ph_cas_arr (id int, r ph_cas[])`},
+				{"column of a domain over its row type", `CREATE DOMAIN ph_cas_dom AS ph_cas; CREATE TABLE ph_cas_domt (id int, r ph_cas_dom)`},
+				{"constraint trigger of another table FROM it", `CREATE TABLE ph_cas_ct (id int);
+CREATE FUNCTION ph_cttrg() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NULL; END';
+CREATE CONSTRAINT TRIGGER ph_cas_ctr AFTER INSERT ON ph_cas_ct FROM ph_cas FOR EACH ROW EXECUTE FUNCTION ph_cttrg()`},
+				{"view over an inheritance child", `CREATE VIEW ph_cas_kidv AS SELECT id FROM ph_cas_kid`},
+				{"view over the child replaced", `CREATE OR REPLACE VIEW ph_cas_kidv AS SELECT id FROM ph_cas_kid WHERE id > 1`},
+				{"another table's default on its owned sequence", `CREATE TABLE ph_cas_seqd (id int DEFAULT nextval('ph_cas_n_seq'))`},
 			} {
 				psql(c.sql)
 				cur := writeState(t, s, crefs)
@@ -319,6 +338,16 @@ CREATE TRIGGER ph_cas_rtr BEFORE INSERT ON ph_cas_row FOR EACH ROW EXECUTE FUNCT
 				if !reflect.DeepEqual(oprev[i], writeState(t, s, r)) {
 					t.Errorf("objects over the table changed the state of %+v (no CASCADE)", r)
 				}
+			}
+			// A long chain of views over the table: each one is a starting
+			// point, none nests past the bound.
+			vchain := "CREATE VIEW ph_cv0 AS SELECT id FROM ph_cas;\n"
+			for i := 1; i <= 10; i++ {
+				vchain += fmt.Sprintf("CREATE VIEW ph_cv%d AS SELECT id FROM ph_cv%d;\n", i, i-1)
+			}
+			psql(vchain)
+			if _, err := engine.ObjectStateOf(ctx, s, "app", crefs); err != nil {
+				t.Errorf("DDL with CASCADE under a chain of views: %v", err)
 			}
 			// A sequence another table's default uses: DROP SEQUENCE ...
 			// CASCADE drops the default.
