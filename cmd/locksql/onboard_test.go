@@ -190,7 +190,7 @@ func TestConsoleWithoutProfileSameUserRefused(t *testing.T) {
 	if code := runEnv(e, []string{"console"}); code != exitFail {
 		t.Fatalf("code %d\n%s", code, out)
 	}
-	for _, want := range []string{"separate account", "sudo locksql install", "locksql doctor"} {
+	for _, want := range []string{"separate account", "through the launcher", "locksql doctor"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output lacks %q:\n%s", want, out)
 		}
