@@ -97,6 +97,7 @@ func objectRefs(d sqlclass.Dialect, pl *plan) engine.ObjectRefs {
 	}
 	refs.Writes = pl.st.Class != sqlclass.Read
 	refs.DDL = pl.st.Class != sqlclass.Read && pl.st.Class != sqlclass.Write
+	refs.Cascade = refs.DDL && slices.ContainsFunc(toks, func(t sqlclass.Token) bool { return t.Kind == sqlclass.TokWord && t.Text == "CASCADE" })
 	if pl.shadow != nil {
 		refs.Functions = append(refs.Functions, pl.shadow.funcs...)
 		refs.Operators = append(refs.Operators, pl.shadow.ops...)

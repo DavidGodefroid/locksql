@@ -47,12 +47,14 @@ This file records the changes a user or an agent has to know about.
   write (the key itself is hashed), so a change in a wide graph of such
   tables no longer answers `E_STALE`. Plan hash version 2.
   It also covers the operators a view, rule, policy, default or `CHECK`
-  (of a table or a domain) uses, with their functions (`pg_depend`
-  records them against the operator, not its function), the enum labels
-  in their sort order and the attributes of the composite types of the
-  columns, and, for a DDL statement, what a `CASCADE` would drop along
-  with its relations: the views over them (and over those), and the
-  policies and constraints of other tables that use them (#119). Plan
+  (of a table or a domain) uses, with their functions and those of their
+  commutators and negators (`pg_depend` records them against the
+  operator, not its function), the enum labels in their sort order and
+  the attributes of the composite types of the columns, and, for a DDL
+  statement that says `CASCADE`, what it would drop along with its
+  relations: the relations whose views, rules, policies, constraints,
+  defaults or triggers depend on them or that have a column of their row
+  type, recursively (not the functions that depend on them) (#119). Plan
   hash version 3.
 
 - **Hub mode** (`locksql console --hub URL --hub-key-file PATH --instance

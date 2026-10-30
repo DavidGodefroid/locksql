@@ -241,12 +241,14 @@ CREATE TABLE ph_opp (id int);
 CREATE POLICY ph_opp_p ON ph_opp USING (id === 1);
 CREATE DOMAIN ph_opd AS int CHECK (VALUE === VALUE);
 CREATE TABLE ph_opdt (id int, d ph_opd);
-GRANT SELECT ON ph_opv, ph_opc, ph_opp, ph_opdt TO ro;`)
+CREATE TABLE ph_opdef (id int, b bool DEFAULT (1 === 1));
+GRANT SELECT ON ph_opv, ph_opc, ph_opp, ph_opdt, ph_opdef TO ro;`)
 			opRefs := map[string]engine.ObjectRefs{
 				"view":         {Relations: []string{"ph_opv"}, Functions: []string{}, Operators: []string{}},
 				"CHECK":        {Relations: []string{"ph_opc"}, Functions: []string{}, Operators: []string{}, Writes: true},
 				"policy":       {Relations: []string{"ph_opp"}, Functions: []string{}, Operators: []string{}},
 				"domain CHECK": {Relations: []string{"ph_opdt"}, Functions: []string{}, Operators: []string{}, Writes: true},
+				"default":      {Relations: []string{"ph_opdef"}, Functions: []string{}, Operators: []string{}, Writes: true},
 			}
 			opPrev := map[string]engine.ObjectState{}
 			for k, r := range opRefs {
@@ -261,8 +263,23 @@ GRANT SELECT ON ph_opv, ph_opc, ph_opp, ph_opdt TO ro;`)
 			}
 			psql(`CREATE OR REPLACE FUNCTION ph_opf(int, int) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT $1 <> $2'`)
 			for k, r := range opRefs {
-				if reflect.DeepEqual(opPrev[k], writeState(t, s, r)) {
+				cur := writeState(t, s, r)
+				if reflect.DeepEqual(opPrev[k], cur) {
 					t.Errorf("the function of an operator in a %s replaced: the state did not change", k)
+				}
+				opPrev[k] = cur
+			}
+			// The planner may run the negator (NOT (a === b) becomes
+			// a !=== b) or the commutator instead: their functions too.
+			psql(`CREATE FUNCTION ph_opn(int, int) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT $1 <> $2';
+CREATE OPERATOR !=== (LEFTARG = int, RIGHTARG = int, FUNCTION = ph_opn, NEGATOR = ===);`)
+			for k, r := range opRefs {
+				opPrev[k] = writeState(t, s, r)
+			}
+			psql(`CREATE OR REPLACE FUNCTION ph_opn(int, int) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT true'`)
+			for k, r := range opRefs {
+				if reflect.DeepEqual(opPrev[k], writeState(t, s, r)) {
+					t.Errorf("the function of the negator of an operator in a %s replaced: the state did not change", k)
 				}
 			}
 
@@ -272,14 +289,24 @@ GRANT SELECT ON ph_opv, ph_opc, ph_opp, ph_opdt TO ro;`)
 			psql(`CREATE TABLE ph_cas (id int PRIMARY KEY, label text);
 CREATE TABLE ph_cas_other (id int);
 GRANT SELECT ON ph_cas, ph_cas_other TO ro;`)
-			crefs := engine.ObjectRefs{Relations: []string{"ph_cas"}, Functions: []string{}, Operators: []string{}, Writes: true, DDL: true}
-			wcrefs := engine.ObjectRefs{Relations: []string{"ph_cas"}, Functions: []string{}, Operators: []string{}, Writes: true}
-			cprev, wcprev := writeState(t, s, crefs), writeState(t, s, wcrefs)
+			crefs := engine.ObjectRefs{Relations: []string{"ph_cas"}, Functions: []string{}, Operators: []string{}, Writes: true, DDL: true, Cascade: true}
+			others := []engine.ObjectRefs{
+				{Relations: []string{"ph_cas"}, Functions: []string{}, Operators: []string{}},
+				{Relations: []string{"ph_cas"}, Functions: []string{}, Operators: []string{}, Writes: true},
+				{Relations: []string{"ph_cas"}, Functions: []string{}, Operators: []string{}, Writes: true, DDL: true},
+			}
+			cprev := writeState(t, s, crefs)
+			var oprev []engine.ObjectState
+			for _, r := range others {
+				oprev = append(oprev, writeState(t, s, r))
+			}
 			for _, c := range []struct{ name, sql string }{
 				{"view over the table", `CREATE VIEW ph_casv AS SELECT id, label FROM ph_cas`},
 				{"view over the view", `CREATE VIEW ph_casv2 AS SELECT id FROM ph_casv`},
 				{"view over the view replaced", `CREATE OR REPLACE VIEW ph_casv2 AS SELECT id FROM ph_casv WHERE id > 0`},
 				{"policy of another table reading it", `CREATE POLICY ph_cas_p ON ph_cas_other USING (id IN (SELECT id FROM ph_cas))`},
+				{"trigger on a table with a column of its row type", `CREATE TABLE ph_cas_row (id int, r ph_cas);
+CREATE TRIGGER ph_cas_rtr BEFORE INSERT ON ph_cas_row FOR EACH ROW EXECUTE FUNCTION ph_trg()`},
 			} {
 				psql(c.sql)
 				cur := writeState(t, s, crefs)
@@ -288,8 +315,19 @@ GRANT SELECT ON ph_cas, ph_cas_other TO ro;`)
 				}
 				cprev = cur
 			}
-			if !reflect.DeepEqual(wcprev, writeState(t, s, wcrefs)) {
-				t.Error("a view over the table changed the state of a write to it")
+			for i, r := range others {
+				if !reflect.DeepEqual(oprev[i], writeState(t, s, r)) {
+					t.Errorf("objects over the table changed the state of %+v (no CASCADE)", r)
+				}
+			}
+			// A sequence another table's default uses: DROP SEQUENCE ...
+			// CASCADE drops the default.
+			psql(`CREATE SEQUENCE ph_cas_seq; GRANT SELECT ON ph_cas_seq TO ro;`)
+			srefs := engine.ObjectRefs{Relations: []string{"ph_cas_seq"}, Functions: []string{}, Operators: []string{}, Writes: true, DDL: true, Cascade: true}
+			sprev := writeState(t, s, srefs)
+			psql(`CREATE TABLE ph_cas_def (id bigint DEFAULT nextval('ph_cas_seq'))`)
+			if reflect.DeepEqual(sprev, writeState(t, s, srefs)) {
+				t.Error("DROP SEQUENCE CASCADE, a default using it: the state did not change")
 			}
 
 			// Enum labels and composite types of the columns (#119).
