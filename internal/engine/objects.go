@@ -16,7 +16,9 @@ type ObjectRefs struct {
 	Functions []string `json:"functions"`
 	Operators []string `json:"operators"`
 	// Writes: the statement writes; the tables whose foreign keys
-	// reference its relations are followed too (a cascade reaches them).
+	// reference its relations with CASCADE, SET NULL or SET DEFAULT are
+	// followed too (a cascade reaches them); with DDL, every referencing
+	// table (TRUNCATE ... CASCADE).
 	Writes bool `json:"writes,omitempty"`
 	// DDL: the statement changes the schema; the event triggers that fire
 	// on it are read too.

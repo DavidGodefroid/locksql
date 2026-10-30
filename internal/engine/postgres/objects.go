@@ -224,7 +224,8 @@ func relationDefs(ctx context.Context, c *pgx.Conn, rels []uint32) ([]engine.Obj
 // relationUses are the relations and functions that the views, rules,
 // triggers, policies, defaults and constraints of rels use, their
 // partitions and inheritance relatives and, for a write, the tables whose
-// foreign keys reference them. A PL/pgSQL body records nothing in
+// foreign keys reference them with an action that changes their rows (for
+// DDL, every referencing table). A PL/pgSQL body records nothing in
 // pg_depend: the functions it calls are not followed (only its own source
 // is hashed), nor are the objects dynamic SQL reaches.
 func relationUses(ctx context.Context, c *pgx.Conn, rels []uint32, refs engine.ObjectRefs) (relOut, funcOut []uint32, err error) {
