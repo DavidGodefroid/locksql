@@ -4,7 +4,7 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## Unreleased
+## v0.11.0 (2026-10-30)
 
 ### Added
 
@@ -16,11 +16,12 @@ This file records the changes a user or an agent has to know about.
   console's copy is in force. At each start the profile's new mask rules
   are added to it; nothing else of the profile's set is (allow rules,
   removed masks, mode changes), and a profile set that still differs is
-  told at start.
+  told at start. It must be an absolute path (a relative one is a config
+  error).
 
 ### Changed
 
-- **Hub mode: re-approval, reveal and rollback** (lockkit v0.5.0).
+- **Hub mode: re-approval, reveal and rollback** (lockkit v0.5.0 and v0.6.0).
   - An expired ticket (pending past its TTL, or approved but the approval
     aged before the run) is asked again: `query.run` with it answers
     `pending` with a new ticket that names the expired one and the inputs
@@ -73,7 +74,7 @@ This file records the changes a user or an agent has to know about.
   - at level 2 the fingerprint prompt names what it decides ("to apply
     the policy changes");
   - credentials that expire without a way to reconnect end the session as
-    "connection lost" (was "credentials expired").
+    "connection lost" (was "credentials expired");
   - a change request is no longer checked for valid UTF-8 (it is escaped
     for the console either way);
   - `pii.add`: a rule the on-disk rule file refuses answers
@@ -84,7 +85,8 @@ This file records the changes a user or an agent has to know about.
     own records; while a loosening approved at `:review` is being saved, a
     renewal asked from lockhub may see its fingerprint, and goes stale at
     the run if the save fails.
-  Builds on lockkit v0.7.1.
+
+- Pinned to lockkit v0.7.1.
 
 - **Plan hash coverage** (#119). The plan hash also covers the operators
   a view, rule, policy, default or `CHECK` (of a table or a domain) uses,
