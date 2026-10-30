@@ -61,6 +61,9 @@ func (t Token) nameIn(d Dialect) string {
 	return t.Name()
 }
 
+// NameIn is nameIn, for other packages.
+func (t Token) NameIn(d Dialect) string { return t.nameIn(d) }
+
 // fold upper-cases s for keyword and name comparisons. Lower-casing first
 // also folds characters such as the Kelvin sign (U+212A) that servers with
 // case-insensitive collations treat as their ASCII letter; upper-casing then

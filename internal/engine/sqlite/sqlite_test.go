@@ -487,3 +487,29 @@ func TestRunCutsHugeCells(t *testing.T) {
 		t.Errorf("CutCells = %v", res.CutCells)
 	}
 }
+
+// A counted run hands the check the rows the write changed, before the
+// commit: a check error rolls the write back, a nil one commits it.
+func TestRunCountedRollsBack(t *testing.T) {
+	path := setupDB(t)
+	s := connect(t, path, config.TierWrite)
+	ctx := context.Background()
+	over := errors.New("over the bound")
+	var seen int64
+	_, err := engine.RunCounted(ctx, s, "main", classify(t, "UPDATE items SET label = 'z' WHERE id <= 30"), 0, func(n int64) error {
+		seen = n
+		return over
+	})
+	if !errors.Is(err, over) || seen != 30 {
+		t.Fatalf("counted run: %v, %d rows", err, seen)
+	}
+	assertCount(t, path, "SELECT count(*) FROM items WHERE label = 'z'", 0)
+	res, err := engine.RunCounted(ctx, s, "main", classify(t, "UPDATE items SET label = 'z' WHERE id <= 30"), 0, func(int64) error { return nil })
+	if err != nil || res.Affected != 30 {
+		t.Fatalf("committed run: %+v, %v", res, err)
+	}
+	assertCount(t, path, "SELECT count(*) FROM items WHERE label = 'z'", 30)
+	if _, err := engine.RunCounted(ctx, connect(t, path, config.TierDDL), "main", classify(t, "VACUUM"), 0, func(int64) error { return nil }); err == nil {
+		t.Fatal("VACUUM ran outside a transaction in a counted run")
+	}
+}

@@ -24,6 +24,7 @@ import (
 	"math"
 	"net"
 	"strconv"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -569,6 +570,105 @@ func (s *session) useDB(ctx context.Context, db string) error {
 // Run executes one classified statement inside a transaction: READ ONLY
 // for the read class, a plain one rolled back on error for the others.
 func (s *session) Run(ctx context.Context, db string, st sqlclass.Statement, maxRows int) (engine.Result, error) {
+	return s.run(ctx, db, st, maxRows, nil)
+}
+
+// RunCounted implements engine.RowChecker. A DDL statement commits
+// implicitly on MySQL: it is refused.
+func (s *session) RunCounted(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
+	if st.Class != sqlclass.Write && st.Class != sqlclass.Read {
+		return engine.Result{}, fmt.Errorf("%s: a %s statement commits implicitly: its rows cannot be checked before a commit", s.flavor, st.Class)
+	}
+	return s.run(ctx, db, st, maxRows, check)
+}
+
+// nonTransactional returns the tables and views q may write to whose
+// changes a ROLLBACK may not undo: a table of another storage engine
+// (MyISAM, Aria, MEMORY, CSV, ...) or a view (its tables are not looked
+// up). It reads every such table of the server in one query and looks
+// for its name in q as a whole word, quoted or not, whatever the lexer
+// makes of it (a name may start with a digit): a word that only happens
+// to equal such a name refuses more, never less. Called in the
+// transaction, mu held.
+func (s *session) nonTransactional(q string) ([]string, error) {
+	r, err := s.conn.Execute(`SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, COALESCE(ENGINE, '') FROM information_schema.TABLES
+		WHERE TABLE_TYPE <> 'BASE TABLE' OR UPPER(COALESCE(ENGINE, '')) NOT IN ('INNODB', 'NDBCLUSTER', 'NDB', 'ROCKSDB', 'TOKUDB')`)
+	if err != nil {
+		return nil, err
+	}
+	if r.Resultset == nil {
+		return nil, nil
+	}
+	text := strings.ToLower(q)
+	var out []string
+	for row := range r.RowNumber() {
+		sc, _ := r.GetString(row, 0)
+		tn, _ := r.GetString(row, 1)
+		typ, _ := r.GetString(row, 2)
+		eng, _ := r.GetString(row, 3)
+		if typ == "SYSTEM VIEW" && strings.EqualFold(sc, "information_schema") {
+			continue // read-only
+		}
+		name := strings.ToLower(tn)
+		// The server's own schemas count only when the statement names
+		// them with their schema.
+		if slices.Contains(systemSchemas, strings.ToLower(sc)) && !qualified(text, strings.ToLower(sc), name) || !wordIn(text, name) {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s.%s (%s)", sc, tn, strings.ToLower(strings.TrimSpace(typ+" "+eng))))
+	}
+	return out, nil
+}
+
+// identChar reports a byte of an unquoted MySQL identifier.
+func identChar(b byte) bool {
+	return b == '_' || b == '$' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= 0x80
+}
+
+// wordIn reports whether name occurs in text as a whole word.
+func wordIn(text, name string) bool {
+	for i := 0; name != "" && i <= len(text)-len(name); {
+		k := strings.Index(text[i:], name)
+		if k < 0 {
+			return false
+		}
+		k += i
+		end := k + len(name)
+		if (k == 0 || !identChar(text[k-1])) && (end == len(text) || !identChar(text[end])) {
+			return true
+		}
+		i = k + 1
+	}
+	return false
+}
+
+// qualified reports whether text names schema.name (quoted or not, blanks
+// around the dot allowed).
+func qualified(text, schema, name string) bool {
+	for i := 0; i < len(text); {
+		k := strings.Index(text[i:], name)
+		if k < 0 {
+			return false
+		}
+		k += i
+		j := k - 1
+		for j >= 0 && (text[j] == '`' || text[j] == '"' || text[j] == ' ' || text[j] == '\t' || text[j] == '\n') {
+			j--
+		}
+		if j >= 0 && text[j] == '.' {
+			before := strings.TrimRight(text[:j], " \t\n`\"")
+			if strings.HasSuffix(before, schema) {
+				return true
+			}
+		}
+		i = k + 1
+	}
+	return false
+}
+
+// run is Run, with check (when not nil) called on the rows the statement
+// changed before the commit; a check error rolls it back.
+func (s *session) run(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
 	if int(st.Class) > int(s.tier) {
 		return engine.Result{}, fmt.Errorf("mysql: a %s statement exceeds tier %s", st.Class, s.tier)
 	}
@@ -580,9 +680,24 @@ func (s *session) Run(ctx context.Context, db string, st sqlclass.Statement, max
 		begin = readOnlyTx
 	}
 	res, err := s.inTx(ctx, db, begin, func() (engine.Result, error) {
+		if check != nil && st.Class == sqlclass.Write {
+			// A ROLLBACK must undo what the check refuses.
+			nt, err := s.nonTransactional(st.SQL)
+			if err != nil {
+				return engine.Result{}, err
+			}
+			if len(nt) > 0 {
+				return engine.Result{}, checkErr{fmt.Errorf("%s: the write reaches tables a ROLLBACK may not undo: %s; its rows cannot be checked before a commit", s.flavor, strings.Join(nt, ", "))}
+			}
+		}
 		r, err := s.stream(st.SQL, maxRows)
 		if err == nil {
 			s.trustOrigins(st.SQL, r.Columns)
+		}
+		if err == nil && check != nil {
+			if cerr := check(r.Affected); cerr != nil {
+				return engine.Result{}, checkErr{cerr}
+			}
 		}
 		return r, err
 	}, true)
@@ -631,6 +746,20 @@ func (s *session) inTx(ctx context.Context, db, begin string, fn func() (engine.
 		return engine.Result{}, fmt.Errorf("%s: statement interrupted: timeout of %s reached: %w",
 			s.flavor, s.timeout, context.DeadlineExceeded)
 	}
+	if ce := (checkErr{}); errors.As(err, &ce) {
+		// The run's own check refused it: roll back, the error as is. A
+		// ROLLBACK with a warning (1196: some non-transactional changed
+		// tables could not be rolled back, through a trigger for one) did
+		// not undo everything: a hard failure, never "rolled back".
+		r, rerr := s.conn.Execute("ROLLBACK")
+		if rerr != nil {
+			return engine.Result{}, s.fail(ctx, rerr)
+		}
+		if r != nil && r.Warnings > 0 {
+			return engine.Result{}, fmt.Errorf("%s: the ROLLBACK did not undo every change (%d warnings, such as 1196: a non-transactional table was changed): the write was refused by its check before the commit, but some of it stays", s.flavor, r.Warnings)
+		}
+		return engine.Result{}, ce.err
+	}
 	if err != nil || !commit {
 		if _, rerr := s.conn.Execute("ROLLBACK"); rerr != nil && err == nil {
 			err = rerr
@@ -645,6 +774,11 @@ func (s *session) inTx(ctx context.Context, db, begin string, fn func() (engine.
 	}
 	return res, nil
 }
+
+// checkErr carries the error of a counted run's check out of inTx.
+type checkErr struct{ err error }
+
+func (e checkErr) Error() string { return e.err.Error() }
 
 // stream runs q and keeps at most maxRows rows (all when maxRows <= 0); the
 // rest of the result is read and dropped, which leaves the connection in

@@ -390,6 +390,41 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		}
 	})
 
+	t.Run("another agent's ticket refused", func(t *testing.T) {
+		alice := ipc.Requester{Agent: "dev-alice", Token: "hash-of-alice"}
+		var pr ipc.PlanResult
+		if e := cl.call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT id FROM hub_t WHERE id = 1 LIMIT 1", Requester: alice}, &pr); e != nil {
+			t.Fatalf("plan: %+v", e)
+		}
+		if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil); e == nil || e.Code != ipc.CodeWrongRequester {
+			t.Fatalf("another agent's plan id: %+v", e)
+		}
+		var p pendingResult
+		if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID, Requester: alice}, &p); e != nil || p.Status != "pending" {
+			t.Fatalf("run: %+v %+v", p, e)
+		}
+		approveOnce(t, lockBin, facade, "y")
+		deadline := time.Now().Add(60 * time.Second)
+		for {
+			e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: p.Ticket, Requester: ipc.Requester{Agent: "dev-bob", Token: "hash-of-bob"}}, nil)
+			if e != nil && strings.Contains(e.Message, "no decision yet") && time.Now().Before(deadline) {
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			if e == nil || e.Code != ipc.CodeWrongRequester {
+				t.Fatalf("another agent's ticket: %+v", e)
+			}
+			break
+		}
+		if n := runs(p.Ticket); n != 0 {
+			t.Fatalf("another agent's ticket ran: %d runs", n)
+		}
+		var rr ipc.RunResult
+		if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: p.Ticket, Requester: alice}, &rr); e != nil || len(rr.Rows) != 1 {
+			t.Fatalf("the requester's run: %+v %+v", rr, e)
+		}
+	})
+
 	t.Run("schema change between approval and run is stale", func(t *testing.T) {
 		s := submit(query)
 		approveOnce(t, lockBin, facade, "y")

@@ -289,7 +289,29 @@ func (s *session) Run(ctx context.Context, db string, st sqlclass.Statement, max
 		}
 		return s.query(ctx, st.SQL, withOrigins, maxRows)
 	}
-	return s.exec(ctx, st)
+	return s.exec(ctx, st, nil)
+}
+
+// RunCounted implements engine.RowChecker.
+func (s *session) RunCounted(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
+	if st.Class == sqlclass.Read {
+		return s.Run(ctx, db, st, maxRows)
+	}
+	if st.Kind == "vacuum" {
+		return engine.Result{}, errors.New("sqlite: VACUUM runs outside a transaction: it cannot be checked before a commit")
+	}
+	if int(st.Class) > int(s.tier) {
+		return engine.Result{}, fmt.Errorf("sqlite: a %s statement exceeds tier %s", st.Class, s.tier)
+	}
+	if _, err := lexSingle(st.SQL); err != nil {
+		return engine.Result{}, err
+	}
+	if err := s.checkDB(ctx, db); err != nil {
+		return engine.Result{}, err
+	}
+	ctx, cancel := s.withTimeout(ctx)
+	defer cancel()
+	return s.exec(ctx, st, check)
 }
 
 func (s *session) query(ctx context.Context, q string, withOrigins bool, maxRows int) (engine.Result, error) {
@@ -416,7 +438,10 @@ func (s *session) columnInfo(q string) ([]msqlite.ColumnInfo, error) {
 	return info, err
 }
 
-func (s *session) exec(ctx context.Context, st sqlclass.Statement) (engine.Result, error) {
+// exec runs a write-class statement in a transaction; check (when not
+// nil) is called on the rows it changed before the commit, and an error of
+// it rolls the statement back.
+func (s *session) exec(ctx context.Context, st sqlclass.Statement, check func(int64) error) (engine.Result, error) {
 	if st.Kind == "vacuum" { // VACUUM cannot run inside a transaction
 		if _, err := s.conn.ExecContext(ctx, st.SQL); err != nil {
 			return engine.Result{}, wrap(ctx, err)
@@ -437,6 +462,12 @@ func (s *session) exec(ctx context.Context, st sqlclass.Statement) (engine.Resul
 		if res.Affected, err = r.RowsAffected(); err != nil {
 			tx.Rollback()
 			return engine.Result{}, wrap(ctx, err)
+		}
+	}
+	if check != nil {
+		if err := check(res.Affected); err != nil {
+			tx.Rollback()
+			return engine.Result{}, err
 		}
 	}
 	if err := tx.Commit(); err != nil {

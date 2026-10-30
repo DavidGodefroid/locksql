@@ -54,10 +54,42 @@ This file records the changes a user or an agent has to know about.
   human's reason. `--auto` is refused with `--hub`, Shift+Tab does not turn
   auto mode on, and statements with `${placeholders}` are refused (values
   are typed in the console).
+- **Plans and tickets bound to the requesting agent** (hub mode, #91).
+  `query.plan` and `query.run` carry `requester` (the agent's lea name and
+  the hash of its `LEA_AGENT_TOKEN`, from lockkit's
+  `mcpkit.RequesterFromEnv`; the CLI and the MCP server send it). A plan id
+  (in every mode) or ticket presented by another agent is refused with
+  `CodeWrongRequester` (-32007) and stays its requester's. Not a security
+  boundary: agents of one account can read each other's token.
+- **Rowcount re-check of a hub-mode write** (#91). A write's ticket shows
+  `rows changed: at most N` (twice the planner's estimate from an `EXPLAIN`
+  of the write, at least 10 more); the run counts the rows it changed in
+  its own transaction before the commit, and past the bound rolls back and
+  answers stale with a new ticket whose screen says how many rows it would
+  have changed. PostgreSQL, MySQL/MariaDB and SQLite. The bound counts the
+  statement's own rows: the ticket names the triggers, rules and cascading
+  foreign keys it does not count (PostgreSQL); a data-modifying `WITH` is
+  refused in hub mode; on MySQL/MariaDB a write to a non-transactional table
+  or a view is not run, and a `ROLLBACK` that warns is a failure. The
+  screen names the requester by its kernel identity, the lea name as its
+  unverified claim.
 
 - Builds on lockkit v0.3.1 (hub support), was a commit of lockkit main.
 
 ### Fixed
+
+- **Becoming production at runtime re-applies the start-up refusals**
+  (#93, as lockkit#34). When the policy in force becomes production while
+  the console runs (a tightening, applied at once), an X11 session or core
+  dumps that could not be disabled now end the session (`refused after the
+  profile became production`), as they refuse a production profile at
+  start-up; before, only the privilege audit was run again.
+
+- **The separated-setup handoff keeps `--hub-plain-http`** (#111). The
+  console-account command printed (or run) for `locksql console --hub
+  http://… --hub-plain-http` now carries the flag; without it the console
+  refused the http:// hub (lockkit v0.3.1). The console usage line lists
+  the flag.
 
 - **Audit writes fail closed** (lockkit #5). An approved or
   auto-approved query whose approval record cannot be written runs
