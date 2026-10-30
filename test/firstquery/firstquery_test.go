@@ -299,3 +299,92 @@ func firstQuery(t *testing.T, env []string) {
 	}
 	t.Logf("first approved query: %v %v", rows.Columns, rows.Rows)
 }
+
+// An agent in a container of its own runs as a uid with no account in the
+// image (lea's agents: the host user's uid), with the socket volume and
+// the clients group. The image as it is (no allowed_uids) refuses it; a
+// console started with --allowed-uids serves that uid and no other one.
+// Its own volumes and container names, removed at the end.
+func TestConsoleAllowedUIDs(t *testing.T) {
+	setup(t)
+	project := demoProject(t)
+	human(t, 1, project, []string{"profile", "add", "--profile", "dev", "--engine", "sqlite", "--path", "demo.db"})
+	human(t, 2, project, []string{"doctor", "--fix", "--yes"}, 1)
+	image := os.Getenv("LOCKSQL_IMAGE")
+	if image == "" {
+		image = "locksql"
+	}
+	runVol, homeVol := "locksql-e2e-allowed-run", "locksql-e2e-allowed-home"
+	t.Cleanup(func() {
+		for _, n := range []string{"locksql-e2e-allowed-1", "locksql-e2e-allowed-2", "locksql-e2e-allowed-3"} {
+			exec.Command("docker", "rm", "-f", n).Run()
+		}
+		exec.Command("docker", "volume", "rm", runVol, homeVol).Run()
+	})
+	console := func(name string, extra ...string) *exec.Cmd {
+		return exec.Command("docker", append([]string{"run", "-it", "--rm", "--name", name, "--user", "locksql",
+			"-v", project + ":" + project, "-v", runVol + ":/run/locksql", "-v", homeVol + ":/home/locksql",
+			image, "console", "--project", project}, extra...)...)
+	}
+	// listen answers the first start's prompts until the console listens.
+	listen := func(scr *screen, tty *os.File) {
+		at := 0
+		for {
+			var got string
+			got, at = scr.waitFor(t, at, time.Minute, "Apply these changes? [y/N] ", "Accept all [a], review [r], skip [s]: ", "Listening…")
+			if got == "Listening…" {
+				return
+			}
+			if strings.HasPrefix(got, "Apply") {
+				tty.Write([]byte("y\n"))
+			} else {
+				tty.Write([]byte("a\n"))
+			}
+		}
+	}
+	// foreign is the agent's status as uid, in a container of its own.
+	foreign := func(uid string) (string, error) {
+		out, err := exec.Command("docker", "run", "--rm", "--user", uid, "--group-add", "10000", "-e", "HOME=/tmp",
+			"-v", project+":"+project, "-w", project, "-v", runVol+":/run/locksql",
+			image, "status", "--profile", "dev").CombinedOutput()
+		t.Logf("uid %s: locksql status: %v\n%s", uid, err, out)
+		return string(out), err
+	}
+	served := func(uid string) bool { _, err := foreign(uid); return err == nil }
+
+	scr, tty, end := startConsole(t, console("locksql-e2e-allowed-1"))
+	listen(scr, tty)
+	if served("4242") {
+		t.Error("no --allowed-uids: uid 4242 served")
+	}
+	if _, err := exec.Command("docker", "run", "--rm", "-v", project+":"+project, "-w", project, "-v", runVol+":/run/locksql",
+		image, "status", "--profile", "dev").CombinedOutput(); err != nil {
+		t.Errorf("the image's agent refused: %v", err)
+	}
+	end()
+	exec.Command("docker", "wait", "locksql-e2e-allowed-1").Run()
+
+	scr, tty, end = startConsole(t, console("locksql-e2e-allowed-2", "--allowed-uids", "4242"))
+	listen(scr, tty)
+	if !strings.Contains(scr.String(), "allowed uids besides locksql-clients (--allowed-uids): 4242") {
+		t.Error("the console does not print the allowed uids")
+	}
+	if !served("4242") {
+		t.Error("--allowed-uids 4242: uid 4242 refused")
+	}
+	if served("4243") {
+		t.Error("--allowed-uids 4242: uid 4243 served")
+	}
+	end()
+	exec.Command("docker", "wait", "locksql-e2e-allowed-2").Run()
+
+	// The console's own uid would void the separation; root is refused
+	// before anything else.
+	scr, _, end = startConsole(t, console("locksql-e2e-allowed-3", "--allowed-uids", "10001"))
+	scr.waitFor(t, 0, time.Minute, "may also connect as a client")
+	end()
+	out, err := exec.Command("docker", "run", "--rm", "--user", "locksql", image, "console", "--allowed-uids", "0").CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "leading zero") {
+		t.Errorf("--allowed-uids 0: %v\n%s", err, out)
+	}
+}

@@ -81,6 +81,11 @@ type Options struct {
 	// Hub is the hub mode (--hub, --hub-key-file, --instance): the human
 	// decides in lockhub, query.run answers pending with a ticket.
 	Hub kconsole.HubOptions
+	// AllowedUIDs (--allowed-uids) may connect besides the members of the
+	// client group, as allowed_uids of the system setup: an agent in a
+	// container of its own whose uid has no account in the console's.
+	// Set only by whoever starts the console, never by a client.
+	AllowedUIDs []int
 }
 
 // ServerConfig holds what a Server needs once the start-up sequence is

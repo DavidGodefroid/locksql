@@ -24,7 +24,7 @@ import (
 // [--show-results]`. It runs in the human's terminal only. Without
 // --profile it opens the only profile, or asks which one among several.
 func runConsole(e env, args []string) int {
-	const usage = "usage: locksql console [--profile P] [--project DIR] [--auto] [--allow-unmask] [--show-results] [--hub URL --hub-key-file PATH --instance NAME [--hub-plain-http] [--facade-keys-file PATH] [--devices-file PATH [--require-device RISKS] [--seal-clear]]]"
+	const usage = "usage: locksql console [--profile P] [--project DIR] [--auto] [--allow-unmask] [--show-results] [--allowed-uids UID,...] [--hub URL --hub-key-file PATH --instance NAME [--hub-plain-http] [--facade-keys-file PATH] [--devices-file PATH [--require-device RISKS] [--seal-clear]]]"
 	fs := flag.NewFlagSet("console", flag.ContinueOnError)
 	fs.SetOutput(e.stderr)
 	profile := fs.String("profile", "", "profile to open")
@@ -34,6 +34,8 @@ func runConsole(e env, args []string) int {
 	showResults := fs.Bool("show-results", false, "print in this console, in clear, the result of each masked query it runs; the client still gets it masked")
 	noUpdateCheck := fs.Bool(strings.TrimPrefix(noUpdateCheckFlag, "--"), false, "internal: no new-version check (the handoff passes LOCKSQL_NO_UPDATE_CHECK on with it)")
 	project := fs.String("project", "", "project directory (default: the current directory); the console account opens the agent's project from its own session")
+	var allowed onceFlag
+	fs.Var(&allowed, "allowed-uids", "comma-separated uids that may connect besides locksql-clients' members, for this console only: an agent in a container of its own whose uid has no account here (root, 65534 and the console's own uid are refused)")
 	var hub kconsole.HubOptions
 	hub.Register(fs)
 	if err := fs.Parse(args); err != nil {
@@ -41,6 +43,11 @@ func runConsole(e env, args []string) int {
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintln(e.stderr, usage)
+		return exitUsage
+	}
+	uids, err := parseAllowedUIDs(allowed.v)
+	if err != nil {
+		fmt.Fprintln(e.stderr, "locksql console:", err)
 		return exitUsage
 	}
 	if !e.tty {
@@ -63,7 +70,7 @@ func runConsole(e env, args []string) int {
 	// in the console account, or say how.
 	if proj, err := consoleProject(e.cwd, *project); err == nil {
 		absHubFiles(e.cwd, &hub)
-		a := consoleArgs{profile: *profile, project: proj, auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults, hub: hub,
+		a := consoleArgs{profile: *profile, project: proj, auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults, hub: hub, allowedUIDs: uids,
 			noUpdateCheck: *noUpdateCheck || e.updateCheckOff()}
 		if code, handled := handoffConsole(e, a); handled {
 			return code
@@ -122,7 +129,7 @@ func runConsole(e env, args []string) int {
 	if ctx.Err() != nil {
 		return exitFail
 	}
-	return openConsole(ctx, e, name, consoleFlags{auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults, hub: hub}, *project, term)
+	return openConsole(ctx, e, name, consoleFlags{auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults, hub: hub, allowedUIDs: uids}, *project, term)
 }
 
 // consoleFlags are the console-only switches: no client or config file can
@@ -131,6 +138,10 @@ type consoleFlags struct {
 	auto, allowUnmask, showResults bool
 	// hub is the hub mode, written by lock up.
 	hub kconsole.HubOptions
+	// allowedUIDs (--allowed-uids) may connect besides the client group's
+	// members: set by whoever starts the console (the human, the
+	// launcher, lock up), never by a client.
+	allowedUIDs []int
 }
 
 // openConsole runs the console on profile until it ends.
@@ -150,6 +161,7 @@ func openConsole(ctx context.Context, e env, profile string, f consoleFlags, pro
 		AllowUnmask: f.allowUnmask,
 		ShowResults: f.showResults,
 		Hub:         f.hub,
+		AllowedUIDs: f.allowedUIDs,
 		Cwd:         cwd,
 		IO:          term,
 		TTY:         os.Stdin,

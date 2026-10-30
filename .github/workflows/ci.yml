@@ -123,6 +123,13 @@ jobs:
           test "$code" = 2 # no console is running
           code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" install 2>err || code=$?
           test "$code" = 1 && grep -q 'runs in Docker' err
+      - name: docker build with ALLOWED_UIDS
+        run: |
+          docker build --build-arg ALLOWED_UIDS=4242,4243 -t locksql-allowed .
+          docker run --rm --entrypoint cat locksql-allowed /etc/locksql/system.toml | grep -x 'allowed_uids = \[4242,4243\]'
+          for bad in '1,,2' '0' '1000,0' '10001' '007' '65534' 'a'; do
+            if docker build --build-arg ALLOWED_UIDS="$bad" . >/dev/null 2>&1; then echo "ALLOWED_UIDS=$bad accepted" >&2; exit 1; fi
+          done
       - name: docker build --target vault
         run: |
           docker build --target vault -t locksql:vault .

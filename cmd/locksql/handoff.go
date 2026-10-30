@@ -15,6 +15,7 @@ import (
 
 	"github.com/DavidGodefroid/lockkit/sysconf"
 	"github.com/DavidGodefroid/locksql/internal/config"
+	"github.com/DavidGodefroid/locksql/internal/console"
 )
 
 // handoffEnv holds what the console handoff reads from the system; tests
@@ -94,6 +95,8 @@ type consoleArgs struct {
 	profile, project               string
 	auto, allowUnmask, showResults bool
 	hub                            kconsole.HubOptions
+	// allowedUIDs is --allowed-uids, passed on as typed (parsed).
+	allowedUIDs []int
 	// noUpdateCheck forwards LOCKSQL_NO_UPDATE_CHECK, which the helper
 	// does not pass on, as an internal flag.
 	noUpdateCheck bool
@@ -113,6 +116,9 @@ func (a consoleArgs) argv() []string {
 	}
 	if a.showResults {
 		out = append(out, "--show-results")
+	}
+	if len(a.allowedUIDs) > 0 {
+		out = append(out, "--allowed-uids", joinUIDs(a.allowedUIDs))
 	}
 	if a.hub.Enabled() {
 		// Every hub flag lockkit registers, --facade-keys-file and the
@@ -191,6 +197,9 @@ func handoffConsole(e env, a consoleArgs) (code int, handled bool) {
 	if err != nil || sys == nil {
 		return 0, false
 	}
+	// An account the console will serve (--allowed-uids) is the agent's
+	// side, as a member of the client group is.
+	sys = console.WithAllowedUIDs(sys, a.allowedUIDs)
 	h := e.handoffEnv()
 	svcUID, err := h.serviceUID(sys)
 	if err != nil {

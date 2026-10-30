@@ -32,9 +32,15 @@ FROM alpine:3.22 AS console
 # ALLOWED_UIDS: comma-separated uids that may reach the console besides the
 # members of locksql-clients, for an agent in a container of its own whose
 # uid has no account here (docs/docker.md#agent-in-its-own-container).
+# Root (0), the console account (10001), 65534 (nobody) and leading zeros
+# are refused. `locksql console --allowed-uids` does the same at run time,
+# with the release image as it is.
 ARG ALLOWED_UIDS=""
 # ca-certificates: tls = "verify-full" checks remote servers against them.
 RUN case "$ALLOWED_UIDS" in *[!0-9,]*|,*|*,|*,,*) echo "ALLOWED_UIDS: comma-separated uids, got '$ALLOWED_UIDS'" >&2; exit 1;; esac \
+ && for u in $(echo "$ALLOWED_UIDS" | tr ',' ' '); do \
+      case "$u" in 0*|10001|65534) echo "ALLOWED_UIDS: $u is root, the console account, nobody (or has a leading zero)" >&2; exit 1;; esac; \
+    done \
  && apk add --no-cache ca-certificates \
  && addgroup -S -g 10000 locksql-clients \
  && adduser -D -u 10001 -s /bin/sh -g "locksql console" locksql \
