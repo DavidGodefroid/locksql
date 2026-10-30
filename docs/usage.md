@@ -762,6 +762,19 @@ sends approvals to lockhub instead of asking on this terminal:
 - The screen names the requester as the kernel reports it (uid, pid,
   executable); the lea name the client sends is shown as its claim
   (`claims lea agent "…"`), not verified.
+- PII rule sets under `lock up`: the profile directory is a read-only copy
+  there, so `lock up` sets `LOCKSQL_PII_DIR` to a directory of the console's
+  own volume. The console keeps its rule sets there (`pii/<set>.toml`): the
+  first-run PII proposal, `pii add` and later proposals write there. A set it
+  lacks is first copied, once, from the profile's `.locksql/pii/<set>.toml`
+  (or the legacy `.locksql/pii.toml` as the `default` set). From then on the
+  console's copy is in force: at each start, the mask rules of the profile's
+  set that it lacks are added to it (a tightening you made in the workspace
+  and `lock up` reviewed); nothing else of the profile's set is taken (allow
+  rules, removed masks, mode changes), and a profile set that still differs
+  is told at start. Make those changes at the console (a mask the profile
+  still has comes back at the next start: remove it there too), or remove
+  the console's copy from its volume to take the profile's set again.
 
 ### Policy changes
 
@@ -1291,6 +1304,7 @@ finds the project's consoles.
 | `.locksql/config.toml` | project profiles (no secrets) |
 | `.locksql/pii/<set>.toml` | PII rule sets (project); a legacy `pii.toml` is moved to `pii/default.toml` |
 | `<user config dir>/locksql/pii/<set>.toml` | PII rule sets outside a project |
+| `$LOCKSQL_PII_DIR/pii/<set>.toml` | PII rule sets of a console whose profile directory is read-only (`lock up`), seeded from the profile's |
 | `<user config dir>/locksql/config.toml` | personal profiles |
 | `<user state dir>/locksql/approved/*.json` | last approved policies |
 | `config.toml.bak`, `pii/<set>.toml.bak` | the files before the last `locksql config import` |
