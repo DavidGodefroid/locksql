@@ -12,13 +12,26 @@ This file records the changes a user or an agent has to know about.
   live switches (Shift+Tab, Ctrl-O, `:unmask`), `:status`, `:review` and
   the policy polling, the session limits and the reconnection are
   lockkit's `console.Server`; locksql is its backend (the SQL methods, the
-  approval screen, the masking). What the human sees and what clients get
-  is unchanged and pinned by the golden screens, the `status` answer
-  included. Differences: a change request beyond the 20 queued is refused
-  ("too many pending change requests") instead of dropping the oldest; a
-  request handler that panics answers an internal error and the session
-  goes on; at level 2 the fingerprint prompt names what it decides ("to
-  apply the policy changes"). Builds on lockkit v0.7.0.
+  approval screen, the masking). The approval screens, the `status`
+  answer, `:status` and `:review` are unchanged and pinned by the golden
+  screens. Other differences:
+  - a tightening read from the files that cannot be saved as the approved
+    policy now applies anyway (audited `policy`/`unsaved`); before, the
+    looser policy stayed in force. `pii.add` then answers ok;
+  - a tightening locksql cannot compile (an unknown detector) ends the
+    session instead of leaving the looser policy in force;
+  - a change request beyond the 20 queued is refused ("too many pending
+    change requests") instead of dropping the oldest; an empty or too long
+    one says "change must be 1 to 500 bytes";
+  - any request naming a hub `ticket` on a console without its hub is
+    answered `CodeWithdrawn`, whatever the method;
+  - a request handler that panics is told on the console (escaped) and
+    audited as a failed `run`;
+  - at level 2 the fingerprint prompt names what it decides ("to apply
+    the policy changes");
+  - credentials that expire without a way to reconnect end the session as
+    "connection lost" (was "credentials expired").
+  Builds on lockkit v0.7.0.
 - **Approvals are decided by lockkit's console.** The console closes its
   approval screen with lockkit's `console.Asker` (same prompt, same answers,
   same audit records): the screens are pinned byte for byte by golden tests

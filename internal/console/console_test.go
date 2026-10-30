@@ -42,6 +42,7 @@ type fakeSession struct {
 	runs     []string
 	catalog  int
 	extra    []string // ExtraPrivileges warnings
+	extraErr error    // ExtraPrivileges error
 	closed   bool
 	// count answers the k-anonymity row counts (nil: the default result).
 	count   *engine.Result
@@ -129,7 +130,7 @@ func (f *fakeSession) ServerVersion() string { return "11.4.0-MariaDB" }
 func (f *fakeSession) Flavor() engine.Flavor { return engine.FlavorMariaDB }
 func (f *fakeSession) OriginColumns() bool   { return f.origin }
 func (f *fakeSession) ExtraPrivileges(context.Context, config.Tier) ([]string, error) {
-	return f.extra, nil
+	return f.extra, f.extraErr
 }
 func (f *fakeSession) Databases(context.Context) ([]string, error) { return f.dbs, nil }
 func (f *fakeSession) Tables(context.Context, string) ([]string, error) {

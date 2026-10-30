@@ -243,7 +243,7 @@ func TestBecomingProductionReappliesStartRefusals(t *testing.T) {
 			c.RefuseProduction = func() error { calls++; return errors.New("console: refused: an X11 session on a production profile") }
 		})
 		if noSession {
-			h.s.sess = nil
+			h.s.k.Lost() // lockkit's console holds the session
 		}
 		prod := uatProfile()
 		prod.Production = true
