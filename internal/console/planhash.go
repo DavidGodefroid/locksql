@@ -131,14 +131,39 @@ func (s *Server) planState(ctx context.Context, sess engine.Session, pl *plan) (
 // planHash is the hash of pl's inputs under the policy in force, with
 // state as read from the server.
 func (s *Server) planHash(pl *plan, state *engine.ObjectState) (string, error) {
-	fp, err := ticket.HashOf(s.approved)
+	in, err := s.planInputsOf(pl, state)
 	if err != nil {
 		return "", err
 	}
-	return ticket.HashOf(planInputs{
+	return ticket.HashOf(in)
+}
+
+// planDigests are the plan hash of pl and the digest of each of its
+// inputs by name (ticket.InputDigests): a renewal of its ticket tells the
+// human which of them moved.
+func (s *Server) planDigests(pl *plan, state *engine.ObjectState) (string, map[string]string, error) {
+	in, err := s.planInputsOf(pl, state)
+	if err != nil {
+		return "", nil, err
+	}
+	h, err := ticket.HashOf(in)
+	if err != nil {
+		return "", nil, err
+	}
+	d, err := ticket.InputDigests(in)
+	return h, d, err
+}
+
+// planInputsOf are the inputs of pl's plan hash under the policy in force.
+func (s *Server) planInputsOf(pl *plan, state *engine.ObjectState) (planInputs, error) {
+	fp, err := ticket.HashOf(s.approved)
+	if err != nil {
+		return planInputs{}, err
+	}
+	return planInputs{
 		V: planHashVersion, Profile: s.profile.Name, Engine: s.profile.Engine, Host: s.host(), DB: pl.db,
 		SQL: normalizedSQL(s.dialect, pl.st.SQL), Unmask: pl.unmask, PolicyFP: fp, State: state,
-	})
+	}, nil
 }
 
 // errStale is the check error of a guarded run whose plan hash no longer

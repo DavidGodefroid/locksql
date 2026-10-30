@@ -10,9 +10,12 @@ import (
 	"errors"
 	"net"
 	"os"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	kconsole "github.com/DavidGodefroid/lockkit/console"
+	"github.com/DavidGodefroid/lockkit/ticket"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
@@ -182,6 +185,9 @@ type plan struct {
 	// the run checks it again in its own transaction (planhash.go).
 	refs engine.ObjectRefs
 	hash string
+	// inputs are the digests of the plan hash's inputs by name
+	// (ticket.InputDigests): a renewal names those that moved.
+	inputs map[string]string
 	// guarded: the engine read the definitions, and the run checks them.
 	guarded bool
 	// requester is the agent that planned it: its lea name and token (as
@@ -204,8 +210,9 @@ type plan struct {
 // not safe for concurrent use: Serve runs every request on one goroutine.
 type Server struct {
 	cfg ServerConfig
-	// auditFails counts consecutive audit write failures (maxAuditFails).
-	auditFails int
+	// auditFails counts consecutive audit write failures (maxAuditFails),
+	// the hub's goroutine's too (auditHubRequest).
+	auditFails atomic.Int32
 	approver   Approver
 	approved   config.Policy
 	profile    config.Profile
@@ -255,6 +262,13 @@ type Server struct {
 
 	ended  bool
 	reason string
+
+	// live is the policy in force as the hub's goroutine reads it, and
+	// recomputed the full recomputes of expired plans being renewed
+	// (hubrenew.go).
+	live        atomic.Pointer[hubLive]
+	recomputeMu sync.Mutex
+	recomputed  map[string]recomputed
 }
 
 // NewServer checks cfg and returns a server enforcing cfg.Policy.
@@ -273,6 +287,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		auto: cfg.Auto, showResults: cfg.ShowResults && cfg.Boundary == "", allowUnmask: cfg.AllowUnmask}
 	if err := s.apply(cfg.Policy); err != nil {
 		return nil, err
+	}
+	if cfg.Hub != nil {
+		s.hubWire()
 	}
 	s.started = s.now()
 	s.lastSeen = s.started
@@ -294,11 +311,17 @@ func (s *Server) apply(p config.Policy) error {
 	if err != nil {
 		return err
 	}
+	// Before anything changes: a policy is applied whole or not at all.
+	fp, err := ticket.HashOf(p)
+	if err != nil {
+		return err
+	}
 	s.approved = p
 	s.profile = p.Profile
 	s.rules = pii.Rules{Mask: append([]string(nil), p.PIIMask...), Allow: append([]string(nil), p.PIIAllow...), Modes: p.PIIModes}
 	s.detectors = ds
 	s.dialect = d
+	s.setLive(fp)
 	return nil
 }
 
@@ -319,21 +342,26 @@ func (s *Server) writeAudit(rec audit.Record) error {
 	rec.Profile = s.profile.Name
 	rec.Engine = s.profile.Engine
 	rec.Host = s.host()
-	rec.DBUser = s.cfg.DBUser
-	// A login read from Vault names its own user, new at every connection.
-	if u, ok := s.sess.(interface{ DBUser() string }); ok && u.DBUser() != "" {
-		rec.DBUser = u.DBUser()
-	}
+	rec.DBUser = s.dbUser()
+	s.liveDBUser(rec.DBUser)
 	if err := s.cfg.Audit.Append(rec); err != nil {
-		s.auditFails++
 		s.cfg.IO.Println(paint.Fail("audit log write failed: " + safeText(err.Error(), false)))
-		if s.auditFails >= maxAuditFails {
+		if s.auditFails.Add(1) >= maxAuditFails {
 			s.End("the audit log cannot be written")
 		}
 		return err
 	}
-	s.auditFails = 0
+	s.auditFails.Store(0)
 	return nil
+}
+
+// dbUser is the database user of the records: a login read from Vault
+// names its own user, new at every connection.
+func (s *Server) dbUser() string {
+	if u, ok := s.sess.(interface{ DBUser() string }); ok && u.DBUser() != "" {
+		return u.DBUser()
+	}
+	return s.cfg.DBUser
 }
 
 func (s *Server) host() string {
@@ -391,6 +419,10 @@ func (s *Server) Tick() {
 		s.End("maximum session length")
 	case now.Sub(s.lastSeen) >= l.IdleTimeout:
 		s.End("idle timeout")
+	case s.auditFails.Load() >= maxAuditFails:
+		// Failures of the hub's own records (auditHubRequest) end the
+		// session here, on the request goroutine.
+		s.End("the audit log cannot be written")
 	}
 }
 

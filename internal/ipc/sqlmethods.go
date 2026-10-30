@@ -87,6 +87,9 @@ const (
 	// CodeWrongRequester: a plan or ticket presented by another agent than
 	// the one that made it (Requester.Token).
 	CodeWrongRequester = kipc.CodeWrongRequester
+	// CodeWithdrawn: a hub ticket run by a console that now runs without
+	// its hub (rollback of hub mode): plan again.
+	CodeWithdrawn = kipc.CodeWithdrawn
 
 	CodeParseError     = kipc.CodeParseError
 	CodeInvalidRequest = kipc.CodeInvalidRequest

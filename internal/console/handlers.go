@@ -490,7 +490,7 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 		}
 		pl.sideEffects = tr
 	}
-	if pl.hash, err = s.planHash(pl, state); err != nil {
+	if pl.hash, pl.inputs, err = s.planDigests(pl, state); err != nil {
 		return nil, ptr(s.failed(id, "plan", err))
 	}
 
