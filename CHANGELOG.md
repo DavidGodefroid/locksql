@@ -40,6 +40,13 @@ This file records the changes a user or an agent has to know about.
   the approval in its audit log"), the human sees why; three failed
   writes in a row end the session. Denials stay denials.
 
+- **Widenings take effect only once recorded** (#102). Auto mode on,
+  clear results shown, `:unmask` allowed and a loosened policy approved
+  (at `:review` or at start) write their audit record first; if it cannot
+  be written they stay off (the policy is neither saved nor applied, and
+  the console does not start), and the console says so. Narrowing still
+  applies at once.
+
 - **No widening switch while a prompt waits.** Shift+Tab (auto mode on),
   Ctrl-O (clear results on) and `:unmask` are refused, with a line saying to
   answer the prompt first, while the console waits for an approval, a typed
