@@ -946,7 +946,7 @@ PII columns (columns under a mask rule) may be used as follows:
 | `GROUP BY col` | `GROUP BY` an expression of it; `GROUP BY name` where `name` is both an input column and an alias for another value; PII filters in correlated subqueries, recursive CTEs or a `SELECT` without `FROM` |
 | | `ORDER BY`, window `PARTITION BY` and `ORDER BY`, `FILTER`, `DISTINCT ON` |
 
-- A filter, grouping or aggregate on a PII column triggers k-anonymity
+- A filter, grouping, `DISTINCT` or aggregate on a PII column triggers k-anonymity
   checks: before the approval prompt, the console runs `COUNT` queries
   (shown on the approval screen). Each constant filter on a PII column counts
   the subjects of that column in its own base table
@@ -973,7 +973,7 @@ PII columns (columns under a mask rule) may be used as follows:
   that stores a query's rows (`INSERT ... SELECT`) is parsed and analysed
   like a read before it runs. Its returned columns are masked by where they
   come from, so renaming a masked column is fine; an expression over one, a
-  function outside the allowlist, a PII filter, grouping or aggregate in the
+  function outside the allowlist, a PII filter, grouping, `DISTINCT` or aggregate in the
   outer `SELECT`, and syntax the parser does not read (`MERGE`, multi-table
   MySQL writes, ...) are refused. Filters in the write's own `WHERE` are
   yours to approve: the read rules do not apply there.

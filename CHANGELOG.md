@@ -57,12 +57,31 @@ This file records the changes a user or an agent has to know about.
 
 ### Fixed
 
+- **Audit writes fail closed** (lockkit #5). An approved or
+  auto-approved query whose approval record cannot be written runs
+  nothing: the agent gets `CodeInternal` ("the console could not record
+  the approval in its audit log"), the human sees why; three failed
+  writes in a row end the session. Denials stay denials.
+
+- **Widenings take effect only once recorded** (#102). Auto mode on,
+  clear results shown, `:unmask` allowed and a loosened policy approved
+  (at `:review` or at start) write their audit record first; if it cannot
+  be written they stay off (the policy is neither saved nor applied, and
+  the console does not start), and the console says so. Narrowing still
+  applies at once.
+
 - **No widening switch while a prompt waits.** Shift+Tab (auto mode on),
   Ctrl-O (clear results on) and `:unmask` are refused, with a line saying to
   answer the prompt first, while the console waits for an approval, a typed
   value, a refusal to acknowledge or a reconnection; switching auto mode or
   clear results off stays allowed. At level 2 a second finger prompt no
   longer nests in the pending one (lockkit #2).
+
+- **`DISTINCT` over a PII column is counted.** Like `GROUP BY`, a
+  `SELECT DISTINCT` that outputs a PII column now runs the k-anonymity row
+  count of its `FROM`/`WHERE`, and warns under `k`. In a correlated
+  subquery, a recursive CTE, a `SELECT` without `FROM` or a write, such a
+  `DISTINCT` is now refused, as a grouping already was.
 
 ## v0.9.0 (2026-10-28)
 
