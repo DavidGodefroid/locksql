@@ -278,6 +278,45 @@ func TestAdvDedupeOracle(t *testing.T) {
 	}
 }
 
+// Duplicate removal over a PII column compares its rows with each other: on
+// rows the agent picked with a non-PII filter, the number of rows left tells
+// whether the chosen subjects share a value, the test the self-comparison
+// rule refuses. Like GROUP BY, DISTINCT then needs the node's row count.
+func TestAdvDistinctNeedsCount(t *testing.T) {
+	for _, d := range []sqlclass.Dialect{sqlclass.MySQL, sqlclass.Postgres, sqlclass.SQLite} {
+		for _, tc := range []struct {
+			sql, count string
+		}{
+			{"SELECT DISTINCT email FROM users WHERE id IN (57, 58) LIMIT 10", "FROM users WHERE id IN (57, 58)"},
+			{"SELECT COUNT(*) FROM (SELECT DISTINCT email FROM users WHERE id IN (57, 58)) t LIMIT 1", "FROM users WHERE id IN (57, 58)"},
+			{"SELECT DISTINCT name, email FROM users WHERE id = 57 OR id = 58 LIMIT 10", "FROM users WHERE id = 57 OR id = 58"},
+			{"WITH c AS (SELECT DISTINCT salary FROM users WHERE id IN (57, 58)) SELECT COUNT(*) FROM c LIMIT 1", "FROM users WHERE id IN (57, 58)"},
+			{"SELECT COUNT(DISTINCT email) FROM users WHERE id IN (57, 58) LIMIT 1", "FROM users WHERE id IN (57, 58)"},
+			{"SELECT DISTINCT email FROM users LIMIT 5", "FROM users"},
+		} {
+			a, err := analyze(t, d, tc.sql)
+			if err != nil {
+				t.Errorf("%s %q: %v", d, tc.sql, err)
+				continue
+			}
+			found := false
+			for _, k := range a.KChecks {
+				found = found || !k.Grouped && strings.HasSuffix(k.SQL, "SELECT COUNT(*) "+tc.count)
+			}
+			if !found {
+				t.Errorf("%s %q: no row count in %+v", d, tc.sql, a.KChecks)
+			}
+		}
+		// DISTINCT over unmasked columns only needs no count.
+		a, err := analyze(t, d, "SELECT DISTINCT name FROM users WHERE id IN (57, 58) LIMIT 10")
+		if err != nil || len(a.KChecks) != 0 {
+			t.Errorf("%s: DISTINCT over a plain column: checks %+v, err %v", d, a, err)
+		}
+		// A count the node cannot run on its own is refused, as for GROUP BY.
+		wantRefused(t, d, "SELECT id FROM orders o WHERE EXISTS (SELECT DISTINCT u.email FROM users u WHERE u.id = o.user_id) LIMIT 10")
+	}
+}
+
 // A PII column compared with itself is IS NOT NULL in disguise: it selects
 // rows with no constant for the k-anonymity check to count. A self-join on
 // the column is the same probe, whatever the relation instances; a join
