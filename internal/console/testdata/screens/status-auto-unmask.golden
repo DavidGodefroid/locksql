@@ -1,0 +1,40 @@
+== status answer
+{
+  "profile": "uat",
+  "engine": "mariadb",
+  "host": "db.uat.example.com",
+  "host_confirmed": true,
+  "production": false,
+  "auto_approve": true,
+  "allow_unmask": true,
+  "show_results": false,
+  "tier": "read",
+  "databases": [
+    "app",
+    "other"
+  ],
+  "limits": {
+    "statement_timeout": 30000000000,
+    "explain_rows_warn": 100000,
+    "explain_rows_refuse": 1000000,
+    "max_rows": 200,
+    "max_cell_chars": 200,
+    "max_output_bytes": 65536,
+    "k_anonymity": 5,
+    "reference_probe": 5,
+    "idle_timeout": 1200000000000,
+    "max_session": 14400000000000
+  },
+  "idle_timeout_in_s": 1200,
+  "session_ends_in_s": 14400
+}
+== :status
+"  \x1b[2mprofile      \x1b[0m  uat · mariadb db.uat.example.com · tier read · production false"
+"  \x1b[2mdatabases    \x1b[0m  app, other"
+"  \x1b[2mmode         \x1b[0m  \x1b[33mauto: statements allowed by the tier and the weight check run without a prompt\x1b[0m\x1b[2m (Shift+Tab or :mode)\x1b[0m"
+"  \x1b[2mresults      \x1b[0m  masked (the agent's view)\x1b[2m (Ctrl-O or :results)\x1b[0m"
+"  \x1b[2munmask       \x1b[0m  \x1b[1;31mallowed: clients may ask for unmasked output, approved here each time\x1b[0m\x1b[2m (:unmask)\x1b[0m"
+"  \x1b[2mlimits       \x1b[0m  timeout 30s · warn 100000 · refuse 1000000 · max_rows 200 · max_cell_chars 200 · max_output_bytes 65536"
+"  \x1b[2msession      \x1b[0m  ends in 240 min (max_session 4h0m0s) · idle_timeout 20m0s"
+"  \x1b[2mplans open   \x1b[0m  0"
+"  \x1b[2mpolicy change\x1b[0m  none"

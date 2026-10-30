@@ -1,0 +1,40 @@
+== status answer
+{
+  "profile": "prod",
+  "engine": "mariadb",
+  "host": "db.example.com",
+  "host_confirmed": true,
+  "production": true,
+  "auto_approve": false,
+  "allow_unmask": false,
+  "show_results": false,
+  "tier": "read",
+  "databases": [
+    "app",
+    "other"
+  ],
+  "limits": {
+    "statement_timeout": 10000000000,
+    "explain_rows_warn": 20000,
+    "explain_rows_refuse": 200000,
+    "max_rows": 200,
+    "max_cell_chars": 200,
+    "max_output_bytes": 65536,
+    "k_anonymity": 10,
+    "reference_probe": 5,
+    "idle_timeout": 600000000000,
+    "max_session": 7200000000000
+  },
+  "idle_timeout_in_s": 600,
+  "session_ends_in_s": 7200
+}
+== :status
+"  \x1b[2mprofile      \x1b[0m  prod · mariadb db.example.com · tier read · production true"
+"  \x1b[2mdatabases    \x1b[0m  app, other"
+"  \x1b[2mmode         \x1b[0m  manual: every statement is prompted (production: auto mode unavailable)\x1b[2m (Shift+Tab or :mode)\x1b[0m"
+"  \x1b[2mresults      \x1b[0m  masked (the agent's view)\x1b[2m (Ctrl-O or :results)\x1b[0m"
+"  \x1b[2munmask       \x1b[0m  refused (:unmask allows it)\x1b[2m (:unmask)\x1b[0m"
+"  \x1b[2mlimits       \x1b[0m  timeout 10s · warn 20000 · refuse 200000 · max_rows 200 · max_cell_chars 200 · max_output_bytes 65536"
+"  \x1b[2msession      \x1b[0m  ends in 120 min (max_session 2h0m0s) · idle_timeout 10m0s"
+"  \x1b[2mplans open   \x1b[0m  0"
+"  \x1b[2mpolicy change\x1b[0m  none"
