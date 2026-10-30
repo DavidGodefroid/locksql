@@ -110,23 +110,6 @@ func TestWireAgentsSkippedForServiceAccount(t *testing.T) {
 	}
 }
 
-func TestOnboardSeparatedClientOnlyWires(t *testing.T) {
-	e, out, home := onboardEnv(t, "codex")
-	e.sys = func() (*sysconf.Config, error) { return &sysconf.Config{ServiceUser: "locksql-nobody-xyz"}, nil }
-	if code := runOnboard(e); code != exitOK {
-		t.Fatalf("code %d\n%s", code, out)
-	}
-	if !strings.Contains(out.String(), "locksql session") || !strings.Contains(out.String(), "~/.codex/config.toml") {
-		t.Fatalf("no hint or no wiring:\n%s", out)
-	}
-	if _, err := os.Stat(userConfig(t)); err == nil {
-		t.Fatal("client account wrote a profile")
-	}
-	if _, err := os.Stat(filepath.Join(home, ".codex", "config.toml")); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestClientCommandsNeverWire(t *testing.T) {
 	e, _, home := onboardEnv(t, "codex", "claude")
 	for _, args := range [][]string{{"tables", "--db", "x"}, {"status"}, {"version"}, {"init", "--bogus"}} {
@@ -195,56 +178,6 @@ func TestInitDetectsAgents(t *testing.T) {
 	}
 }
 
-// separatedClient makes e a client account in separated mode.
-func separatedClient(e *env) {
-	e.sys = func() (*sysconf.Config, error) { return &sysconf.Config{ServiceUser: "locksql-nobody-xyz"}, nil }
-}
-
-// separatedService makes e the service account in separated mode.
-func separatedService(e *env) {
-	e.sys = func() (*sysconf.Config, error) {
-		u, _ := user.Current()
-		return &sysconf.Config{ServiceUser: u.Username}, nil
-	}
-}
-
-func TestSeparatedClientGetsProjectSteps(t *testing.T) {
-	e, out, _ := onboardEnv(t, "codex")
-	separatedClient(&e)
-	if code := runOnboard(e); code != exitOK {
-		t.Fatalf("code %d\n%s", code, out)
-	}
-	for _, want := range []string{"~/.codex/config.toml", ".locksql/config.toml", "locksql init", "locksql console --project"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("output lacks %q:\n%s", want, out)
-		}
-	}
-	if strings.Contains(out.String(), "add a database") {
-		t.Fatalf("still points at the user config:\n%s", out)
-	}
-}
-
-func TestSeparatedServiceBareIsConsoleWithoutPrompts(t *testing.T) {
-	e, out, home := onboardEnv(t, "codex")
-	separatedService(&e)
-	// No profile visible: no prompt (answerIO would fail the test), a
-	// pointer to the project config and --project.
-	if code := runOnboard(e); code != exitUsage {
-		t.Fatalf("code %d\n%s", code, out)
-	}
-	for _, want := range []string{".locksql/config.toml", "--project"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("output lacks %q:\n%s", want, out)
-		}
-	}
-	if _, err := os.Stat(userConfig(t)); err == nil {
-		t.Fatal("service account prompted and wrote a profile")
-	}
-	if _, err := os.Stat(filepath.Join(home, ".codex")); err == nil {
-		t.Fatal("service account wired agents")
-	}
-}
-
 func TestConsoleWithoutProfileSameUserRefused(t *testing.T) {
 	e, out, home := onboardEnv(t, "codex")
 	if err := os.MkdirAll(filepath.Join(e.cwd, ".locksql"), 0o755); err != nil {
@@ -267,27 +200,6 @@ func TestConsoleWithoutProfileSameUserRefused(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(home); len(entries) != 0 {
 		t.Fatalf("wrote %v before refusing", entries)
-	}
-}
-
-func TestSysconfErrorStopsEarly(t *testing.T) {
-	for _, args := range [][]string{nil, {"console"}} {
-		e, out, home := onboardEnv(t, "codex")
-		e.sys = func() (*sysconf.Config, error) {
-			return nil, errors.New("sysconf: /etc/locksql/system.toml: not owned by root")
-		}
-		var code int
-		if args == nil {
-			code = runOnboard(e)
-		} else {
-			code = runEnv(e, args)
-		}
-		if code != exitUsage || !strings.Contains(out.String(), "not owned by root") {
-			t.Fatalf("%v: code %d\n%s", args, code, out)
-		}
-		if entries, _ := os.ReadDir(home); len(entries) != 0 {
-			t.Fatalf("%v: wrote %v", args, entries)
-		}
 	}
 }
 
@@ -316,85 +228,6 @@ func TestWireAgentsSkippedAsRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex")); err == nil {
 		t.Fatal("wired as root")
-	}
-}
-
-// installSpy replaces the install step of the onboarding.
-func installSpy(e *env, answer string) *[]string {
-	var calls []string
-	e.stdin = strings.NewReader(answer)
-	e.install = func(args []string) int {
-		calls = append(calls, strings.Join(args, " "))
-		return exitOK
-	}
-	return &calls
-}
-
-func TestOnboardSameUserOffersInstall(t *testing.T) {
-	e, out, home := onboardEnv(t, "codex")
-	calls := installSpy(&e, "y\n")
-	if code := runOnboard(e); code != exitOK {
-		t.Fatalf("code %d\n%s", code, out)
-	}
-	if len(*calls) != 1 {
-		t.Fatalf("install calls %v", *calls)
-	}
-	for _, want := range []string{"~/.codex/config.toml", "separate account", ".locksql/config.toml", "locksql console --project"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("output lacks %q:\n%s", want, out)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(home, ".codex", "config.toml")); err != nil {
-		t.Fatal("agents not wired:", err)
-	}
-	if _, err := os.Stat(userConfig(t)); err == nil {
-		t.Fatal("onboarding wrote a user profile")
-	}
-}
-
-func TestOnboardSameUserInstallDeclined(t *testing.T) {
-	for _, answer := range []string{"n\n", "\n", ""} {
-		e, out, _ := onboardEnv(t)
-		calls := installSpy(&e, answer)
-		if code := runOnboard(e); code != exitOK {
-			t.Fatalf("answer %q: code %d\n%s", answer, code, out)
-		}
-		if len(*calls) != 0 {
-			t.Fatalf("answer %q ran install", answer)
-		}
-		if !strings.Contains(out.String(), "Later: run sudo locksql install") || !strings.Contains(out.String(), "locksql console --project") {
-			t.Fatalf("answer %q: no steps:\n%s", answer, out)
-		}
-	}
-}
-
-func TestOnboardSameUserExistingProfileNotUsed(t *testing.T) {
-	e, out, _ := onboardEnv(t)
-	before := []byte("[profiles.dev]\nengine = \"sqlite\"\npath = \"/tmp/x.db\"\n")
-	os.MkdirAll(filepath.Dir(userConfig(t)), 0o700)
-	os.WriteFile(userConfig(t), before, 0o600)
-	installSpy(&e, "n\n")
-	if code := runOnboard(e); code != exitOK {
-		t.Fatalf("code %d\n%s", code, out)
-	}
-	if !strings.Contains(out.String(), ".locksql/config.toml") {
-		t.Fatalf("no pointer to the project config:\n%s", out)
-	}
-	after, err := os.ReadFile(userConfig(t))
-	if err != nil || !bytes.Equal(after, before) {
-		t.Fatalf("user config changed (%v):\n%s", err, after)
-	}
-}
-
-func TestOnboardSameUserInstallFailurePropagates(t *testing.T) {
-	e, out, _ := onboardEnv(t)
-	installSpy(&e, "y\n")
-	e.install = func([]string) int { return exitFail }
-	if code := runOnboard(e); code != exitFail {
-		t.Fatalf("code %d, want %d\n%s", code, exitFail, out)
-	}
-	if !strings.Contains(out.String(), "locksql console --project") {
-		t.Fatalf("steps not printed after a failed install:\n%s", out)
 	}
 }
 

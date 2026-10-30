@@ -9,7 +9,6 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 // sysConfig is the separated-mode setup, nil in same-user mode.
@@ -114,68 +113,4 @@ func projectDirHint(e env) string {
 		return client.ShellQuote(root)
 	}
 	return "DIR"
-}
-
-// separatedSteps is printed to an account other than the service account
-// in separated mode. The console reads the service account's user config,
-// which the agents' account cannot see: both sides share a project config
-// instead, and the console serves that project.
-func separatedSteps(e env) string {
-	account := product.P.Account
-	if sys, err := sysConfig(e); err == nil && sys != nil {
-		account = sys.ServiceUser
-	}
-	dir := projectDirHint(e)
-	return fmt.Sprintf(`Separated mode: the console runs as %s and serves one project at a time.
-  1. Put the database profile in %s/.locksql/config.toml (`+"`locksql setup`"+` asks for it
-     and gives the console account access to the project; `+"`locksql init <agent>`"+` writes
-     a commented example).
-  2. In the locksql session (account %s), run:  locksql console --project %s
-Agents working in that project then reach the console.
-`, account, dir, account, dir)
-}
-
-// sameUserSteps is printed when no separated setup exists: the console
-// refuses to run in the agent's account.
-const sameUserSteps = `The console must run in a separate account, apart from your agents: it alone
-holds the database password, and the agent's account cannot read its terminal.
-`
-
-// offerInstall asks whether to run locksql install now and returns
-// install's exit code; any answer but y returns exitOK. Either way the
-// steps follow.
-func offerInstall(e env) int {
-	// One reader for both prompts: install must not lose buffered input.
-	e.stdin = lineReader(e)
-	if !confirm(e, "Set it up now with sudo locksql install? [y/N] ") {
-		fmt.Fprintln(e.stdout, "\nLater: run sudo locksql install, then locksql doctor.")
-		return exitOK
-	}
-	run := e.install
-	if run == nil {
-		run = func(args []string) int { return runInstall(e, args) }
-	}
-	return run(nil)
-}
-
-// runOnboard is bare `locksql` in a terminal: wire the agents, then lead
-// to the separated setup. The service account gets the console.
-func runOnboard(e env) int {
-	if code, failed := sysFail(e, ""); failed {
-		return code
-	}
-	separated, service := isServiceAccount(e)
-	if separated && service {
-		return runConsole(e, nil)
-	}
-	fmt.Fprint(e.stdout, e.paint.Banner(product.P.Name, product.P.Tagline, version))
-	fmt.Fprintln(e.stdout)
-	wireAgents(e)
-	code := exitOK
-	if !separated {
-		fmt.Fprint(e.stdout, "\n"+sameUserSteps)
-		code = offerInstall(e)
-	}
-	fmt.Fprint(e.stdout, "\n"+separatedSteps(e))
-	return code
 }
