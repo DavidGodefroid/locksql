@@ -594,17 +594,14 @@ func (s *session) nonTransactional(q string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The name a token may stand for: a word, a `quoted` name, or a
+	// "double-quoted" one (ANSI_QUOTES), unquoted and folded.
 	name := func(i int) (string, bool) {
 		if i >= len(toks) {
 			return "", false
 		}
-		switch toks[i].Kind {
-		case sqlclass.TokWord:
-			return toks[i].Text, true
-		case sqlclass.TokQuotedIdent:
-			return toks[i].Text, true
-		}
-		return "", false
+		n := toks[i].NameIn(sqlclass.MySQL)
+		return n, n != ""
 	}
 	dot := func(i int) bool { return i < len(toks) && toks[i].Kind == sqlclass.TokPunct && toks[i].Text == "." }
 	var out []string
@@ -736,7 +733,7 @@ func (s *session) inTx(ctx context.Context, db, begin string, fn func() (engine.
 			return engine.Result{}, s.fail(ctx, rerr)
 		}
 		if r != nil && r.Warnings > 0 {
-			return engine.Result{}, fmt.Errorf("%s: the ROLLBACK did not undo every change (%d warnings, such as 1196: a non-transactional table was changed); refused by: %v", s.flavor, r.Warnings, ce.err)
+			return engine.Result{}, fmt.Errorf("%s: the ROLLBACK did not undo every change (%d warnings, such as 1196: a non-transactional table was changed): the write was refused by its check before the commit, but some of it stays", s.flavor, r.Warnings)
 		}
 		return engine.Result{}, ce.err
 	}

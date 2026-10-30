@@ -288,6 +288,11 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		if err == nil || errors.Is(err, over) || checked || !strings.Contains(err.Error(), "rc_my") {
 			t.Fatalf("MyISAM write: %v (checked %v)", err, checked)
 		}
+		for _, q := range []string{"UPDATE `rc_my` SET label = 'z'", "UPDATE `app`.`RC_MY` SET label = 'z'", "UPDATE app.rc_my SET label = 'z'"} {
+			if _, err := engine.RunCounted(ctx, s, "app", write(q), 10, func(int64) error { checked = true; return over }); err == nil || errors.Is(err, over) || checked {
+				t.Fatalf("%s: %v (checked %v)", q, err, checked)
+			}
+		}
 		if r := mustRun(t, s, "SELECT label FROM rc_my"); fmt.Sprint(r.Rows) != "[[a]]" {
 			t.Fatalf("the MyISAM write ran: %v", r.Rows)
 		}

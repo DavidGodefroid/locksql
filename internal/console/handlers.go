@@ -786,8 +786,8 @@ func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session,
 	}
 	if rc := (errRowcount{}); errors.As(err, &rc) {
 		pl.affected = rc.affected
-		s.println(paint.Warn(rc.Error()))
-		return s.refuseWarned(ctx, id, pl, class, refusal.New(refusal.Stale, rc.Error()))
+		s.println(paint.Warn(rc.Error() + ": rolled back"))
+		return s.refuseWarned(ctx, id, pl, class, refusal.New(refusal.Stale, rc.Error()+": rolled back"))
 	}
 	rec.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {

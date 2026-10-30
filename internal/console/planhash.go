@@ -179,7 +179,7 @@ func (s *Server) staleCheck(pl *plan) engine.GuardCheck {
 type errRowcount struct{ affected, max int64 }
 
 func (e errRowcount) Error() string {
-	return fmt.Sprintf("the write would have changed %d rows, more than the %d its approval allows: rolled back", e.affected, e.max)
+	return fmt.Sprintf("the write would have changed %d rows, more than the %d its approval allows", e.affected, e.max)
 }
 
 // rowCheck is the rowcount check of a write's run, in its own transaction

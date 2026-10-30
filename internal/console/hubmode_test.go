@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"github.com/DavidGodefroid/lockkit/hubclient"
 	"github.com/DavidGodefroid/lockkit/hubclient/hubtest"
+	"github.com/DavidGodefroid/lockkit/plans"
 	"github.com/DavidGodefroid/lockkit/ticket"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
@@ -479,5 +481,33 @@ func TestHubModeWriteSideEffects(t *testing.T) {
 	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
 	if raw := string(hub.Ticket(tk)); !strings.Contains(raw, "trigger app.users.audit") {
 		t.Fatalf("ticket: %s", raw)
+	}
+}
+
+// A write plan stored without a rowcount bound (an older console) never
+// runs unbounded: it is stale.
+func TestBindRows(t *testing.T) {
+	w := &plan{st: sqlclass.Statement{Class: sqlclass.Write}}
+	if err := w.bindRows(hubPlan{}); !errors.Is(err, plans.ErrStale) {
+		t.Fatalf("unbounded write: %v", err)
+	}
+	if err := w.bindRows(hubPlan{MaxAffected: 12}); err != nil || w.maxAffected != 12 {
+		t.Fatalf("bounded write: %v %d", err, w.maxAffected)
+	}
+	r := &plan{st: sqlclass.Statement{Class: sqlclass.Read}}
+	if err := r.bindRows(hubPlan{}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+}
+
+func TestSideEffectsVolatileFunction(t *testing.T) {
+	fn := func(vol string) engine.ObjectDef {
+		return engine.ObjectDef{Kind: "function", Name: "app.f(integer)", Def: strings.Join([]string{"BEGIN \x1f weird END", "", "", "f", vol, "f", "plpgsql", "integer", "integer", "", "alice"}, "\x1f")}
+	}
+	if got := sideEffects(engine.ObjectState{Objects: []engine.ObjectDef{fn("v")}}); len(got) != 1 || got[0] != "function app.f(integer)" {
+		t.Fatalf("volatile: %q", got)
+	}
+	if got := sideEffects(engine.ObjectState{Objects: []engine.ObjectDef{fn("i"), fn("s")}}); len(got) != 0 {
+		t.Fatalf("immutable/stable: %q", got)
 	}
 }

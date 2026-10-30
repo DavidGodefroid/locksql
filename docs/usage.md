@@ -740,9 +740,9 @@ sends approvals to lockhub instead of asking on this terminal:
   covering them. The plan hash is checked in the same transaction, before
   and after the statement. No `LOCK TABLE` or `SERIALIZABLE`: the write
   takes only its own locks.
-- The bound counts the statement's own rows. Rows changed by triggers,
+- The bound counts the statement's own rows. Rows changed by triggers, functions,
   rules or foreign-key cascades are not counted: on PostgreSQL the ticket
-  names the triggers, rules and cascading foreign keys the write reaches. A
+  names the triggers, rules, volatile functions and cascading foreign keys the write reaches. A
   statement with a data-modifying statement inside it (`WITH d AS (DELETE
   ...) UPDATE ...`) is refused in hub mode (`E_STATEMENT_KIND`): its count
   would not cover its rows. On MySQL/MariaDB a write naming a table a

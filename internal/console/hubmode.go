@@ -90,9 +90,12 @@ func nestedDML(d sqlclass.Dialect, sql string) bool {
 	if err != nil {
 		return true
 	}
-	for _, t := range toks {
+	for i, t := range toks {
 		if t.Kind != sqlclass.TokWord || t.Depth == 0 {
 			continue
+		}
+		if t.Text == "UPDATE" && i > 0 && toks[i-1].Kind == sqlclass.TokWord && (toks[i-1].Text == "FOR" || toks[i-1].Text == "KEY") {
+			continue // a locking clause: SELECT ... FOR [NO KEY] UPDATE
 		}
 		switch t.Text {
 		case "INSERT", "UPDATE", "DELETE", "MERGE":
@@ -111,6 +114,13 @@ func sideEffects(st engine.ObjectState) []string {
 		switch o.Kind {
 		case "trigger", "rule":
 			out = append(out, o.Kind+" "+o.Name)
+		case "function":
+			// A volatile function may write; its rows are not the
+			// statement's. provolatile is the 7th field from the end
+			// (the source, first, may hold anything).
+			if f := strings.Split(o.Def, "\x1f"); len(f) >= 11 && f[len(f)-7] == "v" {
+				out = append(out, "function "+o.Name)
+			}
 		case "constraint":
 			def := strings.ToUpper(o.Def)
 			for _, a := range []string{"CASCADE", "SET NULL", "SET DEFAULT"} {
@@ -122,6 +132,17 @@ func sideEffects(st engine.ObjectState) []string {
 		}
 	}
 	return out
+}
+
+// bindRows sets the rowcount bound of pl from its stored body. A write
+// stored without one (a plan store from an older console) never runs
+// unbounded: it is stale, planned again with a bound.
+func (pl *plan) bindRows(body hubPlan) error {
+	pl.maxAffected = body.MaxAffected
+	if pl.st.Class == sqlclass.Write && body.MaxAffected <= 0 {
+		return fmt.Errorf("%w: the write has no rowcount bound", plans.ErrStale)
+	}
+	return nil
 }
 
 // rowSlack is the margin of a write's rowcount bound over its estimate.
@@ -180,7 +201,7 @@ func (s *Server) hubScreen(pl *plan) render.MaskedScreen {
 		src.Body = append(src.Body, render.Structure("PII: UNMASKED"))
 	}
 	if pl.maxAffected > 0 {
-		src.Body = append(src.Body, render.Structure(fmt.Sprintf("rows changed: at most %d by the statement itself (checked before the commit; more rolls back); rows changed by triggers, rules or foreign-key cascades are not counted", pl.maxAffected)))
+		src.Body = append(src.Body, render.Structure(fmt.Sprintf("rows changed: at most %d by the statement itself (checked before the commit; more rolls back); rows changed by triggers, rules, foreign-key cascades or functions are not counted", pl.maxAffected)))
 	}
 	return render.MaskScreen(src, render.Masking{Detectors: s.detectors, Personal: func(string, string) bool { return true }})
 }
@@ -318,7 +339,10 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 		if planResp != nil {
 			return "", "", errReplan
 		}
-		pl.requester, pl.maxAffected = who, body.MaxAffected
+		pl.requester = who
+		if err := pl.bindRows(body); err != nil {
+			return "", "", err
+		}
 		fp, err := ticket.HashOf(s.approved)
 		return fp, pl.hash, err
 	})
@@ -329,6 +353,9 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 		s.withdraw(ctx, ticketID, caller)
 		return *planResp
 	case errors.Is(err, plans.ErrStale):
+		// Ended by Begin when the hash differs; a recheck refusal leaves
+		// it pending: withdraw it (a no-op on an ended plan).
+		s.withdraw(ctx, ticketID, caller)
 		return s.hubStale(ctx, id, body, ticketID, who, 0)
 	case errors.Is(err, hubclient.ErrDenied):
 		msg := "denied by the human; do not retry unless asked"
