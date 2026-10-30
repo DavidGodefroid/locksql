@@ -13,6 +13,7 @@ import (
 	kconfig "github.com/DavidGodefroid/lockkit/config"
 	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"github.com/DavidGodefroid/lockkit/secrets"
+	"github.com/DavidGodefroid/lockkit/ticket"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
@@ -133,11 +134,17 @@ func (s *Server) ApplyPolicy(kp kconsole.Policy) error {
 	if err != nil {
 		return err
 	}
+	// Before anything changes: a policy is applied whole or not at all.
+	fp, err := ticket.HashOf(p)
+	if err != nil {
+		return err
+	}
 	s.approved = p
 	s.profile = p.Profile
 	s.rules = pii.Rules{Mask: append([]string(nil), p.PIIMask...), Allow: append([]string(nil), p.PIIAllow...), Modes: p.PIIModes}
 	s.detectors = ds
 	s.dialect = d
+	s.setLive(fp) // what the hub's goroutine checks tickets against
 	return nil
 }
 

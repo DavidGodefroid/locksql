@@ -115,10 +115,9 @@ func (a consoleArgs) argv() []string {
 		out = append(out, "--show-results")
 	}
 	if a.hub.Enabled() {
-		out = append(out, "--hub", a.hub.URL, "--hub-key-file", a.hub.KeyFile, "--instance", a.hub.Instance)
-		if a.hub.PlainHTTP {
-			out = append(out, "--hub-plain-http")
-		}
+		// Every hub flag lockkit registers, --facade-keys-file and the
+		// device flags included (HubOptions.Args).
+		out = append(out, a.hub.Args()...)
 	}
 	return out
 }

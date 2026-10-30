@@ -10,6 +10,8 @@ import (
 	"errors"
 	"net"
 	"os"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	kconsole "github.com/DavidGodefroid/lockkit/console"
@@ -242,7 +244,22 @@ type Server struct {
 	catalogCache map[string][]engine.ColumnInfo
 	// quantum levels response times (ResponseQuantum; 0 in tests).
 	quantum time.Duration
+
+	// auditFails counts consecutive failures of the hub goroutine's own
+	// records (auditHubRequest); Tick ends the session on maxAuditFails.
+	// lockkit's console counts those of the request goroutine.
+	auditFails atomic.Int32
+	// live is the policy in force as the hub's goroutine reads it, and
+	// recomputed the full recomputes of expired plans being renewed
+	// (hubrenew.go).
+	live        atomic.Pointer[hubLive]
+	recomputeMu sync.Mutex
+	recomputed  map[string]recomputed
 }
+
+// maxAuditFails consecutive failures of the hub goroutine's records end
+// the session, as lockkit's console does for its own.
+const maxAuditFails = 3
 
 // NewServer checks cfg and returns a server enforcing cfg.Policy.
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -293,6 +310,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 	s.k = k
+	if cfg.Hub != nil {
+		s.hubWire()
+	}
 	return s, nil
 }
 
@@ -335,12 +355,18 @@ func (s *Server) stamp(rec audit.Record) audit.Record {
 	rec.Profile = s.profile.Name
 	rec.Engine = s.profile.Engine
 	rec.Host = s.host()
-	rec.DBUser = s.cfg.DBUser
-	// A login read from Vault names its own user, new at every connection.
-	if u, ok := s.sess.(interface{ DBUser() string }); ok && u.DBUser() != "" {
-		rec.DBUser = u.DBUser()
-	}
+	rec.DBUser = s.dbUser()
+	s.liveDBUser(rec.DBUser)
 	return rec
+}
+
+// dbUser is the database user of the records: a login read from Vault
+// names its own user, new at every connection.
+func (s *Server) dbUser() string {
+	if u, ok := s.sess.(interface{ DBUser() string }); ok && u.DBUser() != "" {
+		return u.DBUser()
+	}
+	return s.cfg.DBUser
 }
 
 func (s *Server) host() string {
@@ -369,7 +395,14 @@ func (s *Server) Ended() (string, bool) { return s.k.Ended() }
 
 // Tick ends the session on idle or maximum session timeout, as set by the
 // policy in force: a policy change applies from the next tick.
-func (s *Server) Tick() { s.k.Tick() }
+func (s *Server) Tick() {
+	s.k.Tick()
+	if s.auditFails.Load() >= maxAuditFails {
+		// Failures of the hub's own records end the session here, on the
+		// request goroutine.
+		s.End("the audit log cannot be written")
+	}
+}
 
 // Handle serves one request. It is the whole client surface of the console:
 // none of the methods loosens the policy.

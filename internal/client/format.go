@@ -277,6 +277,7 @@ func DescribeError(err error) ErrorInfo {
 			ipc.CodeNoSuchPlan:    "no_such_plan",
 			ipc.CodeConnLost:      "connection_lost",
 			ipc.CodePolicyPending: "policy_pending",
+			ipc.CodeWithdrawn:     "withdrawn",
 			ipc.CodeInvalidParams: "invalid_params",
 		}
 		kind, ok := kinds[re.Code]
