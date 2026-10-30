@@ -55,8 +55,9 @@ This file records the changes a user or an agent has to know about.
   or change along with its relations (views over them, policies,
   constraints, defaults and triggers that use them, inheritance children,
   owned sequences and their users, columns of their row type,
-  recursively; `DROP FUNCTION/TYPE/DOMAIN/SCHEMA ... CASCADE` are not
-  walked) (#119). The function of an operator counts as one more level of
+  recursively; the functions and domains it would drop are not hashed,
+  and `DROP FUNCTION/DOMAIN/SCHEMA ... CASCADE` or `DROP TYPE` of an enum
+  are not walked) (#119). The function of an operator counts as one more level of
   the 8-level bound. Plan hash version 3.
 
 - **Hub mode** (`locksql console --hub URL --hub-key-file PATH --instance
