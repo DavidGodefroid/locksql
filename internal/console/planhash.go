@@ -13,7 +13,7 @@ import (
 
 // planHashVersion is the version of planInputs: a change of what the hash
 // covers changes it.
-const planHashVersion = 1
+const planHashVersion = 2
 
 // planInputs is what a plan hash covers: the statement (normalised), where
 // it runs, the policy in force and, on an engine that can read them
@@ -95,6 +95,7 @@ func objectRefs(d sqlclass.Dialect, pl *plan) engine.ObjectRefs {
 		}
 	}
 	refs.Writes = pl.st.Class != sqlclass.Read
+	refs.DDL = pl.st.Class != sqlclass.Read && pl.st.Class != sqlclass.Write
 	if pl.shadow != nil {
 		refs.Functions = append(refs.Functions, pl.shadow.funcs...)
 		refs.Operators = append(refs.Operators, pl.shadow.ops...)

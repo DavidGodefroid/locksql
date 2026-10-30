@@ -38,6 +38,14 @@ This file records the changes a user or an agent has to know about.
   plan whose objects changed is refused with the new code `E_STALE` (the
   statement rolled back when they changed during it). `CREATE OR REPLACE`
   keeps the OIDs, so the definitions are hashed, not the OIDs.
+  The hash also covers the domains of the columns (base type, `NOT NULL`,
+  default, `CHECK` constraints and their functions, through a domain over
+  a domain) and, for a DDL statement, the event triggers and their
+  functions (#105). A write follows only the tables whose foreign keys
+  reference it with an action that changes their rows (`CASCADE`, `SET
+  NULL`, `SET DEFAULT`): a `NO ACTION`/`RESTRICT` key only refuses the
+  write (the key itself is hashed), so a change in a wide graph of such
+  tables no longer answers `E_STALE`. Plan hash version 2.
 
 - **Hub mode** (`locksql console --hub URL --hub-key-file PATH --instance
   NAME`, written by `lock up`; `locksql hub-key --instance NAME` prints the

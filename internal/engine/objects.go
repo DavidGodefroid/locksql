@@ -18,6 +18,9 @@ type ObjectRefs struct {
 	// Writes: the statement writes; the tables whose foreign keys
 	// reference its relations are followed too (a cascade reaches them).
 	Writes bool `json:"writes,omitempty"`
+	// DDL: the statement changes the schema; the event triggers that fire
+	// on it are read too.
+	DDL bool `json:"ddl,omitempty"`
 }
 
 // ObjectDef is the definition of one object a statement resolves to, as

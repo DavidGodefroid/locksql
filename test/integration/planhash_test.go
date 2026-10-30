@@ -114,6 +114,80 @@ GRANT SELECT ON ph_w, ph_part TO ro;`)
 				wprev = cur
 			}
 
+			// A NO ACTION or RESTRICT foreign key only refuses a write: the
+			// referencing tables are not followed, so a change in a wide
+			// graph of them leaves the plan as it is (#105). The key itself
+			// is hashed with the table's constraints.
+			wide := ""
+			for i := range 40 {
+				wide += fmt.Sprintf("CREATE TABLE ph_ref%d (id int, w_id int REFERENCES ph_w (id)%s);\n", i, map[bool]string{true: " ON DELETE RESTRICT"}[i%2 == 0])
+			}
+			psql(wide)
+			wprev = writeState(t, s, wrefs)
+			psql(`ALTER TABLE ph_ref7 ADD COLUMN note text; CREATE TRIGGER ph_rtr BEFORE INSERT ON ph_ref8 FOR EACH ROW EXECUTE FUNCTION ph_trg();`)
+			if cur := writeState(t, s, wrefs); !reflect.DeepEqual(wprev, cur) {
+				t.Error("a change in a table referencing the written one without a cascade made the plan stale")
+			}
+			psql(`ALTER TABLE ph_ref9 DROP CONSTRAINT ph_ref9_w_id_fkey; ALTER TABLE ph_ref9 ADD FOREIGN KEY (w_id) REFERENCES ph_w (id) ON DELETE SET NULL`)
+			cur := writeState(t, s, wrefs)
+			if reflect.DeepEqual(wprev, cur) {
+				t.Error("a key turned into SET NULL: the state did not change")
+			}
+			wprev = cur
+			psql(`ALTER TABLE ph_ref9 ADD COLUMN note text`)
+			if cur := writeState(t, s, wrefs); reflect.DeepEqual(wprev, cur) {
+				t.Error("a change in a table a cascade reaches: the state did not change")
+			}
+
+			// Domains of the columns: ALTER DOMAIN changes their CHECK in
+			// place (#105), through a domain over a domain too. (A domain an
+			// array column uses cannot be altered.)
+			psql(`CREATE DOMAIN ph_pos AS int CHECK (VALUE > 0);
+CREATE DOMAIN ph_small AS ph_pos CHECK (VALUE < 1000);
+CREATE TABLE ph_dom (id int, a ph_pos, b ph_small);
+GRANT SELECT ON ph_dom TO ro;`)
+			drefs := engine.ObjectRefs{Relations: []string{"ph_dom"}, Functions: []string{}, Operators: []string{}, Writes: true}
+			dprev := writeState(t, s, drefs)
+			for _, c := range []struct{ name, sql string }{
+				{"domain CHECK added", `ALTER DOMAIN ph_pos ADD CONSTRAINT ph_pos_even CHECK (VALUE % 2 = 0) NOT VALID`},
+				{"domain over a domain, CHECK dropped", `ALTER DOMAIN ph_small DROP CONSTRAINT ph_small_check`},
+				{"domain default", `ALTER DOMAIN ph_small SET DEFAULT 2`},
+				{"domain NOT NULL", `ALTER DOMAIN ph_pos SET NOT NULL`},
+			} {
+				psql(c.sql)
+				cur := writeState(t, s, drefs)
+				if reflect.DeepEqual(dprev, cur) {
+					t.Errorf("%s: the state did not change", c.name)
+				}
+				dprev = cur
+			}
+			psql(`CREATE FUNCTION ph_dck(int) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT true';
+ALTER DOMAIN ph_pos ADD CONSTRAINT ph_pos_f CHECK (ph_dck(VALUE));`)
+			dprev = writeState(t, s, drefs)
+			psql(`CREATE OR REPLACE FUNCTION ph_dck(int) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT $1 < 50'`)
+			if cur := writeState(t, s, drefs); reflect.DeepEqual(dprev, cur) {
+				t.Error("the function of a domain CHECK replaced: the state did not change")
+			}
+
+			// Event triggers run on DDL: their definitions and functions are
+			// in the state of a DDL statement (#105), not of a read.
+			erefs := engine.ObjectRefs{Relations: []string{"ph_t"}, Functions: []string{}, Operators: []string{}, Writes: true, DDL: true}
+			eprev, rprev := writeState(t, s, erefs), state(s)
+			psql(`CREATE FUNCTION ph_evt() RETURNS event_trigger LANGUAGE plpgsql AS 'BEGIN END';
+CREATE EVENT TRIGGER ph_et ON ddl_command_start EXECUTE FUNCTION ph_evt();`)
+			ecur := writeState(t, s, erefs)
+			if reflect.DeepEqual(eprev, ecur) {
+				t.Error("new event trigger: the DDL state did not change")
+			}
+			if !reflect.DeepEqual(rprev, state(s)) {
+				t.Error("an event trigger changed the state of a read")
+			}
+			psql(`CREATE OR REPLACE FUNCTION ph_evt() RETURNS event_trigger LANGUAGE plpgsql AS 'BEGIN RAISE NOTICE ''x''; END'`)
+			if cur := writeState(t, s, erefs); reflect.DeepEqual(ecur, cur) {
+				t.Error("event trigger function replaced: the DDL state did not change")
+			}
+			psql(`DROP EVENT TRIGGER ph_et`)
+
 			// Deeper than the bound: refused, never hashed in part.
 			chain := "CREATE VIEW ph_d0 AS SELECT id FROM ph_t;\n"
 			for i := 1; i <= 10; i++ {

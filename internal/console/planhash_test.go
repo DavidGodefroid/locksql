@@ -121,3 +121,14 @@ func TestObjectRefs(t *testing.T) {
 		t.Errorf("functions %v", refs.Functions)
 	}
 }
+
+// A DDL statement reads the event triggers too; a read or a write does
+// not (#105).
+func TestObjectRefsDDL(t *testing.T) {
+	for class, want := range map[sqlclass.Class]bool{sqlclass.Read: false, sqlclass.Write: false, sqlclass.DDL: true, sqlclass.Admin: true} {
+		refs := objectRefs(sqlclass.Postgres, &plan{st: sqlclass.Statement{SQL: "ALTER TABLE t ADD c int", Class: class}})
+		if refs.DDL != want {
+			t.Errorf("%s: DDL %v", class, refs.DDL)
+		}
+	}
+}
