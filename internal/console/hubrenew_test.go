@@ -128,13 +128,14 @@ func TestHubRecomputeIsTheRecheck(t *testing.T) {
 	}
 
 	// On the hub's goroutine (no session): the session-free inputs are
-	// recomputed, the statement's and the definitions' digests and the
-	// plan hash kept as stored.
+	// recomputed, the statement and the definitions unchecked (never
+	// their stored digests), the plan hash kept as stored.
 	body, _ := json.Marshal(hubPlan{DB: "app", SQL: hubWrite})
 	fp, _ := ticket.HashOf(h.s.approved)
 	p := &plans.Plan{Body: body, Binding: plans.Binding{PolicyFP: fp, PlanHash: pl.hash, Inputs: pl.inputs}}
 	gfp, ghash, gin, err := h.s.hubRecompute(p)
-	if err != nil || gfp != fp || ghash != pl.hash || len(ticket.DiffInputs(pl.inputs, gin)) != 0 {
+	want := []ticket.Change{{Input: "sql", Change: ticket.ChangeUnchecked}, {Input: "state", Change: ticket.ChangeUnchecked}}
+	if err != nil || gfp != fp || ghash != pl.hash || !slices.Equal(ticket.DiffInputs(pl.inputs, gin), want) {
 		t.Fatalf("hub-side recompute: %s %s %v %v", gfp, ghash, ticket.DiffInputs(pl.inputs, gin), err)
 	}
 	// A moved policy shows on that side too (lockkit then refuses the
@@ -218,7 +219,10 @@ func TestHubRenewRequestIsAudited(t *testing.T) {
 		t.Fatalf("no renewal pushed:\n%s", h.io.output())
 	}
 	nt := pushedTicket(t, hub, next)
-	if nt.Renews == nil || nt.Renews.Of != tk || !nt.Renews.Checked || len(nt.Renews.Changes) != 0 {
+	// Without a session the statement and its definitions are not
+	// checked: the renewal says so, never "unchanged".
+	if nt.Renews == nil || nt.Renews.Of != tk || nt.Renews.Unchanged() ||
+		!slices.Equal(nt.Renews.Changes, []ticket.Change{{Input: "sql", Change: ticket.ChangeUnchecked}, {Input: "state", Change: ticket.ChangeUnchecked}}) {
 		t.Fatalf("renews %+v", nt.Renews)
 	}
 	for time.Now().Before(deadline) && !strings.Contains(h.auditLog(t), `"event":"renew"`) {

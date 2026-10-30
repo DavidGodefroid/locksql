@@ -119,10 +119,11 @@ func (s *Server) hubRenew(ctx context.Context, id int64, tk string, caller plans
 // session (another goroutine's) cannot be read: the inputs that need no
 // session (the policy, the profile, the engine, the host, the database,
 // unmask) are recomputed, while the statement as planned ("sql") and the
-// definitions it resolves to ("state") keep their stored digests, and so
-// does the plan hash. Those are checked at the run, which plans again and
-// answers stale, with a new ticket, if they moved. Nothing here runs a
-// statement.
+// definitions it resolves to ("state") are ticket.UncheckedInput: the
+// renewal names them "unchecked", so the hub never shows it as checked
+// and unchanged, and the plan hash stays the stored one. They are checked
+// at the run, which plans again and answers stale, with a new ticket, if
+// they moved. Nothing here runs a statement.
 func (s *Server) hubRecompute(p *plans.Plan) (string, string, map[string]string, error) {
 	s.recomputeMu.Lock()
 	r, ok := s.recomputed[p.ID]
@@ -133,10 +134,6 @@ func (s *Server) hubRecompute(p *plans.Plan) (string, string, map[string]string,
 	v := s.live.Load()
 	if v == nil {
 		return "", "", nil, fmt.Errorf("no policy in force")
-	}
-	if p.Binding.Inputs == nil {
-		// A plan from a console before the inputs were recorded.
-		return v.fp, p.Binding.PlanHash, nil, nil
 	}
 	var body hubPlan
 	if err := json.Unmarshal(p.Body, &body); err != nil {
@@ -149,11 +146,7 @@ func (s *Server) hubRecompute(p *plans.Plan) (string, string, map[string]string,
 	}
 	inputs := maps.Clone(now)
 	for _, k := range []string{"sql", "state"} {
-		if d, ok := p.Binding.Inputs[k]; ok {
-			inputs[k] = d
-		} else {
-			delete(inputs, k)
-		}
+		inputs[k] = ticket.UncheckedInput
 	}
 	return v.fp, p.Binding.PlanHash, inputs, nil
 }

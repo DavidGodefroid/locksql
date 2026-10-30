@@ -63,8 +63,9 @@ This file records the changes a user or an agent has to know about.
     statement resolves to, `policy_fp`, `sql`, …; names only, never
     values). The statement is planned again first, read-only, as the run's
     recheck does. A renewal asked for in lockhub is checked too: the policy
-    and the profile now, the statement and its definitions at the run
-    (stale, with a new ticket, if they moved). A changed policy is no
+    and the profile now; the statement and its definitions are named
+    `unchecked` on it (no session there), and checked at the run (stale,
+    with a new ticket, if they moved). A changed policy is no
     renewal: plan again. Before, an expired ticket answered `denied`.
   - The clear approval screen stays in the plan, for a pinned local facade
     to reveal (Ctrl-O, `--facade-keys-file`) or a pinned device; the hub
@@ -80,7 +81,7 @@ This file records the changes a user or an agent has to know about.
     tickets with the error `withdrawn` (`CodeWithdrawn`), instead of
     `invalid_params`. Nothing of them runs.
 
-- Builds on lockkit v0.5.0 (hub support, re-approval, reveal, rollback).
+- Builds on lockkit v0.5.0 + `cbdcf00` (lockkit #84, `ticket.UncheckedInput`; v0.6.0 next) for hub support, re-approval, reveal and rollback.
 
 ### Fixed
 
