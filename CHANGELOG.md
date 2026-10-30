@@ -18,7 +18,7 @@ This file records the changes a user or an agent has to know about.
   ("too many pending change requests") instead of dropping the oldest; a
   request handler that panics answers an internal error and the session
   goes on; at level 2 the fingerprint prompt names what it decides ("to
-  apply the policy changes"). Builds on lockkit vNEXT.
+  apply the policy changes"). Builds on lockkit v0.7.0.
 - **Approvals are decided by lockkit's console.** The console closes its
   approval screen with lockkit's `console.Asker` (same prompt, same answers,
   same audit records): the screens are pinned byte for byte by golden tests
