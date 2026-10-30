@@ -237,6 +237,11 @@ func (s *tunneledSession) RunCounted(ctx context.Context, db string, st sqlclass
 	return engine.RunCounted(ctx, s.Session, db, st, maxRows, check)
 }
 
+// Triggers passes the listing on (engine.TriggerLister).
+func (s *tunneledSession) Triggers(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.TriggersOf(ctx, s.Session, db, names)
+}
+
 // ObjectState passes the read on (engine.ObjectGuard).
 func (s *proxiedSession) ObjectState(ctx context.Context, db string, refs engine.ObjectRefs) (engine.ObjectState, error) {
 	return engine.ObjectStateOf(ctx, s.Session, db, refs)
@@ -250,4 +255,9 @@ func (s *proxiedSession) RunGuarded(ctx context.Context, db string, st sqlclass.
 // RunCounted passes the counted run on (engine.RowChecker).
 func (s *proxiedSession) RunCounted(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
 	return engine.RunCounted(ctx, s.Session, db, st, maxRows, check)
+}
+
+// Triggers passes the listing on (engine.TriggerLister).
+func (s *proxiedSession) Triggers(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.TriggersOf(ctx, s.Session, db, names)
 }
