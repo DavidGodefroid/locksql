@@ -72,7 +72,8 @@ This file records the changes a user or an agent has to know about.
     `renew` records).
   - The separated-setup handoff forwards every hub flag lockkit registers
     (`--facade-keys-file`, `--devices-file`, `--require-device`,
-    `--seal-clear`, `--hub-plain-http`).
+    `--seal-clear`, `--hub-plain-http`); a relative facade keys or devices
+    file is made absolute like the hub key file.
   - Hub mode off (rollback): a console started without `--hub` after
     running with it withdraws the plans hub mode left pending (the hub
     hears of it at the next start with `--hub`) and answers a run of their
@@ -82,6 +83,12 @@ This file records the changes a user or an agent has to know about.
 - Builds on lockkit v0.5.0 (hub support, re-approval, reveal, rollback).
 
 ### Fixed
+
+- **The separated-setup handoff keeps `--hub-plain-http`** (#111). The
+  console-account command printed (or run) for `locksql console --hub
+  http://… --hub-plain-http` now carries the flag; without it the console
+  refused the http:// hub (lockkit v0.3.1). The console usage line lists
+  the flag.
 
 - **Audit writes fail closed** (lockkit #5). An approved or
   auto-approved query whose approval record cannot be written runs

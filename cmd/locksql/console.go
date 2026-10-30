@@ -24,7 +24,7 @@ import (
 // [--show-results]`. It runs in the human's terminal only. Without
 // --profile it opens the only profile, or asks which one among several.
 func runConsole(e env, args []string) int {
-	const usage = "usage: locksql console [--profile P] [--project DIR] [--auto] [--allow-unmask] [--show-results] [--hub URL --hub-key-file PATH --instance NAME]"
+	const usage = "usage: locksql console [--profile P] [--project DIR] [--auto] [--allow-unmask] [--show-results] [--hub URL --hub-key-file PATH --instance NAME [--hub-plain-http] [--facade-keys-file PATH] [--devices-file PATH [--require-device RISKS] [--seal-clear]]]"
 	fs := flag.NewFlagSet("console", flag.ContinueOnError)
 	fs.SetOutput(e.stderr)
 	profile := fs.String("profile", "", "profile to open")
@@ -62,6 +62,14 @@ func runConsole(e env, args []string) int {
 	// Started from another account of a separated setup: open the console
 	// in the console account, or say how.
 	if proj, err := consoleProject(e.cwd, *project); err == nil {
+		// The console account starts in its own home: a relative key,
+		// facade keys or devices file is the agent's, from its working
+		// directory.
+		for _, f := range []*string{&hub.KeyFile, &hub.FacadeKeysFile, &hub.DevicesFile} {
+			if *f != "" && !filepath.IsAbs(*f) {
+				*f = filepath.Join(e.cwd, *f)
+			}
+		}
 		a := consoleArgs{profile: *profile, project: proj, auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults, hub: hub,
 			noUpdateCheck: *noUpdateCheck || e.updateCheckOff()}
 		if code, handled := handoffConsole(e, a); handled {
