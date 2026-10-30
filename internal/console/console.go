@@ -126,6 +126,11 @@ type ServerConfig struct {
 	// profile in force at that time. Nil means a lost connection ends the
 	// console.
 	Reconnect func(ctx context.Context, p config.Profile) (engine.Session, error)
+	// RefuseProduction re-applies the start-up refusals of a production
+	// profile (an X11 session, core dumps that could not be disabled) when
+	// the policy in force becomes production: an error ends the session.
+	// nil: none.
+	RefuseProduction func() error
 	// Quantum levels the response time of query.run (ResponseQuantum in
 	// the real console, 0 to disable).
 	Quantum time.Duration
