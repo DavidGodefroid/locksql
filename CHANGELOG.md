@@ -4,6 +4,20 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## v0.11.3 (2026-10-31)
+
+Supported lockhub: as v0.11.2.
+
+### Changed
+
+- The SQLite engine embeds SQLite 3.54.1 (`modernc.org/sqlite` v1.61.0,
+  `modernc.org/libc` v1.79.0; was 3.53.4, #107). A query cancelled while
+  waiting under `busy_timeout` now stops at once instead of waiting out the
+  2 s timeout; nothing else changes for locksql (no shared cache, no prepared
+  statements). Release signing is unchanged: the release workflow updates
+  `sigstore/cosign-installer` to v4.1.2 and still installs cosign v2.6.1
+  (#108).
+
 ## v0.11.2 (2026-10-31)
 
 Supported lockhub: as v0.11.1; `allowed_uids` on a locksql lock under
