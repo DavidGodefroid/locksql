@@ -230,6 +230,90 @@ CREATE EVENT TRIGGER ph_et ON ddl_command_start EXECUTE FUNCTION ph_evt();`)
 			}
 			psql(`DROP EVENT TRIGGER ph_et`)
 
+			// An operator used inside a view, a policy, a CHECK or a domain
+			// CHECK is recorded in pg_depend against pg_operator, not its
+			// function: replacing the function changes them all (#119).
+			psql(`CREATE FUNCTION ph_opf(int, int) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT $1 = $2';
+CREATE OPERATOR === (LEFTARG = int, RIGHTARG = int, FUNCTION = ph_opf);
+CREATE VIEW ph_opv AS SELECT id FROM ph_t WHERE id === 1;
+CREATE TABLE ph_opc (id int CHECK (id === id));
+CREATE TABLE ph_opp (id int);
+CREATE POLICY ph_opp_p ON ph_opp USING (id === 1);
+CREATE DOMAIN ph_opd AS int CHECK (VALUE === VALUE);
+CREATE TABLE ph_opdt (id int, d ph_opd);
+GRANT SELECT ON ph_opv, ph_opc, ph_opp, ph_opdt TO ro;`)
+			opRefs := map[string]engine.ObjectRefs{
+				"view":         {Relations: []string{"ph_opv"}, Functions: []string{}, Operators: []string{}},
+				"CHECK":        {Relations: []string{"ph_opc"}, Functions: []string{}, Operators: []string{}, Writes: true},
+				"policy":       {Relations: []string{"ph_opp"}, Functions: []string{}, Operators: []string{}},
+				"domain CHECK": {Relations: []string{"ph_opdt"}, Functions: []string{}, Operators: []string{}, Writes: true},
+			}
+			opPrev := map[string]engine.ObjectState{}
+			for k, r := range opRefs {
+				opPrev[k] = writeState(t, s, r)
+				found := false
+				for _, o := range opPrev[k].Objects {
+					found = found || o.Kind == "operator" && strings.HasPrefix(o.Name, "===")
+				}
+				if !found {
+					t.Errorf("operator in a %s: not in the state %v", k, opPrev[k].Objects)
+				}
+			}
+			psql(`CREATE OR REPLACE FUNCTION ph_opf(int, int) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT $1 <> $2'`)
+			for k, r := range opRefs {
+				if reflect.DeepEqual(opPrev[k], writeState(t, s, r)) {
+					t.Errorf("the function of an operator in a %s replaced: the state did not change", k)
+				}
+			}
+
+			// DDL with CASCADE drops what depends on its relation: the
+			// views over it (and over those), the policies and constraints
+			// of other tables that use it (#119).
+			psql(`CREATE TABLE ph_cas (id int PRIMARY KEY, label text);
+CREATE TABLE ph_cas_other (id int);
+GRANT SELECT ON ph_cas, ph_cas_other TO ro;`)
+			crefs := engine.ObjectRefs{Relations: []string{"ph_cas"}, Functions: []string{}, Operators: []string{}, Writes: true, DDL: true}
+			wcrefs := engine.ObjectRefs{Relations: []string{"ph_cas"}, Functions: []string{}, Operators: []string{}, Writes: true}
+			cprev, wcprev := writeState(t, s, crefs), writeState(t, s, wcrefs)
+			for _, c := range []struct{ name, sql string }{
+				{"view over the table", `CREATE VIEW ph_casv AS SELECT id, label FROM ph_cas`},
+				{"view over the view", `CREATE VIEW ph_casv2 AS SELECT id FROM ph_casv`},
+				{"view over the view replaced", `CREATE OR REPLACE VIEW ph_casv2 AS SELECT id FROM ph_casv WHERE id > 0`},
+				{"policy of another table reading it", `CREATE POLICY ph_cas_p ON ph_cas_other USING (id IN (SELECT id FROM ph_cas))`},
+			} {
+				psql(c.sql)
+				cur := writeState(t, s, crefs)
+				if reflect.DeepEqual(cprev, cur) {
+					t.Errorf("DDL, %s: the state did not change", c.name)
+				}
+				cprev = cur
+			}
+			if !reflect.DeepEqual(wcprev, writeState(t, s, wcrefs)) {
+				t.Error("a view over the table changed the state of a write to it")
+			}
+
+			// Enum labels and composite types of the columns (#119).
+			psql(`CREATE TYPE ph_mood AS ENUM ('sad', 'happy');
+CREATE TYPE ph_pair AS (a int, b text);
+CREATE TABLE ph_ty (id int, m ph_mood, ms ph_mood[], p ph_pair);
+GRANT SELECT ON ph_ty TO ro;`)
+			tyrefs := engine.ObjectRefs{Relations: []string{"ph_ty"}, Functions: []string{}, Operators: []string{}, Writes: true}
+			typrev := writeState(t, s, tyrefs)
+			for _, c := range []struct{ name, sql string }{
+				{"enum value added", `ALTER TYPE ph_mood ADD VALUE 'ok' BEFORE 'happy'`},
+				{"enum value renamed", `ALTER TYPE ph_mood RENAME VALUE 'sad' TO 'blue'`},
+				// (A composite type a column uses cannot gain, lose or retype
+				// an attribute; it can rename one.)
+				{"composite attribute renamed", `ALTER TYPE ph_pair RENAME ATTRIBUTE b TO label`},
+			} {
+				psql(c.sql)
+				cur := writeState(t, s, tyrefs)
+				if reflect.DeepEqual(typrev, cur) {
+					t.Errorf("%s: the state did not change", c.name)
+				}
+				typrev = cur
+			}
+
 			// Deeper than the bound: refused, never hashed in part.
 			chain := "CREATE VIEW ph_d0 AS SELECT id FROM ph_t;\n"
 			for i := 1; i <= 10; i++ {

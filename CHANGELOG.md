@@ -46,6 +46,14 @@ This file records the changes a user or an agent has to know about.
   NULL`, `SET DEFAULT`): a `NO ACTION`/`RESTRICT` key only refuses the
   write (the key itself is hashed), so a change in a wide graph of such
   tables no longer answers `E_STALE`. Plan hash version 2.
+  It also covers the operators a view, rule, policy, default or `CHECK`
+  (of a table or a domain) uses, with their functions (`pg_depend`
+  records them against the operator, not its function), the enum labels
+  in their sort order and the attributes of the composite types of the
+  columns, and, for a DDL statement, what a `CASCADE` would drop along
+  with its relations: the views over them (and over those), and the
+  policies and constraints of other tables that use them (#119). Plan
+  hash version 3.
 
 - **Hub mode** (`locksql console --hub URL --hub-key-file PATH --instance
   NAME`, written by `lock up`; `locksql hub-key --instance NAME` prints the
