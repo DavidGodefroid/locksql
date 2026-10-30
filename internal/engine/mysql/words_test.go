@@ -56,7 +56,8 @@ func TestQualifier(t *testing.T) {
 		{"update other\r\n. t set x = 1", true},
 		{"update `oth``er`.t set x = 1", true},
 	} {
-		if got := qualifier(matchText(c.text), "other") || qualifier(matchText(c.text), "oth`er"); got != c.want {
+		texts := matchTexts(c.text)
+		if got := anyText(texts, func(t string) bool { return qualifier(t, "other") || qualifier(t, "oth`er") }); got != c.want {
 			t.Errorf("qualifier(%q) = %v", c.text, got)
 		}
 	}
@@ -64,11 +65,24 @@ func TestQualifier(t *testing.T) {
 
 func TestQualifiedBlanks(t *testing.T) {
 	for _, q := range []string{"UPDATE other\r.rc_oth SET x = 1", "UPDATE other\f.rc_oth SET x = 1", "UPDATE other\v.\vrc_oth SET x = 1", "UPDATE `other`\r\n.`rc_oth` SET x = 1"} {
-		if !qualified(matchText(q), "other", "rc_oth") || !qualifier(matchText(q), "other") {
+		texts := matchTexts(q)
+		if !anyText(texts, func(t string) bool { return qualified(t, "other", "rc_oth") }) || !anyText(texts, func(t string) bool { return qualifier(t, "other") }) {
 			t.Errorf("%q: not qualified", q)
 		}
 	}
-	if !qualified(matchText("UPDATE `a``b`.t SET x = 1"), "a`b", "t") {
-		t.Error("a schema with a doubled backtick")
+	for _, c := range []struct{ q, schema, name string }{
+		{"UPDATE `a``b`.t SET x = 1", "a`b", "t"},
+		{`UPDATE "a""b".t SET x = 1`, `a"b`, "t"},
+		{"UPDATE \"a``b\".t SET x = 1", "a``b", "t"},
+		{"UPDATE `a\"\"b`.t SET x = 1", `a""b`, "t"},
+		{`UPDATE app."t""x" SET x = 1`, "app", `t"x`},
+	} {
+		texts := matchTexts(c.q)
+		if !anyText(texts, func(t string) bool { return qualified(t, c.schema, c.name) }) || !anyText(texts, func(t string) bool { return qualifier(t, c.schema) }) {
+			t.Errorf("%q: %s.%s not qualified", c.q, c.schema, c.name)
+		}
+	}
+	if !anyText(matchTexts(`UPDATE "t""x" SET x = 1`), func(t string) bool { return wordIn(t, `t"x`) }) {
+		t.Error("a bare name with a doubled double quote")
 	}
 }

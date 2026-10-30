@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -592,7 +593,7 @@ func (s *session) RunCounted(ctx context.Context, db string, st sqlclass.Stateme
 // server's own schemas count like any other (the current database may be
 // mysql). Called in the transaction, mu held.
 func (s *session) nonTransactional(q string) ([]string, error) {
-	text := matchText(q)
+	texts := matchTexts(q)
 	r, err := s.conn.Execute(`SELECT SCHEMA_NAME, DATABASE() FROM information_schema.SCHEMATA`)
 	if err != nil {
 		return nil, err
@@ -605,7 +606,7 @@ func (s *session) nonTransactional(q string) ([]string, error) {
 			if row == 0 {
 				current, _ = r.GetString(row, 1)
 			}
-			if qualifier(text, strings.ToLower(sc)) {
+			if anyText(texts, func(t string) bool { return qualifier(t, strings.ToLower(sc)) }) {
 				schemas = append(schemas, sc)
 			}
 		}
@@ -632,7 +633,8 @@ func (s *session) nonTransactional(q string) ([]string, error) {
 			continue // read-only
 		}
 		name := strings.ToLower(tn)
-		if !(strings.EqualFold(sc, current) && wordIn(text, name)) && !qualified(text, strings.ToLower(sc), name) {
+		bare := strings.EqualFold(sc, current) && anyText(texts, func(t string) bool { return wordIn(t, name) })
+		if !bare && !anyText(texts, func(t string) bool { return qualified(t, strings.ToLower(sc), name) }) {
 			continue
 		}
 		out = append(out, fmt.Sprintf("%s.%s (%s)", sc, tn, strings.ToLower(strings.TrimSpace(typ+" "+eng))))
@@ -640,11 +642,13 @@ func (s *session) nonTransactional(q string) ([]string, error) {
 	return out, nil
 }
 
-// matchText is q as nonTransactional matches names in it: lower case,
-// every blank the server accepts (\r, \f, \v too) a space, and a doubled
-// backtick inside a quoted name single, so that "other\r.t" and a schema
-// name holding a backtick show their schema to qualifier and qualified.
-func matchText(q string) string {
+// matchTexts are the versions of q nonTransactional matches names in, a
+// match in any of them counting: lower case, every blank the server
+// accepts (\r, \f, \v too) a space; as is, with doubled backticks single
+// and with doubled double quotes single (ANSI_QUOTES), so that "other\r.t"
+// and a name holding a quote character show their schema to qualifier and
+// qualified.
+func matchTexts(q string) []string {
 	text := strings.Map(func(r rune) rune {
 		switch r {
 		case '\r', '\f', '\v':
@@ -652,7 +656,12 @@ func matchText(q string) string {
 		}
 		return r
 	}, strings.ToLower(q))
-	return strings.ReplaceAll(text, "``", "`")
+	return []string{text, strings.ReplaceAll(text, "``", "`"), strings.ReplaceAll(text, `""`, `"`)}
+}
+
+// anyText reports whether match holds for one of texts.
+func anyText(texts []string, match func(string) bool) bool {
+	return slices.ContainsFunc(texts, match)
 }
 
 // qualifier reports whether text names schema as a qualifier: the whole

@@ -266,9 +266,10 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		ddl("CREATE TABLE rc_inno (id INT PRIMARY KEY, label VARCHAR(20)) ENGINE=InnoDB")
 		ddl("CREATE TRIGGER rc_trg AFTER UPDATE ON rc_inno FOR EACH ROW INSERT INTO rc_log VALUES (NEW.id)")
 		ddl("CREATE TABLE other.rc_oth (id INT PRIMARY KEY, label VARCHAR(20)) ENGINE=MEMORY")
+		ddl("CREATE TABLE mysql.rc_sys (id INT PRIMARY KEY, label VARCHAR(20)) ENGINE=MyISAM")
 		t.Cleanup(func() {
 			ddl("DROP TRIGGER IF EXISTS rc_trg")
-			ddl("DROP TABLE IF EXISTS rc_my, rc_log, rc_inno, 1rc_my, other.rc_oth")
+			ddl("DROP TABLE IF EXISTS rc_my, rc_log, rc_inno, 1rc_my, other.rc_oth, mysql.rc_sys")
 		})
 		s := connectMySQL(t, m, srv, "rw", config.TierWrite, 30*time.Second)
 		for _, q := range []string{"INSERT INTO rc_my VALUES (1, 'a')", "INSERT INTO rc_inno VALUES (1, 'a')"} {
@@ -314,6 +315,11 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		// From the other schema, the bare name counts.
 		if _, err := engine.RunCounted(ctx, s, "other", write("UPDATE rc_oth SET label = 'z'"), 10, func(int64) error { checked = true; return over }); !errors.Is(err, engine.ErrUncounted) || checked {
 			t.Fatalf("bare name in the current database: %v (checked %v)", err, checked)
+		}
+		// The server's own schemas are not exempt: from within mysql, a bare
+		// name counts.
+		if _, err := engine.RunCounted(ctx, s, "mysql", write("UPDATE rc_sys SET label = 'z'"), 10, func(int64) error { checked = true; return over }); !errors.Is(err, engine.ErrUncounted) || checked {
+			t.Fatalf("bare name in mysql: %v (checked %v)", err, checked)
 		}
 		// DDL commits implicitly: a typed refusal too.
 		if _, err := engine.RunCounted(ctx, s, "app", sqlclass.Statement{Class: sqlclass.DDL, Kind: "ddl", SQL: "CREATE TABLE rc_x (id INT)", Limit: -1}, 10, func(int64) error { return nil }); !errors.Is(err, engine.ErrUncounted) {
