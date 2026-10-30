@@ -68,6 +68,8 @@ This file records the changes a user or an agent has to know about.
   answers stale with a new ticket whose screen says how many rows it would
   have changed. PostgreSQL, MySQL/MariaDB and SQLite.
 
+- Builds on lockkit v0.3.1 (hub support), was a commit of lockkit main.
+
 ### Fixed
 
 - **Audit writes fail closed** (lockkit #5). An approved or
