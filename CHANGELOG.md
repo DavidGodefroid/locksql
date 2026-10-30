@@ -51,7 +51,40 @@ This file records the changes a user or an agent has to know about.
     tickets with the error `withdrawn` (`CodeWithdrawn`), instead of
     `invalid_params`. Nothing of them runs.
 
-- Builds on lockkit v0.6.0 (re-approval with `unchecked` inputs, reveal, rollback).
+- **The console runs on lockkit's console** (#96). The request loop, the
+  live switches (Shift+Tab, Ctrl-O, `:unmask`), `:status`, `:review` and
+  the policy polling, the session limits and the reconnection are
+  lockkit's `console.Server`; locksql is its backend (the SQL methods, the
+  approval screen, the masking). The approval screens, the `status`
+  answer, `:status` and `:review` are unchanged and pinned by the golden
+  screens. Other differences:
+  - a tightening read from the files that cannot be saved as the approved
+    policy now applies anyway (audited `policy`/`unsaved`); before, the
+    looser policy stayed in force. `pii.add` then answers ok;
+  - a tightening locksql cannot compile (an unknown detector) ends the
+    session instead of leaving the looser policy in force;
+  - a change request beyond the 20 queued is refused ("too many pending
+    change requests") instead of dropping the oldest; an empty or too long
+    one says "change must be 1 to 500 bytes";
+  - any request naming a hub `ticket` on a console without its hub is
+    answered `CodeWithdrawn`, whatever the method;
+  - a request handler that panics is told on the console (escaped) and
+    audited as a failed `run`;
+  - at level 2 the fingerprint prompt names what it decides ("to apply
+    the policy changes");
+  - credentials that expire without a way to reconnect end the session as
+    "connection lost" (was "credentials expired").
+  - a change request is no longer checked for valid UTF-8 (it is escaped
+    for the console either way);
+  - `pii.add`: a rule the on-disk rule file refuses answers
+    `CodeInternal` (was `CodeInvalidParams`), and error texts go through
+    the sanitiser;
+  - in hub mode, three failed writes in a row of the hub's own records
+    (reveals, renewals) end the session, counted apart from the console's
+    own records; while a loosening approved at `:review` is being saved, a
+    renewal asked from lockhub may see its fingerprint, and goes stale at
+    the run if the save fails.
+  Builds on lockkit v0.7.1.
 
 - **Plan hash coverage** (#119). The plan hash also covers the operators
   a view, rule, policy, default or `CHECK` (of a table or a domain) uses,

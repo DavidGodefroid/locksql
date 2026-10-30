@@ -41,8 +41,17 @@ func TestApprovalAuditFailureRefuses(t *testing.T) {
 		t.Fatalf("the human was not told:\n%s", out)
 	}
 
-	// Auto mode too.
-	h.s.auto = true
+	// Auto mode too (switched on while the log could be written).
+	if err := os.Chmod(logPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.s.toggleMode()
+	if err := os.Chmod(logPath, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if !h.s.autoApprove() {
+		t.Fatal("auto mode not on")
+	}
 	pr = h.plan(t, selectUsers, false)
 	if r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}); r.Error == nil || r.Error.Code != ipc.CodeInternal {
 		t.Fatalf("unrecorded auto approval ran: %+v", r.Error)
@@ -51,10 +60,12 @@ func TestApprovalAuditFailureRefuses(t *testing.T) {
 		t.Fatal("the statement ran in auto mode")
 	}
 	if _, ended := h.s.Ended(); ended {
-		t.Fatal("ended after two failures")
+		t.Fatal("ended after a failure")
 	}
-	pr = h.plan(t, selectUsers, false)
-	_ = h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	for range 2 { // switching auto mode on was recorded: the count started again
+		pr = h.plan(t, selectUsers, false)
+		_ = h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	}
 	if reason, ended := h.s.Ended(); !ended || reason != "the audit log cannot be written" {
 		t.Fatalf("session not ended after repeated failures: %q %v", reason, ended)
 	}
@@ -80,16 +91,16 @@ func TestWideningAuditFailureKeepsSwitchesOff(t *testing.T) {
 	readOnlyLog(t, h.state)
 
 	h.s.toggleMode()
-	if h.s.auto {
+	if h.s.autoApprove() {
 		t.Error("auto mode on without a record")
 	}
 	h.s.toggleResults()
-	if h.s.showResults {
+	if h.s.showResults() {
 		t.Error("clear results shown without a record")
 	}
 	h.io.answers = []string{"y"}
 	h.s.toggleUnmask(context.Background())
-	if h.s.allowUnmask {
+	if h.s.allowUnmask() {
 		t.Error("unmask allowed without a record")
 	}
 	if !strings.Contains(h.io.output(), "not recorded in the audit log") {

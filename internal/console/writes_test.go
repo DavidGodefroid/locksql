@@ -86,8 +86,7 @@ func TestWriteFunctionsAllowlist(t *testing.T) {
 	p := uatProfile()
 	p.Tier = config.TierAdmin
 	p.WriteFunctions = config.WriteFunctionsAllowlist
-	h := newHarness(t, p, skip)
-	h.s.allowUnmask = true
+	h := newHarness(t, p, skip, allowUnmask)
 	for _, q := range []string{
 		"UPDATE users SET note = myfunc(id) WHERE id = 1",
 		"INSERT INTO orders (id, user_id, total) VALUES (1, 1, shop.price(1))",

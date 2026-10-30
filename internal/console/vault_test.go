@@ -280,8 +280,9 @@ func TestVaultLeaseReconnects(t *testing.T) {
 	}
 	h = newHarness(t, p, func(c *ServerConfig) {
 		c.Reconnect = func(context.Context, config.Profile) (engine.Session, error) { return next(), nil }
+		logins++
+		c.Session = &vaultSession{Session: c.Session, user: "v-1", refreshAt: c.Now().Add(54 * time.Minute)}
 	})
-	h.s.sess = next()
 	run := func() {
 		pr := h.plan(t, selectUsers, false)
 		h.io.answers = append(h.io.answers, "y")

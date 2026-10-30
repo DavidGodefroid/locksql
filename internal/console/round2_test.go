@@ -59,7 +59,7 @@ func TestPIIAddWhilePending(t *testing.T) {
 	h := newHarness(t, uatProfile())
 	next := h.s.approved
 	next.Profile.Limits.MaxRows *= 2
-	h.s.pending = &next
+	h.s.setPending(next)
 	h.ok(t, ipc.MethodPIIAdd, ipc.PIIAddParams{Pattern: "app.users.phone"}, nil)
 	h.io.answers = []string{"y"}
 	h.s.Command(context.Background(), ":review")

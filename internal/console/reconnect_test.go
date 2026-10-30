@@ -170,8 +170,7 @@ func TestReviewWarnsAboutSkipPermissions(t *testing.T) {
 	h := newHarness(t, p, func(c *ServerConfig) { c.Auto = true })
 	next := p
 	next.Production = false
-	h.s.pending = new(config.Policy)
-	*h.s.pending = config.NewPolicy(next, []string{"app.users.email"}, nil)
+	h.s.setPending(config.NewPolicy(next, []string{"app.users.email"}, nil))
 	h.io.answers = []string{"n"}
 	h.s.Command(context.Background(), ":review")
 	if !strings.Contains(h.io.output(), "without a prompt") {
@@ -244,7 +243,7 @@ func TestBecomingProductionReappliesStartRefusals(t *testing.T) {
 			c.RefuseProduction = func() error { calls++; return errors.New("console: refused: an X11 session on a production profile") }
 		})
 		if noSession {
-			h.s.sess = nil
+			h.s.k.Lost() // lockkit's console holds the session
 		}
 		prod := uatProfile()
 		prod.Production = true
@@ -257,6 +256,9 @@ func TestBecomingProductionReappliesStartRefusals(t *testing.T) {
 		}
 		if !strings.Contains(h.io.output(), "X11") {
 			t.Errorf("the refusal is not shown:\n%s", h.io.output())
+		}
+		if strings.Contains(h.io.output(), "policy tightened") {
+			t.Errorf("tightened said of a session that ends:\n%s", h.io.output())
 		}
 		if log := h.auditLog(t); !strings.Contains(log, `"error":"became production: console: refused: an X11 session`) {
 			t.Errorf("the refusal is not audited:\n%s", log)

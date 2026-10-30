@@ -42,6 +42,7 @@ type fakeSession struct {
 	runs     []string
 	catalog  int
 	extra    []string // ExtraPrivileges warnings
+	extraErr error    // ExtraPrivileges error
 	closed   bool
 	// count answers the k-anonymity row counts (nil: the default result).
 	count   *engine.Result
@@ -140,7 +141,7 @@ func (f *fakeSession) ServerVersion() string { return "11.4.0-MariaDB" }
 func (f *fakeSession) Flavor() engine.Flavor { return engine.FlavorMariaDB }
 func (f *fakeSession) OriginColumns() bool   { return f.origin }
 func (f *fakeSession) ExtraPrivileges(context.Context, config.Tier) ([]string, error) {
-	return f.extra, nil
+	return f.extra, f.extraErr
 }
 func (f *fakeSession) Databases(context.Context) ([]string, error) { return f.dbs, nil }
 func (f *fakeSession) Tables(context.Context, string) ([]string, error) {
@@ -1317,7 +1318,7 @@ func TestPolicyFromFilesKeepsMaskModes(t *testing.T) {
 	prompts := h.io.promptCount()
 	writeRules(t, root, "[[mask]]\ncolumn = \"app.users.email\"\n")
 	h.s.CheckPolicy()
-	if h.s.pending != nil || h.io.promptCount() != prompts {
+	if h.s.pendingPolicy() || h.io.promptCount() != prompts {
 		t.Fatal("a change back to redact waited for the human")
 	}
 	if _, ok := h.s.approved.PIIModes["app.users.email"]; ok {

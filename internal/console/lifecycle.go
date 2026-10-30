@@ -632,9 +632,15 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 
+	approver := st.approver
+	if hub != nil {
+		// Decisions come from lockhub; this terminal keeps the console's own
+		// decisions (policy changes, :unmask).
+		approver = hub.Approver(approver)
+	}
 	s, err := NewServer(ServerConfig{
-		Policy: approved, RulesPath: rulesPath, StateDir: o.StateDir, ApprovedKey: key,
-		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Approver: st.approver, Fingerprint: iso.verifier != nil, Boundary: iso.boundary(), Now: o.Now,
+		Policy: approved, RulesPath: rulesPath, StateDir: o.StateDir, ApprovedKey: key, Refused: refusedFP,
+		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Approver: approver, Fingerprint: iso.verifier != nil, Boundary: iso.boundary(), Now: o.Now,
 		Auto: o.Auto, AllowUnmask: o.AllowUnmask, ShowResults: o.ShowResults, Version: o.Version, LoadPolicy: loadPolicy,
 		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health, Hub: hub,
 		RefuseProduction: refuseProduction,
@@ -644,7 +650,6 @@ func Run(ctx context.Context, o Options) error {
 		closeSess()
 		return err
 	}
-	s.refused = refusedFP
 	s.audit(audit.Record{Event: audit.EventLogin, Decision: "ok"})
 	o.IO.Println("")
 	for _, l := range readyLines(path, cfg.ProjectRoot, o.ShowResults) {
@@ -658,9 +663,6 @@ func Run(ctx context.Context, o Options) error {
 		lines = ls.Lines()
 	}
 	if hub != nil {
-		// Decisions come from lockhub; this terminal keeps the console's own
-		// decisions (policy changes, :unmask).
-		s.approver = hub.Approver(s.approver)
 		wctx, stopWatch := context.WithCancel(ctx)
 		watched := make(chan struct{})
 		go func() { defer close(watched); hub.Watch(wctx, o.IO) }()
@@ -668,9 +670,7 @@ func Run(ctx context.Context, o Options) error {
 		s.println(paint.Step("hub mode: requests are decided in lockhub (instance " + safeText(o.Hub.Instance, false) + ")"))
 	}
 	serveErr := s.Serve(ctx, ln, lines)
-	if s.sess != nil {
-		_ = s.sess.Close()
-	}
+	s.Close()
 	reason, _ := s.Ended()
 	s.audit(audit.Record{Event: audit.EventLogout, Decision: reason})
 	o.IO.Println(paint.Step("session ended: " + reason))

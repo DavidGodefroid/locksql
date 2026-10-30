@@ -71,8 +71,8 @@ func TestNoWideningWhileApprovalWaits(t *testing.T) {
 	pr = h0.plan(t, selectUsers, false)
 	h0.io.answers = []string{"y"}
 	h0.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
-	if h0.s.autoApprove() || h0.s.showResults || h0.s.allowUnmask {
-		t.Fatalf("widened during a prompt: auto %v results %v unmask %v", h0.s.autoApprove(), h0.s.showResults, h0.s.allowUnmask)
+	if h0.s.autoApprove() || h0.s.showResults() || h0.s.allowUnmask() {
+		t.Fatalf("widened during a prompt: auto %v results %v unmask %v", h0.s.autoApprove(), h0.s.showResults(), h0.s.allowUnmask())
 	}
 	if n := strings.Count(h0.io.output(), "not while a prompt waits"); n != 3 {
 		t.Fatalf("refusal printed %d times:\n%s", n, h0.io.output())
