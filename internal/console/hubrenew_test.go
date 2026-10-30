@@ -135,7 +135,7 @@ func TestHubRecomputeIsTheRecheck(t *testing.T) {
 	// renewal: plan again).
 	next := h.s.approved
 	next.PIIMask = append(slices.Clone(next.PIIMask), "app.users.note")
-	if err := h.s.apply(next); err != nil {
+	if err := h.s.adopt(next, "tightened"); err != nil {
 		t.Fatal(err)
 	}
 	gfp, _, gin, err = h.s.hubRecompute(p)

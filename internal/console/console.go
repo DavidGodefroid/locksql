@@ -188,6 +188,9 @@ type plan struct {
 	// the run checks it again in its own transaction (planhash.go).
 	refs engine.ObjectRefs
 	hash string
+	// inputs are the digests of the plan hash's inputs by name
+	// (ticket.InputDigests): a renewal names those that moved.
+	inputs map[string]string
 	// guarded: the engine read the definitions, and the run checks them.
 	guarded bool
 	// requester is the agent that planned it: its lea name and token (as
