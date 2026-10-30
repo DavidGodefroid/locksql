@@ -16,6 +16,12 @@ This file records the changes a user or an agent has to know about.
 
 ### Fixed
 
+- **Audit writes fail closed** (lockkit #5). An approved or
+  auto-approved query whose approval record cannot be written runs
+  nothing: the agent gets `CodeInternal` ("the console could not record
+  the approval in its audit log"), the human sees why; three failed
+  writes in a row end the session. Denials stay denials.
+
 - **No widening switch while a prompt waits.** Shift+Tab (auto mode on),
   Ctrl-O (clear results on) and `:unmask` are refused, with a line saying to
   answer the prompt first, while the console waits for an approval, a typed

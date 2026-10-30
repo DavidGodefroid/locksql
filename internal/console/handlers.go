@@ -635,8 +635,12 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	}
 	// The decision is on record before anything runs: a console stopped
 	// between the approval and the end of the run still leaves a trace of
-	// what was approved. The run record follows, with the outcome.
-	s.audit(rec)
+	// what was approved. The run record follows, with the outcome. An
+	// approval that cannot be recorded runs nothing.
+	if s.writeAudit(rec) != nil {
+		s.println(paint.Fail("refused: the approval could not be recorded in the audit log"))
+		return errResp(req.ID, ipc.CodeInternal, "the console could not record the approval in its audit log, so the query was not run; ask the user to check the console")
+	}
 	rec.Event, rec.Decision = audit.EventRun, "ok"
 	// The prompts may have waited: check the TTL again, so that an
 	// approval or a value landing after it runs nothing.
