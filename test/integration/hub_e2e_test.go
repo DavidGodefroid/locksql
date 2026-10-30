@@ -717,6 +717,28 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		verified(t)
 	})
 
+	// 7. The console's audit, against the hub's (#118): the decisions it
+	// acted on (the first approval, the denial, alice's approval) carry
+	// the hub's signature; the forged ones and the stale one it never
+	// acted on are the hub's alone.
+	t.Run("lock audit verify --lock: the console's records are signed", func(t *testing.T) {
+		var logs []string
+		_ = filepath.WalkDir(filepath.Join(home, "state"), func(path string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && d.Name() == "audit.log" {
+				logs = append(logs, path)
+			}
+			return nil
+		})
+		if len(logs) != 1 {
+			t.Fatalf("console audit logs %q, want one", logs)
+		}
+		out, err := exec.Command(lockBin, "audit", "verify", "--data", data, "--hub-key-file", hubPub, "--lock", hubInst+"="+logs[0]).CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "OK: "+hubInst+": ") || !strings.Contains(string(out), ", 3 hub decisions match the hub's") ||
+			strings.Contains(string(out), "without the hub's signature") || !strings.Contains(string(out), "4 hub decision(s) on it not in this log") {
+			t.Fatalf("lock audit verify --lock: want 3 signed hub decisions, 4 not acted on: %v\n%s", err, out)
+		}
+	})
+
 	t.Run("hub stopped: pending, nothing runs", func(t *testing.T) {
 		hub.stop()
 		var pr ipc.PlanResult

@@ -320,3 +320,38 @@ func TestStandaloneAfterHubModeWithdraws(t *testing.T) {
 		t.Fatalf("answer %q, runs %d", r.Error.Message, h.sess.runCount())
 	}
 }
+
+// The run of an expired ticket is audited as its renewal, once (#118); an
+// approval the lock could not use (dated ahead of its clock) is recorded
+// with the hub's signature on it.
+func TestHubModeRenewalIsAudited(t *testing.T) {
+	var hub *hubtest.Hub
+	clock := &testClock{at: time.Now()}
+	h := newHarness(t, writeProfile(), withHubAt(t, &hub, t.TempDir(), clock.now, nil))
+	guarded(h)
+	pr := h.plan(t, hubWrite, false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	d := decideSigned(t, hub, tk, ticket.Approved, "", func(d *ticket.Decision) {
+		d.At = clock.now().Add(10 * time.Minute).UTC().Truncate(time.Millisecond)
+	})
+	next := pendingTicket(t, runTicket(t, h, tk), "pending")
+	if next == tk || h.sess.runCount() != 0 {
+		t.Fatalf("new ticket %q (old %q), runs %d", next, tk, h.sess.runCount())
+	}
+	if again := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: tk}), "pending"); again != next {
+		t.Fatalf("second run of the expired ticket: %q, want %q", again, next)
+	}
+	renew := auditRecords(t, h, "renew", tk)
+	if len(renew) != 1 || renew[0]["decision"] != "renewed" || renew[0]["reason"] != "renewed by ticket "+next || renew[0]["sql"] != hubWrite {
+		t.Fatalf("renewal records %v", renew)
+	}
+	wantHubSigned(t, renew[0], d)
+
+	// Expired pending: no decision, no signature.
+	clock.add(ticket.RiskWrite.TTL() + time.Hour)
+	last := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: next}), "pending")
+	renew = auditRecords(t, h, "renew", next)
+	if len(renew) != 1 || renew[0]["reason"] != "renewed by ticket "+last || renew[0]["hub_sig"] != nil || renew[0]["approver"] != nil {
+		t.Fatalf("renewal records of an expired pending ticket %v", renew)
+	}
+}
