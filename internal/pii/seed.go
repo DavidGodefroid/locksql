@@ -1,13 +1,14 @@
 package pii
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -74,15 +75,11 @@ func SeedSets(from, to string) ([]string, error) {
 	return wrote, nil
 }
 
-// SameSet reports whether the files a and b hold the same bytes; false
-// when either is missing or unreadable.
-func SameSet(a, b string) bool {
-	ra, err := readRegular(a)
-	if err != nil {
-		return false
-	}
-	rb, err := readRegular(b)
-	return err == nil && bytes.Equal(ra, rb)
+// SameRules reports whether a and b mask and allow the same patterns,
+// with the same modes.
+func SameRules(a, b Rules) bool {
+	return slices.Equal(canonical(a.Mask), canonical(b.Mask)) && slices.Equal(canonical(a.Allow), canonical(b.Allow)) &&
+		maps.Equal(a.Modes, b.Modes)
 }
 
 // readRegular reads path, a regular file (not a link) of at most maxSeed

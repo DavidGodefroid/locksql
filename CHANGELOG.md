@@ -13,8 +13,10 @@ This file records the changes a user or an agent has to know about.
   to the console's own volume, its copy of the profile being read-only, so
   a first start no longer needs a rule set written beforehand by locksql's
   own launcher. The profile's sets are copied in once; from then on the
-  console's copy is in force (a drift from the profile's set is told at
-  start).
+  console's copy is in force. At each start the profile's new mask rules
+  are added to it; its allow rules, removed masks and other modes are not
+  applied (they would loosen it), and a profile set that still differs is
+  told at start.
 
 ### Changed
 

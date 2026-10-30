@@ -63,15 +63,6 @@ func TestSeedSets(t *testing.T) {
 	if got, err := SeedSets(from, to); err != nil || len(got) != 0 {
 		t.Fatalf("second seed: %v, %v", got, err)
 	}
-	if SameSet(filepath.Join(from, SetsDir, "shop.toml"), filepath.Join(to, SetsDir, "shop.toml")) {
-		t.Error("SameSet on different files")
-	}
-	if !SameSet(filepath.Join(to, SetsDir, "billing.toml"), filepath.Join(to, SetsDir, "billing.toml")) {
-		t.Error("SameSet on one file")
-	}
-	if SameSet(filepath.Join(to, SetsDir, "none.toml"), filepath.Join(to, SetsDir, "none.toml")) {
-		t.Error("SameSet on a missing file")
-	}
 }
 
 // The legacy pii.toml of the profile becomes the console's default set
@@ -120,5 +111,26 @@ func TestSeedSetsNothing(t *testing.T) {
 	got, err := SeedSets(filepath.Join(t.TempDir(), "none"), filepath.Join(t.TempDir(), "none"))
 	if err != nil || len(got) != 0 {
 		t.Fatalf("%v, %v", got, err)
+	}
+}
+
+func TestSameRules(t *testing.T) {
+	var a, b Rules
+	_ = a.Add("app.users.email")
+	_ = a.Add("app.users.phone")
+	_ = b.Add("app.users.phone")
+	_ = b.Add("app.users.email")
+	if !SameRules(a, b) {
+		t.Fatal("order matters")
+	}
+	_ = b.AddAllow("app.users.nick")
+	if SameRules(a, b) {
+		t.Fatal("an allow rule is no difference")
+	}
+	var c Rules
+	_ = c.AddMode("app.users.email", ModeEmail)
+	_ = c.Add("app.users.phone")
+	if SameRules(a, c) {
+		t.Fatal("a mode is no difference")
 	}
 }

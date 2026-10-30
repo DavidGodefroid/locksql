@@ -224,6 +224,56 @@ func legacyRulesNotice(cwd, projectRoot, rulesPath string) string {
 // it to the console's own volume, its profile copy being read-only.
 const PIIDirEnv = "LOCKSQL_PII_DIR"
 
+// profileSet is the file of the rule set set in the profile's directory
+// dir: pii/<set>.toml, or for the default set the legacy pii.toml; ""
+// when it has none.
+func profileSet(dir, set string) string {
+	if pii.SetExists(dir, set) {
+		p, _ := pii.SetPath(dir, set)
+		return p
+	}
+	if legacy := filepath.Join(dir, pii.LegacyFile); set == pii.DefaultSet {
+		if st, err := os.Lstat(legacy); err == nil && st.Mode().IsRegular() {
+			return legacy
+		}
+	}
+	return ""
+}
+
+// mergeProfileMasks adds to the console's rule set at rulesPath the mask
+// rules of the profile's set (in profileDir) it lacks: a tightening made
+// in the workspace and reviewed by lock up applies. Nothing else of the
+// profile's set is taken (an allow rule, a removed mask or another mode
+// would loosen the console's set). It returns the rules added.
+func mergeProfileMasks(profileDir, set, rulesPath string) (int, error) {
+	theirs := profileSet(profileDir, set)
+	if theirs == "" {
+		return 0, nil
+	}
+	tr, err := pii.LoadRulesFile(theirs)
+	if err != nil {
+		return 0, err
+	}
+	mine, err := pii.LoadRulesFile(rulesPath)
+	if err != nil {
+		return 0, err
+	}
+	added := 0
+	for _, pat := range tr.Mask {
+		if slices.Contains(mine.Mask, pat) {
+			continue
+		}
+		if err := mine.AddMode(pat, tr.Modes[pat]); err != nil {
+			return 0, err
+		}
+		added++
+	}
+	if added == 0 {
+		return 0, nil
+	}
+	return added, pii.SaveRulesFile(rulesPath, mine)
+}
+
 // piiDirNotice is one line when the profile's directory profileDir (""
 // without Options.PIIDir) holds the rule set set with other content than
 // the console's copy at rulesPath, the one in force; "" otherwise.
@@ -231,11 +281,16 @@ func piiDirNotice(profileDir, set, rulesPath string) string {
 	if profileDir == "" {
 		return ""
 	}
-	theirs, err := pii.SetPath(profileDir, set)
-	if err != nil || !pii.SetExists(profileDir, set) || pii.SameSet(theirs, rulesPath) {
+	theirs := profileSet(profileDir, set)
+	if theirs == "" {
 		return ""
 	}
-	return fmt.Sprintf("note: the PII rule set %q of the profile (%s) differs from this console's (%s), which is in force: the console's copy was seeded once and is edited here (pii add, the PII proposals); remove it from the console's volume to take the profile's again", set, theirs, rulesPath)
+	tr, err1 := pii.LoadRulesFile(theirs)
+	mr, err2 := pii.LoadRulesFile(rulesPath)
+	if err1 == nil && err2 == nil && pii.SameRules(tr, mr) {
+		return ""
+	}
+	return fmt.Sprintf("note: the PII rule set %q of the profile (%s) differs from this console's (%s), which is in force: its new mask rules were added here, but nothing that would loosen the console's set (an allow rule, a removed mask, another mode); change those at this console, or remove its copy to take the profile's again at the next start", set, theirs, rulesPath)
 }
 
 // newIsolationEnv builds what Run's isolation checks read; tests replace it.
@@ -390,6 +445,15 @@ func Run(ctx context.Context, o Options) error {
 	}
 	if n := legacyRulesNotice(o.Cwd, cfg.ProjectRoot, rulesPath); n != "" {
 		o.IO.Println(safeText(n, false))
+	}
+	if profileRules != "" {
+		added, err := mergeProfileMasks(profileRules, ruleSet, rulesPath)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrConfig, err)
+		}
+		if added > 0 {
+			o.IO.Println(safeText(fmt.Sprintf("note: %d mask rules of the profile's PII rule set %q added to this console's (%s)", added, ruleSet, rulesPath), false))
+		}
 	}
 	if n := piiDirNotice(profileRules, ruleSet, rulesPath); n != "" {
 		o.IO.Println(paint.Warn(safeText(n, false)))

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -159,6 +160,31 @@ func TestRunPIIDir(t *testing.T) {
 	for _, p := range io.prompts {
 		if strings.Contains(p, "Apply these changes") {
 			t.Fatalf("the profile's set was read instead of the console's:\n%s", io.output())
+		}
+	}
+
+	// A mask rule added to the profile's set (a tightening lock up
+	// reviewed) reaches the console's copy; an allow rule does not.
+	for _, d := range []string{filepath.Dir(theirs), dir} {
+		os.Chmod(d, 0o755)
+	}
+	if err := os.WriteFile(theirs, []byte("[[mask]]\ncolumn = \"app.users.email\"\n\n[[mask]]\ncolumn = \"app.users.iban\"\n\n[[allow]]\ncolumn = \"app.users.phone\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	io, _ = run(piiDir)
+	if !strings.Contains(io.output(), "1 mask rules of the profile") || !strings.Contains(io.output(), "differs from this console's") {
+		t.Fatalf("no merge or drift notice:\n%s", io.output())
+	}
+	got, err := pii.LoadRulesFile(mine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got.Mask, []string{"app.users.email", "app.users.iban", "app.users.phone"}) && !slices.Equal(got.Mask, []string{"app.users.email", "app.users.phone", "app.users.iban"}) || len(got.Allow) != 0 {
+		t.Fatalf("the console's set: %+v", got)
+	}
+	for _, p := range io.prompts {
+		if strings.Contains(p, "Apply these changes") {
+			t.Fatalf("a merged tightening asked for approval:\n%s", io.output())
 		}
 	}
 
