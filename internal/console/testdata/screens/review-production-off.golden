@@ -1,0 +1,8 @@
+== :review
+"pending policy change for profile prod:"
+"\x1b[1;31m  ~ production: true → false  (loosens)\x1b[0m"
+"<bell>"
+"? Apply these changes? [y/N] "
+"policy change applied"
+== audit
+event=policy decision=applied approval=session
