@@ -298,7 +298,7 @@ func (s *session) RunCounted(ctx context.Context, db string, st sqlclass.Stateme
 		return s.Run(ctx, db, st, maxRows)
 	}
 	if st.Kind == "vacuum" {
-		return engine.Result{}, errors.New("sqlite: VACUUM runs outside a transaction: it cannot be checked before a commit")
+		return engine.Result{}, engine.Uncounted(errors.New("sqlite: VACUUM runs outside a transaction: it cannot be checked before a commit"))
 	}
 	if int(st.Class) > int(s.tier) {
 		return engine.Result{}, fmt.Errorf("sqlite: a %s statement exceeds tier %s", st.Class, s.tier)

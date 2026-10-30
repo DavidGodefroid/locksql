@@ -1254,3 +1254,8 @@ func (s *vaultSession) RunGuarded(ctx context.Context, db string, st sqlclass.St
 func (s *vaultSession) RunCounted(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
 	return engine.RunCounted(ctx, s.Session, db, st, maxRows, check)
 }
+
+// Triggers passes the listing on (engine.TriggerLister).
+func (s *vaultSession) Triggers(ctx context.Context, db string, names []string) ([]string, error) {
+	return engine.TriggersOf(ctx, s.Session, db, names)
+}
