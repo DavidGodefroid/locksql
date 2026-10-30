@@ -733,7 +733,9 @@ sends approvals to lockhub instead of asking on this terminal:
   another's ticket by mistake; agents of one account can read each other's
   token, so it is no security boundary (the workspace is).
 - A write carries a rowcount bound on its screen (`rows changed: at most
-  N`): twice the planner's estimate, at least 10 more. The run counts the
+  N`): twice the planner's estimate (for an `INSERT`/`REPLACE ... VALUES`,
+  at least its number of rows, twice that on MySQL/MariaDB for `REPLACE` or
+  `ON DUPLICATE KEY UPDATE`), at least 10 more. The run counts the
   rows it changed in its own transaction, before the commit; past the bound
   it rolls back and answers `{"status":"stale","ticket":<new>}`, the new
   ticket's screen saying how many rows it would have changed, its bound
@@ -742,16 +744,37 @@ sends approvals to lockhub instead of asking on this terminal:
   takes only its own locks.
 - The bound counts the statement's own rows. Rows changed by triggers, functions,
   rules or foreign-key cascades are not counted: on PostgreSQL the ticket
-  names the triggers, rules, volatile functions and cascading foreign keys the write reaches. A
+  names the triggers, rules, volatile functions and cascading foreign keys the write reaches;
+  on MySQL/MariaDB and SQLite, the triggers of the tables it names (on
+  MySQL/MariaDB only those of tables the account holds `TRIGGER` on;
+  listed for the human, not in the plan hash: a trigger created after the
+  approval does not make the ticket stale; under `ANSI_QUOTES` a table
+  named in double quotes gets none listed). A
   statement with a data-modifying statement inside it (`WITH d AS (DELETE
   ...) UPDATE ...`) is refused in hub mode (`E_STATEMENT_KIND`): its count
   would not cover its rows. On MySQL/MariaDB a write naming a table a
-  `ROLLBACK` cannot undo (MyISAM, Aria, MEMORY, ... or a view) is not run,
+  `ROLLBACK` cannot undo (MyISAM, Aria, MEMORY, ... or a view: of the
+  current database by its bare name, or of any schema with its schema) is
+  not run and refused with `E_STATEMENT_KIND` (as a DDL statement or
+  `VACUUM` would be: nothing ran, do not retry it as is),
   and a `ROLLBACK` that warns (a trigger into such a table) is reported as a
   failure, never as rolled back.
 - The screen names the requester as the kernel reports it (uid, pid,
   executable); the lea name the client sends is shown as its claim
   (`claims lea agent "…"`), not verified.
+- PII rule sets under `lock up`: the profile directory is a read-only copy
+  there, so `lock up` sets `LOCKSQL_PII_DIR` to a directory of the console's
+  own volume. The console keeps its rule sets there (`pii/<set>.toml`): the
+  first-run PII proposal, `pii add` and later proposals write there. A set it
+  lacks is first copied, once, from the profile's `.locksql/pii/<set>.toml`
+  (or the legacy `.locksql/pii.toml` as the `default` set). From then on the
+  console's copy is in force: at each start, the mask rules of the profile's
+  set that it lacks are added to it (a tightening you made in the workspace
+  and `lock up` reviewed); nothing else of the profile's set is taken (allow
+  rules, removed masks, mode changes), and a profile set that still differs
+  is told at start. Make those changes at the console (a mask the profile
+  still has comes back at the next start: remove it there too), or remove
+  the console's copy from its volume to take the profile's set again.
 
 ### Policy changes
 
@@ -1206,7 +1229,7 @@ The retry rules:
 | `E_STALE` | the definitions the statement resolves to (functions, views, rules, triggers, row-level policies, grants, search path) changed between the plan and the run, or during the run | rewrite | plan the statement again; the human approves the new plan |
 | `E_POLICY` | a refusal no check named (fail-closed; should not happen) | stop | none: report it as a bug |
 
-`E_STALE` comes from the plan hash: on PostgreSQL it covers the effective `search_path` and the definitions of what the statement resolves to (functions and operators, views, rules, triggers, row-level policies, grants, column defaults and generated columns, constraints, partitions; for a write, the tables its foreign keys cascade into), followed up to 8 levels deep; a deeper statement is refused. The functions a PL/pgSQL body calls and the objects dynamic SQL reaches are not followed: only the calling function's own source is hashed.
+`E_STALE` comes from the plan hash: on PostgreSQL it covers the effective `search_path` and the definitions of what the statement resolves to (functions and operators, including the operators views, rules, policies, defaults and `CHECK`s use and their commutators and negators, views, rules, triggers, row-level policies, grants, column defaults and generated columns, constraints, partitions, the domains, enum labels and composite types of the columns; for a write, the tables its foreign keys cascade into; for DDL, the event triggers and, for a `DROP` or `ALTER` with `CASCADE`, every relation pg_depend says it would drop or change along with its relations: views over them, policies, constraints, defaults and triggers that use them, inheritance children, owned sequences and their users, columns of their row type, recursively; the functions and domains it would drop are not hashed, and `DROP FUNCTION/DOMAIN/SCHEMA ... CASCADE` or `DROP TYPE` of an enum name no relation and are not walked), followed up to 8 levels deep; a deeper statement is refused. The functions a PL/pgSQL body calls and the objects dynamic SQL reaches are not followed: only the calling function's own source is hashed.
 
 `E_K_ANON` (fewer than `k_anonymity` rows behind a PII filter, group or
 aggregate) is no longer emitted since v0.5.2: a count under k is a warning on
@@ -1281,6 +1304,7 @@ finds the project's consoles.
 | `.locksql/config.toml` | project profiles (no secrets) |
 | `.locksql/pii/<set>.toml` | PII rule sets (project); a legacy `pii.toml` is moved to `pii/default.toml` |
 | `<user config dir>/locksql/pii/<set>.toml` | PII rule sets outside a project |
+| `$LOCKSQL_PII_DIR/pii/<set>.toml` | PII rule sets of a console whose profile directory is read-only (`lock up`), seeded from the profile's |
 | `<user config dir>/locksql/config.toml` | personal profiles |
 | `<user state dir>/locksql/approved/*.json` | last approved policies |
 | `config.toml.bak`, `pii/<set>.toml.bak` | the files before the last `locksql config import` |

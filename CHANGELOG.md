@@ -6,6 +6,84 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
+### Added
+
+- **`LOCKSQL_PII_DIR`** (lockhub#41). With it, the console keeps its PII
+  rule sets in that directory instead of the profile's: `lock up` sets it
+  to the console's own volume, its copy of the profile being read-only, so
+  a first start no longer needs a rule set written beforehand by locksql's
+  own launcher. The profile's sets are copied in once; from then on the
+  console's copy is in force. At each start the profile's new mask rules
+  are added to it; nothing else of the profile's set is (allow rules,
+  removed masks, mode changes), and a profile set that still differs is
+  told at start.
+
+### Changed
+
+- **Hub mode: re-approval, reveal and rollback** (lockkit v0.5.0).
+  - An expired ticket (pending past its TTL, or approved but the approval
+    aged before the run) is asked again: `query.run` with it answers
+    `pending` with a new ticket that names the expired one and the inputs
+    of the plan hash that moved since (`state`: the definitions the
+    statement resolves to, `policy_fp`, `sql`, …; names only, never
+    values). The statement is planned again first, read-only, as the run's
+    recheck does. A renewal asked for in lockhub is checked too: the policy
+    and the profile now; the statement and its definitions are named
+    `unchecked` on it (no session there), and checked at the run (stale,
+    with a new ticket, if they moved). A changed policy is no
+    renewal: plan again. Before, an expired ticket answered `denied`.
+  - The clear approval screen stays in the plan, for a pinned local facade
+    to reveal (Ctrl-O, `--facade-keys-file`) or a pinned device; the hub
+    still gets the masked one. Reveals and renewals are audited (`reveal`,
+    `renew` records).
+  - The separated-setup handoff forwards every hub flag lockkit registers
+    (`--facade-keys-file`, `--devices-file`, `--require-device`,
+    `--seal-clear`, `--hub-plain-http`); a relative facade keys or devices
+    file is made absolute like the hub key file.
+  - `--facade-keys-file` and `--devices-file` are trust anchors checked
+    like `--hub-key-file`: a link, a file or directory writable by its
+    group or others, or one owned by neither root nor the console's
+    account is refused before any prompt, and the console reads its own
+    0600 copy in its state directory.
+  - Hub mode off (rollback): a console started without `--hub` after
+    running with it withdraws the plans hub mode left pending (the hub
+    hears of it at the next start with `--hub`) and answers a run of their
+    tickets with the error `withdrawn` (`CodeWithdrawn`), instead of
+    `invalid_params`. Nothing of them runs.
+
+- Builds on lockkit v0.6.0 (re-approval with `unchecked` inputs, reveal, rollback).
+
+- **Plan hash coverage** (#119). The plan hash also covers the operators
+  a view, rule, policy, default or `CHECK` (of a table or a domain) uses,
+  with their functions and those of their commutators and negators
+  (`pg_depend` records them against the operator, not its function), the
+  enum labels in their sort order and the attributes of the composite
+  types of the columns, and, for a `DROP` or `ALTER` with `CASCADE`, every
+  relation `pg_depend` says it would drop or change along with its
+  relations (views over them, policies, constraints, defaults and
+  triggers that use them, inheritance children, owned sequences and their
+  users, columns of their row type, recursively; the functions and
+  domains it would drop are not hashed, and `DROP FUNCTION/DOMAIN/SCHEMA
+  ... CASCADE` or `DROP TYPE` of an enum are not walked). The function of
+  an operator counts as one more level of the 8-level bound. Plan hash
+  version 3: plans made by v0.10.0 are answered `E_STALE`.
+
+- **Hub-mode rowcount bound follow-ups** (#120). On MySQL/MariaDB and
+  SQLite the ticket of a write also names the triggers of the tables it
+  names. An `INSERT`/`REPLACE ... VALUES` is bounded by at least its
+  number of rows (EXPLAIN gives no estimate for them on MySQL and SQLite;
+  twice that for `REPLACE` and `ON DUPLICATE KEY UPDATE` on
+  MySQL/MariaDB). A write whose rows cannot be checked before a commit (a
+  non-transactional table on MySQL/MariaDB) is refused with
+  `E_STATEMENT_KIND` instead of the generic failure, so the agent does
+  not retry it. The MySQL/MariaDB check reads only the tables of the
+  current database and of the schemas the statement qualifies a name
+  with: a non-transactional table of another schema no longer refuses an
+  unrelated write that uses the same word, and the server's own schemas
+  are no longer exempt when named bare from within them.
+
+## v0.10.0 (2026-10-30)
+
 ### Changed
 
 - **Approvals are decided by lockkit's console.** The console closes its
@@ -16,7 +94,7 @@ This file records the changes a user or an agent has to know about.
 - **Chained audit log.** Each audit record now ends with `prev_hash`, the
   hash of the line before it (lockkit's `audit.Verify`
   checks the chain and names the first record edited, removed, inserted or
-  reordered). The line before it is the 0.8 line, byte for byte. Existing logs
+  reordered). Apart from `prev_hash` a record is the 0.9 line, byte for byte. Existing logs
   are not rewritten: new records chain onto their last line. Records of
   hub mode will also carry `ticket`, `approver`, `facade` and `hub_sig`.
   `locksql stats` reads old and new logs alike.
@@ -38,6 +116,14 @@ This file records the changes a user or an agent has to know about.
   plan whose objects changed is refused with the new code `E_STALE` (the
   statement rolled back when they changed during it). `CREATE OR REPLACE`
   keeps the OIDs, so the definitions are hashed, not the OIDs.
+  The hash also covers the domains of the columns (base type, `NOT NULL`,
+  default, `CHECK` constraints and their functions, through a domain over
+  a domain) and, for a DDL statement, the event triggers and their
+  functions (#105). A write follows only the tables whose foreign keys
+  reference it with an action that changes their rows (`CASCADE`, `SET
+  NULL`, `SET DEFAULT`): a `NO ACTION`/`RESTRICT` key only refuses the
+  write (the key itself is hashed), so a change in a wide graph of such
+  tables no longer answers `E_STALE`. Plan hash version 2.
 
 - **Hub mode** (`locksql console --hub URL --hub-key-file PATH --instance
   NAME`, written by `lock up`; `locksql hub-key --instance NAME` prints the
@@ -74,38 +160,7 @@ This file records the changes a user or an agent has to know about.
   screen names the requester by its kernel identity, the lea name as its
   unverified claim.
 
-- **Hub mode: re-approval, reveal and rollback** (lockkit v0.5.0).
-  - An expired ticket (pending past its TTL, or approved but the approval
-    aged before the run) is asked again: `query.run` with it answers
-    `pending` with a new ticket that names the expired one and the inputs
-    of the plan hash that moved since (`state`: the definitions the
-    statement resolves to, `policy_fp`, `sql`, …; names only, never
-    values). The statement is planned again first, read-only, as the run's
-    recheck does. A renewal asked for in lockhub is checked too: the policy
-    and the profile now; the statement and its definitions are named
-    `unchecked` on it (no session there), and checked at the run (stale,
-    with a new ticket, if they moved). A changed policy is no
-    renewal: plan again. Before, an expired ticket answered `denied`.
-  - The clear approval screen stays in the plan, for a pinned local facade
-    to reveal (Ctrl-O, `--facade-keys-file`) or a pinned device; the hub
-    still gets the masked one. Reveals and renewals are audited (`reveal`,
-    `renew` records).
-  - The separated-setup handoff forwards every hub flag lockkit registers
-    (`--facade-keys-file`, `--devices-file`, `--require-device`,
-    `--seal-clear`, `--hub-plain-http`); a relative facade keys or devices
-    file is made absolute like the hub key file.
-  - `--facade-keys-file` and `--devices-file` are trust anchors checked
-    like `--hub-key-file`: a link, a file or directory writable by its
-    group or others, or one owned by neither root nor the console's
-    account is refused before any prompt, and the console reads its own
-    0600 copy in its state directory.
-  - Hub mode off (rollback): a console started without `--hub` after
-    running with it withdraws the plans hub mode left pending (the hub
-    hears of it at the next start with `--hub`) and answers a run of their
-    tickets with the error `withdrawn` (`CodeWithdrawn`), instead of
-    `invalid_params`. Nothing of them runs.
-
-- Builds on lockkit v0.6.0 (hub support, re-approval with `unchecked` inputs, reveal, rollback).
+- Pinned to the lockkit v0.3.1 release (hub support) instead of a commit of lockkit main.
 
 ### Fixed
 

@@ -478,8 +478,17 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 		return nil, ptr(s.failed(id, "plan", err))
 	}
 	pl.guarded = state != nil
-	if state != nil && st.Class == sqlclass.Write {
+	switch {
+	case state != nil && st.Class == sqlclass.Write:
 		pl.sideEffects = sideEffects(*state)
+	case st.Class == sqlclass.Write && s.cfg.Hub != nil:
+		// No object definitions (MySQL, SQLite): the triggers of the
+		// tables the write names, for its ticket.
+		tr, err := engine.TriggersOf(ctx, sess, pl.db, pl.refs.Relations)
+		if err != nil && !errors.Is(err, engine.ErrNoTriggerList) {
+			return nil, ptr(s.failed(id, "plan", err))
+		}
+		pl.sideEffects = tr
 	}
 	if pl.hash, pl.inputs, err = s.planDigests(pl, state); err != nil {
 		return nil, ptr(s.failed(id, "plan", err))
@@ -788,6 +797,11 @@ func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session,
 		pl.affected = rc.affected
 		s.println(paint.Warn(rc.Error() + ": rolled back"))
 		return s.refuseWarned(ctx, id, pl, class, refusal.New(refusal.Stale, rc.Error()+": rolled back"))
+	}
+	if errors.Is(err, engine.ErrUncounted) {
+		// Nothing ran, and the same statement is refused again: a typed
+		// refusal, so that the agent does not retry it.
+		return s.refuseWarned(ctx, id, pl, class, refusal.New(refusal.StatementKind, err.Error()+" (nothing ran; do not retry it as is)"))
 	}
 	rec.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {

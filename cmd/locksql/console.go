@@ -154,6 +154,7 @@ func openConsole(ctx context.Context, e env, profile string, f consoleFlags, pro
 		IO:          term,
 		TTY:         os.Stdin,
 		Version:     version,
+		PIIDir:      os.Getenv(console.PIIDirEnv),
 	})
 	if err != nil {
 		fmt.Fprintln(e.stderr, "locksql console:", err)

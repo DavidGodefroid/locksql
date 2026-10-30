@@ -23,8 +23,8 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"strconv"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -577,7 +577,7 @@ func (s *session) Run(ctx context.Context, db string, st sqlclass.Statement, max
 // implicitly on MySQL: it is refused.
 func (s *session) RunCounted(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
 	if st.Class != sqlclass.Write && st.Class != sqlclass.Read {
-		return engine.Result{}, fmt.Errorf("%s: a %s statement commits implicitly: its rows cannot be checked before a commit", s.flavor, st.Class)
+		return engine.Result{}, engine.Uncounted(fmt.Errorf("%s: a %s statement commits implicitly: its rows cannot be checked before a commit", s.flavor, st.Class))
 	}
 	return s.run(ctx, db, st, maxRows, check)
 }
@@ -585,21 +585,44 @@ func (s *session) RunCounted(ctx context.Context, db string, st sqlclass.Stateme
 // nonTransactional returns the tables and views q may write to whose
 // changes a ROLLBACK may not undo: a table of another storage engine
 // (MyISAM, Aria, MEMORY, CSV, ...) or a view (its tables are not looked
-// up). It reads every such table of the server in one query and looks
-// for its name in q as a whole word, quoted or not, whatever the lexer
-// makes of it (a name may start with a digit): a word that only happens
-// to equal such a name refuses more, never less. Called in the
-// transaction, mu held.
+// up). It reads such tables of the current database and of the schemas q
+// qualifies a name with, and counts a table of the current database that
+// q names bare, and any one q names with its schema, quoted or not,
+// whatever the lexer makes of it (a name may start with a digit): a word
+// that only happens to equal such a name refuses more, never less. The
+// server's own schemas count like any other (the current database may be
+// mysql). Called in the transaction, mu held.
 func (s *session) nonTransactional(q string) ([]string, error) {
-	r, err := s.conn.Execute(`SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, COALESCE(ENGINE, '') FROM information_schema.TABLES
-		WHERE TABLE_TYPE <> 'BASE TABLE' OR UPPER(COALESCE(ENGINE, '')) NOT IN ('INNODB', 'NDBCLUSTER', 'NDB', 'ROCKSDB', 'TOKUDB')`)
+	texts := matchTexts(q)
+	r, err := s.conn.Execute(`SELECT SCHEMA_NAME, DATABASE() FROM information_schema.SCHEMATA`)
+	if err != nil {
+		return nil, err
+	}
+	var current string
+	var schemas []any
+	if r.Resultset != nil {
+		for row := range r.RowNumber() {
+			sc, _ := r.GetString(row, 0)
+			if row == 0 {
+				current, _ = r.GetString(row, 1)
+			}
+			if anyText(texts, func(t string) bool { return qualifier(t, strings.ToLower(sc)) }) {
+				schemas = append(schemas, sc)
+			}
+		}
+	}
+	cond := "TABLE_SCHEMA = DATABASE()"
+	if len(schemas) > 0 {
+		cond += " OR TABLE_SCHEMA IN (?" + strings.Repeat(", ?", len(schemas)-1) + ")"
+	}
+	r, err = s.conn.Execute(`SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, COALESCE(ENGINE, '') FROM information_schema.TABLES
+		WHERE (`+cond+`) AND (TABLE_TYPE <> 'BASE TABLE' OR UPPER(COALESCE(ENGINE, '')) NOT IN ('INNODB', 'NDBCLUSTER', 'NDB', 'ROCKSDB', 'TOKUDB'))`, schemas...)
 	if err != nil {
 		return nil, err
 	}
 	if r.Resultset == nil {
 		return nil, nil
 	}
-	text := strings.ToLower(q)
 	var out []string
 	for row := range r.RowNumber() {
 		sc, _ := r.GetString(row, 0)
@@ -610,14 +633,59 @@ func (s *session) nonTransactional(q string) ([]string, error) {
 			continue // read-only
 		}
 		name := strings.ToLower(tn)
-		// The server's own schemas count only when the statement names
-		// them with their schema.
-		if slices.Contains(systemSchemas, strings.ToLower(sc)) && !qualified(text, strings.ToLower(sc), name) || !wordIn(text, name) {
+		bare := strings.EqualFold(sc, current) && anyText(texts, func(t string) bool { return wordIn(t, name) })
+		if !bare && !anyText(texts, func(t string) bool { return qualified(t, strings.ToLower(sc), name) }) {
 			continue
 		}
 		out = append(out, fmt.Sprintf("%s.%s (%s)", sc, tn, strings.ToLower(strings.TrimSpace(typ+" "+eng))))
 	}
 	return out, nil
+}
+
+// matchTexts are the versions of q nonTransactional matches names in, a
+// match in any of them counting: lower case, every blank the server
+// accepts (\r, \f, \v too) a space; as is, with doubled backticks single
+// and with doubled double quotes single (ANSI_QUOTES), so that "other\r.t"
+// and a name holding a quote character show their schema to qualifier and
+// qualified.
+func matchTexts(q string) []string {
+	text := strings.Map(func(r rune) rune {
+		switch r {
+		case '\r', '\f', '\v':
+			return ' '
+		}
+		return r
+	}, strings.ToLower(q))
+	return []string{text, strings.ReplaceAll(text, "``", "`"), strings.ReplaceAll(text, `""`, `"`)}
+}
+
+// anyText reports whether match holds for one of texts.
+func anyText(texts []string, match func(string) bool) bool {
+	return slices.ContainsFunc(texts, match)
+}
+
+// qualifier reports whether text names schema as a qualifier: the whole
+// word followed by a dot (quoted or not, blanks around the dot allowed).
+func qualifier(text, schema string) bool {
+	for i := 0; schema != "" && i <= len(text)-len(schema); {
+		k := strings.Index(text[i:], schema)
+		if k < 0 {
+			return false
+		}
+		k += i
+		end := k + len(schema)
+		if k == 0 || !identChar(text[k-1]) {
+			j := end
+			for j < len(text) && (text[j] == '`' || text[j] == '"' || text[j] == ' ' || text[j] == '\t' || text[j] == '\n') {
+				j++
+			}
+			if j < len(text) && text[j] == '.' && (end == len(text) || !identChar(text[end])) {
+				return true
+			}
+		}
+		i = k + 1
+	}
+	return false
 }
 
 // identChar reports a byte of an unquoted MySQL identifier.
@@ -687,7 +755,7 @@ func (s *session) run(ctx context.Context, db string, st sqlclass.Statement, max
 				return engine.Result{}, err
 			}
 			if len(nt) > 0 {
-				return engine.Result{}, checkErr{fmt.Errorf("%s: the write reaches tables a ROLLBACK may not undo: %s; its rows cannot be checked before a commit", s.flavor, strings.Join(nt, ", "))}
+				return engine.Result{}, checkErr{engine.Uncounted(fmt.Errorf("%s: the write reaches tables a ROLLBACK may not undo: %s; its rows cannot be checked before a commit", s.flavor, strings.Join(nt, ", ")))}
 			}
 		}
 		r, err := s.stream(st.SQL, maxRows)

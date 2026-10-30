@@ -58,6 +58,17 @@ type fakeSession struct {
 	guardedRuns int
 	countedRuns int
 	rolledBack  []string
+	// triggers answers engine.TriggerLister; triggerNames are the names
+	// it was asked about.
+	triggers     []string
+	triggerNames [][]string
+}
+
+func (f *fakeSession) Triggers(_ context.Context, _ string, names []string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.triggerNames = append(f.triggerNames, names)
+	return slices.Clone(f.triggers), nil
 }
 
 func (f *fakeSession) ObjectState(_ context.Context, _ string, refs engine.ObjectRefs) (engine.ObjectState, error) {
