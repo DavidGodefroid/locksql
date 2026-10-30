@@ -85,14 +85,8 @@ func (st *starter) checkLockedOut() error {
 // on any outcome other than Approved, or calls checkLockedOut when it goes
 // on.
 func (st *starter) decide(ctx context.Context, d Decision) Result {
-	r := st.appr().Approve(ctx, d)
-	if r.Outcome == NoFinger {
-		explainNoFinger(st.io.Println, r)
-		if errors.Is(r.Err, ErrTooManyNoMatch) {
-			st.lockedOut = true
-		}
-	}
-	return r
+	a := kconsole.Asker{IO: st.io, Approver: st.appr(), End: func(string) { st.lockedOut = true }}
+	return a.Decide(ctx, d)
 }
 
 // appr is the approver in force: typed when none was set (a starter built
@@ -587,7 +581,7 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 	if len(changes) == 0 {
 		return *ap, "", nil
 	}
-	if !loosens(changes) {
+	if !kconsole.Loosens(changes) {
 		if err := config.SaveApproved(stateDir, key, cur); err != nil {
 			return config.Policy{}, "", err
 		}

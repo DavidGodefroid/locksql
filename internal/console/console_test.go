@@ -147,6 +147,9 @@ type fakeIO struct {
 	bells int
 	// status is the last status line set (StatusLine).
 	status string
+	// transcript is everything the human sees, in order: lines, prompts
+	// ("? " and "?secret "), bells ("<bell>"). The golden screens compare it.
+	transcript []string
 }
 
 func (f *fakeIO) SetStatus(s string) {
@@ -165,17 +168,20 @@ func (f *fakeIO) Bell() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bells++
+	f.transcript = append(f.transcript, "<bell>")
 }
 
 func (f *fakeIO) Println(s string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.out = append(f.out, s)
+	f.transcript = append(f.transcript, s)
 }
 
 func (f *fakeIO) Ask(ctx context.Context, prompt string, _ time.Duration) (string, bool) {
 	f.mu.Lock()
 	f.prompts = append(f.prompts, prompt)
+	f.transcript = append(f.transcript, "? "+prompt)
 	if f.block {
 		ch := f.blocked
 		f.mu.Unlock()
@@ -204,6 +210,7 @@ func (f *fakeIO) AskSecret(_ context.Context, prompt string) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.prompts = append(f.prompts, prompt)
+	f.transcript = append(f.transcript, "?secret "+prompt)
 	if len(f.secrets) == 0 {
 		return nil, errors.New("no answer")
 	}
