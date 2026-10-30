@@ -84,6 +84,9 @@ const (
 	CodeNoSuchPlan    = kipc.CodeNoSuchPlan
 	CodeConnLost      = kipc.CodeConnLost
 	CodePolicyPending = kipc.CodePolicyPending
+	// CodeWithdrawn: a hub ticket run by a console that now runs without
+	// its hub (rollback of hub mode): plan again.
+	CodeWithdrawn = kipc.CodeWithdrawn
 
 	CodeParseError     = kipc.CodeParseError
 	CodeInvalidRequest = kipc.CodeInvalidRequest

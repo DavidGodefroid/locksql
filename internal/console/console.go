@@ -10,6 +10,8 @@ import (
 	"errors"
 	"net"
 	"os"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	kconsole "github.com/DavidGodefroid/lockkit/console"
@@ -171,6 +173,9 @@ type plan struct {
 	// the run checks it again in its own transaction (planhash.go).
 	refs engine.ObjectRefs
 	hash string
+	// inputs are the digests of the plan hash's inputs by name
+	// (ticket.InputDigests): a renewal names those that moved.
+	inputs map[string]string
 	// guarded: the engine read the definitions, and the run checks them.
 	guarded bool
 }
@@ -230,6 +235,13 @@ type Server struct {
 
 	ended  bool
 	reason string
+
+	// live is the policy in force as the hub's goroutine reads it, and
+	// recomputed the full recomputes of expired plans being renewed
+	// (hubrenew.go).
+	live        atomic.Pointer[hubLive]
+	recomputeMu sync.Mutex
+	recomputed  map[string]recomputed
 }
 
 // NewServer checks cfg and returns a server enforcing cfg.Policy.
@@ -248,6 +260,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		auto: cfg.Auto, showResults: cfg.ShowResults && cfg.Boundary == "", allowUnmask: cfg.AllowUnmask}
 	if err := s.apply(cfg.Policy); err != nil {
 		return nil, err
+	}
+	if cfg.Hub != nil {
+		s.hubWire()
 	}
 	s.started = s.now()
 	s.lastSeen = s.started
@@ -274,7 +289,7 @@ func (s *Server) apply(p config.Policy) error {
 	s.rules = pii.Rules{Mask: append([]string(nil), p.PIIMask...), Allow: append([]string(nil), p.PIIAllow...), Modes: p.PIIModes}
 	s.detectors = ds
 	s.dialect = d
-	return nil
+	return s.setLive()
 }
 
 // println writes one console line.

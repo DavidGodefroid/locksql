@@ -55,7 +55,31 @@ This file records the changes a user or an agent has to know about.
   auto mode on, and statements with `${placeholders}` are refused (values
   are typed in the console).
 
-- Builds on lockkit v0.3.1 (hub support), was a commit of lockkit main.
+- **Hub mode: re-approval, reveal and rollback** (lockkit v0.5.0).
+  - An expired ticket (pending past its TTL, or approved but the approval
+    aged before the run) is asked again: `query.run` with it answers
+    `pending` with a new ticket that names the expired one and the inputs
+    of the plan hash that moved since (`state`: the definitions the
+    statement resolves to, `policy_fp`, `sql`, …; names only, never
+    values). The statement is planned again first, read-only, as the run's
+    recheck does. A renewal asked for in lockhub is checked too: the policy
+    and the profile now, the statement and its definitions at the run
+    (stale, with a new ticket, if they moved). A changed policy is no
+    renewal: plan again. Before, an expired ticket answered `denied`.
+  - The clear approval screen stays in the plan, for a pinned local facade
+    to reveal (Ctrl-O, `--facade-keys-file`) or a pinned device; the hub
+    still gets the masked one. Reveals and renewals are audited (`reveal`,
+    `renew` records).
+  - The separated-setup handoff forwards every hub flag lockkit registers
+    (`--facade-keys-file`, `--devices-file`, `--require-device`,
+    `--seal-clear`, `--hub-plain-http`).
+  - Hub mode off (rollback): a console started without `--hub` after
+    running with it withdraws the plans hub mode left pending (the hub
+    hears of it at the next start with `--hub`) and answers a run of their
+    tickets with the error `withdrawn` (`CodeWithdrawn`), instead of
+    `invalid_params`. Nothing of them runs.
+
+- Builds on lockkit v0.5.0 (hub support, re-approval, reveal, rollback).
 
 ### Fixed
 

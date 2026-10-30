@@ -65,8 +65,10 @@ func (s *Server) hubRisk(pl *plan) ticket.Risk {
 // hubScreen is the approval screen of pl as it leaves the lock: the
 // structure of the statement, every literal masked (the hub and its
 // facades never see a value of the statement in clear), the verdict and
-// the warnings.
-func (s *Server) hubScreen(pl *plan) render.MaskedScreen {
+// the warnings. clear is the same screen unmasked: it stays in the plan
+// (hubclient.SubmitClear), sealed only to a pinned device or to a pinned
+// local facade that asks for it (a reveal, Ctrl-O).
+func (s *Server) hubScreen(pl *plan) (masked render.MaskedScreen, clear kconsole.Screen) {
 	db := pl.db
 	if db == "" {
 		db = "(default)"
@@ -81,7 +83,21 @@ func (s *Server) hubScreen(pl *plan) render.MaskedScreen {
 	if pl.unmask {
 		src.Body = append(src.Body, render.Structure("PII: UNMASKED"))
 	}
-	return render.MaskScreen(src, render.Masking{Detectors: s.detectors, Personal: func(string, string) bool { return true }})
+	return render.MaskScreen(src, render.Masking{Detectors: s.detectors, Personal: func(string, string) bool { return true }}), clearScreen(src)
+}
+
+// clearScreen is src as the console's clear screen: each line its parts'
+// text, values included.
+func clearScreen(src render.ScreenSource) kconsole.Screen {
+	sc := kconsole.Screen{Header: src.Header, Note: src.Note, Warnings: src.Warnings, Red: src.Red}
+	for _, l := range src.Body {
+		var b strings.Builder
+		for _, p := range l {
+			b.WriteString(p.Text)
+		}
+		sc.Body = append(sc.Body, b.String())
+	}
+	return sc
 }
 
 // statementLines are the lines of a statement in parts: its literals
@@ -164,12 +180,16 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 	}
 	caller := hubCaller(ctx)
 	h := s.cfg.Hub
-	hp, err := h.Store.Create(plans.Binding{UID: caller.UID, TokenHash: plans.HashToken(caller.Token), PolicyFP: fp, PlanHash: pl.hash}, body, 0)
+	hp, err := h.Store.Create(plans.Binding{UID: caller.UID, TokenHash: plans.HashToken(caller.Token), PolicyFP: fp, PlanHash: pl.hash, Inputs: pl.inputs}, body, 0)
 	if err != nil {
 		return errResp(id, ipc.CodeInternal, "plan store: "+err.Error())
 	}
-	sc := &kconsole.Screen{Hub: &kconsole.HubTicket{PlanID: hp.ID, Caller: caller, Risk: s.hubRisk(pl), Masked: s.hubScreen(pl),
-		Requester: ticket.Requester{Agent: kconsole.PeerText(ctx)}}}
+	// The screen carries the clear text too: the console's Submit hands it
+	// to SubmitClear, for a reveal or a pinned device.
+	masked, clear := s.hubScreen(pl)
+	sc := &clear
+	sc.Hub = &kconsole.HubTicket{PlanID: hp.ID, Caller: caller, Risk: s.hubRisk(pl), Masked: masked,
+		Requester: ticket.Requester{Agent: kconsole.PeerText(ctx)}}
 	a := s.asker().Ask(ctx, id, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
 		rec.Event, rec.Decision, rec.Reason, rec.Error, rec.Approval, rec.Ticket = b.Event, b.Decision, b.Reason, b.Error, b.Approval, b.Ticket
 		s.audit(rec)
@@ -185,7 +205,9 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string) ipc.Response {
 	h := s.cfg.Hub
 	if h == nil {
-		return errResp(id, ipc.CodeInvalidParams, "this console is not in hub mode: run a plan by its plan_id")
+		// Hub mode off (rollback): the start withdrew the plans it left
+		// pending (withdrawStandalone); the agent hears it explicitly.
+		return kconsole.WithdrawnResp(id, ticketID)
 	}
 	caller := hubCaller(ctx)
 	var pl *plan
@@ -203,6 +225,8 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string) 
 		return fp, pl.hash, err
 	})
 	switch {
+	case errors.Is(err, ticket.ErrExpired):
+		return s.hubRenew(ctx, id, ticketID, caller)
 	case errors.Is(err, errReplan):
 		s.withdraw(ctx, ticketID, caller)
 		return *planResp

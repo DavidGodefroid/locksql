@@ -315,6 +315,10 @@ func Run(ctx context.Context, o Options) error {
 		// The plans store holds a lock file: closed on every return, after
 		// the watch has stopped (deferred later, so run first).
 		defer hub.Close()
+	} else {
+		// Rollback of hub mode: the plans a run with --hub left pending
+		// are withdrawn, and a run of their tickets is refused.
+		withdrawStandalone(o.IO, o.StateDir)
 	}
 
 	cfg, err := config.Load(o.Cwd)
