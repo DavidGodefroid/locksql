@@ -620,7 +620,9 @@ func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session,
 		s.println(paint.Fail("refused: the approval could not be recorded in the audit log"))
 		return errResp(id, ipc.CodeInternal, "the console could not record the approval in its audit log, so the query was not run; ask the user to check the console")
 	}
-	rec.Event, rec.Decision = audit.EventRun, "ok"
+	// The hub's signature is the decision's: the records that follow are
+	// the run's, not another decision of the hub.
+	rec.Event, rec.Decision, rec.HubSig = audit.EventRun, "ok", ""
 	// The prompts may have waited: check the TTL again, so that an
 	// approval or a value landing after it runs nothing.
 	if s.now().Sub(pl.created) > PlanTTL {

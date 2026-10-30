@@ -383,7 +383,7 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 	case errors.Is(err, plans.ErrWrongRequester):
 		return errResp(id, ipc.CodeWrongRequester, "ticket "+ticketID+": "+wrongRequester)
 	case errors.Is(err, ticket.ErrExpired):
-		return s.hubRenew(ctx, id, ticketID, caller, who)
+		return s.hubRenew(ctx, id, ticketID, caller, who, dec)
 	case errors.Is(err, errReplan):
 		s.withdraw(ctx, ticketID, caller)
 		return *planResp
@@ -393,6 +393,9 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 		s.withdraw(ctx, ticketID, caller)
 		return s.hubStale(ctx, id, body, ticketID, who, 0)
 	case errors.Is(err, hubclient.ErrDenied):
+		if dec != nil {
+			s.auditHubDenial(ctx, ticketID, dec)
+		}
 		msg := "denied by the human; do not retry unless asked"
 		if _, reason, ok := strings.Cut(err.Error(), ": "); ok && reason != "denied" {
 			msg = "denied by the human: " + s.safeReason(reason) + "; do not retry unless asked"
@@ -427,7 +430,10 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 	s.println(paint.Step("ticket " + safeText(ticketID, false) + " approved in lockhub: running"))
 	rec.Event, rec.Decision, rec.Approval, rec.Ticket = audit.EventApproved, "approved", kconsole.HubApproval, ticketID
 	if dec != nil {
-		rec.Approver, rec.Facade = &dec.Approver, dec.Facade
+		// The hub's signature of its decision, so that `lock audit verify
+		// --lock` checks this record against the hub's key; runApproved
+		// keeps it on the approval record only, not on the run's.
+		rec.Approver, rec.Facade, rec.HubSig = &dec.Approver, dec.Facade, dec.Sig
 	}
 	resp := s.runApproved(ctx, id, sess, pl, rec, class, time.Time{})
 	if resp.Error != nil {
@@ -444,6 +450,23 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 	}
 	finish(true, "")
 	return resp
+}
+
+// auditHubDenial records the hub's denial of ticket ticketID, as the run
+// that found it: the statement of the stored plan (the recheck did not
+// run), who denied it on which facade, the reason and the hub's signature.
+// Begin ended the plan Denied, so a second run of the ticket finds it used
+// and is not recorded again.
+func (s *Server) auditHubDenial(ctx context.Context, ticketID string, dec *ticket.Decision) {
+	rec := audit.Record{Event: audit.EventDenied, Decision: string(dec.Decision), Reason: s.safeReason(dec.Reason),
+		Approval: kconsole.HubApproval, Ticket: ticketID, Approver: &dec.Approver, Facade: dec.Facade, HubSig: dec.Sig}
+	if p, err := s.cfg.Hub.Store.TicketPlan(ticketID); err == nil {
+		var body hubPlan
+		if json.Unmarshal(p.Body, &body) == nil {
+			rec.DB, rec.SQL, rec.Unmasked, rec.Intent = body.DB, body.SQL, body.Unmask, body.Intent
+		}
+	}
+	s.audit(withPeerRecord(ctx, rec))
 }
 
 // errReplan marks a run whose statement no longer plans.
