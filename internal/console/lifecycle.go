@@ -100,7 +100,9 @@ func (st *starter) appr() Approver {
 	return st.approver
 }
 
-func (st *starter) audit(rec audit.Record) {
+// audit writes rec; a failure is told and returned: an approval at start
+// is not saved without its record.
+func (st *starter) audit(rec audit.Record) error {
 	rec.Profile, rec.Engine, rec.DBUser = st.profile.Name, st.profile.Engine, st.user
 	rec.Host = st.profile.Host
 	if st.profile.Engine == config.EngineSQLite {
@@ -111,8 +113,23 @@ func (st *starter) audit(rec audit.Record) {
 	}
 	if err := st.log.Append(rec); err != nil {
 		st.io.Println("audit log write failed: " + err.Error())
+		return err
 	}
+	return nil
 }
+
+// failed records, when recorded is set (a widening already on record),
+// that the change it announced did not happen, and returns err.
+func (st *starter) failed(recorded bool, err error) error {
+	if recorded {
+		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "failed", Error: secrets.Sanitize(err)})
+	}
+	return err
+}
+
+// errApprovalUnrecorded: the human approved a policy at start, but the
+// record could not be written; nothing is saved and the console stops.
+var errApprovalUnrecorded = errors.New("console: the approval of the policy could not be recorded in the audit log")
 
 // rulesDirFor is the directory of the PII rule sets: the project's
 // .locksql when there is one, else the user config directory.
@@ -604,10 +621,12 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 			st.audit(audit.Record{Event: audit.EventPolicy, Decision: "refused", Reason: reason, Error: errText})
 			return config.Policy{}, "", errors.New("console: the policy was not approved")
 		}
-		if err := config.SaveApproved(stateDir, key, cur); err != nil {
-			return config.Policy{}, "", err
+		if st.audit(audit.Record{Event: audit.EventPolicy, Decision: "applied", Approval: st.appr().Mode()}) != nil {
+			return config.Policy{}, "", errApprovalUnrecorded
 		}
-		st.audit(audit.Record{Event: audit.EventPolicy, Decision: "applied", Approval: st.appr().Mode()})
+		if err := config.SaveApproved(stateDir, key, cur); err != nil {
+			return config.Policy{}, "", st.failed(true, err)
+		}
 		return cur, "", nil
 	}
 	if err != nil {
@@ -642,10 +661,12 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 		io.Println("changes refused: the last approved policy applies")
 		return *ap, config.Fingerprint(cur), nil
 	}
-	if err := config.SaveApproved(stateDir, key, cur); err != nil {
-		return config.Policy{}, "", err
+	if st.audit(audit.Record{Event: audit.EventPolicy, Decision: "applied", Approval: st.appr().Mode()}) != nil {
+		return config.Policy{}, "", errApprovalUnrecorded
 	}
-	st.audit(audit.Record{Event: audit.EventPolicy, Decision: "applied", Approval: st.appr().Mode()})
+	if err := config.SaveApproved(stateDir, key, cur); err != nil {
+		return config.Policy{}, "", st.failed(true, err)
+	}
 	return cur, "", nil
 }
 
@@ -1115,14 +1136,22 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 		}
 	}
 	next := config.NewPolicy(ap.Profile, rules.Mask, rules.Allow).WithModes(rules.Modes)
+	changed := config.Fingerprint(next) != config.Fingerprint(ap)
+	if allowed && changed {
+		// The human declined to mask a quasi-identifier: a widening, on
+		// record before anything is saved.
+		if st.audit(audit.Record{Event: audit.EventPolicy, Decision: "approved"}) != nil {
+			return ap, errApprovalUnrecorded
+		}
+	}
 	switch {
 	case firstRun:
 		// Write the file even when empty, so that the first-run proposal
 		// runs once.
 		if err := pii.SaveRulesFile(rulesPath, rules); err != nil {
-			return ap, err
+			return ap, st.failed(allowed && changed, err)
 		}
-	case config.Fingerprint(next) != config.Fingerprint(ap):
+	case changed:
 		// Add the accepted rules to the file as it is on disk, so that
 		// unconfirmed edits are neither lost nor applied.
 		onDisk, err := pii.LoadRulesFile(rulesPath)
@@ -1144,19 +1173,17 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 			}
 		}
 		if err := pii.SaveRulesFile(rulesPath, onDisk); err != nil {
-			return ap, err
+			return ap, st.failed(allowed, err)
 		}
 	}
 	next = config.NewPolicy(ap.Profile, rules.Mask, rules.Allow).WithModes(rules.Modes)
-	if config.Fingerprint(next) != config.Fingerprint(ap) {
+	if changed {
 		if err := config.SaveApproved(stateDir, key, next); err != nil {
-			return ap, err
+			return ap, st.failed(allowed, err)
 		}
-		decision := "tightened"
-		if allowed {
-			decision = "approved" // the human declined to mask a quasi-identifier, in the console
+		if !allowed {
+			st.audit(audit.Record{Event: audit.EventPolicy, Decision: "tightened"})
 		}
-		st.audit(audit.Record{Event: audit.EventPolicy, Decision: decision})
 		st.io.Println(paint.OK(fmt.Sprintf("PII: %d mask rules in %s", len(next.PIIMask), rulesPath)))
 	}
 	return next, nil

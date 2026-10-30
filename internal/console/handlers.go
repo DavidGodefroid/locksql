@@ -705,7 +705,7 @@ func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session,
 	// approval that cannot be recorded runs nothing.
 	if s.writeAudit(rec) != nil {
 		s.println(paint.Fail("refused: the approval could not be recorded in the audit log"))
-		return errResp(req.ID, ipc.CodeInternal, "the console could not record the approval in its audit log, so the query was not run; ask the user to check the console")
+		return errResp(id, ipc.CodeInternal, "the console could not record the approval in its audit log, so the query was not run; ask the user to check the console")
 	}
 	rec.Event, rec.Decision = audit.EventRun, "ok"
 	// The prompts may have waited: check the TTL again, so that an
