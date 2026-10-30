@@ -21,7 +21,38 @@ This file records the changes a user or an agent has to know about.
   hub mode will also carry `ticket`, `approver`, `facade` and `hub_sig`.
   `locksql stats` reads old and new logs alike.
 
+- **Plan hash.** `query.plan` answers a `plan_hash` (`sha256:…`) of the
+  normalised statement, the profile, the policy fingerprint and, on
+  PostgreSQL, the effective `search_path` and the definitions of every
+  object the statement resolves to: functions and operators (body,
+  settings, `SECURITY DEFINER`, grants), views (`pg_get_viewdef`), rules,
+  triggers and their functions, row-level policies and the row-level
+  security switches, grants, column defaults and generated columns,
+  constraints, partitions and inheritance, followed through views, rules,
+  triggers, policies, defaults and constraints (and, for a write, into the
+  tables whose foreign keys cascade from it). Objects nested deeper than 8
+  levels refuse the plan rather than go unhashed. Not followed: the
+  functions a PL/pgSQL body calls (only its own source is hashed) and what
+  dynamic SQL reaches. `query.run` checks it before the approval, then again in the
+  statement's own transaction just before and just after the statement: a
+  plan whose objects changed is refused with the new code `E_STALE` (the
+  statement rolled back when they changed during it). `CREATE OR REPLACE`
+  keeps the OIDs, so the definitions are hashed, not the OIDs.
+
 ### Fixed
+
+- **Audit writes fail closed** (lockkit #5). An approved or
+  auto-approved query whose approval record cannot be written runs
+  nothing: the agent gets `CodeInternal` ("the console could not record
+  the approval in its audit log"), the human sees why; three failed
+  writes in a row end the session. Denials stay denials.
+
+- **Widenings take effect only once recorded** (#102). Auto mode on,
+  clear results shown, `:unmask` allowed and a loosened policy approved
+  (at `:review` or at start) write their audit record first; if it cannot
+  be written they stay off (the policy is neither saved nor applied, and
+  the console does not start), and the console says so. Narrowing still
+  applies at once.
 
 - **No widening switch while a prompt waits.** Shift+Tab (auto mode on),
   Ctrl-O (clear results on) and `:unmask` are refused, with a line saying to

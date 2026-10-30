@@ -447,6 +447,16 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		s.noteRefused(pl)
 	}
 
+	pl.refs = objectRefs(s.dialect, pl)
+	state, err := s.planState(ctx, sess, pl)
+	if err != nil {
+		return s.failed(req.ID, "plan", err)
+	}
+	pl.guarded = state != nil
+	if pl.hash, err = s.planHash(pl, state); err != nil {
+		return s.failed(req.ID, "plan", err)
+	}
+
 	s.prunePlans()
 	pl.id = newID()
 	s.plans[pl.id] = pl
@@ -458,7 +468,7 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	return okResp(req.ID, ipc.PlanResult{
 		PlanID: pl.id, Profile: s.profile.Name, Host: s.host(), DB: db, SQL: pl.st.SQL,
 		Class: class, Verdict: verdict, Summary: summary, Reasons: reasons, Unmask: pl.unmask,
-		Values: s.typedNames(),
+		Values: s.typedNames(), PlanHash: pl.hash,
 	})
 }
 
@@ -570,6 +580,20 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	if r != nil {
 		return *r
 	}
+	// What the plan resolves to may have changed since query.plan: refuse
+	// before the human is asked. The run checks again, in its transaction.
+	if pl.guarded {
+		state, err := s.planState(ctx, sess, pl)
+		if err != nil {
+			return s.failedPlan(req.ID, "plan", err, pl)
+		}
+		if h, err := s.planHash(pl, state); err != nil || h != pl.hash {
+			if err != nil {
+				return s.failedPlan(req.ID, "plan", err, pl)
+			}
+			return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, refusal.New(refusal.Stale, errStale{}.Error()))
+		}
+	}
 	pl.warnings = s.warnings(ctx, sess, pl)
 	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask, Warnings: pl.warnings, Intent: pl.intent})
 
@@ -635,8 +659,12 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	}
 	// The decision is on record before anything runs: a console stopped
 	// between the approval and the end of the run still leaves a trace of
-	// what was approved. The run record follows, with the outcome.
-	s.audit(rec)
+	// what was approved. The run record follows, with the outcome. An
+	// approval that cannot be recorded runs nothing.
+	if s.writeAudit(rec) != nil {
+		s.println(paint.Fail("refused: the approval could not be recorded in the audit log"))
+		return errResp(req.ID, ipc.CodeInternal, "the console could not record the approval in its audit log, so the query was not run; ask the user to check the console")
+	}
 	rec.Event, rec.Decision = audit.EventRun, "ok"
 	// The prompts may have waited: check the TTL again, so that an
 	// approval or a value landing after it runs nothing.
@@ -689,12 +717,19 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	switch {
 	case pl.isExplain:
 		res = explainResult(pl.explain)
-	case pl.an != nil:
-		st := pl.st
-		st.SQL = pl.runSQL
-		res, err = sess.Run(rctx, pl.db, st, s.profile.Limits.MaxRows)
 	default:
-		res, err = sess.Run(rctx, pl.db, pl.st, s.profile.Limits.MaxRows)
+		st := pl.st
+		if pl.an != nil {
+			st.SQL = pl.runSQL
+		}
+		if pl.guarded {
+			res, err = engine.RunGuarded(rctx, sess, pl.db, st, s.profile.Limits.MaxRows, pl.refs, s.staleCheck(pl))
+		} else {
+			res, err = sess.Run(rctx, pl.db, st, s.profile.Limits.MaxRows)
+		}
+	}
+	if stale := (errStale{}); errors.As(err, &stale) {
+		return s.refuseWarned(ctx, req.ID, pl, class, refusal.New(refusal.Stale, stale.Error()))
 	}
 	rec.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {

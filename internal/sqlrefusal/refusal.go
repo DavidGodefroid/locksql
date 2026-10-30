@@ -71,6 +71,10 @@ const (
 	MaskedSetOp      Code = "E_MASKED_SET_OP"
 	MaskUncertain    Code = "E_MASK_UNCERTAIN"
 	MaskedWrite      Code = "E_MASKED_WRITE"
+	// Stale: what the statement resolves to on the server (functions,
+	// views, rules, triggers, policies, grants, search path) changed since
+	// the plan: the plan hash no longer matches.
+	Stale Code = "E_STALE"
 	// Policy is the fail-closed code of a refusal no check named: it
 	// should never be seen, and is a bug to report. lockkit defines it.
 	Policy Code = refusal.Policy
@@ -133,6 +137,8 @@ var table = map[Code]struct {
 		"select PII columns by their plain name, without alias, expression or whole-row reference"},
 	MaskedWrite: {RetryStop, "a write that copies a PII column or stores a chosen value in one",
 		"a masked column may only be set to NULL or DEFAULT; tell the user"},
+	Stale: {RetryRewrite, "the database objects the statement uses changed since the plan",
+		"plan the statement again (locksql_plan): the human approves the new plan"},
 }
 
 func init() {

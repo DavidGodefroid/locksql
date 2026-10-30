@@ -13,6 +13,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/product"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
+	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
 // hostKeyAnswerOK accepts "yes", or on a production profile the last 8
@@ -33,6 +34,16 @@ func retryKeychainSSHSecret(err error, used bool) bool {
 	return used && errors.Is(err, tunnel.ErrAuth)
 }
 
+// recordHostKey records a host key the human trusted, before known_hosts
+// is written: a key that cannot be recorded is not trusted.
+func (st *starter) recordHostKey(host, fp string) bool {
+	if st.audit(audit.Record{Event: audit.EventLogin, Decision: "hostkey-added", SSHHost: host, SSHHostKey: fp}) != nil {
+		st.io.Println(paint.Fail("host key not trusted: it could not be recorded in the audit log"))
+		return false
+	}
+	return true
+}
+
 // openTunnel opens the SSH tunnel of p, asking for its secret by p.SSH's
 // credentials mode and for any unknown host key. Open runs under ctx
 // itself, with no deadline of the console's: it bounds its own network
@@ -44,9 +55,8 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 		return nil, fmt.Errorf("console: ssh: %w", err)
 	}
 	khPath := tunnel.KnownHostsPath(home)
-	// added is the fingerprint the human trusted; it is audited once Open
-	// succeeded, as the known_hosts write follows confirm.
-	var added string
+	// confirm records a trusted key before returning: the known_hosts
+	// write follows it, and a key that cannot be recorded is not trusted.
 	confirm := func(host, keyType, fp string) bool {
 		st.io.Println(paint.Warn(fmt.Sprintf("The authenticity of %s can't be established.", safeText(host, false))))
 		st.io.Println(fmt.Sprintf("%s key fingerprint is %s", safeText(keyType, false), fp))
@@ -66,8 +76,7 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 		if r := st.decide(ctx, Decision{Prompt: prompt, Expected: expected, Production: true}); r.Outcome != Approved {
 			return false
 		}
-		added = fp
-		return true
+		return st.recordHostKey(s.Host, fp)
 	}
 	hk, err := tunnel.KnownHosts(khPath, confirm)
 	if err != nil {
@@ -124,9 +133,6 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 	}
 	if err != nil {
 		return nil, fmt.Errorf("console: %s", secrets.Sanitize(err, fromKeychain, asked))
-	}
-	if added != "" {
-		st.audit(audit.Record{Event: audit.EventLogin, Decision: "hostkey-added", SSHHost: s.Host, SSHHostKey: added})
 	}
 	if keychain && asked != nil {
 		st.offerSaveAs(ctx, keychainHost, s.Port, asked, savePrompt)
@@ -214,4 +220,24 @@ func withProxyStderr(err error, stderr string) error {
 		return err
 	}
 	return fmt.Errorf("%w (proxy_command stderr: %s)", err, stderr)
+}
+
+// ObjectState passes the read on (engine.ObjectGuard).
+func (s *tunneledSession) ObjectState(ctx context.Context, db string, refs engine.ObjectRefs) (engine.ObjectState, error) {
+	return engine.ObjectStateOf(ctx, s.Session, db, refs)
+}
+
+// RunGuarded passes the guarded run on (engine.ObjectGuard).
+func (s *tunneledSession) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check func(engine.ObjectState, bool) error) (engine.Result, error) {
+	return engine.RunGuarded(ctx, s.Session, db, st, maxRows, refs, check)
+}
+
+// ObjectState passes the read on (engine.ObjectGuard).
+func (s *proxiedSession) ObjectState(ctx context.Context, db string, refs engine.ObjectRefs) (engine.ObjectState, error) {
+	return engine.ObjectStateOf(ctx, s.Session, db, refs)
+}
+
+// RunGuarded passes the guarded run on (engine.ObjectGuard).
+func (s *proxiedSession) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check func(engine.ObjectState, bool) error) (engine.Result, error) {
+	return engine.RunGuarded(ctx, s.Session, db, st, maxRows, refs, check)
 }

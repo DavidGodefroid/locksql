@@ -52,7 +52,8 @@ it points at). Follow the retry rule of the code:
   narrower filter), `E_MASKED_FILTER` (filter on a non-PII key, or `=`, `IN`, `IS NULL` under
   `AND`), `E_MASKED_EXPRESSION` (the plain column, or `COUNT`/`MIN`/`MAX`), `E_MASKED_ORDER` (order
   by a non-PII column), `E_MASKED_SET_OP` (`UNION ALL` between PII columns), `E_MASK_UNCERTAIN`
-  (PII columns by their plain name).
+  (PII columns by their plain name), `E_STALE` (the objects changed since the plan: plan it
+  again).
 - `retry: ask_user`: `E_TIER`, `E_UNMASK_OFF`, `E_DATABASE_NOT_SERVED`. Tell the user; only the
   human can change it (`locksql_request_change` only queues a proposal).
 - `retry: stop`: `E_FORBIDDEN`, `E_MASKED_WRITE`, `E_ENGINE`, `E_POLICY`. Final for this
