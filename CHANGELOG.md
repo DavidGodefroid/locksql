@@ -6,6 +6,18 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
+### Added
+
+- **`LOCKSQL_PII_DIR`** (lockhub#41). With it, the console keeps its PII
+  rule sets in that directory instead of the profile's: `lock up` sets it
+  to the console's own volume, its copy of the profile being read-only, so
+  a first start no longer needs a rule set written beforehand by locksql's
+  own launcher. The profile's sets are copied in once; from then on the
+  console's copy is in force. At each start the profile's new mask rules
+  are added to it; nothing else of the profile's set is (allow rules,
+  removed masks, mode changes), and a profile set that still differs is
+  told at start.
+
 ### Changed
 
 - **The console runs on lockkit's console** (#96). The request loop, the

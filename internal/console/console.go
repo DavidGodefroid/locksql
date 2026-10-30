@@ -65,6 +65,12 @@ type Options struct {
 	Now func() time.Time
 	// StateDir defaults to config.StateDir().
 	StateDir string
+	// PIIDir, when set (PIIDirEnv), is the directory of the PII rule sets
+	// (pii/<set>.toml) instead of the profile's: lock up's copy of the
+	// profile is read-only, and the console writes its first rule set and
+	// every rule it adds. A set it lacks is first copied from the
+	// profile's directory.
+	PIIDir string
 	// Version is the console version reported to clients.
 	Version string
 	// TTY is the console's terminal device (nil when unknown): its owner
