@@ -40,8 +40,11 @@ func helper(mode string) {
 		fmt.Fprint(os.Stderr, strings.Repeat("x", 4096)+"\nconnect: \x1b[2Jrefused\n")
 		os.Exit(1)
 	case "pwd":
+		// Alive until the test closes the connection: its directory is
+		// removed when the command ends, after the test looked at it.
 		wd, _ := os.Getwd()
 		fmt.Println(wd)
+		io.Copy(io.Discard, os.Stdin)
 	case "pid":
 		fmt.Println(os.Getpid())
 		time.Sleep(time.Hour)
