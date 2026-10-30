@@ -34,7 +34,9 @@ func readHubKeyFile(path string) ([]byte, error) {
 	} else if !trusted(di) {
 		return nil, bad("its directory belongs to neither root nor the console's account")
 	}
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	// O_NONBLOCK: a FIFO named instead of the file does not block the
+	// console; it is refused as not regular.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, bad("%v (a symbolic link is refused)", err)
 	}

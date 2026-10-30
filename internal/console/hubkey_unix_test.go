@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	kconsole "github.com/DavidGodefroid/lockkit/console"
@@ -80,6 +81,14 @@ func TestReadHubKeyFile(t *testing.T) {
 	}
 	if _, err := readHubKeyFile(subdir(t, 0o700)); err == nil {
 		t.Error("a directory was accepted")
+	}
+	// A FIFO is refused at once, without blocking on the open.
+	fifo := filepath.Join(subdir(t, 0o700), "hub.pub")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readHubKeyFile(fifo); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("FIFO: %v", err)
 	}
 }
 
