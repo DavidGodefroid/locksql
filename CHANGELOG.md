@@ -55,6 +55,8 @@ This file records the changes a user or an agent has to know about.
   auto mode on, and statements with `${placeholders}` are refused (values
   are typed in the console).
 
+- Builds on lockkit v0.3.1 (hub support), was a commit of lockkit main.
+
 ### Fixed
 
 - **Audit writes fail closed** (lockkit #5). An approved or
