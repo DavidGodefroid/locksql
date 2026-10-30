@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -404,6 +405,59 @@ func TestHubModeRowcountWithinBound(t *testing.T) {
 	hub.Decide(tk, ticket.Approved, "")
 	if r := runTicket(t, h, tk); r.Error != nil || len(h.sess.rolledBack) != 0 || !hub.Consumed(tk) {
 		t.Fatalf("run %+v, rolled back %q", r.Error, h.sess.rolledBack)
+	}
+}
+
+// Without object definitions (MySQL, SQLite), the ticket of a write lists
+// the triggers of the tables it names (#120); a read asks for none.
+func TestHubModeTriggersListed(t *testing.T) {
+	var hub *hubtest.Hub
+	h := newHarness(t, writeProfile(), withHub(t, &hub))
+	h.sess.triggers = []string{"trigger app.users.users_log (after update)"}
+	pr := h.plan(t, "UPDATE users SET note = 'x' WHERE id = 1", false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	raw := string(hub.Ticket(tk))
+	if !strings.Contains(raw, "rows the bound does not count may change too") || !strings.Contains(raw, "users_log (after update)") {
+		t.Fatalf("ticket: %s", raw)
+	}
+	if len(h.sess.triggerNames) != 1 || !slices.Contains(h.sess.triggerNames[0], "users") {
+		t.Fatalf("asked about %q", h.sess.triggerNames)
+	}
+	h.plan(t, "SELECT id FROM users LIMIT 1", false)
+	if len(h.sess.triggerNames) != 1 {
+		t.Fatalf("a read listed triggers: %q", h.sess.triggerNames)
+	}
+}
+
+// A multi-row VALUES gets a bound of at least its rows, though EXPLAIN
+// gives no estimate for them (#120).
+func TestHubModeValuesBound(t *testing.T) {
+	var hub *hubtest.Hub
+	h := newHarness(t, writeProfile(), withHub(t, &hub))
+	rows := make([]string, 30)
+	for i := range rows {
+		rows[i] = "(" + strconv.Itoa(i+100) + ", 'x')"
+	}
+	pr := h.plan(t, "INSERT INTO users (id, note) VALUES "+strings.Join(rows, ", "), false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	if body := hubBody(t, h, tk); body.MaxAffected < 30 {
+		t.Fatalf("bound %d for 30 rows", body.MaxAffected)
+	}
+}
+
+// A write whose rows the engine cannot count before a commit (a
+// non-transactional table on MySQL) is refused with E_STATEMENT_KIND, not
+// the generic failure, so that the agent does not retry it (#120).
+func TestHubModeUncountedRefused(t *testing.T) {
+	var hub *hubtest.Hub
+	h := newHarness(t, writeProfile(), withHub(t, &hub))
+	pr := h.plan(t, "UPDATE users SET note = 'x' WHERE id = 1", false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	h.sess.runErr = engine.Uncounted(errors.New("mysql: the write reaches tables a ROLLBACK may not undo: app.users (base table myisam); its rows cannot be checked before a commit"))
+	hub.Decide(tk, ticket.Approved, "")
+	r := runTicket(t, h, tk)
+	if r.Error == nil || r.Error.Data == nil || r.Error.Data.Code != "E_STATEMENT_KIND" || !strings.Contains(r.Error.Message, "app.users") || !strings.Contains(r.Error.Message, "do not retry") {
+		t.Fatalf("run: %+v", r.Error)
 	}
 }
 

@@ -81,6 +81,18 @@ This file records the changes a user or an agent has to know about.
   or a view is not run, and a `ROLLBACK` that warns is a failure. The
   screen names the requester by its kernel identity, the lea name as its
   unverified claim.
+  Follow-ups (#120): on MySQL/MariaDB and SQLite the ticket also names the
+  triggers of the tables the write names; an `INSERT`/`REPLACE ... VALUES`
+  is bounded by at least its number of rows (EXPLAIN gives no estimate
+  for them on MySQL and SQLite; twice that for `REPLACE` and `ON
+  DUPLICATE KEY UPDATE` on MySQL/MariaDB); a write whose rows cannot be
+  checked before a commit (a non-transactional table, DDL, `VACUUM`) is
+  refused with `E_STATEMENT_KIND` instead of the generic failure. The
+  MySQL/MariaDB check reads only the tables of the current database and of
+  the schemas the statement qualifies a name with: a non-transactional
+  table of another schema no longer refuses an unrelated write that uses
+  the same word, and the server's own schemas are no longer exempt when
+  named bare from within them.
 
 - Builds on lockkit v0.3.1 (hub support), was a commit of lockkit main.
 

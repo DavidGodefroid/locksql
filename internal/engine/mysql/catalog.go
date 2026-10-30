@@ -277,3 +277,45 @@ func parseGrants(lines []string, tier config.Tier) []string {
 	}
 	return extras
 }
+
+// Triggers implements engine.TriggerLister: the triggers of the tables of
+// db (the profile's database when empty) that names name bare, and of
+// those they name with their schema. information_schema.TRIGGERS shows
+// only the triggers of tables the account holds the TRIGGER privilege
+// on: a trigger it cannot see is not listed.
+func (s *session) Triggers(ctx context.Context, db string, names []string) ([]string, error) {
+	current, _ := s.orDefault(db)
+	type key struct{ schema, table string }
+	want := map[key]bool{}
+	var tables []any
+	for _, n := range names {
+		sc, tb := engine.SplitName(n)
+		if sc == "" {
+			sc = strings.ToLower(current)
+		}
+		if tb == "" || sc == "" {
+			continue
+		}
+		if !want[key{sc, tb}] {
+			tables = append(tables, tb)
+		}
+		want[key{sc, tb}] = true
+	}
+	if len(tables) == 0 {
+		return nil, nil
+	}
+	rows, err := s.query(ctx, `SELECT EVENT_OBJECT_SCHEMA, EVENT_OBJECT_TABLE, TRIGGER_NAME, ACTION_TIMING, EVENT_MANIPULATION
+		FROM information_schema.TRIGGERS WHERE LOWER(EVENT_OBJECT_TABLE) IN (?`+strings.Repeat(", ?", len(tables)-1)+`)
+		ORDER BY EVENT_OBJECT_SCHEMA, EVENT_OBJECT_TABLE, TRIGGER_NAME`, tables...)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, r := range rows {
+		sc, tb := str(r[0]), str(r[1])
+		if want[key{strings.ToLower(sc), strings.ToLower(tb)}] {
+			out = append(out, fmt.Sprintf("trigger %s.%s.%s (%s %s)", sc, tb, str(r[2]), strings.ToLower(str(r[3])), strings.ToLower(str(r[4]))))
+		}
+	}
+	return out, nil
+}

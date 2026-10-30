@@ -37,3 +37,22 @@ func TestQualified(t *testing.T) {
 		}
 	}
 }
+
+func TestQualifier(t *testing.T) {
+	for _, c := range []struct {
+		text string
+		want bool
+	}{
+		{"update other.t set x = 1", true},
+		{"update `other` . `t` set x = 1", true},
+		{"update \"other\".t set x = 1", true},
+		{"update t set x = 'other'", false},
+		{"update another.t set x = 1", false},
+		{"update other_x.t set x = 1", false},
+		{"update t set other = 1", false},
+	} {
+		if got := qualifier(c.text, "other"); got != c.want {
+			t.Errorf("qualifier(%q) = %v", c.text, got)
+		}
+	}
+}

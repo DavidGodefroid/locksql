@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
@@ -76,6 +77,91 @@ type GuardCheck func(st ObjectState, at Step) error
 // refused.
 type RowChecker interface {
 	RunCounted(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(affected int64) error) (Result, error)
+}
+
+// ErrUncounted is matched (errors.Is) by the refusal of a counted run
+// (RowChecker) whose rows cannot be checked before a commit: a statement
+// that runs outside a transaction or commits implicitly, or a write a
+// ROLLBACK may not undo. Nothing ran; the same statement is refused again.
+var ErrUncounted = errors.New("engine: the rows this statement changes cannot be checked before a commit")
+
+// Uncounted marks err as such a refusal (ErrUncounted); its message is
+// err's.
+func Uncounted(err error) error { return uncounted{err} }
+
+type uncounted struct{ error }
+
+func (e uncounted) Is(target error) bool { return target == ErrUncounted }
+func (e uncounted) Unwrap() error        { return e.error }
+
+// TriggerLister is implemented by an engine without an ObjectGuard that
+// can list the triggers of the tables a write names: what changes rows
+// beside the statement itself, which a rowcount bound does not count.
+// names are the names as the statement writes them (one or two parts,
+// quoted or not); a name no table bears is ignored. Each trigger is
+// "trigger <schema>.<table>.<name> (<timing> <event>)".
+type TriggerLister interface {
+	Triggers(ctx context.Context, db string, names []string) ([]string, error)
+}
+
+// ErrNoTriggerList is the error of a session that does not implement
+// TriggerLister.
+var ErrNoTriggerList = errors.New("engine: this session cannot list triggers")
+
+// TriggersOf passes the listing on to s, for session wrappers.
+func TriggersOf(ctx context.Context, s Session, db string, names []string) ([]string, error) {
+	g, ok := s.(TriggerLister)
+	if !ok {
+		return nil, ErrNoTriggerList
+	}
+	return g.Triggers(ctx, db, names)
+}
+
+// SplitName splits a one- or two-part SQL name as a statement writes it
+// ("t", "app.t", "`app`.`t`", "\"T\"", "[t]") into its schema ("" for
+// one part) and its name, quotes removed and folded to lower case.
+func SplitName(name string) (schema, table string) {
+	unquote := func(p string) string {
+		p = strings.TrimSpace(p)
+		if len(p) >= 2 {
+			switch {
+			case p[0] == '`' && p[len(p)-1] == '`':
+				p = strings.ReplaceAll(p[1:len(p)-1], "``", "`")
+			case p[0] == '"' && p[len(p)-1] == '"':
+				p = strings.ReplaceAll(p[1:len(p)-1], `""`, `"`)
+			case p[0] == '[' && p[len(p)-1] == ']':
+				p = p[1 : len(p)-1]
+			}
+		}
+		return strings.ToLower(p)
+	}
+	if i := lastDot(name); i >= 0 {
+		return unquote(name[:i]), unquote(name[i+1:])
+	}
+	return "", unquote(name)
+}
+
+// lastDot is the index of the dot that separates the parts of name,
+// outside quotes, or -1.
+func lastDot(name string) int {
+	var quote byte
+	at := -1
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '`' || c == '"':
+			quote = c
+		case c == '[':
+			quote = ']'
+		case c == '.':
+			at = i
+		}
+	}
+	return at
 }
 
 // ErrNoRowCheck is the error of a session wrapper whose session does not

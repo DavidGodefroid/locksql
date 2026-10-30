@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/DavidGodefroid/locksql/internal/engine"
+	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
 // Catalog queries are built here only; names reach them as bound
@@ -283,4 +284,75 @@ func closeRows(rows *sql.Rows) error {
 		return err
 	}
 	return rows.Close()
+}
+
+// Triggers implements engine.TriggerLister: the triggers, of every schema
+// of the connection (a TEMP trigger may fire on a table of main), on the
+// tables and views names name, by their last part.
+func (s *session) Triggers(ctx context.Context, db string, names []string) ([]string, error) {
+	if err := s.checkDB(ctx, db); err != nil {
+		return nil, err
+	}
+	want := map[string]bool{}
+	for _, n := range names {
+		if _, tb := engine.SplitName(n); tb != "" {
+			want[tb] = true
+		}
+	}
+	if len(want) == 0 {
+		return nil, nil
+	}
+	schemas, err := s.strings(ctx, `SELECT name FROM pragma_database_list ORDER BY seq`)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, sc := range schemas {
+		rows, err := s.conn.QueryContext(ctx, `SELECT tbl_name, name, sql FROM `+quoteIdent(sc)+`.sqlite_schema WHERE type = 'trigger' ORDER BY tbl_name, name`)
+		if err != nil {
+			return nil, wrap(ctx, err)
+		}
+		for rows.Next() {
+			var tb, name string
+			var def sql.NullString
+			if err := rows.Scan(&tb, &name, &def); err != nil {
+				rows.Close()
+				return nil, wrap(ctx, err)
+			}
+			if want[strings.ToLower(tb)] {
+				out = append(out, fmt.Sprintf("trigger %s.%s.%s (%s)", sc, tb, name, triggerWhen(def.String)))
+			}
+		}
+		if err := closeRows(rows); err != nil {
+			return nil, wrap(ctx, err)
+		}
+	}
+	return out, nil
+}
+
+// triggerWhen is the timing and event of a CREATE TRIGGER statement
+// ("before update", "instead of insert"), "" when it does not lex.
+func triggerWhen(def string) string {
+	toks, err := sqlclass.Lex(sqlclass.SQLite, def)
+	if err != nil {
+		return ""
+	}
+	var timing string
+	for _, t := range toks {
+		if t.Kind != sqlclass.TokWord {
+			continue
+		}
+		switch t.Text {
+		case "BEFORE", "AFTER":
+			timing = strings.ToLower(t.Text)
+		case "INSTEAD":
+			timing = "instead of"
+		case "INSERT", "UPDATE", "DELETE":
+			if timing == "" {
+				timing = "before" // SQLite's default
+			}
+			return timing + " " + strings.ToLower(t.Text)
+		}
+	}
+	return ""
 }

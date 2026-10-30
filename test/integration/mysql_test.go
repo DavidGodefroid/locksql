@@ -265,9 +265,10 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		ddl("CREATE TABLE 1rc_my (id INT PRIMARY KEY, label VARCHAR(20)) ENGINE=MyISAM")
 		ddl("CREATE TABLE rc_inno (id INT PRIMARY KEY, label VARCHAR(20)) ENGINE=InnoDB")
 		ddl("CREATE TRIGGER rc_trg AFTER UPDATE ON rc_inno FOR EACH ROW INSERT INTO rc_log VALUES (NEW.id)")
+		ddl("CREATE TABLE other.rc_oth (id INT PRIMARY KEY, label VARCHAR(20)) ENGINE=MEMORY")
 		t.Cleanup(func() {
 			ddl("DROP TRIGGER IF EXISTS rc_trg")
-			ddl("DROP TABLE IF EXISTS rc_my, rc_log, rc_inno, 1rc_my")
+			ddl("DROP TABLE IF EXISTS rc_my, rc_log, rc_inno, 1rc_my, other.rc_oth")
 		})
 		s := connectMySQL(t, m, srv, "rw", config.TierWrite, 30*time.Second)
 		for _, q := range []string{"INSERT INTO rc_my VALUES (1, 'a')", "INSERT INTO rc_inno VALUES (1, 'a')"} {
@@ -286,7 +287,7 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		// A MyISAM table named by the statement: refused before it runs.
 		checked := false
 		_, err := engine.RunCounted(ctx, s, "app", write("UPDATE rc_my SET label = 'z'"), 10, func(int64) error { checked = true; return over })
-		if err == nil || errors.Is(err, over) || checked || !strings.Contains(err.Error(), "rc_my") {
+		if err == nil || errors.Is(err, over) || checked || !strings.Contains(err.Error(), "rc_my") || !errors.Is(err, engine.ErrUncounted) {
 			t.Fatalf("MyISAM write: %v (checked %v)", err, checked)
 		}
 		for _, q := range []string{"UPDATE `rc_my` SET label = 'z'", "UPDATE `app`.`RC_MY` SET label = 'z'", "UPDATE app.rc_my SET label = 'z'", "UPDATE 1rc_my SET label = 'z'", "UPDATE app.1rc_my SET label = 'z'"} {
@@ -296,6 +297,36 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		}
 		if r := mustRun(t, s, "SELECT label FROM rc_my"); fmt.Sprint(r.Rows) != "[[a]]" {
 			t.Fatalf("the MyISAM write ran: %v", r.Rows)
+		}
+		// A non-transactional table of another schema counts only when the
+		// statement names it with its schema (#120): the same word in an
+		// unrelated write does not refuse it.
+		for _, q := range []string{"UPDATE other.rc_oth SET label = 'z'", "UPDATE `other`.`rc_oth` SET label = 'z'"} {
+			if _, err := engine.RunCounted(ctx, s, "app", write(q), 10, func(int64) error { checked = true; return over }); !errors.Is(err, engine.ErrUncounted) || checked {
+				t.Fatalf("%s: %v (checked %v)", q, err, checked)
+			}
+		}
+		if _, err := engine.RunCounted(ctx, s, "app", write("UPDATE small SET label = 'rc_oth' WHERE id = 1"), 10, func(int64) error { return over }); !errors.Is(err, over) {
+			t.Fatalf("a word naming a table of another schema refused the write: %v", err)
+		}
+		// From the other schema, the bare name counts.
+		if _, err := engine.RunCounted(ctx, s, "other", write("UPDATE rc_oth SET label = 'z'"), 10, func(int64) error { checked = true; return over }); !errors.Is(err, engine.ErrUncounted) || checked {
+			t.Fatalf("bare name in the current database: %v (checked %v)", err, checked)
+		}
+		// DDL commits implicitly: a typed refusal too.
+		if _, err := engine.RunCounted(ctx, s, "app", sqlclass.Statement{Class: sqlclass.DDL, Kind: "ddl", SQL: "CREATE TABLE rc_x (id INT)", Limit: -1}, 10, func(int64) error { return nil }); !errors.Is(err, engine.ErrUncounted) {
+			t.Fatalf("DDL: %v", err)
+		}
+		// The triggers of the tables a write names, for its hub ticket.
+		trg, err := engine.TriggersOf(ctx, s, "app", []string{"update", "rc_inno", "set", "label"})
+		if err != nil || !slices.Equal(trg, []string{"trigger app.rc_inno.rc_trg (after update)"}) {
+			t.Fatalf("triggers: %q %v", trg, err)
+		}
+		if trg, err := engine.TriggersOf(ctx, s, "other", []string{"app.rc_inno", "rc_inno"}); err != nil || len(trg) != 1 {
+			t.Fatalf("triggers of a qualified name: %q %v", trg, err)
+		}
+		if trg, err := engine.TriggersOf(ctx, s, "app", []string{"other.rc_inno", "rc_my"}); err != nil || len(trg) != 0 {
+			t.Fatalf("triggers of other tables: %q %v", trg, err)
 		}
 		// A trigger writes to MyISAM: the ROLLBACK warns, and the run says
 		// it did not undo everything, never that it rolled back.
