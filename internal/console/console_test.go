@@ -56,6 +56,8 @@ type fakeSession struct {
 	objectRefs  []engine.ObjectRefs
 	duringRun   func()
 	guardedRuns int
+	countedRuns int
+	rolledBack  []string
 }
 
 func (f *fakeSession) ObjectState(_ context.Context, _ string, refs engine.ObjectRefs) (engine.ObjectState, error) {
@@ -68,7 +70,7 @@ func (f *fakeSession) ObjectState(_ context.Context, _ string, refs engine.Objec
 	return cloneState(*f.objects), nil
 }
 
-func (f *fakeSession) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check func(engine.ObjectState, bool) error) (engine.Result, error) {
+func (f *fakeSession) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check engine.GuardCheck) (engine.Result, error) {
 	before, err := f.ObjectState(ctx, db, refs)
 	if err != nil {
 		return engine.Result{}, err
@@ -76,7 +78,7 @@ func (f *fakeSession) RunGuarded(ctx context.Context, db string, st sqlclass.Sta
 	f.mu.Lock()
 	f.guardedRuns++
 	f.mu.Unlock()
-	if err := check(before, false); err != nil {
+	if err := check(before, engine.Step{}); err != nil {
 		return engine.Result{}, err
 	}
 	res, err := f.Run(ctx, db, st, maxRows)
@@ -87,10 +89,35 @@ func (f *fakeSession) RunGuarded(ctx context.Context, db string, st sqlclass.Sta
 		f.duringRun()
 	}
 	after, _ := f.ObjectState(ctx, db, refs)
-	if err := check(after, true); err != nil {
+	if err := check(after, engine.Step{After: true, Affected: res.Affected}); err != nil {
+		f.rollback(st)
 		return engine.Result{}, err
 	}
 	return res, nil
+}
+
+// RunCounted implements engine.RowChecker: a failed check takes the
+// statement out of runs again (rolled back).
+func (f *fakeSession) RunCounted(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
+	res, err := f.Run(ctx, db, st, maxRows)
+	if err != nil {
+		return res, err
+	}
+	f.mu.Lock()
+	f.countedRuns++
+	f.mu.Unlock()
+	if err := check(res.Affected); err != nil {
+		f.rollback(st)
+		return engine.Result{}, err
+	}
+	return res, nil
+}
+
+// rollback records that st was rolled back.
+func (f *fakeSession) rollback(st sqlclass.Statement) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rolledBack = append(f.rolledBack, st.SQL)
 }
 
 func cloneState(s engine.ObjectState) engine.ObjectState {

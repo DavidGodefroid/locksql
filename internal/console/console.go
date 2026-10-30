@@ -15,6 +15,7 @@ import (
 	"time"
 
 	kconsole "github.com/DavidGodefroid/lockkit/console"
+	"github.com/DavidGodefroid/lockkit/ticket"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
@@ -183,14 +184,29 @@ type plan struct {
 	inputs map[string]string
 	// guarded: the engine read the definitions, and the run checks them.
 	guarded bool
+	// requester is the agent that planned it: its lea name and token (as
+	// its client sent it; compared, never shown or written).
+	requester ipc.Requester
+	// maxAffected bounds the rows a hub-mode write may change (0: no
+	// bound): more rolls it back in its own transaction, as stale.
+	// affected is what such a rolled-back run would have changed, and
+	// staleTicket its ticket (hubmode.go).
+	maxAffected int64
+	affected    int64
+	staleTicket string
+	// sideEffects are what changes rows beside the statement itself and
+	// so beside its rowcount: triggers, rules, foreign-key cascades (from
+	// the definitions read on PostgreSQL).
+	sideEffects []string
 }
 
 // Server serves client requests one at a time against one session. It is
 // not safe for concurrent use: Serve runs every request on one goroutine.
 type Server struct {
 	cfg ServerConfig
-	// auditFails counts consecutive audit write failures (maxAuditFails).
-	auditFails int
+	// auditFails counts consecutive audit write failures (maxAuditFails),
+	// the hub's goroutine's too (auditHubRequest).
+	auditFails atomic.Int32
 	approver   Approver
 	approved   config.Policy
 	profile    config.Profile
@@ -289,12 +305,18 @@ func (s *Server) apply(p config.Policy) error {
 	if err != nil {
 		return err
 	}
+	// Before anything changes: a policy is applied whole or not at all.
+	fp, err := ticket.HashOf(p)
+	if err != nil {
+		return err
+	}
 	s.approved = p
 	s.profile = p.Profile
 	s.rules = pii.Rules{Mask: append([]string(nil), p.PIIMask...), Allow: append([]string(nil), p.PIIAllow...), Modes: p.PIIModes}
 	s.detectors = ds
 	s.dialect = d
-	return s.setLive()
+	s.setLive(fp)
+	return nil
 }
 
 // println writes one console line.
@@ -314,21 +336,26 @@ func (s *Server) writeAudit(rec audit.Record) error {
 	rec.Profile = s.profile.Name
 	rec.Engine = s.profile.Engine
 	rec.Host = s.host()
-	rec.DBUser = s.cfg.DBUser
-	// A login read from Vault names its own user, new at every connection.
-	if u, ok := s.sess.(interface{ DBUser() string }); ok && u.DBUser() != "" {
-		rec.DBUser = u.DBUser()
-	}
+	rec.DBUser = s.dbUser()
+	s.liveDBUser(rec.DBUser)
 	if err := s.cfg.Audit.Append(rec); err != nil {
-		s.auditFails++
 		s.cfg.IO.Println(paint.Fail("audit log write failed: " + safeText(err.Error(), false)))
-		if s.auditFails >= maxAuditFails {
+		if s.auditFails.Add(1) >= maxAuditFails {
 			s.End("the audit log cannot be written")
 		}
 		return err
 	}
-	s.auditFails = 0
+	s.auditFails.Store(0)
 	return nil
+}
+
+// dbUser is the database user of the records: a login read from Vault
+// names its own user, new at every connection.
+func (s *Server) dbUser() string {
+	if u, ok := s.sess.(interface{ DBUser() string }); ok && u.DBUser() != "" {
+		return u.DBUser()
+	}
+	return s.cfg.DBUser
 }
 
 func (s *Server) host() string {
@@ -386,6 +413,10 @@ func (s *Server) Tick() {
 		s.End("maximum session length")
 	case now.Sub(s.lastSeen) >= l.IdleTimeout:
 		s.End("idle timeout")
+	case s.auditFails.Load() >= maxAuditFails:
+		// Failures of the hub's own records (auditHubRequest) end the
+		// session here, on the request goroutine.
+		s.End("the audit log cannot be written")
 	}
 }
 

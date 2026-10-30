@@ -54,6 +54,25 @@ This file records the changes a user or an agent has to know about.
   human's reason. `--auto` is refused with `--hub`, Shift+Tab does not turn
   auto mode on, and statements with `${placeholders}` are refused (values
   are typed in the console).
+- **Plans and tickets bound to the requesting agent** (hub mode, #91).
+  `query.plan` and `query.run` carry `requester` (the agent's lea name and
+  the hash of its `LEA_AGENT_TOKEN`, from lockkit's
+  `mcpkit.RequesterFromEnv`; the CLI and the MCP server send it). A plan id
+  (in every mode) or ticket presented by another agent is refused with
+  `CodeWrongRequester` (-32007) and stays its requester's. Not a security
+  boundary: agents of one account can read each other's token.
+- **Rowcount re-check of a hub-mode write** (#91). A write's ticket shows
+  `rows changed: at most N` (twice the planner's estimate from an `EXPLAIN`
+  of the write, at least 10 more); the run counts the rows it changed in
+  its own transaction before the commit, and past the bound rolls back and
+  answers stale with a new ticket whose screen says how many rows it would
+  have changed. PostgreSQL, MySQL/MariaDB and SQLite. The bound counts the
+  statement's own rows: the ticket names the triggers, rules and cascading
+  foreign keys it does not count (PostgreSQL); a data-modifying `WITH` is
+  refused in hub mode; on MySQL/MariaDB a write to a non-transactional table
+  or a view is not run, and a `ROLLBACK` that warns is a failure. The
+  screen names the requester by its kernel identity, the lea name as its
+  unverified claim.
 
 - **Hub mode: re-approval, reveal and rollback** (lockkit v0.5.0).
   - An expired ticket (pending past its TTL, or approved but the approval
@@ -75,13 +94,18 @@ This file records the changes a user or an agent has to know about.
     (`--facade-keys-file`, `--devices-file`, `--require-device`,
     `--seal-clear`, `--hub-plain-http`); a relative facade keys or devices
     file is made absolute like the hub key file.
+  - `--facade-keys-file` and `--devices-file` are trust anchors checked
+    like `--hub-key-file`: a link, a file or directory writable by its
+    group or others, or one owned by neither root nor the console's
+    account is refused before any prompt, and the console reads its own
+    0600 copy in its state directory.
   - Hub mode off (rollback): a console started without `--hub` after
     running with it withdraws the plans hub mode left pending (the hub
     hears of it at the next start with `--hub`) and answers a run of their
     tickets with the error `withdrawn` (`CodeWithdrawn`), instead of
     `invalid_params`. Nothing of them runs.
 
-- Builds on lockkit v0.5.0 + `cbdcf00` (lockkit #84, `ticket.UncheckedInput`; v0.6.0 next) for hub support, re-approval, reveal and rollback.
+- Builds on lockkit v0.6.0 (hub support, re-approval with `unchecked` inputs, reveal, rollback).
 
 ### Fixed
 

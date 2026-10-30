@@ -19,7 +19,6 @@ import (
 	"github.com/DavidGodefroid/lockkit/plans"
 	"github.com/DavidGodefroid/lockkit/ticket"
 
-	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/product"
 )
@@ -78,12 +77,6 @@ func withHubAt(t *testing.T, hub **hubtest.Hub, stateDir string, now func() time
 		}
 		t.Cleanup(end)
 	}
-}
-
-func writeProfile() config.Profile {
-	p := uatProfile()
-	p.Tier = config.TierWrite
-	return p
 }
 
 const hubWrite = "UPDATE users SET note = 'x' WHERE id = 1"
@@ -234,6 +227,41 @@ func TestHubRenewRequestIsAudited(t *testing.T) {
 	approveAt(hub, next, clock)
 	if r := runTicket(t, h, next); r.Error != nil || h.sess.runCount() != 1 {
 		t.Fatalf("run of the renewal: %+v, runs %d", r.Error, h.sess.runCount())
+	}
+}
+
+// A plan stored without its inputs (made by a console before them,
+// pending at the upgrade), renewed from lockhub: never "checked,
+// unchanged", since the statement and its definitions were not checked.
+func TestHubRenewRequestOfALegacyPlan(t *testing.T) {
+	var hub *hubtest.Hub
+	clock := &testClock{at: time.Now()}
+	h := newHarness(t, writeProfile(), withHubAt(t, &hub, t.TempDir(), clock.now, nil))
+	guarded(h)
+	pr := h.plan(t, hubWrite, false)
+	h.s.plans[pr.PlanID].inputs = nil // as an older console stored it
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	if p, err := h.s.cfg.Hub.Store.TicketPlan(tk); err != nil || p.Binding.Inputs != nil {
+		t.Fatalf("plan %+v %v, want no inputs", p, err)
+	}
+	clock.add(ticket.RiskWrite.TTL() + time.Hour)
+	hub.Request(tk, ticket.RequestRenew, nil, func(q *ticket.HubRequest) { q.At = clock.now().UTC().Truncate(time.Millisecond) })
+	var next string
+	for deadline := time.Now().Add(10 * time.Second); next == "" && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		for _, id := range hub.Tickets() {
+			if id != tk {
+				next = id
+			}
+		}
+	}
+	if next == "" {
+		t.Fatalf("no renewal pushed:\n%s", h.io.output())
+	}
+	nt := pushedTicket(t, hub, next)
+	if nt.Renews == nil || nt.Renews.Unchanged() || !slices.ContainsFunc(nt.Renews.Changes, func(c ticket.Change) bool {
+		return c.Input == "state" && c.Change == ticket.ChangeUnchecked
+	}) {
+		t.Fatalf("renews %+v: a legacy plan renewed as unchanged", nt.Renews)
 	}
 }
 

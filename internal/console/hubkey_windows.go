@@ -6,23 +6,20 @@ import (
 	"os"
 )
 
-// maxHubKeyFile bounds the pinned hub key file (one base64 line).
-const maxHubKeyFile = 4096
-
-// readHubKeyFile reads the pinned hub key file; locksql runs its console
+// readPinnedFile reads a trust anchor named by flag; locksql runs its console
 // in its Linux image, where its owner, mode and directory are checked too.
-func readHubKeyFile(path string) ([]byte, error) {
+func readPinnedFile(flag, path string, max int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("%w: --hub-key-file: %v", ErrConfig, err)
+		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, flag, err)
 	}
 	defer f.Close()
 	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%w: --hub-key-file %s is not a regular file", ErrConfig, path)
+		return nil, fmt.Errorf("%w: %s %s is not a regular file", ErrConfig, flag, path)
 	}
-	b, err := io.ReadAll(io.LimitReader(f, maxHubKeyFile+1))
-	if err != nil || len(b) > maxHubKeyFile {
-		return nil, fmt.Errorf("%w: --hub-key-file %s: unreadable or larger than %d bytes", ErrConfig, path, maxHubKeyFile)
+	b, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil || int64(len(b)) > max {
+		return nil, fmt.Errorf("%w: %s %s: unreadable or larger than %d bytes", ErrConfig, flag, path, max)
 	}
 	return b, nil
 }

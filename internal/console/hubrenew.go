@@ -36,14 +36,20 @@ type hubLive struct {
 	dbUser                string
 }
 
-// setLive records the policy in force for the hub's goroutine.
-func (s *Server) setLive() error {
-	fp, err := ticket.HashOf(s.approved)
-	if err != nil {
-		return err
+// setLive records the policy in force, of fingerprint fp, for the hub's
+// goroutine. Only the request goroutine stores it.
+func (s *Server) setLive(fp string) {
+	s.live.Store(&hubLive{fp: fp, profile: s.profile.Name, engine: s.profile.Engine, host: s.host(), dbUser: s.dbUser()})
+}
+
+// liveDBUser keeps the database user of the hub's records the one
+// writeAudit records (a Vault login changes at every connection).
+func (s *Server) liveDBUser(u string) {
+	if v := s.live.Load(); v != nil && v.dbUser != u {
+		c := *v
+		c.dbUser = u
+		s.live.Store(&c)
 	}
-	s.live.Store(&hubLive{fp: fp, profile: s.profile.Name, engine: s.profile.Engine, host: s.host(), dbUser: s.cfg.DBUser})
-	return nil
 }
 
 // recomputed is a full recompute of an expired plan, made on the
@@ -72,42 +78,67 @@ func (s *Server) auditHubRequest(b kaudit.Base) {
 	}
 	if err := s.cfg.Audit.Append(rec); err != nil {
 		s.println(paint.Fail("audit log write failed: " + safeText(err.Error(), false)))
+		s.auditFails.Add(1) // counted with the console's own (Tick ends the session)
+		return
 	}
+	s.auditFails.Store(0)
 }
 
 // hubRenew answers the run of expired ticket tk: its statement is planned
-// again now, on this goroutine (read-only: the definitions it resolves to,
-// as the recheck reads them), and the ticket asked again with what moved
-// (Hub.RenewResp). A statement that no longer plans answers its refusal.
-func (s *Server) hubRenew(ctx context.Context, id int64, tk string, caller plans.Caller) ipc.Response {
+// again now, on this goroutine, the way the run's recheck does
+// (queryRunTicket: read-only, the definitions it resolves to, the
+// requester and the rowcount bound), and the ticket asked again with what
+// moved (Hub.RenewResp). A statement that no longer plans answers its
+// refusal.
+//
+// The full recompute is stashed by the plan's body, not its id: when tk's
+// renewal expired too, lockkit renews that renewal (the last link of the
+// chain, same body), and it gets the full recompute as well. A renewal
+// asked for in lockhub, or a recompute this run could not make, takes the
+// session-free path of hubRecompute: unchecked inputs, never one click.
+func (s *Server) hubRenew(ctx context.Context, id int64, tk string, caller plans.Caller, who ipc.Requester) ipc.Response {
 	h := s.cfg.Hub
-	if p, err := h.Store.ExpiredByTicket(tk, caller); err == nil && p.RenewedBy == "" {
+	if p, err := h.Store.ExpiredByTicket(tk, caller); err == nil {
 		var body hubPlan
 		if err := json.Unmarshal(p.Body, &body); err != nil {
 			return errResp(id, ipc.CodeInternal, "plan store: "+err.Error())
 		}
 		pl, r := s.buildPlan(ctx, id, ipc.PlanParams{DB: body.DB, SQL: body.SQL, Unmask: body.Unmask, Intent: body.Intent})
 		if r != nil {
+			// Unlike the recheck's errReplan, there is nothing to withdraw:
+			// an expired plan is final (plans.Store.End refuses it) and its
+			// ticket expired at the hub. A renewal asked for later runs
+			// into this refusal again at the run.
 			return *r
+		}
+		pl.requester = who
+		if err := pl.bindRows(body); err != nil {
+			// A write stored without a rowcount bound (an older console):
+			// planned again with one, as a stale run is.
+			return s.hubStale(ctx, id, body, tk, who, 0)
 		}
 		fp, err := ticket.HashOf(s.approved)
 		if err != nil {
 			return errResp(id, ipc.CodeInternal, "policy fingerprint: "+err.Error())
 		}
+		key := string(p.Body)
 		s.recomputeMu.Lock()
 		if s.recomputed == nil {
 			s.recomputed = map[string]recomputed{}
 		}
-		s.recomputed[p.ID] = recomputed{fp: fp, hash: pl.hash, inputs: pl.inputs}
+		s.recomputed[key] = recomputed{fp: fp, hash: pl.hash, inputs: pl.inputs}
 		s.recomputeMu.Unlock()
 		defer func() {
 			s.recomputeMu.Lock()
-			delete(s.recomputed, p.ID)
+			delete(s.recomputed, key)
 			s.recomputeMu.Unlock()
 		}()
 	}
-	s.println(paint.Warn("ticket " + safeText(tk, false) + " expired before its run: asked again in lockhub"))
-	return h.RenewResp(ctx, id, tk, caller)
+	resp := h.RenewResp(ctx, id, tk, caller)
+	if resp.Error == nil {
+		s.println(paint.Warn("ticket " + safeText(tk, false) + " expired before its run: asked again in lockhub"))
+	}
+	return resp
 }
 
 // hubRecompute is the hub client's Recompute: the policy fingerprint, plan
@@ -126,7 +157,7 @@ func (s *Server) hubRenew(ctx context.Context, id int64, tk string, caller plans
 // they moved. Nothing here runs a statement.
 func (s *Server) hubRecompute(p *plans.Plan) (string, string, map[string]string, error) {
 	s.recomputeMu.Lock()
-	r, ok := s.recomputed[p.ID]
+	r, ok := s.recomputed[string(p.Body)]
 	s.recomputeMu.Unlock()
 	if ok {
 		return r.fp, r.hash, r.inputs, nil

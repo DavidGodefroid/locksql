@@ -142,9 +142,9 @@ GRANT SELECT ON ph_w, ph_part TO ro;`)
 			st := sqlclass.Statement{SQL: "UPDATE ph_t SET label = 'z' WHERE id = 2", Class: sqlclass.Write}
 			checks := 0
 			_, err := engine.RunGuarded(ctx, rw, "app", st, 10, engine.ObjectRefs{Relations: []string{"ph_t"}, Functions: []string{}, Operators: []string{}},
-				func(_ engine.ObjectState, after bool) error {
+				func(_ engine.ObjectState, at engine.Step) error {
 					checks++
-					if after {
+					if at.After {
 						return errCheck
 					}
 					return nil

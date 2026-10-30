@@ -459,3 +459,46 @@ func TestFormatHelpers(t *testing.T) {
 		t.Errorf("clean = %q", got)
 	}
 }
+
+// Plan, Run and RunTicket carry the agent from lea's environment: its name
+// and the hash of its token, never the token itself.
+func TestRequestsCarryTheRequester(t *testing.T) {
+	runtimeDir(t)
+	t.Setenv("LEA_AGENT", "dev-7")
+	t.Setenv("LEA_AGENT_TOKEN", "raw-secret-token")
+	cwd := t.TempDir()
+	var mu sync.Mutex
+	var params []string
+	startFake(t, cwd, "uat", func(req ipc.Request) ipc.Response {
+		mu.Lock()
+		params = append(params, string(req.Params))
+		mu.Unlock()
+		return result(req.ID, map[string]any{})
+	})
+	c, err := Dial(cwd, "uat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	ctx := context.Background()
+	if _, err := c.Plan(ctx, ipc.PlanParams{SQL: "SELECT 1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Run(ctx, "p1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.RunTicket(ctx, "T1"); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(params) != 3 {
+		t.Fatalf("params %q", params)
+	}
+	for _, p := range params {
+		var v struct{ Requester ipc.Requester }
+		if err := json.Unmarshal([]byte(p), &v); err != nil || v.Requester.Agent != "dev-7" || len(v.Requester.Token) != 64 || strings.Contains(p, "raw-secret-token") {
+			t.Fatalf("params %s", p)
+		}
+	}
+}

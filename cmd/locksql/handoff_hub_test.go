@@ -4,6 +4,7 @@ package main
 
 import (
 	"flag"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -29,5 +30,16 @@ func TestHandoffForwardsFacadeKeys(t *testing.T) {
 	}
 	if back != hub {
 		t.Fatalf("parsed back %+v, want %+v", back, hub)
+	}
+}
+
+// Relative hub files are the agent's, from its working directory: the
+// console account gets them absolute.
+func TestHandoffHubFilesAbsolute(t *testing.T) {
+	cwd := t.TempDir()
+	hub := kconsole.HubOptions{KeyFile: "hub.pub", FacadeKeysFile: "k/facades.json", DevicesFile: "/abs/devices.json"}
+	absHubFiles(cwd, &hub)
+	if hub.KeyFile != filepath.Join(cwd, "hub.pub") || hub.FacadeKeysFile != filepath.Join(cwd, "k/facades.json") || hub.DevicesFile != "/abs/devices.json" {
+		t.Fatalf("%+v", hub)
 	}
 }

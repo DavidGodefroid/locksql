@@ -308,6 +308,9 @@ func Run(ctx context.Context, o Options) error {
 			if o.Hub.KeyFile, err = pinHubKey(o.StateDir, o.Hub.Instance, o.Hub.KeyFile); err != nil {
 				return err
 			}
+			if err := pinAnchors(o.StateDir, &o.Hub); err != nil {
+				return err
+			}
 		}
 		if hub, err = kconsole.OpenHub(product.P, o.Hub, o.StateDir, o.Now); err != nil {
 			return err
@@ -1250,6 +1253,11 @@ func (s *vaultSession) ObjectState(ctx context.Context, db string, refs engine.O
 }
 
 // RunGuarded passes the guarded run on (engine.ObjectGuard).
-func (s *vaultSession) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check func(engine.ObjectState, bool) error) (engine.Result, error) {
+func (s *vaultSession) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check engine.GuardCheck) (engine.Result, error) {
 	return engine.RunGuarded(ctx, s.Session, db, st, maxRows, refs, check)
+}
+
+// RunCounted passes the counted run on (engine.RowChecker).
+func (s *vaultSession) RunCounted(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
+	return engine.RunCounted(ctx, s.Session, db, st, maxRows, check)
 }

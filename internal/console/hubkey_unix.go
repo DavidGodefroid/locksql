@@ -10,18 +10,16 @@ import (
 	"syscall"
 )
 
-// maxHubKeyFile bounds the pinned hub key file (one base64 line).
-const maxHubKeyFile = 4096
-
-// readHubKeyFile reads the pinned hub key file, refusing one another
+// readPinnedFile reads a trust anchor named by flag (the hub key, the
+// facade keys, the devices), refusing one another
 // account could replace: a symbolic link, not a regular file, writable by
 // its group or others, owned by neither root nor the console's account,
 // or in a directory writable by group or others that is neither root's
 // nor the console's. The checks and the read go through one descriptor,
 // opened without following a link.
-func readHubKeyFile(path string) ([]byte, error) {
+func readPinnedFile(flag, path string, max int64) ([]byte, error) {
 	bad := func(format string, a ...any) error {
-		return fmt.Errorf("%w: --hub-key-file %s: %s", ErrConfig, path, fmt.Sprintf(format, a...))
+		return fmt.Errorf("%w: %s %s: %s", ErrConfig, flag, path, fmt.Sprintf(format, a...))
 	}
 	trusted := func(fi os.FileInfo) bool {
 		st, ok := fi.Sys().(*syscall.Stat_t)
@@ -53,12 +51,12 @@ func readHubKeyFile(path string) ([]byte, error) {
 	case !trusted(fi):
 		return nil, bad("belongs to neither root nor the console's account")
 	}
-	b, err := io.ReadAll(io.LimitReader(f, maxHubKeyFile+1))
+	b, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil {
 		return nil, bad("%v", err)
 	}
-	if len(b) > maxHubKeyFile {
-		return nil, bad("larger than %d bytes", maxHubKeyFile)
+	if int64(len(b)) > max {
+		return nil, bad("larger than %d bytes", max)
 	}
 	return b, nil
 }

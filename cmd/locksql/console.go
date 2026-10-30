@@ -62,14 +62,7 @@ func runConsole(e env, args []string) int {
 	// Started from another account of a separated setup: open the console
 	// in the console account, or say how.
 	if proj, err := consoleProject(e.cwd, *project); err == nil {
-		// The console account starts in its own home: a relative key,
-		// facade keys or devices file is the agent's, from its working
-		// directory.
-		for _, f := range []*string{&hub.KeyFile, &hub.FacadeKeysFile, &hub.DevicesFile} {
-			if *f != "" && !filepath.IsAbs(*f) {
-				*f = filepath.Join(e.cwd, *f)
-			}
-		}
+		absHubFiles(e.cwd, &hub)
 		a := consoleArgs{profile: *profile, project: proj, auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults, hub: hub,
 			noUpdateCheck: *noUpdateCheck || e.updateCheckOff()}
 		if code, handled := handoffConsole(e, a); handled {
@@ -217,4 +210,15 @@ func onboardFail(e env, err error) int {
 		return exitUsage
 	}
 	return exitFail
+}
+
+// absHubFiles makes the hub's files absolute from cwd: the console account
+// starts in its own home, so a relative key, facade keys or devices file
+// is the agent's, from its working directory.
+func absHubFiles(cwd string, hub *kconsole.HubOptions) {
+	for _, f := range []*string{&hub.KeyFile, &hub.FacadeKeysFile, &hub.DevicesFile} {
+		if *f != "" && !filepath.IsAbs(*f) {
+			*f = filepath.Join(cwd, *f)
+		}
+	}
 }
