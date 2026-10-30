@@ -66,6 +66,12 @@ This file records the changes a user or an agent has to know about.
   profile became production`), as they refuse a production profile at
   start-up; before, only the privilege audit was run again.
 
+- **The separated-setup handoff keeps `--hub-plain-http`** (#111). The
+  console-account command printed (or run) for `locksql console --hub
+  http://… --hub-plain-http` now carries the flag; without it the console
+  refused the http:// hub (lockkit v0.3.1). The console usage line lists
+  the flag.
+
 - **Audit writes fail closed** (lockkit #5). An approved or
   auto-approved query whose approval record cannot be written runs
   nothing: the agent gets `CodeInternal` ("the console could not record
