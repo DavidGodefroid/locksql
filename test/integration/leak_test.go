@@ -171,6 +171,14 @@ func (s nopClose) ShadowedOperators(ctx context.Context, db string, names []stri
 	return engine.ShadowedOperators(ctx, s.Session, db, names)
 }
 
+func (s nopClose) ObjectState(ctx context.Context, db string, refs engine.ObjectRefs) (engine.ObjectState, error) {
+	return engine.ObjectStateOf(ctx, s.Session, db, refs)
+}
+
+func (s nopClose) RunGuarded(ctx context.Context, db string, st sqlclass.Statement, maxRows int, refs engine.ObjectRefs, check func(engine.ObjectState, bool) error) (engine.Result, error) {
+	return engine.RunGuarded(ctx, s.Session, db, st, maxRows, refs, check)
+}
+
 // leakQueries are the adversarial review round 2 and 3 cases, written
 // against the seeds (big.email under a rule, small(id, label)). Write cases
 // change no data, or only rows they insert themselves; they need a write
