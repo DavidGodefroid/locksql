@@ -97,6 +97,13 @@ func (c *Client) Run(ctx context.Context, planID string) (ipc.RunResult, error) 
 	return r, err
 }
 
+// RunTicket runs the plan of a ticket decided in lockhub (hub mode).
+func (c *Client) RunTicket(ctx context.Context, ticket string) (ipc.RunResult, error) {
+	var r ipc.RunResult
+	err := c.Call(ctx, ipc.MethodQueryRun, ipc.RunParams{Ticket: ticket}, &r)
+	return r, err
+}
+
 // PIIList returns the column rules in force.
 func (c *Client) PIIList(ctx context.Context) (ipc.PIIListResult, error) {
 	var r ipc.PIIListResult

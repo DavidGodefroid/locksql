@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -23,7 +24,7 @@ import (
 // [--show-results]`. It runs in the human's terminal only. Without
 // --profile it opens the only profile, or asks which one among several.
 func runConsole(e env, args []string) int {
-	const usage = "usage: locksql console [--profile P] [--project DIR] [--auto] [--allow-unmask] [--show-results]"
+	const usage = "usage: locksql console [--profile P] [--project DIR] [--auto] [--allow-unmask] [--show-results] [--hub URL --hub-key-file PATH --instance NAME]"
 	fs := flag.NewFlagSet("console", flag.ContinueOnError)
 	fs.SetOutput(e.stderr)
 	profile := fs.String("profile", "", "profile to open")
@@ -33,6 +34,8 @@ func runConsole(e env, args []string) int {
 	showResults := fs.Bool("show-results", false, "print in this console, in clear, the result of each masked query it runs; the client still gets it masked")
 	noUpdateCheck := fs.Bool(strings.TrimPrefix(noUpdateCheckFlag, "--"), false, "internal: no new-version check (the handoff passes LOCKSQL_NO_UPDATE_CHECK on with it)")
 	project := fs.String("project", "", "project directory (default: the current directory); the console account opens the agent's project from its own session")
+	var hub kconsole.HubOptions
+	hub.Register(fs)
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -59,7 +62,7 @@ func runConsole(e env, args []string) int {
 	// Started from another account of a separated setup: open the console
 	// in the console account, or say how.
 	if proj, err := consoleProject(e.cwd, *project); err == nil {
-		a := consoleArgs{profile: *profile, project: proj, auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults,
+		a := consoleArgs{profile: *profile, project: proj, auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults, hub: hub,
 			noUpdateCheck: *noUpdateCheck || e.updateCheckOff()}
 		if code, handled := handoffConsole(e, a); handled {
 			return code
@@ -118,13 +121,15 @@ func runConsole(e env, args []string) int {
 	if ctx.Err() != nil {
 		return exitFail
 	}
-	return openConsole(ctx, e, name, consoleFlags{auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults}, *project, term)
+	return openConsole(ctx, e, name, consoleFlags{auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults, hub: hub}, *project, term)
 }
 
 // consoleFlags are the console-only switches: no client or config file can
 // set them.
 type consoleFlags struct {
 	auto, allowUnmask, showResults bool
+	// hub is the hub mode, written by lock up.
+	hub kconsole.HubOptions
 }
 
 // openConsole runs the console on profile until it ends.
@@ -143,6 +148,7 @@ func openConsole(ctx context.Context, e env, profile string, f consoleFlags, pro
 		Auto:        f.auto,
 		AllowUnmask: f.allowUnmask,
 		ShowResults: f.showResults,
+		Hub:         f.hub,
 		Cwd:         cwd,
 		IO:          term,
 		TTY:         os.Stdin,

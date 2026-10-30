@@ -67,6 +67,10 @@ func (s *Server) toggleMode() {
 		s.println(paint.Warn("auto mode is not available on a production profile: every statement is prompted"))
 		return
 	}
+	if !s.auto && s.cfg.Hub != nil {
+		s.println(paint.Warn("auto mode is not available in hub mode: lockhub decides every statement"))
+		return
+	}
 	if !s.auto && s.widenRefused("auto mode") {
 		return
 	}

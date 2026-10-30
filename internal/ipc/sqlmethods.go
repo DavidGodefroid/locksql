@@ -139,7 +139,10 @@ type PlanResult struct {
 
 // RunParams runs an approved plan.
 type RunParams struct {
-	PlanID string `json:"plan_id"`
+	PlanID string `json:"plan_id,omitempty"`
+	// Ticket runs the plan of a ticket decided in lockhub (hub mode), in
+	// place of PlanID.
+	Ticket string `json:"ticket,omitempty"`
 }
 
 // RunResult is a capped, masked result. Text is the rendered TSV.
@@ -154,6 +157,14 @@ type RunResult struct {
 	// DurationMS is no longer filled: timings stay on the console.
 	DurationMS int64  `json:"duration_ms,omitempty"`
 	Text       string `json:"text,omitempty"`
+	// Status is "pending" (hub mode: the human decides in lockhub; run
+	// Ticket once decided) or "stale" (the plan of StaleTicket changed:
+	// Ticket is the new one); "" for a result.
+	Status      string `json:"status,omitempty"`
+	Ticket      string `json:"ticket,omitempty"`
+	Lock        string `json:"lock,omitempty"`
+	Instance    string `json:"instance,omitempty"`
+	StaleTicket string `json:"stale_ticket,omitempty"`
 }
 
 // StatusResult describes the console session.

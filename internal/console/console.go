@@ -18,6 +18,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
+	"github.com/DavidGodefroid/locksql/internal/product"
 	"github.com/DavidGodefroid/locksql/internal/sqlast"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
@@ -68,6 +69,9 @@ type Options struct {
 	// TTY is the console's terminal device (nil when unknown): its owner
 	// must be the console's account in a separated setup.
 	TTY *os.File
+	// Hub is the hub mode (--hub, --hub-key-file, --instance): the human
+	// decides in lockhub, query.run answers pending with a ticket.
+	Hub kconsole.HubOptions
 }
 
 // ServerConfig holds what a Server needs once the start-up sequence is
@@ -128,6 +132,9 @@ type ServerConfig struct {
 	PeerAllowed func(ipc.Cred) bool
 	// Health is reported in status for locksql doctor.
 	Health *ipc.Health
+	// Hub is the hub mode (nil: the human decides on this terminal); the
+	// Approver is then its asynchronous approver.
+	Hub *kconsole.Hub
 }
 
 // plan is a one-shot plan awaiting query.run.
@@ -322,7 +329,7 @@ func noFingerFields(r Result) (reason, errText string) {
 
 // asker takes the human decisions of s (lockkit's console).
 func (s *Server) asker() kconsole.Asker {
-	return kconsole.Asker{IO: s.cfg.IO, Approver: s.approver, Profile: s.profile.Name, End: s.End, Waiting: s.waiting}
+	return kconsole.Asker{IO: s.cfg.IO, Approver: s.approver, Profile: s.profile.Name, Lock: product.P.Name, End: s.End, Waiting: s.waiting}
 }
 
 // waiting counts the prompts that wait for the human: a control key or a

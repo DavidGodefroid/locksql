@@ -216,6 +216,14 @@ func FormatPlan(w io.Writer, p ipc.PlanResult) {
 
 // FormatRun writes the console's TSV rendering of a result.
 func FormatRun(w io.Writer, r ipc.RunResult) {
+	switch r.Status {
+	case "pending":
+		fmt.Fprintf(w, "Pending human approval: ticket %s on %s. Do not retry. End your turn; you will be told when it is decided, then run the ticket.\n", r.Ticket, r.Lock)
+		return
+	case "stale":
+		fmt.Fprintf(w, "Stale: what the statement uses changed since ticket %s was decided; it was submitted again as ticket %s on %s. Do not retry. End your turn; you will be told when it is decided.\n", r.StaleTicket, r.Ticket, r.Lock)
+		return
+	}
 	text := r.Text
 	if text == "" && len(r.Columns) == 0 {
 		text = fmt.Sprintf("(%d rows affected)\n", r.Affected)

@@ -358,105 +358,11 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	if r := decode(req, &p); r != nil {
 		return *r
 	}
-	if strings.TrimSpace(p.SQL) == "" {
-		return errResp(req.ID, ipc.CodeInvalidParams, "query.plan needs sql")
-	}
-	if len(p.Intent) > ipc.MaxIntent || !utf8.ValidString(p.Intent) || strings.ContainsAny(p.Intent, "\r\n") {
-		return errResp(req.ID, ipc.CodeInvalidParams, fmt.Sprintf("intent must be one line of at most %d bytes", ipc.MaxIntent))
-	}
-	p.Intent = strings.TrimSpace(p.Intent)
-	db, r := s.checkDB(req.ID, p.DB)
+	pl, r := s.buildPlan(ctx, req.ID, p)
 	if r != nil {
 		return *r
 	}
-	auditSQL := capSQL(p.SQL)
-	base := lead(p.SQL)
-	if p.Unmask && !s.allowUnmask {
-		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "", "", p.SQL, refusal.New(refusal.UnmaskOff, "unmasked output is off in this console: run the query masked, or ask the human to allow it in the console (:unmask, or --allow-unmask at start)"))
-	}
-	inner, explain, off := splitExplain(s.dialect, p.SQL)
-	st, err := sqlclass.Classify(s.dialect, inner, s.profile.Limits.MaxRows)
-	if err != nil {
-		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "", "", p.SQL, shifted(err, base+off))
-	}
-	if st.Class == sqlclass.Read && st.Kind != "select" {
-		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, "read", "", p.SQL, refusal.Newf(refusal.StatementKind,
-			"%s is not allowed: only SELECT, WITH ... SELECT and EXPLAIN SELECT are (use the catalog commands to list and describe tables)",
-			strings.ToUpper(st.Kind)).At(base+off, strings.ToUpper(st.Kind)))
-	}
-	if explain && st.Class != sqlclass.Read {
-		return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, st.Class.String(), "", p.SQL, refusal.New(refusal.StatementKind, "only EXPLAIN SELECT is allowed").At(base+off, ""))
-	}
-	class := st.Class.String()
-	if int(st.Class) > int(s.profile.Tier) {
-		return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", p.SQL, refusal.Newf(refusal.Tier,
-			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
-	}
-	if st.Class != sqlclass.Read && sqlast.HasPlaceholder(s.dialect, st.SQL) {
-		// A write is never analysed for placeholders: it would run with
-		// the literal text '${...}'.
-		return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", p.SQL, refusal.New(refusal.Placeholder, "placeholders are only allowed in read statements, compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')"))
-	}
-	sess, r := s.session(ctx, req.ID)
-	if r != nil {
-		return *r
-	}
-	var shadow *shadowNames
-	if s.profile.WriteFunctions == config.WriteFunctionsAllowlist {
-		r, sn, err := s.strictWriteFunctions(ctx, sess, db, st)
-		if err != nil {
-			return s.failed(req.ID, "plan", err)
-		}
-		if r != nil {
-			return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", p.SQL, shifted(r, base))
-		}
-		shadow = sn
-	}
-	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String(), src: p.SQL, base: base, shadow: shadow}
-	if !p.Unmask && st.Class != sqlclass.Read {
-		// Before the run: a write's RETURNING list or a data-modifying
-		// CTE must not move PII under another label, since refusing its
-		// result afterwards would not undo the write.
-		r, err := s.writePlan(ctx, sess, pl)
-		if err != nil {
-			return s.failed(req.ID, "plan", err)
-		}
-		if r != nil {
-			return s.refuse(ctx, req.ID, p.Intent, db, st.SQL, class, "", p.SQL, r)
-		}
-	}
-	if st.Class == sqlclass.Read {
-		// The read path: the statement is parsed in full and every column
-		// resolved before anything runs.
-		full := strings.TrimSpace(p.SQL)
-		r, err := s.readPlan(ctx, sess, pl, full)
-		if err != nil {
-			return s.failed(req.ID, "plan", err)
-		}
-		if r != nil {
-			return s.refuse(ctx, req.ID, p.Intent, db, auditSQL, class, "", p.SQL, r)
-		}
-		pl.st.SQL = strings.TrimSuffix(full, ";")
-		// Under a PII filter the verdict is a statistic of the filtered
-		// value: it is decided by query.run, on the console.
-		if r := s.assess(pl); r != nil && !estimatesHidden(pl) {
-			return s.refuse(ctx, req.ID, p.Intent, db, pl.st.SQL, class, pl.level, p.SQL, r)
-		}
-	} else {
-		pl.summary = "no EXPLAIN for " + strings.ToUpper(st.Kind)
-		s.noteRefused(pl)
-	}
-
-	pl.refs = objectRefs(s.dialect, pl)
-	state, err := s.planState(ctx, sess, pl)
-	if err != nil {
-		return s.failed(req.ID, "plan", err)
-	}
-	pl.guarded = state != nil
-	if pl.hash, err = s.planHash(pl, state); err != nil {
-		return s.failed(req.ID, "plan", err)
-	}
-
+	db, class := pl.db, pl.st.Class.String()
 	s.prunePlans()
 	pl.id = newID()
 	s.plans[pl.id] = pl
@@ -471,6 +377,114 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 		Values: s.typedNames(), PlanHash: pl.hash,
 	})
 }
+
+// buildPlan checks and plans the statement of p: the plan, or the answer
+// that refuses it (audited). query.plan stores the plan; a hub-mode run
+// plans again from the stored statement (hubmode.go).
+func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*plan, *ipc.Response) {
+	if strings.TrimSpace(p.SQL) == "" {
+		return nil, ptr(errResp(id, ipc.CodeInvalidParams, "query.plan needs sql"))
+	}
+	if len(p.Intent) > ipc.MaxIntent || !utf8.ValidString(p.Intent) || strings.ContainsAny(p.Intent, "\r\n") {
+		return nil, ptr(errResp(id, ipc.CodeInvalidParams, fmt.Sprintf("intent must be one line of at most %d bytes", ipc.MaxIntent)))
+	}
+	p.Intent = strings.TrimSpace(p.Intent)
+	db, r := s.checkDB(id, p.DB)
+	if r != nil {
+		return nil, r
+	}
+	auditSQL := capSQL(p.SQL)
+	base := lead(p.SQL)
+	if p.Unmask && !s.allowUnmask {
+		return nil, ptr(s.refuse(ctx, id, p.Intent, db, auditSQL, "", "", p.SQL, refusal.New(refusal.UnmaskOff, "unmasked output is off in this console: run the query masked, or ask the human to allow it in the console (:unmask, or --allow-unmask at start)")))
+	}
+	inner, explain, off := splitExplain(s.dialect, p.SQL)
+	st, err := sqlclass.Classify(s.dialect, inner, s.profile.Limits.MaxRows)
+	if err != nil {
+		return nil, ptr(s.refuse(ctx, id, p.Intent, db, auditSQL, "", "", p.SQL, shifted(err, base+off)))
+	}
+	if st.Class == sqlclass.Read && st.Kind != "select" {
+		return nil, ptr(s.refuse(ctx, id, p.Intent, db, auditSQL, "read", "", p.SQL, refusal.Newf(refusal.StatementKind,
+			"%s is not allowed: only SELECT, WITH ... SELECT and EXPLAIN SELECT are (use the catalog commands to list and describe tables)",
+			strings.ToUpper(st.Kind)).At(base+off, strings.ToUpper(st.Kind))))
+	}
+	if explain && st.Class != sqlclass.Read {
+		return nil, ptr(s.refuse(ctx, id, p.Intent, db, auditSQL, st.Class.String(), "", p.SQL, refusal.New(refusal.StatementKind, "only EXPLAIN SELECT is allowed").At(base+off, "")))
+	}
+	class := st.Class.String()
+	if int(st.Class) > int(s.profile.Tier) {
+		return nil, ptr(s.refuse(ctx, id, p.Intent, db, st.SQL, class, "", p.SQL, refusal.Newf(refusal.Tier,
+			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier)))
+	}
+	if st.Class != sqlclass.Read && sqlast.HasPlaceholder(s.dialect, st.SQL) {
+		// A write is never analysed for placeholders: it would run with
+		// the literal text '${...}'.
+		return nil, ptr(s.refuse(ctx, id, p.Intent, db, st.SQL, class, "", p.SQL, refusal.New(refusal.Placeholder, "placeholders are only allowed in read statements, compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")))
+	}
+	sess, r := s.session(ctx, id)
+	if r != nil {
+		return nil, r
+	}
+	var shadow *shadowNames
+	if s.profile.WriteFunctions == config.WriteFunctionsAllowlist {
+		r, sn, err := s.strictWriteFunctions(ctx, sess, db, st)
+		if err != nil {
+			return nil, ptr(s.failed(id, "plan", err))
+		}
+		if r != nil {
+			return nil, ptr(s.refuse(ctx, id, p.Intent, db, st.SQL, class, "", p.SQL, shifted(r, base)))
+		}
+		shadow = sn
+	}
+	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String(), src: p.SQL, base: base, shadow: shadow}
+	if !p.Unmask && st.Class != sqlclass.Read {
+		// Before the run: a write's RETURNING list or a data-modifying
+		// CTE must not move PII under another label, since refusing its
+		// result afterwards would not undo the write.
+		r, err := s.writePlan(ctx, sess, pl)
+		if err != nil {
+			return nil, ptr(s.failed(id, "plan", err))
+		}
+		if r != nil {
+			return nil, ptr(s.refuse(ctx, id, p.Intent, db, st.SQL, class, "", p.SQL, r))
+		}
+	}
+	if st.Class == sqlclass.Read {
+		// The read path: the statement is parsed in full and every column
+		// resolved before anything runs.
+		full := strings.TrimSpace(p.SQL)
+		r, err := s.readPlan(ctx, sess, pl, full)
+		if err != nil {
+			return nil, ptr(s.failed(id, "plan", err))
+		}
+		if r != nil {
+			return nil, ptr(s.refuse(ctx, id, p.Intent, db, auditSQL, class, "", p.SQL, r))
+		}
+		pl.st.SQL = strings.TrimSuffix(full, ";")
+		// Under a PII filter the verdict is a statistic of the filtered
+		// value: it is decided by query.run, on the console.
+		if r := s.assess(pl); r != nil && !estimatesHidden(pl) {
+			return nil, ptr(s.refuse(ctx, id, p.Intent, db, pl.st.SQL, class, pl.level, p.SQL, r))
+		}
+	} else {
+		pl.summary = "no EXPLAIN for " + strings.ToUpper(st.Kind)
+		s.noteRefused(pl)
+	}
+
+	pl.refs = objectRefs(s.dialect, pl)
+	state, err := s.planState(ctx, sess, pl)
+	if err != nil {
+		return nil, ptr(s.failed(id, "plan", err))
+	}
+	pl.guarded = state != nil
+	if pl.hash, err = s.planHash(pl, state); err != nil {
+		return nil, ptr(s.failed(id, "plan", err))
+	}
+
+	return pl, nil
+}
+
+func ptr(r ipc.Response) *ipc.Response { return &r }
 
 // assess sets the plan's weight verdict under the limits in force. It
 // returns the refusal when the verdict is REFUSE.
@@ -541,40 +555,18 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	if r := decode(req, &p); r != nil {
 		return *r
 	}
+	if p.Ticket != "" {
+		return s.queryRunTicket(ctx, req.ID, p.Ticket)
+	}
 	pl, ok := s.plans[p.PlanID]
 	delete(s.plans, p.PlanID) // one-shot, whatever happens next
 	if !ok || s.now().Sub(pl.created) > PlanTTL {
 		return errResp(req.ID, ipc.CodeNoSuchPlan, "no such plan: it is unknown, already used or expired; plan the query again")
 	}
 	class := pl.st.Class.String()
-	if int(pl.st.Class) > int(s.profile.Tier) {
-		return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, refusal.Newf(refusal.Tier,
-			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier))
-	}
-	// Unmasked output may have been turned off (:unmask) since query.plan.
-	if pl.unmask && !s.allowUnmask {
-		return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, refusal.New(refusal.UnmaskOff, "unmasked output was turned off in this console since the plan: run the query masked"))
-	}
-	// The limits may have changed since query.plan (a tightening is applied
-	// at once): the verdict shown and enforced is the one under the policy
-	// in force now.
-	var hiddenRefusal *refusal.Error
-	if pl.explain != nil {
-		r := s.assess(pl)
-		if r == nil {
-			if r = s.assessK(pl); r != nil {
-				pl.level = weight.Refuse.String()
-				pl.reasons = append(pl.reasons, r.Reason)
-			}
-		}
-		if r != nil {
-			if !estimatesHidden(pl) {
-				return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, r)
-			}
-			// Under a PII filter an immediate answer would tell the
-			// agent the verdict: the refusal waits for the human.
-			hiddenRefusal = r
-		}
+	hiddenRefusal, r := s.runChecks(ctx, req.ID, pl)
+	if r != nil {
+		return *r
 	}
 	sess, r := s.session(ctx, req.ID)
 	if r != nil {
@@ -598,6 +590,9 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask, Warnings: pl.warnings, Intent: pl.intent})
 
 	s.screen(ctx, pl)
+	if s.cfg.Hub != nil {
+		return s.hubSubmit(ctx, req.ID, sess, pl, rec, hiddenRefusal)
+	}
 	if hiddenRefusal != nil {
 		return s.refuseOnScreen(ctx, req.ID, rec, hiddenRefusal)
 	}
@@ -657,13 +652,60 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		}
 		rec.Event, rec.Decision, rec.Approval = audit.EventApproved, "approved", s.approver.Mode()
 	}
+	return s.runApproved(ctx, req.ID, sess, pl, rec, class, start)
+}
+
+// runChecks are the checks of a plan at run time, under the policy and the
+// switches in force now: the tier, unmasked output, and the weight check
+// with the limits in force (a tightening applies at once). It returns the
+// refusal to answer at once, or hidden, a weight refusal under a PII
+// filter that waits for the human (an immediate answer would tell the
+// agent the verdict).
+func (s *Server) runChecks(ctx context.Context, id int64, pl *plan) (hidden *refusal.Error, resp *ipc.Response) {
+	class := pl.st.Class.String()
+	if int(pl.st.Class) > int(s.profile.Tier) {
+		return nil, ptr(s.refuse(ctx, id, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, refusal.Newf(refusal.Tier,
+			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier)))
+	}
+	// Unmasked output may have been turned off (:unmask) since query.plan.
+	if pl.unmask && !s.allowUnmask {
+		return nil, ptr(s.refuse(ctx, id, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, refusal.New(refusal.UnmaskOff, "unmasked output was turned off in this console since the plan: run the query masked")))
+	}
+	// The limits may have changed since query.plan (a tightening is applied
+	// at once): the verdict shown and enforced is the one under the policy
+	// in force now.
+	if pl.explain != nil {
+		r := s.assess(pl)
+		if r == nil {
+			if r = s.assessK(pl); r != nil {
+				pl.level = weight.Refuse.String()
+				pl.reasons = append(pl.reasons, r.Reason)
+			}
+		}
+		if r != nil {
+			if !estimatesHidden(pl) {
+				return nil, ptr(s.refuse(ctx, id, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, r))
+			}
+			// Under a PII filter an immediate answer would tell the
+			// agent the verdict: the refusal waits for the human.
+			hidden = r
+		}
+	}
+	return hidden, nil
+}
+
+// runApproved records the decision and runs the approved plan pl: the
+// checks that may have changed while the human decided, the guarded run,
+// the masking and the answer. start is when the response time is levelled
+// from (zero: from the run).
+func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session, pl *plan, rec audit.Record, class string, start time.Time) ipc.Response {
 	// The decision is on record before anything runs: a console stopped
 	// between the approval and the end of the run still leaves a trace of
 	// what was approved. The run record follows, with the outcome. An
 	// approval that cannot be recorded runs nothing.
 	if s.writeAudit(rec) != nil {
 		s.println(paint.Fail("refused: the approval could not be recorded in the audit log"))
-		return errResp(req.ID, ipc.CodeInternal, "the console could not record the approval in its audit log, so the query was not run; ask the user to check the console")
+		return errResp(id, ipc.CodeInternal, "the console could not record the approval in its audit log, so the query was not run; ask the user to check the console")
 	}
 	rec.Event, rec.Decision = audit.EventRun, "ok"
 	// The prompts may have waited: check the TTL again, so that an
@@ -672,7 +714,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		rec.Event, rec.Decision = audit.EventTimeout, "expired"
 		s.audit(rec)
 		s.println(paint.Fail("plan expired while waiting for approval: not run"))
-		return errResp(req.ID, ipc.CodeNoSuchPlan, "the plan expired while waiting for approval; plan the query again")
+		return errResp(id, ipc.CodeNoSuchPlan, "the plan expired while waiting for approval; plan the query again")
 	}
 	if pl.an != nil && len(pl.an.Values) > 0 {
 		// The values are known now: analyse again, so that the statement
@@ -682,12 +724,12 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 			if err != nil {
 				// Approved already: the failure is audited like a run's.
 				s.auditRunFailed(rec, s.auditErrText(err, pl))
-				return s.failedPlan(req.ID, "plan", err, pl)
+				return s.failedPlan(id, "plan", err, pl)
 			}
-			return s.refuseWarned(ctx, req.ID, pl, class, r)
+			return s.refuseWarned(ctx, id, pl, class, r)
 		}
 		if missing, _ := s.placeholders(pl); len(missing) > 0 {
-			return s.refuseWarned(ctx, req.ID, pl, class, refusal.New(refusal.Placeholder, "a placeholder has no value"))
+			return s.refuseWarned(ctx, id, pl, class, refusal.New(refusal.Placeholder, "a placeholder has no value"))
 		}
 	}
 
@@ -696,9 +738,9 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	if r, err := s.checkShadows(ctx, sess, pl.db, pl.shadow); err != nil || r != nil {
 		if err != nil {
 			s.auditRunFailed(rec, s.auditErrText(err, pl))
-			return s.failedPlan(req.ID, "plan", err, pl)
+			return s.failedPlan(id, "plan", err, pl)
 		}
-		return s.refuseWarned(ctx, req.ID, pl, class, r)
+		return s.refuseWarned(ctx, id, pl, class, r)
 	}
 
 	rctx := ctx
@@ -729,7 +771,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		}
 	}
 	if stale := (errStale{}); errors.As(err, &stale) {
-		return s.refuseWarned(ctx, req.ID, pl, class, refusal.New(refusal.Stale, stale.Error()))
+		return s.refuseWarned(ctx, id, pl, class, refusal.New(refusal.Stale, stale.Error()))
 	}
 	rec.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
@@ -737,13 +779,13 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 		s.auditRunFailed(rec, s.auditErrText(err, pl))
 		s.println(paint.Fail("failed: " + safeText(s.errText(err, pl.st.SQL, false, pl), false)))
 		if errors.Is(err, engine.ErrConnLost) {
-			return s.failed(req.ID, "statement failed", err)
+			return s.failed(id, "statement failed", err)
 		}
 		if errors.Is(rctx.Err(), context.DeadlineExceeded) {
-			return errResp(req.ID, ipc.CodeInternal, "statement timed out (limits.statement_timeout)")
+			return errResp(id, ipc.CodeInternal, "statement timed out (limits.statement_timeout)")
 		}
 		// Never the server's message: it can quote values.
-		return errResp(req.ID, ipc.CodeInternal, genericFailure)
+		return errResp(id, ipc.CodeInternal, genericFailure)
 	}
 	var clear *engine.Result
 	if s.showResults && !pl.unmask && len(res.Columns) > 0 {
@@ -753,7 +795,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	if !pl.unmask && pl.an != nil {
 		if err := s.maskRead(&res, pl, sess); err != nil {
 			s.println(paint.Fail("result dropped: " + safeText(err.Error(), false)))
-			return s.refuseWarned(ctx, req.ID, pl, class, refusal.New(refusal.MaskUncertain, "the result could not be masked with certainty and was dropped: "+err.Error()))
+			return s.refuseWarned(ctx, id, pl, class, refusal.New(refusal.MaskUncertain, "the result could not be masked with certainty and was dropped: "+err.Error()))
 		}
 	} else if !pl.unmask {
 		origin := sess.OriginColumns()
@@ -764,7 +806,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 					r.Code = refusal.MaskUncertain
 				}
 				r.Reason += " (the result was dropped)"
-				return s.refuseWarned(ctx, req.ID, pl, class, r)
+				return s.refuseWarned(ctx, id, pl, class, r)
 			}
 		}
 		pii.MaskResult(&res, s.rules, s.detectors, origin)
@@ -772,7 +814,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	out, err := s.result(res)
 	if err != nil {
 		s.auditRunFailed(rec, secrets.Sanitize(err))
-		return errResp(req.ID, ipc.CodeInternal, "render: "+rec.Error)
+		return errResp(id, ipc.CodeInternal, "render: "+rec.Error)
 	}
 	rec.Rows, rec.Affected, rec.Truncated = int64(len(out.Rows)), res.Affected, out.Truncated
 	s.audit(rec)
@@ -791,7 +833,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 			s.showTable(paint.Yellow("result in clear (shown here only; the agent got it masked)"), *clear, &res)
 		}
 	}
-	return okResp(req.ID, out)
+	return okResp(id, out)
 }
 
 // auditRunFailed writes the run record of an approved statement that did

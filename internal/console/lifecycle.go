@@ -17,6 +17,7 @@ import (
 	"time"
 
 	kconsole "github.com/DavidGodefroid/lockkit/console"
+	"github.com/DavidGodefroid/lockkit/hubclient"
 	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/lockkit/tunnel"
 	"github.com/DavidGodefroid/lockkit/ui"
@@ -268,6 +269,10 @@ func Run(ctx context.Context, o Options) error {
 	if iso.desktop && iso.verifier == nil && o.ShowResults {
 		return fmt.Errorf("%w: level 1 does not accept --show-results: the agent's account can read this window", ErrConfig)
 	}
+	// Hub mode: lockhub decides, with its own auto mode.
+	if o.Hub.Enabled() && o.Auto {
+		return fmt.Errorf("%w: --auto is refused with --hub: lockhub decides", ErrConfig)
+	}
 	hardenErr := hardenProcess()
 	if hardenErr != nil {
 		o.IO.Println(paint.Warn(red + "could not disable core dumps: " + safeText(hardenErr.Error(), false) + reset))
@@ -290,6 +295,26 @@ func Run(ctx context.Context, o Options) error {
 			return err
 		}
 		o.StateDir = d
+	}
+	var hub *kconsole.Hub
+	if o.Hub.Enabled() {
+		// The flags, the pinned hub key and the instance key are checked
+		// before any prompt.
+		if o.Hub.KeyFile != "" && o.Hub.URL != "" && o.Hub.Instance != "" {
+			// The instance names the copy of the key: checked first.
+			if !hubclient.ValidInstance(o.Hub.Instance) {
+				return fmt.Errorf("%w: --instance %q is not a valid instance name", ErrConfig, o.Hub.Instance)
+			}
+			if o.Hub.KeyFile, err = pinHubKey(o.StateDir, o.Hub.Instance, o.Hub.KeyFile); err != nil {
+				return err
+			}
+		}
+		if hub, err = kconsole.OpenHub(product.P, o.Hub, o.StateDir, o.Now); err != nil {
+			return err
+		}
+		// The plans store holds a lock file: closed on every return, after
+		// the watch has stopped (deferred later, so run first).
+		defer hub.Close()
 	}
 
 	cfg, err := config.Load(o.Cwd)
@@ -490,7 +515,7 @@ func Run(ctx context.Context, o Options) error {
 		Policy: approved, RulesPath: rulesPath, StateDir: o.StateDir, ApprovedKey: key,
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Approver: st.approver, Fingerprint: iso.verifier != nil, Boundary: iso.boundary(), Now: o.Now,
 		Auto: o.Auto, AllowUnmask: o.AllowUnmask, ShowResults: o.ShowResults, Version: o.Version, LoadPolicy: loadPolicy,
-		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health,
+		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health, Hub: hub,
 	})
 	if err != nil {
 		ln.Close()
@@ -509,6 +534,16 @@ func Run(ctx context.Context, o Options) error {
 	var lines <-chan string
 	if ls, ok := o.IO.(LineSource); ok {
 		lines = ls.Lines()
+	}
+	if hub != nil {
+		// Decisions come from lockhub; this terminal keeps the console's own
+		// decisions (policy changes, :unmask).
+		s.approver = hub.Approver(s.approver)
+		wctx, stopWatch := context.WithCancel(ctx)
+		watched := make(chan struct{})
+		go func() { defer close(watched); hub.Watch(wctx, o.IO) }()
+		defer func() { stopWatch(); <-watched }()
+		s.println(paint.Step("hub mode: requests are decided in lockhub (instance " + safeText(o.Hub.Instance, false) + ")"))
 	}
 	serveErr := s.Serve(ctx, ln, lines)
 	if s.sess != nil {
