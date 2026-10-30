@@ -36,6 +36,12 @@ This file records the changes a user or an agent has to know about.
   clear results off stays allowed. At level 2 a second finger prompt no
   longer nests in the pending one (lockkit #2).
 
+- **`DISTINCT` over a PII column is counted.** Like `GROUP BY`, a
+  `SELECT DISTINCT` that outputs a PII column now runs the k-anonymity row
+  count of its `FROM`/`WHERE`, and warns under `k`. In a correlated
+  subquery, a recursive CTE, a `SELECT` without `FROM` or a write, such a
+  `DISTINCT` is now refused, as a grouping already was.
+
 ## v0.9.0 (2026-10-28)
 
 ### Changed

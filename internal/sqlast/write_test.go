@@ -132,6 +132,7 @@ func TestWriteReturningRefused(t *testing.T) {
 		{pg, "WITH u AS (UPDATE users SET status = 'x' RETURNING email AS e) SELECT upper(e) FROM u"},
 		{pg, "WITH u AS (UPDATE users SET status = 'x' RETURNING email AS e) SELECT e FROM u ORDER BY e"},
 		{pg, "WITH u AS (UPDATE users SET status = 'x' RETURNING email AS e) SELECT e FROM u GROUP BY e"},
+		{pg, "WITH u AS (UPDATE users SET status = 'x' RETURNING email AS e) SELECT DISTINCT e FROM u"},
 		{pg, "WITH u AS (UPDATE users SET status = 'x' RETURNING email AS e) SELECT 1 FROM u WHERE e = 'a@x.example'"},
 		{pg, "UPDATE users SET status = 'x' RETURNING (SELECT max(email) FROM contacts) AS m"},
 		{pg, "UPDATE users SET status = 'x' RETURNING max(id)"},

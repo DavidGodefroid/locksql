@@ -29,15 +29,17 @@ func TestWindowsRefusesCommands(t *testing.T) {
 }
 
 // The host install, its update and its setup are refused: locksql runs in
-// Docker, and the launcher on the host updates itself.
+// Docker, and the launcher on the host updates itself. Their code is gone:
+// nothing runs as root, whatever the flags.
 func TestHostModeCommandsRefused(t *testing.T) {
-	for _, args := range [][]string{{"install"}, {"install", "--yes"}, {"setup"}, {"update"}, {"update", "--yes"}} {
+	for _, args := range [][]string{{"install"}, {"install", "--yes"}, {"install", "--print"}, {"setup"}, {"setup", "--yes"}, {"update"}, {"update", "--yes"}, {"update", "v1.0.0"}} {
 		var out, errOut bytes.Buffer
-		e := env{stdout: &out, stderr: &errOut, cwd: t.TempDir()}
+		e := env{stdout: &out, stderr: &errOut, cwd: t.TempDir(), tty: true, stdin: strings.NewReader("y\n"),
+			root: func(string) error { t.Errorf("%v ran a root script", args); return nil }}
 		if code := runEnv(e, args); code != exitFail {
 			t.Errorf("%v: exit %d, want %d", args, code, exitFail)
 		}
-		if !strings.Contains(errOut.String(), "runs in Docker") || !strings.Contains(errOut.String(), "docs/docker.md") || out.Len() != 0 {
+		if !strings.Contains(errOut.String(), "runs in Docker") || !strings.Contains(errOut.String(), "scripts/install.sh") || !strings.Contains(errOut.String(), "docs/docker.md") || out.Len() != 0 {
 			t.Errorf("%v: stdout %q stderr %q", args, out.String(), errOut.String())
 		}
 	}

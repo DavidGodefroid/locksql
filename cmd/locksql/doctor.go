@@ -79,6 +79,10 @@ type doctorEnv struct {
 	tlsProbe func(config.Profile) ([]*x509.Certificate, error)
 }
 
+// imageHint is the fix of a check that a former host install met: the
+// console now runs in the image, whose launcher sets it up.
+const imageHint = "run locksql through the launcher, which runs it in its image (scripts/install.sh, docs/docker.md)"
+
 func realDoctorEnv() doctorEnv {
 	return doctorEnv{
 		goos:       runtime.GOOS,
@@ -323,11 +327,10 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 	sys, err := d.loadSys()
 	switch {
 	case err != nil:
-		add(checkFail, "system setup", err.Error(), "fix "+product.SysconfPath()+" (root-owned, mode 0644) or run sudo locksql install again")
+		add(checkFail, "system setup", err.Error(), "fix "+product.SysconfPath()+" (root-owned, mode 0644), or "+imageHint)
 		return out
 	case sys == nil:
-		add(checkFail, "separation", "same-user mode: the console refuses to run in the agent's account",
-			"run sudo locksql install, then use the console from a separate locksql session")
+		add(checkFail, "separation", "same-user mode: the console refuses to run in the agent's account", imageHint)
 		if on, known := d.tiocsti(); known && on {
 			add(checkWarn, "terminal injection", "dev.tty.legacy_tiocsti = 1: a process can type into a terminal of its own account",
 				"sysctl -w dev.tty.legacy_tiocsti=0 (default since Linux 6.2)")
@@ -364,9 +367,9 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 				add(checkOK, "binary", bin+" belongs to root", "")
 			case sys != nil:
 				add(checkFail, "binary", bin+" can be changed by a non-root account: the console would run what the agent puts there",
-					"run the console from /usr/local/bin/locksql (sudo locksql install copies it there)")
+					imageHint)
 			default:
-				add(checkWarn, "binary", bin+" is not owned by root", "install locksql system-wide (sudo locksql install)")
+				add(checkWarn, "binary", bin+" is not owned by root", imageHint)
 			}
 		}
 	}
@@ -463,7 +466,7 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 	add(checkOK, "system setup", product.SysconfPath()+" (root-owned)", "")
 	svc, err := d.lookupUser(sys.ServiceUser)
 	if err != nil {
-		add(checkFail, "console account", fmt.Sprintf("%q does not exist", sys.ServiceUser), "run sudo locksql install")
+		add(checkFail, "console account", fmt.Sprintf("%q does not exist", sys.ServiceUser), imageHint)
 		return out
 	}
 	svcUID, _ := strconv.Atoi(svc.Uid)
@@ -523,7 +526,7 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 	dirFix := socketDirScript(d.goos, sys, wantMode)
 	dirWhat := fmt.Sprintf("create %s %s %s:%s", sys.SocketDir, wantMode, sys.ServiceUser, sys.ClientGroup)
 	if fi, err := d.stat(sys.SocketDir); err != nil {
-		fixable(checkFail, "socket directory", sys.SocketDir+" is missing", "run sudo locksql install (or systemd-tmpfiles --create)", dirWhat, dirFix)
+		fixable(checkFail, "socket directory", sys.SocketDir+" is missing", "locksql doctor --fix (or systemd-tmpfiles --create)", dirWhat, dirFix)
 	} else {
 		uid, gid, ok := d.ownerOf(fi)
 		perm := fi.Mode().Perm()
@@ -549,7 +552,7 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 		case d.goos == "linux" && fi.Mode()&os.ModeSetgid == 0:
 			// The console cannot give its socket to the client group.
 			fixable(checkFail, "socket directory", fmt.Sprintf("%s has mode %04o, without setgid", sys.SocketDir, shown),
-				"sudo locksql install (it also fixes /etc/tmpfiles.d/locksql.conf)", dirWhat, dirFix)
+				"locksql doctor --fix (it also fixes /etc/tmpfiles.d/locksql.conf)", dirWhat, dirFix)
 		default:
 			add(checkOK, "socket directory", fmt.Sprintf("%s %04o %s:%s", sys.SocketDir, shown, sys.ServiceUser, sys.ClientGroup), "")
 		}
