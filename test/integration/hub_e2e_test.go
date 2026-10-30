@@ -3,9 +3,19 @@
 package integration
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DavidGodefroid/lockkit/ticket"
 	"github.com/creack/pty"
 
 	"github.com/DavidGodefroid/locksql/internal/ipc"
@@ -26,7 +37,10 @@ import (
 // terminal; the agent runs the ticket and gets the rows; the hub's audit
 // verifies. Then the refusals: a denial, a schema change between the
 // approval and the run (stale, a new ticket), a decision replayed, the
-// hub stopped (pending, nothing runs).
+// hub stopped (pending, nothing runs). The console reaches the hub through
+// a proxy that forges the decision of one ticket in flight: signed by a key
+// the console did not pin, or one byte of it changed; neither runs. Last,
+// one byte of the hub's audit log changed fails `lock audit verify`.
 //
 //	LOCKHUB_E2E=1 LOCKHUB_SRC=~/Documents/lockhub go test -tags integration -run TestHubPhase1 ./test/integration
 
@@ -66,6 +80,91 @@ func freePort(t *testing.T) int {
 	}
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port
+}
+
+// hubProxy forwards the console's requests to lockhub. The decision on
+// ticket target, as it comes back from GET /v1/decisions, is replaced by
+// forge(decision): a hub with another key, or someone on the wire.
+type hubProxy struct {
+	mu     sync.Mutex
+	target string
+	forge  func(raw []byte) ([]byte, error)
+	forged chan forgery
+}
+
+// forgery is a decision the proxy replaced: what lockhub sent, what the
+// console got instead.
+type forgery struct {
+	orig, sent []byte
+	err        error
+}
+
+func startHubProxy(t *testing.T, hubAddr string) (*hubProxy, string) {
+	t.Helper()
+	p := &hubProxy{forged: make(chan forgery, 1)}
+	rp := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: hubAddr})
+	rp.ModifyResponse = p.modify
+	srv := httptest.NewServer(rp)
+	t.Cleanup(func() { srv.CloseClientConnections(); srv.Close() })
+	return p, srv.Listener.Addr().String()
+}
+
+// forgeNext arms the proxy for the decision on tk.
+func (p *hubProxy) forgeNext(tk string, forge func([]byte) ([]byte, error)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.target, p.forge = tk, forge
+}
+
+func (p *hubProxy) modify(resp *http.Response) error {
+	if resp.Request.URL.Path != "/v1/decisions" || resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.target == "" {
+		return nil
+	}
+	b, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return err
+	}
+	var res map[string]json.RawMessage
+	var ds []map[string]json.RawMessage
+	if json.Unmarshal(b, &res) == nil && json.Unmarshal(res["decisions"], &ds) == nil {
+		for _, d := range ds {
+			var tk string
+			if json.Unmarshal(d["ticket"], &tk) != nil || tk != p.target {
+				continue
+			}
+			f := forgery{orig: append([]byte(nil), d["decision"]...)}
+			f.sent, f.err = p.forge(f.orig)
+			if f.err == nil {
+				d["decision"] = f.sent
+				res["decisions"] = rawJSON(ds)
+				b = rawJSON(res)
+			}
+			p.target = ""
+			p.forged <- f
+			break
+		}
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(b))
+	resp.ContentLength = int64(len(b))
+	resp.Header.Set("Content-Length", fmt.Sprint(len(b)))
+	return nil
+}
+
+// rawJSON marshals v leaving the raw decisions in it byte for byte.
+func rawJSON(v any) []byte {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		panic(err)
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }
 
 // hubProc is a running `lockhub serve`.
@@ -261,9 +360,14 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 	facade := filepath.Join(fdir, "f.sock")
 	addr := fmt.Sprintf("127.0.0.1:%d", freePort(t))
 	hub := startHub(t, hubBin, data, addr, facade)
+	proxy, proxyAddr := startHubProxy(t, addr)
+	pinned, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+	if err != nil || len(pinned) != ed25519.PublicKeySize {
+		t.Fatalf("hub key %q: %v", out, err)
+	}
 
-	// 2. The console in hub mode.
-	c := startConsole(t, project, env, "--profile", "uat", "--hub", "http://"+addr, "--hub-key-file", hubPub, "--instance", hubInst)
+	// 2. The console in hub mode, reaching the hub through the proxy.
+	c := startConsole(t, project, env, "--profile", "uat", "--hub", "http://"+proxyAddr, "--hub-key-file", hubPub, "--instance", hubInst)
 	c.expect("Apply these changes? [y/N]")
 	c.send("y\n")
 	c.expect("Password for ro@127.0.0.1: ")
@@ -324,6 +428,13 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
+	// decided counts the decisions the human made in lockhub.
+	decided := 0
+	decide := func(answer string) string {
+		t.Helper()
+		decided++
+		return approveOnce(t, lockBin, facade, answer)
+	}
 	const query = "SELECT id, label FROM hub_v ORDER BY id LIMIT 10"
 	p := submit(query)
 	if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: p.Ticket}, nil); e == nil {
@@ -331,7 +442,7 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 	}
 
 	// 4. The human approves in `lock approve`.
-	if fo := approveOnce(t, lockBin, facade, "y"); !strings.Contains(fo, "approved") || !strings.Contains(fo, p.Ticket) {
+	if fo := decide("y"); !strings.Contains(fo, "approved") || !strings.Contains(fo, p.Ticket) {
 		t.Fatalf("facade:\n%s", fo)
 	}
 
@@ -383,7 +494,7 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 
 	t.Run("denied", func(t *testing.T) {
 		d := submit("SELECT id FROM hub_t ORDER BY id LIMIT 10")
-		approveOnce(t, lockBin, facade, "n not now")
+		decide("n not now")
 		_, e := runTicket(d.Ticket)
 		if e == nil || e.Code != ipc.CodeDenied || !strings.Contains(e.Message, "not now") {
 			t.Fatalf("denied ticket: %+v", e)
@@ -403,7 +514,7 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID, Requester: alice}, &p); e != nil || p.Status != "pending" {
 			t.Fatalf("run: %+v %+v", p, e)
 		}
-		approveOnce(t, lockBin, facade, "y")
+		decide("y")
 		deadline := time.Now().Add(60 * time.Second)
 		for {
 			e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: p.Ticket, Requester: ipc.Requester{Agent: "dev-bob", Token: "hash-of-bob"}}, nil)
@@ -425,9 +536,147 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		}
 	})
 
+	// The forgeries run before the stale ticket below, which leaves its new
+	// ticket waiting at the hub for the next `lock approve`.
+	//
+	// forged submits sql, arms the proxy with forge for its ticket and
+	// approves the ticket in lockhub; check looks at what the console got
+	// instead. The console must drop it: the ticket stays undecided and
+	// nothing runs.
+	forged := func(t *testing.T, sql string, forge func([]byte) ([]byte, error), check func(t *testing.T, f forgery)) {
+		t.Helper()
+		f := submit(sql)
+		proxy.forgeNext(f.Ticket, forge)
+		defer proxy.forgeNext("", nil)
+		decide("y")
+		var got forgery
+		select {
+		case got = <-proxy.forged:
+		case <-time.After(60 * time.Second):
+			t.Fatal("the decision never came back through the proxy")
+		}
+		if got.err != nil {
+			t.Fatalf("forge: %v", got.err)
+		}
+		if _, err := ticket.VerifyDecision(pinned, got.orig); err != nil {
+			t.Fatalf("lockhub's own decision does not verify: %v\n%s", err, got.orig)
+		}
+		if bytes.Equal(got.orig, got.sent) {
+			t.Fatal("nothing forged")
+		}
+		check(t, got)
+		want := "decision refused: ticket " + f.Ticket
+		deadline := time.Now().Add(60 * time.Second)
+		for !strings.Contains(c.output(), want) {
+			if time.Now().After(deadline) {
+				t.Fatalf("the console never refused the decision (%q):\n%s", want, c.output())
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: f.Ticket}, nil); e == nil || !strings.Contains(e.Message, "no decision yet") {
+			t.Fatalf("run of the forged ticket: want no decision yet, got %+v", e)
+		}
+		if n := runs(f.Ticket); n != 0 {
+			t.Fatalf("the forged decision ran: %d runs", n)
+		}
+	}
+	// resign signs a decision again with key; keepID keeps the pinned hub
+	// key's id in it.
+	resign := func(key ed25519.PrivateKey, keepID bool) func([]byte) ([]byte, error) {
+		return func(raw []byte) ([]byte, error) {
+			var d ticket.Decision
+			if err := json.Unmarshal(raw, &d); err != nil {
+				return nil, err
+			}
+			d.Sig = ""
+			if !keepID {
+				d.HubKeyID = ""
+				if err := d.Sign(key); err != nil {
+					return nil, err
+				}
+				return d.Marshal()
+			}
+			b, err := ticket.Canonical(&d)
+			if err != nil {
+				return nil, err
+			}
+			d.Sig = ticket.SignBytes(key, ticket.ContextDecision, b)
+			return d.Marshal()
+		}
+	}
+
+	t.Run("decision signed by an unpinned hub key refused", func(t *testing.T) {
+		pub, key, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forged(t, "SELECT id FROM hub_t WHERE id = 1 LIMIT 2", resign(key, false), func(t *testing.T, f forgery) {
+			// A well-formed decision of another hub: it verifies under
+			// that hub's key, not under the pinned one.
+			if _, err := ticket.VerifyDecision(pub, f.sent); err != nil {
+				t.Fatalf("the other hub's decision does not verify under its key: %v", err)
+			}
+			if _, err := ticket.VerifyDecision(pinned, f.sent); !errors.Is(err, ticket.ErrBadSignature) {
+				t.Fatalf("under the pinned key: want a bad signature, got %v", err)
+			}
+		})
+	})
+
+	t.Run("decision naming the pinned key, signed by another, refused", func(t *testing.T) {
+		_, key, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forged(t, "SELECT id FROM hub_t WHERE id = 1 LIMIT 3", resign(key, true), func(t *testing.T, f forgery) {
+			var d ticket.Decision
+			if err := json.Unmarshal(f.sent, &d); err != nil || d.HubKeyID != ticket.KeyID(pinned) {
+				t.Fatalf("the forged decision names hub key %q (%v), not the pinned one", d.HubKeyID, err)
+			}
+			// Only the signature tells it apart.
+			if _, err := ticket.VerifyDecision(pinned, f.sent); !errors.Is(err, ticket.ErrBadSignature) {
+				t.Fatalf("want a bad signature, got %v", err)
+			}
+		})
+	})
+
+	t.Run("tampered decision refused", func(t *testing.T) {
+		// One byte of the facade the decision was made on: a field only
+		// the signature covers (the decision still matches the ticket).
+		tamper := func(raw []byte) ([]byte, error) {
+			const at = `"facade":"`
+			i := bytes.Index(raw, []byte(at))
+			if i < 0 {
+				return nil, fmt.Errorf("no facade in %s", raw)
+			}
+			i += len(at)
+			b := append([]byte(nil), raw...)
+			if b[i] == 'x' {
+				b[i] = 'y'
+			} else {
+				b[i] = 'x'
+			}
+			return b, nil
+		}
+		forged(t, "SELECT id FROM hub_t WHERE id = 1 LIMIT 4", tamper, func(t *testing.T, f forgery) {
+			diff := 0
+			for i := range f.sent {
+				if i < len(f.orig) && f.sent[i] != f.orig[i] {
+					diff++
+				}
+			}
+			if len(f.sent) != len(f.orig) || diff != 1 {
+				t.Fatalf("want one byte changed, got %d of %d (was %d)", diff, len(f.sent), len(f.orig))
+			}
+			// Still a well-formed decision: only the signature fails.
+			if _, err := ticket.VerifyDecision(pinned, f.sent); !errors.Is(err, ticket.ErrBadSignature) {
+				t.Fatalf("want a bad signature, got %v", err)
+			}
+		})
+	})
+
 	t.Run("schema change between approval and run is stale", func(t *testing.T) {
 		s := submit(query)
-		approveOnce(t, lockBin, facade, "y")
+		decide("y")
 		psql(`CREATE OR REPLACE VIEW hub_v AS SELECT id, label FROM hub_t WHERE id > 1;`)
 		raw, e := runTicket(s.Ticket)
 		if e != nil {
@@ -449,11 +698,23 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 	})
 
 	// 6. The hub's audit: chained, every decision signed and recorded.
-	t.Run("lock audit verify", func(t *testing.T) {
+	auditVerify := func() (string, error) {
 		out, err := exec.Command(lockBin, "audit", "verify", "--data", data, "--hub-key-file", hubPub).CombinedOutput()
-		if err != nil || !strings.Contains(string(out), "OK:") {
-			t.Fatalf("lock audit verify: %v\n%s", err, out)
+		return string(out), err
+	}
+	verified := func(t *testing.T) {
+		t.Helper()
+		out, err := auditVerify()
+		want := fmt.Sprintf(", %d decisions signed and recorded", decided)
+		if err != nil || !strings.Contains(out, "OK:") || !strings.Contains(out, want) {
+			t.Fatalf("lock audit verify: want %q: %v\n%s", want, err, out)
 		}
+	}
+	t.Run("lock audit verify", func(t *testing.T) {
+		if decided != 7 {
+			t.Fatalf("%d decisions made, want 7", decided)
+		}
+		verified(t)
 	})
 
 	t.Run("hub stopped: pending, nothing runs", func(t *testing.T) {
@@ -476,5 +737,54 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		if n := runs(d.Ticket); n != 0 {
 			t.Fatalf("ran with the hub down: %d runs", n)
 		}
+	})
+
+	t.Run("audit log tampered: lock audit verify fails", func(t *testing.T) {
+		hub.stop()
+		log := filepath.Join(data, "tickets.jsonl")
+		orig, err := os.ReadFile(log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fi, err := os.Stat(log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		write := func(b []byte) {
+			t.Helper()
+			if err := os.Chmod(log, fi.Mode().Perm()|0o200); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(log, b, 0); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(log, fi.Mode().Perm()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		verified(t)
+		// One hex digit of the hash a decision record holds of its signed
+		// decision.
+		const at = `"decision":"sha256:`
+		i := bytes.Index(orig, []byte(at))
+		if i < 0 {
+			t.Fatalf("no decision record in the audit log:\n%s", orig)
+		}
+		i += len(at)
+		bad := append([]byte(nil), orig...)
+		if bad[i] == '0' {
+			bad[i] = '1'
+		} else {
+			bad[i] = '0'
+		}
+		write(bad)
+		out, err := auditVerify()
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) || ee.ExitCode() == 0 || !strings.Contains(out, "FAIL") {
+			t.Fatalf("lock audit verify of a tampered log: want FAIL and a non-zero exit, got %v\n%s", err, out)
+		}
+		// The byte put back, the log verifies again: that byte was it.
+		write(orig)
+		verified(t)
 	})
 }
