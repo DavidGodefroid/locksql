@@ -3,6 +3,7 @@ package console
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -41,7 +42,7 @@ func TestTicketWithoutHubWithdrawn(t *testing.T) {
 // A tightening that cannot be saved still applies (the looser policy
 // stayed in force before, which failed open), audited as unsaved.
 func TestUnsavedTighteningApplies(t *testing.T) {
-	if os.Getuid() == 0 {
+	if runtime.GOOS == "windows" || os.Getuid() == 0 {
 		t.Skip("root writes a read-only directory")
 	}
 	h := newHarness(t, uatProfile())
@@ -102,9 +103,6 @@ func TestHubAuditFailuresEndTheSession(t *testing.T) {
 // policy in force: a tightening moves it, a refused tightening and a
 // loosening whose save failed leave it on the policy in force.
 func TestLiveFingerprintFollowsThePolicy(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("root writes a read-only directory")
-	}
 	h := newHarness(t, uatProfile())
 	inForce := func() string {
 		fp, err := ticket.HashOf(h.s.approved)
@@ -126,22 +124,25 @@ func TestLiveFingerprintFollowsThePolicy(t *testing.T) {
 		t.Fatal("tightening not published")
 	}
 	fp1 := inForce()
-	// A loosening whose save fails is rolled back.
-	dir := filepath.Join(h.state, "locksql", "approved")
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-	looser := h.s.approved
-	looser.Profile.Limits.MaxRows *= 4
-	if err := h.s.adopt(looser, "applied"); err == nil {
-		t.Fatal("a loosening adopted although its save failed")
-	}
-	if h.s.live.Load().fp != fp1 || inForce() != fp1 {
-		t.Fatal("unsaved loosening published to the hub")
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
+	// A loosening whose save fails is rolled back (a read-only directory:
+	// not on Windows, nor as root).
+	if runtime.GOOS != "windows" && os.Getuid() != 0 {
+		dir := filepath.Join(h.state, "locksql", "approved")
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		looser := h.s.approved
+		looser.Profile.Limits.MaxRows *= 4
+		if err := h.s.adopt(looser, "applied"); err == nil {
+			t.Fatal("a loosening adopted although its save failed")
+		}
+		if h.s.live.Load().fp != fp1 || inForce() != fp1 {
+			t.Fatal("unsaved loosening published to the hub")
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// A tightening locksql cannot compile ends the session; the hub stays
 	// on the policy in force.
