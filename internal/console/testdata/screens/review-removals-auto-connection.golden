@@ -8,6 +8,5 @@
 "<bell>"
 "? Apply these changes? [y/N] "
 "connection settings changed: the session ends; start the console again"
-"policy change applied"
 == audit
 event=policy decision=applied approval=session
