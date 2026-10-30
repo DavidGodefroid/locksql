@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"github.com/DavidGodefroid/lockkit/hubclient/hubtest"
 	"github.com/DavidGodefroid/lockkit/ticket"
 
+	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/product"
@@ -258,7 +260,7 @@ func TestHubModeHiddenRefusalSurvivesStale(t *testing.T) {
 	hub.Decide(tk, ticket.Approved, "")
 	next := pendingTicket(t, runTicket(t, h, tk), "stale")
 	// The new plan keeps the refusal waiting for its decision.
-	p, err := h.s.cfg.Hub.Store.ByTicket(next, hubCaller(context.Background()))
+	p, err := h.s.cfg.Hub.Store.ByTicket(next, hubCaller(context.Background(), ipc.Requester{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,5 +273,155 @@ func TestHubModeHiddenRefusalSurvivesStale(t *testing.T) {
 	wantCode(t, r, ipc.CodeRefused)
 	if r.Error.Message != hiddenWeightRefusal || slices.Contains(h.sess.runs, q) {
 		t.Fatalf("refusal %q, runs %q", r.Error.Message, h.sess.runs)
+	}
+}
+
+// A plan and its ticket run only for the agent that asked for them (its
+// lea token, decision H3): another agent's token is refused, and the plan
+// stays the requester's.
+func TestHubModeWrongRequester(t *testing.T) {
+	var hub *hubtest.Hub
+	h := newHarness(t, uatProfile(), withHub(t, &hub))
+	alice := ipc.Requester{Agent: "dev-alice", Token: "hash-of-alice-token"}
+	bob := ipc.Requester{Agent: "dev-bob", Token: "hash-of-bob-token"}
+	var pr ipc.PlanResult
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Requester: alice}, &pr)
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID, Requester: bob}), ipc.CodeWrongRequester)
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeWrongRequester)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID, Requester: alice}), "pending")
+	raw := string(hub.Ticket(tk))
+	if !strings.Contains(raw, "dev-alice") || strings.Contains(raw, alice.Token) {
+		t.Fatalf("ticket requester: %s", raw)
+	}
+	hub.Decide(tk, ticket.Approved, "")
+	run := func(who ipc.Requester) ipc.Response {
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: tk, Requester: who})
+			if r.Error == nil || !strings.Contains(r.Error.Message, "no decision") || time.Now().After(deadline) {
+				return r
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	for _, who := range []ipc.Requester{bob, {}, {Agent: "dev-alice", Token: "forged"}} {
+		wantCode(t, run(who), ipc.CodeWrongRequester)
+	}
+	if slices.Contains(h.sess.runs, selectUsers) {
+		t.Fatal("another agent's ticket ran")
+	}
+	if r := run(alice); r.Error != nil {
+		t.Fatalf("the requester's run: %q", r.Error.Message)
+	}
+	if strings.Contains(h.auditLog(t), alice.Token) {
+		t.Error("the token is in the audit log")
+	}
+}
+
+// Outside hub mode a plan id runs only for its requester too.
+func TestPlanIDWrongRequester(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	var pr ipc.PlanResult
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers, Requester: ipc.Requester{Token: "a"}}, &pr)
+	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID, Requester: ipc.Requester{Token: "b"}}), ipc.CodeWrongRequester)
+	if h.io.promptCount() != 0 {
+		t.Fatal("asked the human for another agent's plan")
+	}
+}
+
+func writeProfile() config.Profile {
+	p := uatProfile()
+	p.Tier = config.TierWrite
+	return p
+}
+
+// A write that changes more rows than its approval allows is rolled back
+// in its own transaction and answered stale with a new ticket, whose bound
+// covers what it would have changed (decision H2); approved again, it runs.
+// Both on an engine that checks the definitions (guarded) and one that
+// only counts the rows.
+func TestHubModeRowcountRecheck(t *testing.T) {
+	for _, withGuard := range []bool{true, false} {
+		name := "counted"
+		if withGuard {
+			name = "guarded"
+		}
+		t.Run(name, func(t *testing.T) {
+			const q = "UPDATE users SET note = 'x' WHERE id = 1"
+			var hub *hubtest.Hub
+			h := newHarness(t, writeProfile(), withHub(t, &hub))
+			if withGuard {
+				guarded(h)
+			}
+			pr := h.plan(t, q, false)
+			tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+			body := hubBody(t, h, tk)
+			if body.MaxAffected <= 0 || body.MaxAffected >= 500 {
+				t.Fatalf("bound %d", body.MaxAffected)
+			}
+			if raw := string(hub.Ticket(tk)); !strings.Contains(raw, "rows changed: at most") {
+				t.Fatalf("the screen does not show the bound: %s", raw)
+			}
+			h.sess.result = engine.Result{Affected: 500}
+			hub.Decide(tk, ticket.Approved, "")
+			next := pendingTicket(t, runTicket(t, h, tk), "stale")
+			if !slices.Contains(h.sess.rolledBack, q) {
+				t.Fatalf("not rolled back: %q", h.sess.rolledBack)
+			}
+			nb := hubBody(t, h, next)
+			if nb.MaxAffected < 500 {
+				t.Fatalf("the new bound %d does not cover the 500 rows", nb.MaxAffected)
+			}
+			if raw := string(hub.Ticket(next)); !strings.Contains(raw, "would have changed 500 rows") {
+				t.Fatalf("the new screen does not say why: %s", raw)
+			}
+			hub.Decide(next, ticket.Approved, "")
+			r := runTicket(t, h, next)
+			if r.Error != nil {
+				t.Fatalf("run of the new ticket: %q", r.Error.Message)
+			}
+			var rr ipc.RunResult
+			if err := json.Unmarshal(r.Result, &rr); err != nil || rr.Affected != 500 || len(h.sess.rolledBack) != 1 {
+				t.Fatalf("result %s, rolled back %q", r.Result, h.sess.rolledBack)
+			}
+			if withGuard && h.sess.countedRuns != 0 || !withGuard && h.sess.countedRuns != 2 {
+				t.Errorf("counted runs %d", h.sess.countedRuns)
+			}
+		})
+	}
+}
+
+// A write within its bound commits at once.
+func TestHubModeRowcountWithinBound(t *testing.T) {
+	const q = "DELETE FROM users WHERE id = 1"
+	var hub *hubtest.Hub
+	h := newHarness(t, writeProfile(), withHub(t, &hub))
+	h.sess.result = engine.Result{Affected: 1}
+	pr := h.plan(t, q, false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	hub.Decide(tk, ticket.Approved, "")
+	if r := runTicket(t, h, tk); r.Error != nil || len(h.sess.rolledBack) != 0 || !hub.Consumed(tk) {
+		t.Fatalf("run %+v, rolled back %q", r.Error, h.sess.rolledBack)
+	}
+}
+
+func hubBody(t *testing.T, h *harness, tk string) hubPlan {
+	t.Helper()
+	p, err := h.s.cfg.Hub.Store.ByTicket(tk, hubCaller(context.Background(), ipc.Requester{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body hubPlan
+	if err := json.Unmarshal(p.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestRowBound(t *testing.T) {
+	for n, want := range map[int64]int64{-1: 10, 0: 10, 1: 11, 10: 20, 500: 1000, math.MaxInt64: math.MaxInt64} {
+		if got := rowBound(n); got != want {
+			t.Errorf("rowBound(%d) = %d, want %d", n, got, want)
+		}
 	}
 }

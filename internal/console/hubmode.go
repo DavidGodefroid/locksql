@@ -2,9 +2,11 @@ package console
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
+	"github.com/DavidGodefroid/locksql/internal/weight"
 )
 
 // Hub mode (--hub, --hub-key-file, --instance): the human decides in
@@ -39,14 +42,59 @@ type hubPlan struct {
 	// Refuse: the weight check refused it under a PII filter; the refusal
 	// waits for the decision, so that answering tells no more than one.
 	Refuse bool `json:"refuse,omitempty"`
+	// MaxAffected is the most rows the write may change, shown on the
+	// ticket's screen: the run checks it in its own transaction, before
+	// the commit, and rolls back as stale past it (0: not a write).
+	MaxAffected int64 `json:"max_affected,omitempty"`
 }
 
-// hubCaller is the client behind ctx, the only one that may run the
-// ticket of its plan. Clients send no requester token yet: the peer's
-// account binds the plan.
-func hubCaller(ctx context.Context) plans.Caller {
+// hubCaller is the client behind ctx and the agent it reports, the only
+// one that may run the ticket of its plan: the peer's account and the
+// agent's lea token (plans.Caller; the store keeps the token hashed).
+func hubCaller(ctx context.Context, who ipc.Requester) plans.Caller {
 	c, _ := kconsole.PeerFrom(ctx)
-	return plans.Caller{UID: c.UID}
+	return plans.Caller{UID: c.UID, Token: who.Token}
+}
+
+// wrongRequester answers a plan or ticket presented by another agent.
+const wrongRequester = "this plan was asked for by another agent: only the agent that planned it may run it; plan the query yourself"
+
+// sameRequester reports that b is the agent that made a plan for a
+// (same lea token; both empty outside lea).
+func sameRequester(a, b ipc.Requester) bool {
+	return subtle.ConstantTimeCompare([]byte(plans.HashToken(a.Token)), []byte(plans.HashToken(b.Token))) == 1
+}
+
+// agentName is the requesting agent as the screens name it: its lea name,
+// or the peer.
+func agentName(ctx context.Context, who ipc.Requester) string {
+	if who.Agent != "" {
+		return safeText(who.Agent, false)
+	}
+	return kconsole.PeerText(ctx)
+}
+
+// rowSlack is the margin of a write's rowcount bound over its estimate.
+const rowSlack = 10
+
+// rowBound is the rowcount bound of a write expected to change about n
+// rows: twice as many, and at least rowSlack more.
+func rowBound(n int64) int64 {
+	n = max(n, 0)
+	if n > math.MaxInt64/2-rowSlack {
+		return math.MaxInt64
+	}
+	return n + max(n, rowSlack)
+}
+
+// writeEstimate is the planner's estimate of the rows a write changes
+// (EXPLAIN without running it), 0 when the engine gives none.
+func (s *Server) writeEstimate(ctx context.Context, sess engine.Session, pl *plan) int64 {
+	ep, err := sess.Explain(ctx, pl.db, pl.st.SQL)
+	if err != nil {
+		return 0
+	}
+	return weight.Assess(ep, s.profile.Limits, s.profile.Production).EstimatedRows
 }
 
 // hubRisk is the risk class of pl's ticket.
@@ -80,6 +128,9 @@ func (s *Server) hubScreen(pl *plan) render.MaskedScreen {
 	src.Body = append(src.Body, render.Structure(""), render.Structure(fmt.Sprintf("class %s · verdict %s", class, pl.level)))
 	if pl.unmask {
 		src.Body = append(src.Body, render.Structure("PII: UNMASKED"))
+	}
+	if pl.maxAffected > 0 {
+		src.Body = append(src.Body, render.Structure(fmt.Sprintf("rows changed: at most %d (checked before the commit; more rolls back)", pl.maxAffected)))
 	}
 	return render.MaskScreen(src, render.Masking{Detectors: s.detectors, Personal: func(string, string) bool { return true }})
 }
@@ -154,22 +205,33 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 		pl.warnings = append(pl.warnings, kw...)
 		rec.Warnings = pl.warnings
 	}
+	if pl.st.Class == sqlclass.Write {
+		// The rows the write may change: about what the planner expects,
+		// or what a rolled-back run of an earlier ticket would have
+		// changed. The run checks it before its commit (H2).
+		pl.maxAffected = rowBound(max(s.writeEstimate(ctx, sess, pl), pl.affected))
+		if pl.staleTicket != "" && pl.affected > 0 {
+			pl.warnings = append(pl.warnings, fmt.Sprintf("the approved run of ticket %s would have changed %d rows: rolled back", pl.staleTicket, pl.affected))
+			rec.Warnings = pl.warnings
+		}
+	}
 	fp, err := ticket.HashOf(s.approved)
 	if err != nil {
 		return errResp(id, ipc.CodeInternal, "policy fingerprint: "+err.Error())
 	}
-	body, err := json.Marshal(hubPlan{DB: pl.db, SQL: pl.src, Unmask: pl.unmask, Intent: pl.intent, Refuse: hidden != nil})
+	body, err := json.Marshal(hubPlan{DB: pl.db, SQL: pl.src, Unmask: pl.unmask, Intent: pl.intent, Refuse: hidden != nil, MaxAffected: pl.maxAffected})
 	if err != nil {
 		return errResp(id, ipc.CodeInternal, err.Error())
 	}
-	caller := hubCaller(ctx)
+	caller := hubCaller(ctx, pl.requester)
+	agent := agentName(ctx, pl.requester)
 	h := s.cfg.Hub
-	hp, err := h.Store.Create(plans.Binding{UID: caller.UID, TokenHash: plans.HashToken(caller.Token), PolicyFP: fp, PlanHash: pl.hash}, body, 0)
+	hp, err := h.Store.Create(plans.Binding{UID: caller.UID, Agent: agent, TokenHash: plans.HashToken(caller.Token), PolicyFP: fp, PlanHash: pl.hash}, body, 0)
 	if err != nil {
 		return errResp(id, ipc.CodeInternal, "plan store: "+err.Error())
 	}
 	sc := &kconsole.Screen{Hub: &kconsole.HubTicket{PlanID: hp.ID, Caller: caller, Risk: s.hubRisk(pl), Masked: s.hubScreen(pl),
-		Requester: ticket.Requester{Agent: kconsole.PeerText(ctx)}}}
+		Requester: ticket.Requester{Agent: agent}}}
 	a := s.asker().Ask(ctx, id, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
 		rec.Event, rec.Decision, rec.Reason, rec.Error, rec.Approval, rec.Ticket = b.Event, b.Decision, b.Reason, b.Error, b.Approval, b.Ticket
 		s.audit(rec)
@@ -182,12 +244,12 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 // the stored text, and its plan hash and policy compared with the plan's
 // before anything runs; the run itself checks the hash again in its own
 // transaction.
-func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string) ipc.Response {
+func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, who ipc.Requester) ipc.Response {
 	h := s.cfg.Hub
 	if h == nil {
 		return errResp(id, ipc.CodeInvalidParams, "this console is not in hub mode: run a plan by its plan_id")
 	}
-	caller := hubCaller(ctx)
+	caller := hubCaller(ctx, who)
 	var pl *plan
 	var body hubPlan
 	var planResp *ipc.Response
@@ -199,15 +261,18 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string) 
 		if planResp != nil {
 			return "", "", errReplan
 		}
+		pl.requester, pl.maxAffected = who, body.MaxAffected
 		fp, err := ticket.HashOf(s.approved)
 		return fp, pl.hash, err
 	})
 	switch {
+	case errors.Is(err, plans.ErrWrongRequester):
+		return errResp(id, ipc.CodeWrongRequester, "ticket "+ticketID+": "+wrongRequester)
 	case errors.Is(err, errReplan):
 		s.withdraw(ctx, ticketID, caller)
 		return *planResp
 	case errors.Is(err, plans.ErrStale):
-		return s.hubStale(ctx, id, body, ticketID)
+		return s.hubStale(ctx, id, body, ticketID, who, 0)
 	case errors.Is(err, hubclient.ErrDenied):
 		msg := "denied by the human; do not retry unless asked"
 		if _, reason, ok := strings.Cut(err.Error(), ": "); ok && reason != "denied" {
@@ -249,7 +314,7 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string) 
 	if resp.Error != nil {
 		if d := resp.Error.Data; d != nil && d.Code == refusal.Stale {
 			finish(false, "stale")
-			return s.hubStale(ctx, id, body, ticketID)
+			return s.hubStale(ctx, id, body, ticketID, who, pl.affected)
 		}
 		finish(false, "failed")
 		return resp
@@ -262,14 +327,21 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string) 
 var errReplan = errors.New("console: the statement no longer plans")
 
 // hubStale answers a ticket whose plan no longer matches: the statement is
-// planned and submitted again, and the client gets stale with the new
-// ticket.
-func (s *Server) hubStale(ctx context.Context, id int64, body hubPlan, old string) ipc.Response {
-	s.println(paint.Warn("ticket " + safeText(old, false) + " is stale: what the statement resolves to changed; a new ticket is submitted"))
+// planned and submitted again, for the same agent, and the client gets
+// stale with the new ticket. affected is what a write rolled back for its
+// rowcount would have changed (0: another cause): the new ticket's bound
+// covers it, and its screen says so.
+func (s *Server) hubStale(ctx context.Context, id int64, body hubPlan, old string, who ipc.Requester, affected int64) ipc.Response {
+	why := "what the statement resolves to changed"
+	if affected > 0 {
+		why = fmt.Sprintf("the write would have changed %d rows, more than approved", affected)
+	}
+	s.println(paint.Warn("ticket " + safeText(old, false) + " is stale: " + why + "; a new ticket is submitted"))
 	pl, r := s.buildPlan(ctx, id, ipc.PlanParams{DB: body.DB, SQL: body.SQL, Unmask: body.Unmask, Intent: body.Intent})
 	if r != nil {
 		return *r
 	}
+	pl.requester, pl.affected, pl.staleTicket = who, affected, old
 	hidden, r := s.runChecks(ctx, id, pl)
 	if r != nil {
 		return *r

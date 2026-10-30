@@ -716,6 +716,31 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
   and, in auto mode, the response time levelled from the counts on, whether
   a count is under k or not.
 
+### Approving in lockhub (hub mode)
+
+`locksql console --hub URL --hub-key-file PATH --instance NAME` (written by
+`lock up`; `locksql hub-key --instance NAME` prints the instance key to pin)
+sends approvals to lockhub instead of asking on this terminal:
+
+- `query.run` answers `{"status":"pending","ticket":…}`: the plan is kept in
+  the console's plan store and its screen, every literal masked, goes to
+  the hub in a signed ticket. `locksql run TICKET` (`locksql_run` with
+  `ticket`) runs it once the human decided.
+- A plan and its ticket run only for the agent that asked for them: the
+  client sends the agent's lea name and the hash of its `LEA_AGENT_TOKEN`
+  (never the token), and another agent presenting the plan id or the
+  ticket gets `CodeWrongRequester` (-32007). This catches an agent using
+  another's ticket by mistake; agents of one account can read each other's
+  token, so it is no security boundary (the workspace is).
+- A write carries a rowcount bound on its screen (`rows changed: at most
+  N`): twice the planner's estimate, at least 10 more. The run counts the
+  rows it changed in its own transaction, before the commit; past the bound
+  it rolls back and answers `{"status":"stale","ticket":<new>}`, the new
+  ticket's screen saying how many rows it would have changed, its bound
+  covering them. The plan hash is checked in the same transaction, before
+  and after the statement. No `LOCK TABLE` or `SERIALIZABLE`: the write
+  takes only its own locks.
+
 ### Policy changes
 
 The console watches the config and PII files while it runs.

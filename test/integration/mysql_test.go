@@ -241,6 +241,11 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		}
 	})
 
+	t.Run("counted run rolls back", func(t *testing.T) {
+		s := connectMySQL(t, m, srv, "rw", config.TierWrite, 30*time.Second)
+		assertCountedRun(t, s, sqlclass.MySQL, "app", "UPDATE small SET label = CONCAT(label, 'x') WHERE id = 1", "SELECT label FROM small WHERE id = 1")
+	})
+
 	t.Run("databases hide system schemas", func(t *testing.T) {
 		s := connectMySQL(t, m, srv, "rw", config.TierRead, 5*time.Second)
 		dbs, err := s.Databases(ctx)

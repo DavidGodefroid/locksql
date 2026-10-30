@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -150,12 +151,13 @@ func (e errStale) Error() string {
 }
 
 // staleCheck is the check of a guarded run of pl: the hash of the state
-// read in the statement's transaction must be the plan's. After a
-// statement other than a read or a write (DDL changes what it names), only
-// the check before it counts.
-func (s *Server) staleCheck(pl *plan) func(engine.ObjectState, bool) error {
-	return func(st engine.ObjectState, after bool) error {
-		if after && pl.st.Class != sqlclass.Read && pl.st.Class != sqlclass.Write {
+// read in the statement's transaction must be the plan's, and a write must
+// change no more rows than its bound (rowCheck). After a statement other
+// than a read or a write (DDL changes what it names), only the check
+// before it counts.
+func (s *Server) staleCheck(pl *plan) engine.GuardCheck {
+	return func(st engine.ObjectState, at engine.Step) error {
+		if at.After && pl.st.Class != sqlclass.Read && pl.st.Class != sqlclass.Write {
 			return nil
 		}
 		h, err := s.planHash(pl, &st)
@@ -163,8 +165,28 @@ func (s *Server) staleCheck(pl *plan) func(engine.ObjectState, bool) error {
 			return err
 		}
 		if h != pl.hash {
-			return errStale{after: after}
+			return errStale{after: at.After}
+		}
+		if at.After {
+			return pl.rowCheck(at.Affected)
 		}
 		return nil
 	}
+}
+
+// errRowcount is the check error of a write that changed more rows than
+// its approval allows (plan.maxAffected): rolled back.
+type errRowcount struct{ affected, max int64 }
+
+func (e errRowcount) Error() string {
+	return fmt.Sprintf("the write would have changed %d rows, more than the %d its approval allows: rolled back", e.affected, e.max)
+}
+
+// rowCheck is the rowcount check of a write's run, in its own transaction
+// before the commit: no more rows than pl.maxAffected (0: no bound).
+func (pl *plan) rowCheck(affected int64) error {
+	if pl.maxAffected > 0 && pl.st.Class == sqlclass.Write && affected > pl.maxAffected {
+		return errRowcount{affected: affected, max: pl.maxAffected}
+	}
+	return nil
 }

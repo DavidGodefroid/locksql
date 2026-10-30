@@ -569,6 +569,21 @@ func (s *session) useDB(ctx context.Context, db string) error {
 // Run executes one classified statement inside a transaction: READ ONLY
 // for the read class, a plain one rolled back on error for the others.
 func (s *session) Run(ctx context.Context, db string, st sqlclass.Statement, maxRows int) (engine.Result, error) {
+	return s.run(ctx, db, st, maxRows, nil)
+}
+
+// RunCounted implements engine.RowChecker. A DDL statement commits
+// implicitly on MySQL: it is refused.
+func (s *session) RunCounted(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
+	if st.Class != sqlclass.Write && st.Class != sqlclass.Read {
+		return engine.Result{}, fmt.Errorf("%s: a %s statement commits implicitly: its rows cannot be checked before a commit", s.flavor, st.Class)
+	}
+	return s.run(ctx, db, st, maxRows, check)
+}
+
+// run is Run, with check (when not nil) called on the rows the statement
+// changed before the commit; a check error rolls it back.
+func (s *session) run(ctx context.Context, db string, st sqlclass.Statement, maxRows int, check func(int64) error) (engine.Result, error) {
 	if int(st.Class) > int(s.tier) {
 		return engine.Result{}, fmt.Errorf("mysql: a %s statement exceeds tier %s", st.Class, s.tier)
 	}
@@ -583,6 +598,11 @@ func (s *session) Run(ctx context.Context, db string, st sqlclass.Statement, max
 		r, err := s.stream(st.SQL, maxRows)
 		if err == nil {
 			s.trustOrigins(st.SQL, r.Columns)
+		}
+		if err == nil && check != nil {
+			if cerr := check(r.Affected); cerr != nil {
+				return engine.Result{}, checkErr{cerr}
+			}
 		}
 		return r, err
 	}, true)
@@ -631,6 +651,13 @@ func (s *session) inTx(ctx context.Context, db, begin string, fn func() (engine.
 		return engine.Result{}, fmt.Errorf("%s: statement interrupted: timeout of %s reached: %w",
 			s.flavor, s.timeout, context.DeadlineExceeded)
 	}
+	if ce := (checkErr{}); errors.As(err, &ce) {
+		// The run's own check refused it: roll back, the error as is.
+		if _, rerr := s.conn.Execute("ROLLBACK"); rerr != nil {
+			return engine.Result{}, s.fail(ctx, rerr)
+		}
+		return engine.Result{}, ce.err
+	}
 	if err != nil || !commit {
 		if _, rerr := s.conn.Execute("ROLLBACK"); rerr != nil && err == nil {
 			err = rerr
@@ -645,6 +672,11 @@ func (s *session) inTx(ctx context.Context, db, begin string, fn func() (engine.
 	}
 	return res, nil
 }
+
+// checkErr carries the error of a counted run's check out of inTx.
+type checkErr struct{ err error }
+
+func (e checkErr) Error() string { return e.err.Error() }
 
 // stream runs q and keeps at most maxRows rows (all when maxRows <= 0); the
 // rest of the result is read and dropped, which leaves the connection in

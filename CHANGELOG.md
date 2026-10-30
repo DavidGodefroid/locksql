@@ -54,6 +54,19 @@ This file records the changes a user or an agent has to know about.
   human's reason. `--auto` is refused with `--hub`, Shift+Tab does not turn
   auto mode on, and statements with `${placeholders}` are refused (values
   are typed in the console).
+- **Plans and tickets bound to the requesting agent** (hub mode, #91).
+  `query.plan` and `query.run` carry `requester` (the agent's lea name and
+  the hash of its `LEA_AGENT_TOKEN`, from lockkit's
+  `mcpkit.RequesterFromEnv`; the CLI and the MCP server send it). A plan id
+  (in every mode) or ticket presented by another agent is refused with
+  `CodeWrongRequester` (-32007) and stays its requester's. Not a security
+  boundary: agents of one account can read each other's token.
+- **Rowcount re-check of a hub-mode write** (#91). A write's ticket shows
+  `rows changed: at most N` (twice the planner's estimate from an `EXPLAIN`
+  of the write, at least 10 more); the run counts the rows it changed in
+  its own transaction before the commit, and past the bound rolls back and
+  answers stale with a new ticket whose screen says how many rows it would
+  have changed. PostgreSQL, MySQL/MariaDB and SQLite.
 
 ### Fixed
 
