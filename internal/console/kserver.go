@@ -162,7 +162,6 @@ func (s *Server) statusOf(c kconsole.StatusResult) ipc.StatusResult {
 		Host:           s.host(),
 		HostConfirmed:  true, // the host is part of the approved policy
 		Production:     s.profile.Production,
-		AutoApprove:    c.AutoApprove,
 		AllowUnmask:    c.AllowUnmask,
 		ShowResults:    c.ShowResults,
 		Tier:           s.profile.Tier.String(),
@@ -242,12 +241,10 @@ func sameSSH(a, b *config.SSHProfile) bool {
 // lines.
 func (s *Server) Words() kconsole.Words {
 	return kconsole.Words{
-		NoAutoProduction: "lockhub decides every statement",
-		NoAutoHub:        "lockhub decides every statement",
-		ResultsOn:        "results: the result of each query is printed here in clear, PII included; the agent still gets it masked (Ctrl-O: hide)",
-		StatusResults:    "shown here in clear, PII included",
-		UnmaskAsk:        "allow clients to ask for unmasked PII output? Each such query is still decided by a human in lockhub",
-		UnmaskOff:        "unmask: off; clients get masked output only, and open unmask plans are refused",
+		ResultsOn:     "results: the result of each query is printed here in clear, PII included; the agent still gets it masked (Ctrl-O: hide)",
+		StatusResults: "shown here in clear, PII included",
+		UnmaskAsk:     "allow clients to ask for unmasked PII output? Each such query is still decided by a human in lockhub",
+		UnmaskOff:     "unmask: off; clients get masked output only, and open unmask plans are refused",
 		ChangeQueued: func(change string) string {
 			return "change requested by a client: " + change + " — type :review to see it"
 		},

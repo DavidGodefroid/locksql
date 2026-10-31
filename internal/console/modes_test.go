@@ -85,7 +85,7 @@ func TestResultsCommand(t *testing.T) {
 func TestStatusLineContent(t *testing.T) {
 	h := newHarness(t, uatProfile(), allowUnmask)
 	st := h.io.statusLine()
-	for _, want := range []string{"UAT", "tier read", "mode manual", "results masked", "unmask allowed"} {
+	for _, want := range []string{"UAT", "tier read", "results masked", "unmask allowed"} {
 		if !strings.Contains(st, want) {
 			t.Errorf("status lacks %q: %q", want, st)
 		}
