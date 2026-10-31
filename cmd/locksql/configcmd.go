@@ -329,7 +329,7 @@ func parseLocals(vals []string) (map[string]map[string]string, error) {
 			}
 		}
 		if !found {
-			return nil, fmt.Errorf("--local %s: only %s can be given (NAME.KEY=VALUE)", lhs, strings.Join(config.LocalKeys, ", "))
+			return nil, fmt.Errorf("--local: only %s can be given (NAME.KEY=VALUE)", strings.Join(config.LocalKeys, ", "))
 		}
 	}
 	return out, nil

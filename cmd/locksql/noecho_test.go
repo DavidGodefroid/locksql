@@ -28,9 +28,15 @@ func TestSetupErrorsDoNotEchoValues(t *testing.T) {
 			}
 		}
 		// Without '=', the whole argument may be the value.
-		_, err := parseLocals([]string{v})
-		if err == nil || strings.Contains(err.Error(), "glsa_Canary") || !strings.Contains(err.Error(), "--local") {
-			t.Errorf("--local %s: err = %v", v, err)
+		// Base64 padding ends the left side at the first '='.
+		for _, arg := range []string{v, v + "==", "dev.tls_cax=" + v} {
+			_, err := parseLocals([]string{arg})
+			if err == nil || strings.Contains(err.Error(), "glsa_Canary") || !strings.Contains(err.Error(), "--local") {
+				t.Errorf("--local %s: err = %v", arg, err)
+			}
+		}
+		if _, err := parseAllowedUIDs("1000," + v); err == nil || strings.Contains(err.Error(), "glsa_Canary") || !strings.Contains(err.Error(), "--allowed-uids") {
+			t.Errorf("--allowed-uids: err = %v", err)
 		}
 	}
 }

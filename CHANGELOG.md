@@ -14,14 +14,14 @@ This file records the changes a user or an agent has to know about.
   `credentials`, `write_functions`, `detectors`, the `limits` durations), of
   `config import` (`needs_local`, the PII rule set names), of the PII rules
   files (a rule's `column` and `mode`), of `locksql profile add` (profile
-  name, engine, credentials, vault path, tls), of `config import --local`
-  without `=` and of `console --instance` and `LOCKSQL_PII_DIR` name the key
+  name, engine, credentials, vault path, tls), of `config import --local`,
+  of `console --allowed-uids` and of `console --instance` and `LOCKSQL_PII_DIR` name the key
   and the allowed values, never the value given. A PII rules file error
   names the entry (`[[mask]] entry 2: pii rule: unknown mode (want redact,
   partial or email)`).
 - lockkit v0.7.2 (was v0.7.1): the same for `ssh.credentials` and the
-  `--hub` URL, which the console's errors and start line now show by scheme
-  and host only; a `--hub` URL with a user or password is refused.
+  `--hub` URL, which the hub client's errors now show by scheme and host
+  only; a `--hub` URL with a user or password is refused.
 
 ## v0.11.3 (2026-10-31)
 
