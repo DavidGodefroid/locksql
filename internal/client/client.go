@@ -31,11 +31,16 @@ var ErrConsoleClosed = kclient.ErrConsoleClosed
 // NoConsoleError reports a missing console and how to start it.
 type NoConsoleError = kclient.NoConsoleError
 
-// StartCommand is the exact command that starts the console for profile
-// (left out when empty) on project (left out when "": the user config).
+// StartCommand is the command that starts the console: `lox up`, for
+// every profile and project (a console is started by `lox up` only, so no
+// profile or project value is put in it).
 func StartCommand(profile, project string) string {
 	return kclient.StartCommand(product.P, profile, project)
 }
+
+// StartHint is what an agent asks of the user when no console runs; it
+// carries no value.
+const StartHint = kclient.StartHint
 
 // ShellQuote quotes s for a POSIX shell when it holds anything beyond
 // letters, digits and ./_-+:,@%=.

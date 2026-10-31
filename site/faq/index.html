@@ -63,7 +63,7 @@
 </section>
 <section aria-labelledby="setup">
   <h2 id="setup">How do I set it up?</h2>
-  <p>With Docker, in three steps: install the <code>locksql</code> launcher, which runs every command in the image; in your project, run <code>locksql init claude</code> (its MCP server is <code>locksql mcp</code>), <code>locksql profile add</code> (the wizard asks for a database profile, never a password) and <code>locksql doctor --fix --yes</code>, which gives <code>.locksql/</code> to the console account; and start <code>locksql console</code> in a terminal you keep in view. <a href="../install/">The Docker setup</a>.</p>
+  <p>With Docker, in three steps: install the <code>locksql</code> launcher, which runs every command in the image; in your project, run <code>locksql init claude</code> (its MCP server is <code>locksql mcp</code>), <code>locksql profile add</code> (the wizard asks for a database profile, never a password) and <code>locksql doctor --fix --yes</code>, which gives <code>.locksql/</code> to the console account; then <code>lox add locksql sql-dev</code> and <code>lox up</code>, which start the console, and <code>lox attach sql-dev</code> to answer its questions in your terminal. <a href="../install/">The Docker setup</a>.</p>
 </section>
 <section aria-labelledby="agents">
   <h2 id="agents">Which AI agents does it work with?</h2>

@@ -168,13 +168,16 @@ The console runs attached to lockhub only: from the project directory,
 ```sh
 lox add locksql sql-dev
 lox up
+lox attach sql-dev
 ```
 
 `lox up` starts the console with its hub flags, through the launcher
 (`locksql console --hub URL --hub-key-file PATH --instance NAME`, plus
 `--profile P`, `--show-results` or `--allow-unmask` from the lock's
 settings: [Start the console](usage.md#2-start-the-console)). Started
-without them, `locksql console` exits with ``launched by `lox up` only``. The
+without them, `locksql console` exits with ``launched by `lox up` only``.
+`lox attach sql-dev` attaches your terminal to it (detach: Ctrl-P Ctrl-Q):
+the console asks its start-up questions there, and again when it restarts. The
 `locksql-home` volume keeps the console account's state from one run to the
 next: the approved policy, the audit log and `~/.ssh/known_hosts` for an
 `ssh` profile. A key for `auth = "key"` must be in that volume, owned by

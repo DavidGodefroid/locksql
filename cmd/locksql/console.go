@@ -125,7 +125,7 @@ func runConsole(e env, args []string) int {
 		}
 		if name == "" {
 			if separated, _ := isServiceAccount(e); separated {
-				fmt.Fprintf(e.stderr, "locksql console: no profile visible here; in separated mode, put the profile in the project's .locksql/config.toml and run: locksql console --project %s\n", projectDirHint(pe))
+				fmt.Fprintf(e.stderr, "locksql console: no profile visible here; in separated mode, put the profile in the project's .locksql/config.toml (project %s), then run `lox up` again\n", projectDirHint(pe))
 			} else {
 				fmt.Fprintln(e.stderr, "locksql console: no profile: put the profile in the project's .locksql/config.toml (locksql init <agent> writes an example)")
 			}

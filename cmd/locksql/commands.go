@@ -233,7 +233,7 @@ func resolveProfile(e env, name string) (string, error) {
 }
 
 // startCommandOf is the command that starts the console err found
-// missing.
+// missing: `lox up`.
 func startCommandOf(err error, profile string) string {
 	var nc *client.NoConsoleError
 	if errors.As(err, &nc) {

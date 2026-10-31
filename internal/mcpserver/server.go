@@ -111,7 +111,7 @@ const instructions = "locksql gives read access (or more, if the human's policy 
 	"Statements are parsed and every column resolved to its source: PII columns may be selected (masked), counted or aggregated, joined with = and filtered with =, IN or IS NULL against literals; " +
 	"keep filters, groups and aggregates on PII broad: when one covers fewer than k rows (k-anonymity) the human is warned before approving and may deny the run. " +
 	"Masked cells come back as <redacted> and cannot be filtered on; placeholders ('${...}') are not supported and are refused (E_PLACEHOLDER). Never ask the user to type a PII value in the chat; at write tiers a masked column may only be set to NULL or DEFAULT. " +
-	"If no console runs, ask the user to run locksql in a separate terminal; never start one yourself. Never edit the locksql config, and never reach a database with mysql, psql, sqlite3, a driver or a container shell." + guidance
+	"If no console runs, ask the user to run `lox up` (a console is started by lox up only); never start one yourself. Never edit the locksql config, and never reach a database with mysql, psql, sqlite3, a driver or a container shell." + guidance
 
 // Tool inputs.
 type (
@@ -288,11 +288,11 @@ func toolError(err error) error {
 	case "no_such_plan":
 		hint = "Plans are one-shot and expire after 10 minutes: call locksql_plan again."
 	case "policy_pending":
-		hint = "A policy change awaits the human's review in the console; wait for it and tell the user."
+		hint = "A policy change awaits the human's review in the console (`lox attach` opens it); wait for it and tell the user."
 	case "connection_lost":
 		hint = "The console lost its database connection; tell the user."
 	case "console_closed":
-		hint = "The console session ended; ask the user to start the console again."
+		hint = "The console session ended; ask the user to start it again with `lox up`."
 	}
 	if hint != "" {
 		msg += "\n" + hint
@@ -343,7 +343,7 @@ func (t *tools) status(ctx context.Context, _ *mcp.CallToolRequest, in StatusIn)
 			if !p.Running {
 				hint, ok := hints[p.Profile]
 				if !ok {
-					hint = "ask the user to run this command in a separate terminal:\n  " + p.Start
+					hint = client.StartHint
 				}
 				fmt.Fprintf(w, "\nNo console runs for profile %s: %s\n", p.Profile, hint)
 			}
