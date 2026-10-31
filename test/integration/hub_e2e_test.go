@@ -58,10 +58,17 @@ func hubE2E(t *testing.T) string {
 	return src
 }
 
-// buildHub builds lockhub and lock from src into dir.
+// buildHub builds lockhub and the host CLI (lox, or lock in older
+// checkouts) from src into dir.
 func buildHub(t *testing.T, src, dir string) (hubBin, lockBin string) {
 	t.Helper()
-	for _, c := range []string{"lockhub", "lock"} {
+	// lockhub renamed its host CLI cmd/lock to cmd/lox (lockhub#79).
+	// TODO: drop the cmd/lock fallback once a lockhub release ships lox.
+	cli := "lox"
+	if _, err := os.Stat(filepath.Join(src, "cmd", cli)); err != nil {
+		cli = "lock"
+	}
+	for _, c := range []string{"lockhub", cli} {
 		cmd := exec.Command("go", "build", "-p", "2", "-o", filepath.Join(dir, c), "./cmd/"+c)
 		cmd.Dir = src
 		cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOMAXPROCS=2")
@@ -69,7 +76,7 @@ func buildHub(t *testing.T, src, dir string) (hubBin, lockBin string) {
 			t.Fatalf("build %s: %v\n%s", c, err, out)
 		}
 	}
-	return filepath.Join(dir, "lockhub"), filepath.Join(dir, "lock")
+	return filepath.Join(dir, "lockhub"), filepath.Join(dir, cli)
 }
 
 func freePort(t *testing.T) int {
