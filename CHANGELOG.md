@@ -4,7 +4,11 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## Unreleased
+## v0.11.5 (2026-10-31)
+
+Supported lockhub: as v0.11.4 (lockhub serves `/v1/` at its root, so the
+`http(s)://host[:port]` hub URL lockkit v0.8.1 requires is the one it
+always needed).
 
 ### Changed
 
@@ -23,10 +27,10 @@ This file records the changes a user or an agent has to know about.
   `secret`, `person_name`) are not enabled: the default detectors mask what
   they masked before, apart from this.
 - lockkit v0.8.0: the Claude Code wiring, merging into the user's
-  `~/.claude/settings.json`, writes the `permissions.allow` entries already there with
-  `&`, `<` and `>` as written instead of `\u0026`-style escapes. locksql's
-  own entries and note hold none of these characters: what it adds is
-  unchanged.
+  `~/.claude/settings.json`, writes the `permissions.allow` entries already
+  there with `&`, `<` and `>` as written instead of `\u0026`-style escapes.
+  locksql's own entries and note hold none of these characters: what it
+  adds is unchanged.
 - **`console --profile` in a separated setup is checked before the
   handoff**: started from another account than the console's, the console
   command is printed or run through sudo, machinectl or su only for a
@@ -44,9 +48,9 @@ This file records the changes a user or an agent has to know about.
   `console`, `doctor`, `config export --profile` and `config import
   --profile`/`--local` name the flag (and the configured profiles), never
   the value given. An unknown command is not quoted back either. With
-  lockkit v0.8.1, the same holds for an invalid profile name, `--instance`, `--require-device`, `hub-key`'s flags, the
-  console's `--profile` mismatch and its `service_user`/`client_group`
-  refusals.
+  lockkit v0.8.1, the same holds for an invalid profile name, `--instance`,
+  `--require-device`, `hub-key`'s flags, the console's `--profile` mismatch
+  and its `service_user`/`client_group` refusals.
 
 ## v0.11.4 (2026-10-31)
 
