@@ -34,14 +34,13 @@ A `query.plan` request goes through these steps in the console
    placeholders and cell references. The result is an `Analysis` (below).
 4. **Weigh.** The console runs `EXPLAIN` on the statement and on each
    k-anonymity count, and `internal/weight` turns the plans into a verdict.
-5. **Count.** Before the approval prompt (after any placeholder values,
-   which an `IN` list mixing them with literals needs), the k-anonymity
-   counts run (`console.kCount`). Fewer than `k_anonymity` rows is a
+5. **Count.** Before the ticket goes to lockhub, the k-anonymity counts run
+   (`console.kCount`). Fewer than `k_anonymity` rows is a
    warning, never a refusal.
-6. **Approve.** The human sees the statement, the PII columns it touches
-   (`Analysis.Uses`), the masked outputs, the counts and, just above the
-   prompt, a `▲ k-anonymity` warning for each count under k. In auto mode
-   the statement runs and the warning goes to the console and the audit.
+6. **Approve.** The human sees, on the ticket in lockhub, the statement
+   (every literal masked), the PII columns it touches (`Analysis.Uses`), the
+   masked outputs, the counts and a `k-anonymity` warning for each count
+   under k; the warnings go to the audit records too.
 7. **Run and mask** (`pii.MaskOutputs`, `modes.go`). The rows are masked
    column by column from the analysis, then go through the value
    detectors, then through the output caps (`internal/render`).
@@ -140,11 +139,9 @@ prompt (`console.kCount`):
   into the statement that runs; the agent never sees them.
 
 A count under `k_anonymity` (or one that cannot run) does not refuse the
-statement. `kCount` returns it as a warning: the console prints it in the
-approval frame, adds it to the audit record's `warnings`, and the human
-decides. Before v0.5.2 it was a refusal (`E_K_ANON`, now retired). The
-agent learns nothing of a count: its answer is the same either way, and in
-auto mode `query.run` levels its response time from the counts on. The
+statement. `kCount` returns it as a warning: the console adds it to the
+ticket and to the audit records' `warnings`, and the human decides. Before v0.5.2 it was a refusal (`E_K_ANON`, now retired). The
+agent learns nothing of a count: its answer is the same either way. The
 structural rules that make a count meaningful (equality only, `AND` only,
 no self-comparison, no view column under a constant filter) still refuse.
 

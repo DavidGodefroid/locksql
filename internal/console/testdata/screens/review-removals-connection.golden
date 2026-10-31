@@ -4,7 +4,6 @@
 "\x1b[1;31m  ~ tls_ca: /etc/ca.pem →   (loosens)\x1b[0m"
 "\x1b[1;31m  - detectors: iban  (loosens)\x1b[0m"
 "\x1b[1;31m  - pii.mask: app.users.email  (loosens)\x1b[0m"
-"\x1b[1;31mauto mode is on: once applied, statements run without a prompt\x1b[0m"
 "<bell>"
 "? Apply these changes? [y/N] "
 "connection settings changed: the session ends; start the console again"

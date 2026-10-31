@@ -286,42 +286,6 @@ func TestHubClearScreenInPlan(t *testing.T) {
 	}
 }
 
-// Rollback (D.5): a console started standalone after hub mode withdraws
-// the plans hub mode left pending and refuses a run of their tickets
-// explicitly; nothing runs, even once the hub approved it.
-func TestStandaloneAfterHubModeWithdraws(t *testing.T) {
-	var hub *hubtest.Hub
-	stateDir := t.TempDir()
-	var stop func()
-	hubbed := newHarness(t, writeProfile(), withHubAt(t, &hub, stateDir, time.Now, &stop))
-	pr := hubbed.plan(t, hubWrite, false)
-	tk := pendingTicket(t, hubbed.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
-	hub.Decide(tk, ticket.Approved, "")
-	stop() // the console stops
-
-	io := &fakeIO{}
-	withdrawStandalone(io, stateDir)
-	if out := io.output(); !strings.Contains(out, "1 pending ticket(s) of "+hubInstanceName+" withdrawn") {
-		t.Fatalf("standalone start said %q", out)
-	}
-	st, err := plans.Open(filepath.Join(stateDir, product.P.Name, "hub", hubInstanceName, "plans"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, err := st.TicketPlan(tk)
-	_ = st.Close()
-	if err != nil || p.State != plans.Withdrawn {
-		t.Fatalf("plan %+v %v, want withdrawn", p, err)
-	}
-
-	h := newHarness(t, writeProfile())
-	r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: tk})
-	wantCode(t, r, ipc.CodeWithdrawn)
-	if !strings.Contains(r.Error.Message, "withdrawn") || h.sess.runCount() != 0 || hubbed.sess.runCount() != 0 {
-		t.Fatalf("answer %q, runs %d", r.Error.Message, h.sess.runCount())
-	}
-}
-
 // The run of an expired ticket is audited as its renewal, once (#118); an
 // approval the lock could not use (dated ahead of its clock) is recorded
 // with the hub's signature on it.

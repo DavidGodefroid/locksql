@@ -6,128 +6,51 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
-	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/console"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
-// secretIO approves every prompt, answers the value prompt with secret and
-// keeps what the console prints.
-type secretIO struct {
-	secret string
-	mu     sync.Mutex
-	out    []string
-}
-
-func (s *secretIO) Println(line string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.out = append(s.out, line)
-}
-func (s *secretIO) Ask(context.Context, string, time.Duration) (string, bool) { return "y", true }
-func (s *secretIO) AskSecret(context.Context, string) ([]byte, error) {
-	return []byte(s.secret), nil
-}
-
-// placeholderValue is the typed value of the round trip: a quote, so that
-// the substitution's quoting reaches the engine.
-const placeholderValue = "o'brien@example.org"
-
-// assertPlaceholderRoundTrip runs, through a console server on a real
-// engine, a typed placeholder on the masked big.email and a reference to a
-// redacted cell of an earlier result. Each must find the right row; no
-// value may reach the client answers, the console screen or the audit log.
-// The row holding placeholderValue must exist, with id obrienID.
-func assertPlaceholderRoundTrip(t *testing.T, s engine.Session, rules pii.Rules, obrienID int64) {
+// assertPlaceholderRefused runs, through a console server on a real
+// engine, a typed placeholder on the masked big.email and references to
+// cells: no value is typed in lockhub, so the placeholder's run is refused
+// (E_PLACEHOLDER) before anything reaches the hub or the engine, and a
+// reference, which no result of the session made, is refused at plan
+// time. The row holding the value is never found.
+func assertPlaceholderRefused(t *testing.T, s engine.Session, rules pii.Rules) {
 	t.Helper()
-	dir := t.TempDir()
-	log, err := audit.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := config.Profile{Name: "it", Engine: string(s.Flavor()), Host: "127.0.0.1", Tier: config.TierRead, Credentials: config.CredentialsAsk,
-		Limits: config.DefaultLimits(false), Detectors: []string{"email"}}
-	io := &secretIO{secret: placeholderValue}
-	srv, err := console.NewServer(console.ServerConfig{
-		Policy: config.NewPolicy(p, rules.Mask, rules.Allow), RulesPath: filepath.Join(t.TempDir(), pii.RulesFile), Session: nopClose{s},
-		DBUser: "it", Databases: []string{"app"}, Audit: log, IO: io, Version: "it",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var answers []string
-	run := func(q string) ipc.RunResult {
-		t.Helper()
-		call := func(method string, params any) ipc.Response {
-			raw, _ := json.Marshal(params)
-			resp := srv.Handle(context.Background(), ipc.Request{JSONRPC: "2.0", ID: 1, Method: method, Params: raw})
-			answers = append(answers, string(resp.Result))
-			if resp.Error != nil {
-				answers = append(answers, resp.Error.Message)
-				t.Fatalf("%s: %s\nconsole:\n%s", q, resp.Error.Message, strings.Join(io.out, "\n"))
+	call := consoleServer(t, s, "app", rules, config.TierRead, []string{"email"})
+	for _, q := range []string{
+		"SELECT id, email FROM big WHERE email = '${email}' LIMIT 5",
+		"SELECT id, status FROM big WHERE email = '${r1.1.2}' LIMIT 5",
+		"SELECT id FROM big WHERE email IN ('${r3.1.2}') LIMIT 5",
+	} {
+		resp := call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
+		if strings.Contains(q, "${r") {
+			if resp.Error == nil || !strings.Contains(resp.Error.Message, "unknown reference") {
+				t.Errorf("%s: plan %s %+v, want an unknown reference", q, resp.Result, resp.Error)
 			}
-			return resp
+			continue
+		}
+		if resp.Error != nil {
+			t.Fatalf("%s: plan: %s", q, resp.Error.Message)
 		}
 		var pr ipc.PlanResult
-		if err := json.Unmarshal(call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q}).Result, &pr); err != nil {
+		if err := json.Unmarshal(resp.Result, &pr); err != nil {
 			t.Fatal(err)
 		}
-		var rr ipc.RunResult
-		if err := json.Unmarshal(call(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}).Result, &rr); err != nil {
-			t.Fatal(err)
+		resp = call(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+		if resp.Error == nil || resp.Error.Data == nil || resp.Error.Data.Code != "E_PLACEHOLDER" {
+			t.Errorf("%s: run %s %+v, want E_PLACEHOLDER", q, resp.Result, resp.Error)
 		}
-		return rr
-	}
-	id := func(rr ipc.RunResult, want int64) {
-		t.Helper()
-		if len(rr.Rows) != 1 || fmt.Sprint(rr.Rows[0][0]) != fmt.Sprint(want) {
-			t.Errorf("rows %v, want the row with id %d", rr.Rows, want)
+		if resp.Error != nil && strings.Contains(resp.Error.Message, "brien") {
+			t.Errorf("%s: the refusal names the value: %q", q, resp.Error.Message)
 		}
-	}
-
-	// A typed value with a quote finds its row; the agent gets a reference.
-	rr := run("SELECT id, email FROM big WHERE email = '${email}' LIMIT 5")
-	id(rr, obrienID)
-	if len(rr.Rows) == 1 && rr.Rows[0][1] != "<redacted:r1.1.2>" {
-		t.Errorf("email cell %v", rr.Rows[0][1])
-	}
-	// The reference to that cell finds the same row, with no prompt.
-	io.secret = "unused@example.org"
-	id(run("SELECT id, status FROM big WHERE email = '${r1.1.2}' LIMIT 5"), obrienID)
-	// A reference to a cell the agent never filtered on.
-	rr = run("SELECT id, email FROM big WHERE id = 7 LIMIT 1")
-	if len(rr.Rows) != 1 || rr.Rows[0][1] != "<redacted:r3.1.2>" {
-		t.Fatalf("rows %v", rr.Rows)
-	}
-	id(run("SELECT id FROM big WHERE email IN ('${r3.1.2}') LIMIT 5"), 7)
-
-	b, err := os.ReadFile(filepath.Join(dir, "locksql", "audit.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	io.mu.Lock()
-	screen := strings.Join(io.out, "\n")
-	io.mu.Unlock()
-	for where, text := range map[string]string{"client answers": strings.Join(answers, "\n"), "audit log": string(b), "console screen": screen} {
-		for _, v := range []string{"brien", "user7@"} {
-			if strings.Contains(text, v) {
-				t.Errorf("%q reached the %s", v, where)
-			}
-		}
-	}
-	if !strings.Contains(string(b), "${r3.1.2}") {
-		t.Error("the audit log lacks the statement as written")
 	}
 }
 

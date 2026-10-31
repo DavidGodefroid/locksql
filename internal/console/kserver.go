@@ -182,7 +182,7 @@ func (s *Server) StatusRows(v kconsole.StatusView) [][2]string {
 	rows := [][2]string{
 		{"profile", fmt.Sprintf("%s · %s %s · tier %s · production %t", st.Profile, st.Engine, safeText(st.Host, false), st.Tier, st.Production)},
 		{"databases", safeText(strings.Join(st.Databases, ", "), false)},
-		{"mode", kconsole.StatusModeRow(v, w)},
+		{"decided", "in lockhub, instance " + safeText(s.cfg.Hub.Instance, false)},
 		{"results", kconsole.StatusResultsRow(v, w)},
 		{"unmask", kconsole.StatusUnmaskRow(v)},
 		{"limits", fmt.Sprintf("timeout %s · warn %d · refuse %d · max_rows %d · max_cell_chars %d · max_output_bytes %d",
@@ -242,18 +242,12 @@ func sameSSH(a, b *config.SSHProfile) bool {
 // lines.
 func (s *Server) Words() kconsole.Words {
 	return kconsole.Words{
-		AutoStart:        "auto mode: statements allowed by the tier and the weight check run without a prompt (Shift+Tab: manual)",
-		AutoOn:           "auto mode: statements allowed by the tier and the weight check run without a prompt; unmasked queries and REFUSE verdicts are still prompted or refused (Shift+Tab: back to manual)",
-		Manual:           "manual mode: every statement is prompted",
-		NoAutoProduction: "auto mode is not available on a production profile: every statement is prompted",
-		NoAutoHub:        "auto mode is not available in hub mode: lockhub decides every statement",
-		StatusAuto:       "auto: statements allowed by the tier and the weight check run without a prompt",
-		StatusManual:     "manual: every statement is prompted",
+		NoAutoProduction: "lockhub decides every statement",
+		NoAutoHub:        "lockhub decides every statement",
 		ResultsOn:        "results: the result of each query is printed here in clear, PII included; the agent still gets it masked (Ctrl-O: hide)",
 		StatusResults:    "shown here in clear, PII included",
-		UnmaskAsk:        "allow clients to ask for unmasked PII output? Each such query is still approved here, never auto-approved",
+		UnmaskAsk:        "allow clients to ask for unmasked PII output? Each such query is still decided by a human in lockhub",
 		UnmaskOff:        "unmask: off; clients get masked output only, and open unmask plans are refused",
-		ReviewAuto:       "auto mode is on: once applied, statements run without a prompt",
 		ChangeQueued: func(change string) string {
 			return "change requested by a client: " + change + " — type :review to see it"
 		},

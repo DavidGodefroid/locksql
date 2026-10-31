@@ -12,7 +12,6 @@ import (
 // Test shims over lockkit's console, which holds the switches and the
 // policy review.
 
-func (s *Server) toggleMode()                      { s.k.Key(kconsole.KeyShiftTab) }
 func (s *Server) toggleResults()                   { s.k.Key(kconsole.KeyCtrlO) }
 func (s *Server) toggleUnmask(ctx context.Context) { s.k.Command(ctx, ":unmask") }
 

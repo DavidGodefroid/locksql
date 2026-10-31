@@ -128,7 +128,7 @@ func TestRunSameUserRefusedFirst(t *testing.T) {
 	t.Cleanup(func() { newIsolationEnv = old })
 
 	io := &fakeIO{answers: []string{"y", "y", "y"}}
-	err := Run(context.Background(), Options{Profile: "uat", Cwd: root, IO: io, StateDir: state})
+	err := Run(context.Background(), Options{Hub: runHub(t), Profile: "uat", Cwd: root, IO: io, StateDir: state})
 	if err == nil || err.Error() != sameUserRefusal {
 		t.Fatalf("want the same-user refusal, got %v", err)
 	}
@@ -158,7 +158,7 @@ func TestRunIsolationBeforePolicy(t *testing.T) {
 	t.Cleanup(func() { newIsolationEnv = old })
 	io := &fakeIO{answers: []string{"y", "y", "y"}}
 	state := t.TempDir()
-	err := Run(context.Background(), Options{Profile: "uat", IO: io, StateDir: state, Cwd: root})
+	err := Run(context.Background(), Options{Hub: runHub(t), Profile: "uat", IO: io, StateDir: state, Cwd: root})
 	if err == nil || !strings.Contains(err.Error(), "login session of uid 1000") {
 		t.Fatalf("err = %v", err)
 	}
@@ -583,7 +583,7 @@ func TestRunProductionX11RefusedBeforePolicy(t *testing.T) {
 	t.Cleanup(func() { newIsolationEnv = old })
 	io := &fakeIO{answers: []string{"y", "prod"}}
 	state := t.TempDir()
-	err := Run(context.Background(), Options{Profile: "prod", IO: io, StateDir: state, Cwd: root})
+	err := Run(context.Background(), Options{Hub: runHub(t), Profile: "prod", IO: io, StateDir: state, Cwd: root})
 	if err == nil || !strings.Contains(err.Error(), "production profile in an X11 session") {
 		t.Fatalf("err = %v", err)
 	}
@@ -616,7 +616,7 @@ func TestRunProductionX11RefusedOnApprovedPolicy(t *testing.T) {
 	newIsolationEnv = func(*os.File) isolationEnv { return fakeIsolation(separated(), sysconf.DisplayX11) }
 	t.Cleanup(func() { newIsolationEnv = old })
 	io := &fakeIO{answers: []string{"y", "y"}}
-	err = Run(context.Background(), Options{Profile: "prod", IO: io, StateDir: state, Cwd: root})
+	err = Run(context.Background(), Options{Hub: runHub(t), Profile: "prod", IO: io, StateDir: state, Cwd: root})
 	if err == nil || !strings.Contains(err.Error(), "production profile in an X11 session") {
 		t.Fatalf("err = %v", err)
 	}
@@ -643,7 +643,7 @@ func TestRunDesktopPolicyNeedsFinger(t *testing.T) {
 	t.Cleanup(func() { newIsolationEnv = old })
 	io := &fakeIO{answers: []string{"y", "y", "y"}}
 	state := t.TempDir()
-	err := Run(context.Background(), Options{Profile: "uat", IO: io, StateDir: state, Cwd: root})
+	err := Run(context.Background(), Options{Hub: runHub(t), Profile: "uat", IO: io, StateDir: state, Cwd: root})
 	if err == nil || !strings.Contains(err.Error(), "not approved") {
 		t.Fatalf("err = %v", err)
 	}
@@ -668,17 +668,17 @@ func runDesktop(t *testing.T, v func(string) (fingerprint.Verifier, error), o Op
 	t.Cleanup(func() { newIsolationEnv = old })
 	io := &fakeIO{answers: []string{"n", "n", "n"}}
 	state := t.TempDir()
-	o.Profile, o.IO, o.StateDir, o.Cwd = "uat", io, state, root
+	o.Profile, o.IO, o.StateDir, o.Cwd, o.Hub = "uat", io, state, root, runHub(t)
 	return io, state, Run(context.Background(), o)
 }
 
 // Level 2 refuses the start-up widening flags before any prompt.
 func TestRunLevel2RefusesWideningFlags(t *testing.T) {
-	for name, o := range map[string]Options{"auto": {Auto: true}, "unmask": {AllowUnmask: true}, "results": {ShowResults: true}} {
+	for name, o := range map[string]Options{"unmask": {AllowUnmask: true}, "results": {ShowResults: true}} {
 		t.Run(name, func(t *testing.T) {
 			v := &fingerprint.Fake{EnrolledN: 1}
 			io, state, err := runDesktop(t, func(string) (fingerprint.Verifier, error) { return v, nil }, o)
-			if !errors.Is(err, ErrConfig) || !strings.Contains(err.Error(), "level 2 does not accept --auto, --allow-unmask or --show-results") {
+			if !errors.Is(err, ErrConfig) || !strings.Contains(err.Error(), "level 2 does not accept --allow-unmask or --show-results") {
 				t.Fatalf("err = %v", err)
 			}
 			if len(io.prompts) != 0 || v.Calls != 0 {
@@ -708,11 +708,11 @@ func TestRunLevel1RefusesShowResults(t *testing.T) {
 	}
 }
 
-// Level 1 takes --auto and --allow-unmask, and approves by typed answer
+// Level 1 takes --allow-unmask, and approves by typed answer
 // alone: no finger is ever asked.
 func TestRunLevel1AcceptsFlagsAndTypes(t *testing.T) {
 	io, _, err := runDesktop(t, func(string) (fingerprint.Verifier, error) { return nil, fingerprint.ErrUnavailable },
-		Options{Auto: true, AllowUnmask: true})
+		Options{AllowUnmask: true})
 	if err == nil || strings.Contains(err.Error(), "level 2") {
 		t.Fatalf("err = %v", err)
 	}
@@ -735,7 +735,7 @@ func TestRunLevel1AuditsDesktopTyped(t *testing.T) {
 	t.Cleanup(func() { newIsolationEnv = old })
 	io := &fakeIO{answers: []string{"y"}}
 	state := t.TempDir()
-	_ = Run(context.Background(), Options{Profile: "uat", IO: io, StateDir: state, Cwd: root})
+	_ = Run(context.Background(), Options{Hub: runHub(t), Profile: "uat", IO: io, StateDir: state, Cwd: root})
 	var log strings.Builder
 	_ = filepath.WalkDir(state, func(p string, d fs.DirEntry, err error) error {
 		if err == nil && !d.IsDir() && strings.HasSuffix(p, "audit.log") {

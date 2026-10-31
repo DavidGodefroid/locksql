@@ -12,12 +12,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/creack/pty"
+
+	"github.com/DavidGodefroid/lockkit/hubclient/hubtest"
+	"github.com/DavidGodefroid/lockkit/ticket"
 
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
@@ -56,7 +60,10 @@ func consoleCommand(bin string, args []string) *exec.Cmd {
 
 // consoleProc is a `locksql console` running in a pseudo-terminal.
 type consoleProc struct {
-	t    *testing.T
+	t *testing.T
+	// hub is the fake lockhub the console is decided on (nil when the
+	// test passed its own --hub).
+	hub  *hubtest.Hub
 	cmd  *exec.Cmd
 	tty  *os.File
 	mu   sync.Mutex
@@ -71,6 +78,13 @@ func startConsole(t *testing.T, project string, env []string, args ...string) *c
 	if err != nil {
 		t.Fatal(err)
 	}
+	var hub *hubtest.Hub
+	if !slices.Contains(args, "--hub") {
+		// One mode: the console is decided on a hub, as lox up starts it.
+		var hubArgs []string
+		hub, hubArgs = fakeHub(t, envHome(t, env))
+		args = append(args, hubArgs...)
+	}
 	cmd := consoleCommand(bin, append([]string{"console"}, args...))
 	cmd.Dir = project
 	cmd.Env = env
@@ -78,7 +92,7 @@ func startConsole(t *testing.T, project string, env []string, args ...string) *c
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &consoleProc{t: t, cmd: cmd, tty: tty, done: make(chan error, 1)}
+	c := &consoleProc{t: t, hub: hub, cmd: cmd, tty: tty, done: make(chan error, 1)}
 	go func() {
 		buf := make([]byte, 4096)
 		for {
@@ -100,6 +114,50 @@ func startConsole(t *testing.T, project string, env []string, args ...string) *c
 		}
 	})
 	return c
+}
+
+// envHome is the HOME of env, the console's home.
+func envHome(t *testing.T, env []string) string {
+	t.Helper()
+	home := ""
+	for _, e := range env {
+		if v, ok := strings.CutPrefix(e, "HOME="); ok {
+			home = v
+		}
+	}
+	if home == "" {
+		t.Fatal("no HOME in the console's environment")
+	}
+	return home
+}
+
+// approvedRun runs plan id as an approved request runs: query.run answers
+// pending with a ticket, the hub approves it, and the ticket runs once
+// the decision has reached the console.
+func approvedRun(t *testing.T, hub *hubtest.Hub, call func(params any, out any) *ipc.RPCError, id string, out any) *ipc.RPCError {
+	t.Helper()
+	var p ipc.RunResult
+	if e := call(ipc.RunParams{PlanID: id}, &p); e != nil {
+		return e
+	}
+	if p.Status != "pending" || p.Ticket == "" {
+		t.Fatalf("query.run: %+v, want pending", p)
+	}
+	hub.Decide(p.Ticket, ticket.Approved, "")
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		e := call(ipc.RunParams{Ticket: p.Ticket}, out)
+		if e == nil || !strings.Contains(e.Message, "no decision") || time.Now().After(deadline) {
+			return e
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// run is approvedRun on the console's socket.
+func (r *rpc) run(hub *hubtest.Hub, id string, out any) *ipc.RPCError {
+	r.t.Helper()
+	return approvedRun(r.t, hub, func(params, out any) *ipc.RPCError { return r.call(ipc.MethodQueryRun, params, out) }, id, out)
 }
 
 func (c *consoleProc) output() string {
@@ -269,39 +327,15 @@ production = true
 			return pr.PlanID
 		}
 
-		// Type-ahead: a "y" typed before the prompt must not approve.
-		id := plan()
-		c.send("y")
-		time.Sleep(300 * time.Millisecond)
-		cl.send(ipc.MethodQueryRun, ipc.RunParams{PlanID: id})
-		c.expect("Approve? [y/N] ")
-		if resp, err := cl.recv(700 * time.Millisecond); err == nil {
-			t.Fatalf("type-ahead answered the prompt: %+v", resp)
-		}
-		c.send("\n")
-		resp, err := cl.recv(30 * time.Second)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resp.Error == nil || resp.Error.Code != ipc.CodeDenied {
-			t.Fatalf("type-ahead run: want denied, got %+v", resp)
-		}
-
-		// A typed answer approves; the email column comes back redacted,
-		// the default mode of a proposed rule.
-		id = plan()
-		cl.send(ipc.MethodQueryRun, ipc.RunParams{PlanID: id})
-		if seen := c.expect("Approve? [y/N] "); !strings.Contains(seen, "masked outputs: email → redact") {
-			t.Errorf("approval screen lacks the mask mode: %q", seen)
-		}
-		c.send("y\n")
-		resp, err = cl.recv(30 * time.Second)
-		if err != nil || resp.Error != nil {
-			t.Fatalf("approved run: %+v %v", resp, err)
-		}
+		// query.run asks nothing here: the request goes to lockhub, with
+		// the approval screen on the console. Once approved, the email
+		// column comes back redacted, the default mode of a proposed rule.
 		var rr ipc.RunResult
-		if err := json.Unmarshal(resp.Result, &rr); err != nil {
-			t.Fatal(err)
+		if e := cl.run(c.hub, plan(), &rr); e != nil {
+			t.Fatalf("approved run: %v", e)
+		}
+		if seen := c.expect("pending: ticket "); !strings.Contains(seen, "masked outputs: email → redact") {
+			t.Errorf("approval screen lacks the mask mode: %q", seen)
 		}
 		if len(rr.Rows) != 1 || !strings.HasPrefix(fmt.Sprint(rr.Rows[0][1]), "<redacted") {
 			t.Fatalf("rows: %+v", rr.Rows)

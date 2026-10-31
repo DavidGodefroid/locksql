@@ -105,7 +105,11 @@ GRANT INSERT ON hr_log TO rw;`)
 		t.Fatal(err)
 	}
 	hub := hubtest.New(t, inst, key.Public().(ed25519.PublicKey))
-	keyFile := filepath.Join(t.TempDir(), "hub.pub")
+	keyDir := t.TempDir()
+	if err := os.Chmod(keyDir, 0o700); err != nil { // writable by its owner only
+		t.Fatal(err)
+	}
+	keyFile := filepath.Join(keyDir, "hub.pub")
 	if err := os.WriteFile(keyFile, []byte(base64.StdEncoding.EncodeToString(hub.Pub)+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

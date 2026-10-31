@@ -92,9 +92,9 @@ func trustedBinary() (string, error) {
 
 // consoleArgs are the console flags passed on to the console account.
 type consoleArgs struct {
-	profile, project               string
-	auto, allowUnmask, showResults bool
-	hub                            kconsole.HubOptions
+	profile, project         string
+	allowUnmask, showResults bool
+	hub                      kconsole.HubOptions
 	// allowedUIDs is --allowed-uids, passed on as typed (parsed).
 	allowedUIDs []int
 	// noUpdateCheck forwards LOCKSQL_NO_UPDATE_CHECK, which the helper
@@ -140,9 +140,6 @@ func (a consoleArgs) argv() []string {
 		}
 		out = append(out, "--profile", p)
 	}
-	if a.auto {
-		out = append(out, "--auto")
-	}
 	if a.allowUnmask {
 		out = append(out, "--allow-unmask")
 	}
@@ -152,11 +149,9 @@ func (a consoleArgs) argv() []string {
 	if len(a.allowedUIDs) > 0 {
 		out = append(out, "--allowed-uids", joinUIDs(a.allowedUIDs))
 	}
-	if a.hub.Enabled() {
-		// Every hub flag lockkit registers, --facade-keys-file and the
-		// device flags included (HubOptions.Args).
-		out = append(out, a.hub.Args()...)
-	}
+	// Every hub flag lockkit registers, --facade-keys-file and the device
+	// flags included (HubOptions.Args).
+	out = append(out, a.hub.Args()...)
 	return out
 }
 

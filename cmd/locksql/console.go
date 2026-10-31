@@ -20,17 +20,17 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
-// runConsole is `locksql console [--profile P] [--auto] [--allow-unmask]
-// [--show-results]`. It runs in the human's terminal only. Without
-// --profile it opens the only profile, or asks which one among several.
+// runConsole is `locksql console --hub URL --hub-key-file PATH --instance
+// NAME [--profile P] [--allow-unmask] [--show-results]`, the command `lox
+// up` starts: requests are decided in lockhub, never on this terminal. It
+// runs in the human's terminal only. Without --profile it opens the only
+// profile, or asks which one among several.
 func runConsole(e env, args []string) int {
-	const usage = "usage: locksql console [--profile P] [--project DIR] [--auto] [--allow-unmask] [--show-results] [--allowed-uids UID,...] [--hub URL --hub-key-file PATH --instance NAME [--hub-plain-http] [--facade-keys-file PATH] [--devices-file PATH [--require-device RISKS] [--seal-clear]]]"
+	const usage = "usage: locksql console --hub URL --hub-key-file PATH --instance NAME [--hub-plain-http] [--facade-keys-file PATH] [--devices-file PATH [--require-device RISKS] [--seal-clear]] [--profile P] [--project DIR] [--allow-unmask] [--show-results] [--allowed-uids UID,...] (launched by `lox up` only)"
 	fs := flag.NewFlagSet("console", flag.ContinueOnError)
 	fs.SetOutput(e.stderr)
 	profile := fs.String("profile", "", "profile to open")
-	auto := fs.Bool("auto", false, "start in auto mode: statements allowed by the tier and the weight check run without a prompt (never on production, never unmask); Shift+Tab switches the mode while the console runs")
-	skip := fs.Bool("skip-permissions", false, "same as --auto (older name)")
-	allowUnmask := fs.Bool("allow-unmask", false, "let clients ask for unmasked PII output; each such query is still approved here, never auto-approved (off by default: unmask requests are refused); :unmask switches it while the console runs")
+	allowUnmask := fs.Bool("allow-unmask", false, "let clients ask for unmasked PII output; each such query is still decided by a human in lockhub (off by default: unmask requests are refused); :unmask switches it while the console runs")
 	showResults := fs.Bool("show-results", false, "print in this console, in clear, the result of each masked query it runs; the client still gets it masked")
 	noUpdateCheck := fs.Bool(strings.TrimPrefix(noUpdateCheckFlag, "--"), false, "internal: no new-version check (the handoff passes LOCKSQL_NO_UPDATE_CHECK on with it)")
 	project := fs.String("project", "", "project directory (default: the current directory); the console account opens the agent's project from its own session")
@@ -42,6 +42,12 @@ func runConsole(e env, args []string) int {
 		return exitUsage
 	}
 	if fs.NArg() > 0 {
+		fmt.Fprintln(e.stderr, usage)
+		return exitUsage
+	}
+	// One mode: the console is started by `lox up`, with its hub.
+	if !hub.Enabled() {
+		fmt.Fprintln(e.stderr, "locksql console:", console.ErrNoHub)
 		fmt.Fprintln(e.stderr, usage)
 		return exitUsage
 	}
@@ -70,7 +76,7 @@ func runConsole(e env, args []string) int {
 	// in the console account, or say how.
 	if proj, err := consoleProject(e.cwd, *project); err == nil {
 		absHubFiles(e.cwd, &hub)
-		a := consoleArgs{profile: *profile, project: proj, auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults, hub: hub, allowedUIDs: uids,
+		a := consoleArgs{profile: *profile, project: proj, allowUnmask: *allowUnmask, showResults: *showResults, hub: hub, allowedUIDs: uids,
 			noUpdateCheck: *noUpdateCheck || e.updateCheckOff()}
 		if code, handled := handoffConsole(e, a); handled {
 			return code
@@ -129,18 +135,18 @@ func runConsole(e env, args []string) int {
 	if ctx.Err() != nil {
 		return exitFail
 	}
-	return openConsole(ctx, e, name, consoleFlags{auto: *auto || *skip, allowUnmask: *allowUnmask, showResults: *showResults, hub: hub, allowedUIDs: uids}, *project, term)
+	return openConsole(ctx, e, name, consoleFlags{allowUnmask: *allowUnmask, showResults: *showResults, hub: hub, allowedUIDs: uids}, *project, term)
 }
 
 // consoleFlags are the console-only switches: no client or config file can
 // set them.
 type consoleFlags struct {
-	auto, allowUnmask, showResults bool
-	// hub is the hub mode, written by lock up.
+	allowUnmask, showResults bool
+	// hub is the hub the console is decided on, written by lox up.
 	hub kconsole.HubOptions
 	// allowedUIDs (--allowed-uids) may connect besides the client group's
 	// members: set by whoever starts the console (the human, the
-	// launcher, lock up), never by a client.
+	// launcher, lox up), never by a client.
 	allowedUIDs []int
 }
 
@@ -157,7 +163,6 @@ func openConsole(ctx context.Context, e env, profile string, f consoleFlags, pro
 	}
 	err := console.Run(ctx, console.Options{
 		Profile:     profile,
-		Auto:        f.auto,
 		AllowUnmask: f.allowUnmask,
 		ShowResults: f.showResults,
 		Hub:         f.hub,

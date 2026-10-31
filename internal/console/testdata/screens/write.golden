@@ -6,11 +6,8 @@
 "\x1b[38;5;99m│\x1b[0m"
 "\x1b[38;5;99m│ \x1b[0mclass \x1b[1;31mWRITE\x1b[0m · EXPLAIN: no EXPLAIN for UPDATE · verdict OK"
 "\x1b[38;5;99m│ \x1b[0mPII: masked (1 column rules; detectors: email)"
-"<bell>"
-"? \x1b[38;5;99m╰─ \x1b[0m\x1b[1mApprove? [y/N] \x1b[0m"
-"\x1b[32m✓\x1b[0m done: 1 rows affected in N ms"
+"\x1b[38;5;99m╰─ \x1b[0mpending: ticket T"
 == response
-ok rows=0 text="(1 rows affected)\n"
+ok rows=0 text=""
 == audit
-event=approved decision=approved approval=session class=write verdict=OK sql=UPDATE users SET status = 'x' WHERE id = 1
-event=run decision=ok approval=session class=write verdict=OK sql=UPDATE users SET status = 'x' WHERE id = 1
+event=pending decision=pending approval=hub class=write verdict=OK sql=UPDATE users SET status = 'x' WHERE id = 1

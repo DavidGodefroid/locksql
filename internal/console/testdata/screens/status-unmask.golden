@@ -5,7 +5,7 @@
   "host": "db.uat.example.com",
   "host_confirmed": true,
   "production": false,
-  "auto_approve": true,
+  "auto_approve": false,
   "allow_unmask": true,
   "show_results": false,
   "tier": "read",
@@ -31,7 +31,7 @@
 == :status
 "  \x1b[2mprofile      \x1b[0m  uat · mariadb db.uat.example.com · tier read · production false"
 "  \x1b[2mdatabases    \x1b[0m  app, other"
-"  \x1b[2mmode         \x1b[0m  \x1b[33mauto: statements allowed by the tier and the weight check run without a prompt\x1b[0m\x1b[2m (Shift+Tab or :mode)\x1b[0m"
+"  \x1b[2mdecided      \x1b[0m  in lockhub, instance sql-uat"
 "  \x1b[2mresults      \x1b[0m  masked (the agent's view)\x1b[2m (Ctrl-O or :results)\x1b[0m"
 "  \x1b[2munmask       \x1b[0m  \x1b[1;31mallowed: clients may ask for unmasked output, approved here each time\x1b[0m\x1b[2m (:unmask)\x1b[0m"
 "  \x1b[2mlimits       \x1b[0m  timeout 30s · warn 100000 · refuse 1000000 · max_rows 200 · max_cell_chars 200 · max_output_bytes 65536"

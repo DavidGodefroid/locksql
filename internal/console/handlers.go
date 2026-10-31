@@ -14,7 +14,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	kaudit "github.com/DavidGodefroid/lockkit/audit"
 	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/locksql/internal/config"
@@ -377,7 +376,7 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 	switch {
 	case state != nil && st.Class == sqlclass.Write:
 		pl.sideEffects = sideEffects(*state)
-	case st.Class == sqlclass.Write && s.cfg.Hub != nil:
+	case st.Class == sqlclass.Write:
 		// No object definitions (MySQL, SQLite): the triggers of the
 		// tables the write names, for its ticket.
 		tr, err := engine.TriggersOf(ctx, sess, pl.db, pl.refs.Relations)
@@ -503,69 +502,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask, Warnings: pl.warnings, Intent: pl.intent})
 
 	s.screen(ctx, pl)
-	if s.cfg.Hub != nil {
-		return s.hubSubmit(ctx, req.ID, sess, pl, rec, hiddenRefusal)
-	}
-	if hiddenRefusal != nil {
-		return s.refuseOnScreen(ctx, req.ID, rec, hiddenRefusal)
-	}
-	// The values are asked before the approval, and asked even when the
-	// approval is skipped: nothing runs while a placeholder has none.
-	missing, _ := s.placeholders(pl)
-	if r := s.askValues(ctx, req.ID, pl, rec, missing); r != nil {
-		return *r
-	}
-	// The k-anonymity counts run before the approval, in auto mode too: a
-	// count under k is a warning for the human, never a refusal, so the
-	// agent's answer is the same whatever the counts say.
-	base := pl.warnings
-	kAlert := func() *ipc.Response {
-		kw, refused, err := s.kCount(ctx, sess, pl)
-		if refused != nil {
-			r := s.refuseWarned(ctx, req.ID, pl, class, refused)
-			return &r
-		}
-		if err != nil {
-			s.auditRunFailed(rec, s.auditErrText(err, pl))
-			r := s.failedPlan(req.ID, "k-anonymity check", err, pl)
-			return &r
-		}
-		pl.warnings = append(slices.Clone(base), kw...)
-		rec.Warnings = pl.warnings
-		s.showKWarnings(kw)
-		return nil
-	}
-	var start time.Time
-	if s.autoApprove() && !pl.unmask {
-		// No human waits in between: the response time is levelled from
-		// the counts on, as it is from the statement on.
-		start = time.Now()
-		if r := kAlert(); r != nil {
-			s.level(ctx, start)
-			return *r
-		}
-		rec.Event, rec.Decision = audit.EventAuto, "auto"
-		s.println(s.frameEnd(paint.Yellow("auto-approved") + paint.Dim(" (auto mode)")))
-	} else {
-		for {
-			if r := kAlert(); r != nil {
-				return *r
-			}
-			r, retype := s.approve(ctx, req.ID, pl, rec)
-			if r != nil {
-				return *r
-			}
-			if !retype {
-				break
-			}
-			_, reused := s.placeholders(pl)
-			if r := s.askValues(ctx, req.ID, pl, rec, reused); r != nil {
-				return *r
-			}
-		}
-		rec.Event, rec.Decision, rec.Approval = audit.EventApproved, "approved", s.cfg.Approver.Mode()
-	}
-	return s.runApproved(ctx, req.ID, sess, pl, rec, class, start)
+	return s.hubSubmit(ctx, req.ID, sess, pl, rec, hiddenRefusal)
 }
 
 // runChecks are the checks of a plan at run time, under the policy and the
@@ -780,75 +717,6 @@ func cloneResult(res engine.Result) engine.Result {
 		c.Rows[i] = slices.Clone(r)
 	}
 	return c
-}
-
-// approve closes the approval screen with the prompt and waits for the
-// human (lockkit's console decides). It returns nil when approved, the
-// error response otherwise (audited). retype reports that the human asked
-// to type again the values the plan reuses. The approval itself is audited
-// by queryRun, once the values are in.
-func (s *Server) approve(ctx context.Context, id int64, pl *plan, rec audit.Record) (resp *ipc.Response, retype bool) {
-	q := kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production}
-	// "r" retypes, unless it is the approval answer itself (a production
-	// profile named r): the Asker does not offer it then.
-	if _, reused := s.placeholders(pl); len(reused) > 0 {
-		q.Retype, q.RetypeNote = "r", " ${"+strings.Join(reused, "}, ${")+"}"
-	}
-	a := s.asker().Ask(ctx, id, q, func(b kaudit.Base) {
-		if b.Event == audit.EventApproved {
-			return
-		}
-		rec.Event, rec.Decision, rec.Reason, rec.Error, rec.Approval = b.Event, b.Decision, b.Reason, b.Error, b.Approval
-		s.audit(rec)
-	})
-	switch {
-	case a.Retype:
-		return nil, true
-	case a.Approved:
-		return nil, false
-	}
-	return &a.Refusal, false
-}
-
-// unanswered audits and answers a prompt left without an answer: the
-// client went away, or the approval timeout passed.
-func (s *Server) unanswered(ctx context.Context, id int64, rec audit.Record) *ipc.Response {
-	var r ipc.Response
-	if ctx.Err() != nil {
-		rec.Event, rec.Decision = audit.EventAbandoned, "abandoned"
-		s.println(paint.Fail("client gone: request cancelled"))
-		r = errResp(id, ipc.CodeDenied, "the request was cancelled")
-	} else {
-		rec.Event, rec.Decision = audit.EventTimeout, "timeout"
-		s.println(paint.Fail("no answer: denied"))
-		r = errResp(id, ipc.CodeTimeout, "no answer from the human within the approval timeout; do not retry unless asked")
-	}
-	s.audit(rec)
-	return &r
-}
-
-// refuseOnScreen ends the approval screen of a plan refused by the weight
-// check under a PII filter. The agent learns of the refusal only once the
-// human has seen it and pressed Enter, so that answering it tells no more
-// than a denial would; --skip-permissions does not skip this prompt.
-//
-// The client learns the code and its default hint only: the reason, its
-// figures and any position stay on the console.
-func (s *Server) refuseOnScreen(ctx context.Context, id int64, rec audit.Record, r *refusal.Error) ipc.Response {
-	s.println(paint.Paint(s.frameColour(), "│ ") + red + "verdict REFUSE: this statement cannot be approved" + reset)
-	bell(s.cfg.IO)
-	// Kept when the prompt goes unanswered too.
-	rec.Error, rec.Code = r.Reason, string(r.Code)
-	s.waiting(true)
-	_, ok := s.cfg.IO.Ask(ctx, s.frameEnd(paint.Bold("Press Enter to refuse ")), ApprovalTimeout)
-	s.waiting(false)
-	if !ok {
-		return *s.unanswered(ctx, id, rec)
-	}
-	rec.Event = audit.EventRefused
-	s.audit(rec)
-	s.println(paint.Fail("refused [" + string(r.Code) + "]: " + safeText(r.Reason, false)))
-	return refusedResp(id, hiddenWeightRefusal, refusal.New(refusal.Cost, hiddenWeightRefusal).Info("", 0))
 }
 
 // result renders the masked result as capped JSON rows and TSV text.

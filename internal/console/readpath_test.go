@@ -1,18 +1,16 @@
 package console
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"net"
-	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DavidGodefroid/lockkit/ticket"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
@@ -24,30 +22,25 @@ func countResult(n any) *engine.Result {
 	return &engine.Result{Columns: []engine.ResultColumn{{Label: "count"}}, Rows: [][]any{{n}}}
 }
 
-// kRun plans q and runs it with the given approval answers. It returns the
-// response, the screen and the number of statements run when the first
-// prompt was shown.
-func kRun(t *testing.T, h *harness, q string, answers ...string) (resp ipc.Response, screen string, runsAtPrompt int) {
+// kRun plans q and runs it once the hub decided its ticket with out. It
+// returns the response and the warnings of the ticket, as its pending
+// record holds them.
+func kRun(t *testing.T, h *harness, q string, out ticket.Outcome, reason string) (resp ipc.Response, warnings string) {
 	t.Helper()
 	pr := h.plan(t, q, false)
-	runsAtPrompt = -1
-	h.io.answers = answers
-	h.io.onAsk = func() {
-		if runsAtPrompt < 0 {
-			runsAtPrompt = len(h.sess.runs)
+	resp = h.decideRun(t, pr.PlanID, out, reason)
+	recs := h.auditRecords(t)
+	for i := len(recs) - 1; i >= 0; i-- {
+		if recs[i]["event"] == "pending" {
+			return resp, fmt.Sprint(recs[i]["warnings"])
 		}
 	}
-	before := len(h.io.out)
-	resp = h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
-	h.io.onAsk = nil
-	h.io.mu.Lock()
-	screen = ansi.ReplaceAllString(strings.Join(h.io.out[before:], "\n"), "")
-	h.io.mu.Unlock()
-	return resp, screen, runsAtPrompt
+	t.Fatal("no pending record")
+	return resp, ""
 }
 
-// A count under k does not refuse: it runs before the prompt and warns the
-// human in the approval frame, who decides as usual.
+// A count under k does not refuse: it runs before the ticket and warns the
+// human on it, who decides as usual.
 func TestKAnonymityWarnsBeforeApproval(t *testing.T) {
 	h := newHarness(t, uatProfile())
 	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{int64(1)}}}
@@ -58,109 +51,56 @@ func TestKAnonymityWarnsBeforeApproval(t *testing.T) {
 	if strings.Contains(pr.Summary, "est.") || pr.Reasons != nil {
 		t.Errorf("row estimates reach the agent: %+v", pr)
 	}
-	under, screen, atPrompt := kRun(t, h, q, "y")
+	under, warn := kRun(t, h, q, ticket.Approved, "")
 	if under.Error != nil {
 		t.Fatalf("a count under k refused the statement: %q", under.Error.Message)
 	}
 	// The subjects of the PII column are counted in its own table, before
-	// the prompt.
+	// the ticket.
 	if want := "SELECT COUNT(*) FROM `app`.`users` WHERE `app`.`users`.`email` = 'alice@example.com'"; len(h.sess.runs) == 0 || h.sess.runs[0] != want {
 		t.Errorf("k-checks run %q, want first %q", h.sess.runs, want)
-	}
-	if atPrompt < 1 || !strings.HasPrefix(h.sess.runs[atPrompt-1], "SELECT COUNT(*)") {
-		t.Errorf("%d statements ran before the prompt (%q): the counts must", atPrompt, h.sess.runs)
 	}
 	if last := h.sess.runs[len(h.sess.runs)-1]; last != q {
 		t.Errorf("last run %q, want the statement", last)
 	}
-	alert := "│ ▲ k-anonymity: the PII filter matches fewer than k=5 rows (2)"
-	if !strings.Contains(screen, alert) || !strings.Contains(screen, "single out one person") {
-		t.Errorf("approval frame lacks the warning:\n%s", screen)
-	}
-	recs := h.auditRecords(t)
-	if w := fmt.Sprint(recs[len(recs)-1]["warnings"]); !strings.Contains(w, "k-anonymity: the PII filter matches fewer than k=5 rows (2)") {
-		t.Errorf("run record warnings %s", w)
+	const alert = "k-anonymity: the PII filter matches fewer than k=5 rows (2)"
+	if !strings.Contains(warn, alert) {
+		t.Errorf("ticket lacks the warning: %s", warn)
 	}
 
 	// Above k: no warning, and the agent's answer is the same.
 	h.sess.count = countResult(int64(7))
-	over, screen, _ := kRun(t, h, q, "y")
-	if strings.Contains(screen, "▲") || strings.Contains(screen, "k-anonymity:") {
-		t.Errorf("a count above k warns:\n%s", screen)
+	over, warn := kRun(t, h, q, ticket.Approved, "")
+	if strings.Contains(warn, "k-anonymity:") {
+		t.Errorf("a count above k warns: %s", warn)
 	}
 	if string(under.Result) != string(over.Result) {
 		t.Errorf("the agent's answer depends on the count:\nunder k %s\nabove k %s", under.Result, over.Result)
 	}
-	recs = h.auditRecords(t)
+	recs := h.auditRecords(t)
 	if w := fmt.Sprint(recs[len(recs)-1]["warnings"]); strings.Contains(w, "k-anonymity") {
 		t.Errorf("a count above k is audited with a warning: %s", w)
 	}
 
 	// A denial after the warning is an ordinary denial.
 	h.sess.count = countResult(int64(2))
-	resp, _, _ := kRun(t, h, q, "n too narrow")
+	resp, _ := kRun(t, h, q, ticket.Denied, "too narrow")
 	wantCode(t, resp, ipc.CodeDenied)
-	if !strings.Contains(resp.Error.Message, "denied by the human: too narrow") || strings.Contains(resp.Error.Message, "k-anonymity") {
+	if !strings.Contains(resp.Error.Message, "too narrow") || strings.Contains(resp.Error.Message, "k-anonymity") {
 		t.Errorf("denial: %q", resp.Error.Message)
-	}
-	recs = h.auditRecords(t)
-	if last := recs[len(recs)-1]; last["event"] != "denied" || !strings.Contains(fmt.Sprint(last["warnings"]), "k-anonymity") {
-		t.Errorf("denial record %v", last)
 	}
 
 	// A group too small warns about the group; a NULL (no group) does not.
 	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}, {Label: "count"}}, Rows: [][]any{}}
 	h.sess.count = countResult(int64(1))
-	resp, screen, _ = kRun(t, h, "SELECT email, count(*) FROM users GROUP BY email LIMIT 5", "y")
-	if resp.Error != nil || !strings.Contains(screen, "▲ k-anonymity: a group covers fewer than k=5 rows (1)") {
-		t.Errorf("small group: %+v\n%s", resp.Error, screen)
+	resp, warn = kRun(t, h, "SELECT email, count(*) FROM users GROUP BY email LIMIT 5", ticket.Approved, "")
+	if resp.Error != nil || !strings.Contains(warn, "k-anonymity: a group covers fewer than k=5 rows (1)") {
+		t.Errorf("small group: %+v %s", resp.Error, warn)
 	}
 	h.sess.count = countResult(nil)
-	resp, screen, _ = kRun(t, h, "SELECT email, count(*) FROM users GROUP BY email LIMIT 5", "y")
-	if resp.Error != nil || strings.Contains(screen, "▲") {
-		t.Errorf("no group: %+v\n%s", resp.Error, screen)
-	}
-}
-
-// In auto mode a count under k runs the statement: the warning is printed
-// in the frame and kept in the audit, and the agent's answer is the same as
-// above k.
-func TestKAnonymityWarningInAutoMode(t *testing.T) {
-	h := newHarness(t, uatProfile(), skip)
-	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{int64(1)}}}
-	const q = "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1"
-
-	h.sess.count = countResult(int64(2))
-	under, screen, _ := kRun(t, h, q)
-	if under.Error != nil {
-		t.Fatalf("auto mode refused a count under k: %q", under.Error.Message)
-	}
-	if h.io.promptCount() != 0 {
-		t.Fatal("auto mode prompted")
-	}
-	if last := h.sess.runs[len(h.sess.runs)-1]; last != q {
-		t.Errorf("last run %q, want the statement", last)
-	}
-	if !strings.Contains(screen, "▲ k-anonymity: the PII filter matches fewer than k=5 rows (2)") || !strings.Contains(screen, "auto-approved") {
-		t.Errorf("console lacks the warning:\n%s", screen)
-	}
-	recs := h.auditRecords(t)
-	for _, r := range recs[len(recs)-2:] {
-		if !strings.Contains(fmt.Sprint(r["warnings"]), "k-anonymity: the PII filter matches fewer than k=5 rows (2)") {
-			t.Errorf("record without the warning: %v", r)
-		}
-	}
-	if recs[len(recs)-2]["decision"] != "auto" {
-		t.Errorf("record %v", recs[len(recs)-2])
-	}
-
-	h.sess.count = countResult(int64(9))
-	over, screen, _ := kRun(t, h, q)
-	if strings.Contains(screen, "▲") {
-		t.Errorf("a count above k warns:\n%s", screen)
-	}
-	if string(under.Result) != string(over.Result) || over.Error != nil {
-		t.Errorf("the agent's answer depends on the count:\nunder k %s\nabove k %s %+v", under.Result, over.Result, over.Error)
+	resp, warn = kRun(t, h, "SELECT email, count(*) FROM users GROUP BY email LIMIT 5", ticket.Approved, "")
+	if resp.Error != nil || strings.Contains(warn, "k-anonymity") {
+		t.Errorf("no group: %+v %s", resp.Error, warn)
 	}
 }
 
@@ -169,12 +109,12 @@ func TestKAnonymityCountFailureWarns(t *testing.T) {
 	h := newHarness(t, uatProfile())
 	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{int64(1)}}}
 	h.sess.count = &engine.Result{Columns: []engine.ResultColumn{{Label: "count"}}, Rows: [][]any{{"many"}}}
-	resp, screen, _ := kRun(t, h, "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1", "y")
+	resp, warn := kRun(t, h, "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1", ticket.Approved, "")
 	if resp.Error != nil {
 		t.Fatalf("refused: %q", resp.Error.Message)
 	}
-	if !strings.Contains(screen, "▲ k-anonymity: a count returned no number") {
-		t.Errorf("no warning:\n%s", screen)
+	if !strings.Contains(warn, "k-anonymity: a count returned no number") {
+		t.Errorf("no warning: %s", warn)
 	}
 }
 
@@ -223,15 +163,13 @@ WHERE c.country_code = 'BE'
 GROUP BY c.id, c.name, c.email ORDER BY spend DESC LIMIT 3`
 	var pr ipc.PlanResult
 	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "main", SQL: q}, &pr)
-	h.io.answers = []string{"y"}
 	var rr ipc.RunResult
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	h.okRun(t, pr.PlanID, &rr)
 	if len(rr.Rows) != 3 {
 		t.Errorf("rows %v", rr.Rows)
 	}
-	out := ansi.ReplaceAllString(h.io.output(), "")
-	if !strings.Contains(out, "▲ k-anonymity: a group covers fewer than k=5 rows (4)") {
-		t.Errorf("approval frame lacks the warning:\n%s", out)
+	if w := fmt.Sprint(recordsOf(t, h, "pending")[0]["warnings"]); !strings.Contains(w, "k-anonymity: a group covers fewer than k=5 rows (4)") {
+		t.Errorf("ticket lacks the warning: %s", w)
 	}
 }
 
@@ -267,30 +205,32 @@ func TestKAnonymityINCountsEachValue(t *testing.T) {
 		c.Policy = config.NewPolicy(p, []string{"main.users.email"}, nil)
 		c.Session, c.Databases = sess, []string{"main"}
 	})
-	run := func(q string) ipc.Response {
+	run := func(q string) (ipc.Response, string) {
 		t.Helper()
 		var pr ipc.PlanResult
 		h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "main", SQL: q}, &pr)
-		h.io.answers = []string{"y"}
-		return h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+		resp := h.approveRun(t, pr.PlanID)
+		recs := recordsOf(t, h, "pending")
+		return resp, fmt.Sprint(recs[len(recs)-1]["warnings"])
 	}
-	if resp := run("SELECT id FROM users WHERE email IN ('a@example.com', 'b@example.com', 'absent@example.com') LIMIT 5"); resp.Error != nil {
+	resp, warn := run("SELECT id FROM users WHERE email IN ('a@example.com', 'b@example.com', 'absent@example.com') LIMIT 5")
+	if resp.Error != nil {
 		t.Fatalf("refused: %q", resp.Error.Message)
 	}
 	out := ansi.ReplaceAllString(h.io.output(), "")
 	if !strings.Contains(out, "SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM") {
 		t.Errorf("approval screen does not show the per-value count:\n%s", out)
 	}
-	if !strings.Contains(out, "▲ k-anonymity: the PII filter matches fewer than k=2 rows (0)") {
-		t.Errorf("the absent value does not warn:\n%s", out)
+	if !strings.Contains(warn, "k-anonymity: the PII filter matches fewer than k=2 rows (0)") {
+		t.Errorf("the absent value does not warn: %s", warn)
 	}
 	// The values that exist pass without a warning.
-	n := strings.Count(out, "▲")
-	if resp := run("SELECT id FROM users WHERE email IN ('a@example.com', 'b@example.com') LIMIT 5"); resp.Error != nil {
+	resp, warn = run("SELECT id FROM users WHERE email IN ('a@example.com', 'b@example.com') LIMIT 5")
+	if resp.Error != nil {
 		t.Errorf("existing values refused: %d %q", resp.Error.Code, resp.Error.Message)
 	}
-	if strings.Count(ansi.ReplaceAllString(h.io.output(), ""), "▲") != n {
-		t.Errorf("existing values warn:\n%s", h.io.output())
+	if strings.Contains(warn, "k-anonymity") {
+		t.Errorf("existing values warn: %s", warn)
 	}
 }
 
@@ -299,7 +239,7 @@ func TestResponseIsLevelled(t *testing.T) {
 	pr := h.plan(t, selectUsers, false)
 	h.io.answers = []string{"y"}
 	start := time.Now()
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	h.okRun(t, pr.PlanID, nil)
 	if el := time.Since(start); el < 150*time.Millisecond {
 		t.Errorf("answered after %s, before the quantum", el)
 	}
@@ -308,7 +248,7 @@ func TestResponseIsLevelled(t *testing.T) {
 	pr = h.plan(t, selectUsers, false)
 	h.io.answers = []string{"y"}
 	start = time.Now()
-	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	resp := h.approveRun(t, pr.PlanID)
 	if el := time.Since(start); el < 150*time.Millisecond || resp.Error == nil {
 		t.Errorf("failure answered after %s: %+v", el, resp.Error)
 	}
@@ -318,7 +258,7 @@ func TestRunResultHasNoTimings(t *testing.T) {
 	h := newHarness(t, uatProfile())
 	pr := h.plan(t, selectUsers, false)
 	h.io.answers = []string{"y"}
-	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	resp := h.approveRun(t, pr.PlanID)
 	if strings.Contains(string(resp.Result), "duration") {
 		t.Errorf("timing reaches the client: %s", resp.Result)
 	}
@@ -363,7 +303,7 @@ func TestReadAllowlist(t *testing.T) {
 	pr := h.plan(t, "EXPLAIN SELECT id FROM users WHERE id = 1 LIMIT 1", false)
 	h.io.answers = []string{"y"}
 	var rr ipc.RunResult
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	h.okRun(t, pr.PlanID, &rr)
 	if len(rr.Columns) != 1 || rr.Columns[0] != "plan" || h.sess.runCount() != 0 {
 		t.Errorf("EXPLAIN result %+v, runs %d", rr, h.sess.runCount())
 	}
@@ -393,78 +333,12 @@ func TestApprovalOnlyFromTheTerminal(t *testing.T) {
 	for _, method := range []string{"approve", "query.approve", "console.answer", "confirm"} {
 		wantCode(t, h.s.Handle(context.Background(), ipc.Request{JSONRPC: "2.0", ID: 1, Method: method}), ipc.CodeMethodNotFound)
 	}
-	// The terminal does not answer: the run is not approved, even though
-	// the client said "y" in every way it could.
-	h.io.timeout = true
+	// The client said "y" in every way it could: the run still waits for
+	// the human's decision in lockhub.
 	h.ok(t, ipc.MethodChangeRequest, ipc.ChangeParams{Change: "y"}, nil)
-	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeTimeout)
+	pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
 	if h.sess.runCount() != 0 {
 		t.Fatal("a statement ran without the human's answer")
-	}
-}
-
-// Over a real socket: bytes a client writes after its run request (a bare
-// "y", a forged response) never reach the approval prompt.
-func TestSocketCannotAnswerThePrompt(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("needs the peer credentials of a Unix socket")
-	}
-	h := newHarness(t, uatProfile())
-	dir, err := os.MkdirTemp("", "lsa")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, "a.sock")
-	ln, err := net.Listen("unix", path)
-	if err != nil {
-		t.Skipf("unix sockets unavailable: %v", err)
-	}
-	pr := h.plan(t, selectUsers, false)
-	h.io.mu.Lock()
-	h.io.block = true
-	h.io.blocked = make(chan struct{})
-	blocked := h.io.blocked
-	h.io.mu.Unlock()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	served := make(chan error, 1)
-	go func() { served <- h.s.Serve(ctx, ln, nil) }()
-
-	c, err := net.Dial("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-	params, _ := json.Marshal(ipc.RunParams{PlanID: pr.PlanID})
-	if err := ipc.WriteMsg(c, ipc.Request{JSONRPC: "2.0", ID: 1, Method: ipc.MethodQueryRun, Params: params}); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-blocked:
-	case <-time.After(5 * time.Second):
-		t.Fatal("approval prompt not reached")
-	}
-	for _, raw := range []string{"y\n", `{"jsonrpc":"2.0","id":1,"result":"y"}` + "\n", `{"jsonrpc":"2.0","id":2,"method":"query.run","params":{"plan_id":"` + pr.PlanID + `"}}` + "\n"} {
-		if _, err := c.Write([]byte(raw)); err != nil {
-			break
-		}
-	}
-	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
-	r := bufio.NewReader(c)
-	var resp ipc.Response
-	_ = ipc.ReadMsg(r, &resp)
-	if h.sess.runCount() != 0 {
-		t.Fatal("bytes from the socket approved a statement")
-	}
-	cancel()
-	select {
-	case <-served:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Serve did not stop")
-	}
-	if h.sess.runCount() != 0 {
-		t.Fatal("a statement ran")
 	}
 }
 
@@ -481,37 +355,6 @@ func TestStatementTextViewsRefused(t *testing.T) {
 	wantCode(t, resp, ipc.CodeRefused)
 }
 
-func TestReferenceRoundTrip(t *testing.T) {
-	h := newHarness(t, uatProfile())
-	pr := h.plan(t, "SELECT id, email, note FROM users WHERE id = 1 LIMIT 1", false)
-	h.io.answers = []string{"y"}
-	var rr ipc.RunResult
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
-	if rr.Rows[0][1] != "<redacted:r1.1.2>" || strings.Contains(rr.Text, "alice@") {
-		t.Fatalf("row %v", rr.Rows[0])
-	}
-	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{int64(1)}}}
-	q := "SELECT id FROM users WHERE email = '${r1.1.2}' LIMIT 1"
-	pr = h.plan(t, q, false)
-	if pr.SQL != q {
-		t.Errorf("the plan shows %q", pr.SQL)
-	}
-	h.io.answers = []string{"y"}
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
-	last := h.sess.runs[len(h.sess.runs)-1]
-	if last != "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1" {
-		t.Errorf("ran %q", last)
-	}
-	for _, r := range h.sess.runs {
-		if strings.HasPrefix(r, "SELECT COUNT(*)") {
-			t.Errorf("k-check ran for a reference: %q", r)
-		}
-	}
-	if strings.Contains(h.auditLog(t), "alice@example.com") {
-		t.Error("the value reached the audit log")
-	}
-}
-
 // A column that may hold a literal the agent wrote gets no reference on any
 // row: a reference to it would be a lookup of a chosen value without the
 // k-anonymity check. INTERSECT with a literal is an equality test on the
@@ -522,7 +365,7 @@ func TestNoReferenceForLiteralColumn(t *testing.T) {
 	pr := h.plan(t, "SELECT email FROM users UNION ALL SELECT 'john@x.com' LIMIT 50", false)
 	h.io.answers = []string{"y"}
 	var rr ipc.RunResult
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	h.okRun(t, pr.PlanID, &rr)
 	for _, row := range rr.Rows {
 		if row[0] != "<redacted>" {
 			t.Errorf("row %v", row)
@@ -541,7 +384,7 @@ func TestExplainWithPlaceholderRefused(t *testing.T) {
 	h := newHarness(t, uatProfile())
 	pr := h.plan(t, "SELECT id, email, note FROM users WHERE id = 1 LIMIT 1", false)
 	h.io.answers = []string{"y"}
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	h.okRun(t, pr.PlanID, nil)
 	for _, q := range []string{
 		"EXPLAIN SELECT id FROM users WHERE email = '${r1.1.2}' LIMIT 1",
 		"EXPLAIN SELECT id FROM users WHERE email = '${email}' LIMIT 1",
@@ -568,7 +411,7 @@ func TestNoReferenceForMixedOrAggregateColumn(t *testing.T) {
 		pr := h.plan(t, q, false)
 		h.io.answers = []string{"y"}
 		var rr ipc.RunResult
-		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+		h.okRun(t, pr.PlanID, &rr)
 		for _, row := range rr.Rows {
 			if row[0] != "<redacted>" {
 				t.Errorf("%s: row %v", q, row)
@@ -581,7 +424,7 @@ func TestNoReferenceForMixedOrAggregateColumn(t *testing.T) {
 	pr := h.plan(t, "SELECT email FROM users WHERE id = 1 LIMIT 5", false)
 	h.io.answers = []string{"y"}
 	var rr ipc.RunResult
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	h.okRun(t, pr.PlanID, &rr)
 	if rr.Rows[0][0] != "<redacted:r1.1.1>" {
 		t.Errorf("plain column: %v", rr.Rows[0])
 	}
@@ -594,70 +437,11 @@ func TestNoReferenceForRecursiveCTELiteral(t *testing.T) {
 	pr := h.plan(t, "WITH RECURSIVE c(e, n) AS (SELECT email, 1 FROM users UNION ALL SELECT 'x', n+1 FROM c WHERE n < 2) SELECT e FROM c LIMIT 5", false)
 	h.io.answers = []string{"y"}
 	var rr ipc.RunResult
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	h.okRun(t, pr.PlanID, &rr)
 	for _, row := range rr.Rows {
 		if row[0] != "<redacted>" {
 			t.Errorf("row %v", row)
 		}
-	}
-}
-
-// A statement that filters a PII column with a literal the agent wrote gets
-// no reference on any column: the agent chose the value behind it, and a
-// reference would let it look that value up without the k-anonymity check.
-func TestNoReferenceUnderAgentLiteralFilter(t *testing.T) {
-	for _, q := range []string{
-		"SELECT email FROM users WHERE email = 'victim@x.com' LIMIT 50",
-		"SELECT email FROM users WHERE email IN ('victim@x.com', 'b@x.com') LIMIT 50",
-		"SELECT email FROM users GROUP BY email HAVING email = 'victim@x.com' LIMIT 5",
-		"SELECT email FROM users WHERE id IN (SELECT id FROM users INTERSECT SELECT id FROM users WHERE email = 'victim@x.com') LIMIT 5",
-		"SELECT email FROM users UNION ALL SELECT email FROM users WHERE email = 'victim@x.com' LIMIT 5",
-		"SELECT u.email FROM users u JOIN orders o ON o.user_id = u.id WHERE u.email = 'victim@x.com' LIMIT 5",
-		"SELECT email FROM users WHERE id IN (SELECT id FROM users WHERE email = 'victim@x.com') LIMIT 5",
-		"SELECT email FROM users WHERE email IN ('${r9.1.1}', 'victim@x.com') LIMIT 5",
-	} {
-		h := newHarness(t, uatProfile())
-		h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"victim@x.com"}}}
-		h.sess.count = &engine.Result{Columns: []engine.ResultColumn{{Label: "n"}}, Rows: [][]any{{int64(100)}}}
-		if strings.Contains(q, "r9.1.1") {
-			// A reference to a known cell, mixed with a literal.
-			pr := h.plan(t, "SELECT email FROM users WHERE id = 1 LIMIT 1", false)
-			h.io.answers = []string{"y"}
-			h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
-			q = strings.Replace(q, "r9.1.1", "r1.1.1", 1)
-		}
-		pr := h.plan(t, q, false)
-		h.io.answers = []string{"y"}
-		var rr ipc.RunResult
-		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
-		if len(rr.Rows) == 0 || rr.Rows[0][0] != "<redacted>" {
-			t.Errorf("%s: rows %v", q, rr.Rows)
-		}
-	}
-}
-
-// A plain fetch, and a fetch filtered by a reference or a typed value, keep
-// their references: the agent chose none of the values.
-func TestReferenceUnderPlaceholderFilter(t *testing.T) {
-	h := newHarness(t, uatProfile())
-	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"alice@example.com"}}}
-	run := func(q string) ipc.RunResult {
-		t.Helper()
-		pr := h.plan(t, q, false)
-		h.io.answers = []string{"y"}
-		var rr ipc.RunResult
-		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
-		return rr
-	}
-	if rr := run("SELECT email FROM users LIMIT 5"); rr.Rows[0][0] != "<redacted:r1.1.1>" {
-		t.Errorf("plain fetch: %v", rr.Rows)
-	}
-	if rr := run("SELECT email FROM users WHERE email = '${r1.1.1}' LIMIT 5"); rr.Rows[0][0] != "<redacted:r2.1.1>" {
-		t.Errorf("reference filter: %v", rr.Rows)
-	}
-	h.io.secrets = []string{"alice@example.com"}
-	if rr := run("SELECT email FROM users WHERE email IN ('${email}', '${r1.1.1}') LIMIT 5"); rr.Rows[0][0] != "<redacted:r3.1.1>" {
-		t.Errorf("typed value filter: %v", rr.Rows)
 	}
 }
 
@@ -670,9 +454,9 @@ func TestRecursiveCTENotConvergedRefused(t *testing.T) {
 
 // Under a PII filter the weight verdict is a 1-bit oracle on the planner's
 // statistics: query.plan answers OK with the estimates hidden, and query.run
-// shows the REFUSE to the human, who presses Enter before the client gets a
-// generic refusal. Neither the main EXPLAIN nor a k-anonymity count's, nor
-// --skip-permissions, makes the answer come without the human.
+// shows the REFUSE to the human and sends the ticket to lockhub: the client
+// gets a generic refusal only once the human decided. Neither the main
+// EXPLAIN nor a k-anonymity count's makes the answer come without the human.
 func TestWeightVerdictUnderPIIFilterDecidedAtRun(t *testing.T) {
 	const q = "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1"
 	heavy := heavyPlan()
@@ -683,7 +467,6 @@ func TestWeightVerdictUnderPIIFilterDecidedAtRun(t *testing.T) {
 	}{
 		{"main EXPLAIN", nil, func(f *fakeSession) { f.plan = heavyPlan() }},
 		{"k-anonymity count", nil, func(f *fakeSession) { f.kplan = &heavy }},
-		{"skip-permissions", []hopt{skip}, func(f *fakeSession) { f.plan = heavyPlan() }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, uatProfile(), tc.opts...)
@@ -702,14 +485,13 @@ func TestWeightVerdictUnderPIIFilterDecidedAtRun(t *testing.T) {
 			if strings.Contains(h.auditLog(t), `"event":"refused"`) {
 				t.Error("plan refusal audited under a PII filter")
 			}
-			h.io.answers = []string{"y"} // ignored: Enter refuses whatever is typed
-			run := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+			run := h.approveRun(t, pr.PlanID) // an approval refuses too
 			wantCode(t, run, ipc.CodeRefused)
 			if run.Error.Message != "refused by the weight check (the details are shown on the console)" {
 				t.Errorf("run refusal: %q", run.Error.Message)
 			}
-			if h.io.promptCount() != 1 || !strings.Contains(h.io.prompts[0], "Press Enter to refuse") {
-				t.Errorf("prompts %q, want one Press Enter to refuse", h.io.prompts)
+			if h.io.promptCount() != 0 {
+				t.Errorf("prompts %q", h.io.prompts)
 			}
 			if h.sess.runCount() != 0 {
 				t.Fatal("a REFUSE verdict ran")
@@ -725,30 +507,23 @@ func TestWeightVerdictUnderPIIFilterDecidedAtRun(t *testing.T) {
 				}
 			}
 			out := ansi.ReplaceAllString(h.io.output(), "")
-			for _, want := range []string{"verdict REFUSE", "50 000 000", "verdict REFUSE: this statement cannot be approved"} {
+			for _, want := range []string{"verdict REFUSE", "50 000 000"} {
 				if !strings.Contains(out, want) {
 					t.Errorf("the console does not show %q: %s", want, out)
 				}
 			}
-			if !strings.Contains(h.auditLog(t), `"event":"refused"`) {
-				t.Error("run refusal not audited")
+			// The audit record keeps the weight reason the client does
+			// not get.
+			recs := h.auditRecords(t)
+			if last := recs[len(recs)-1]; last["event"] != "refused" || last["code"] != "E_COST" || !strings.Contains(fmt.Sprint(last["error"]), "50 000 000") {
+				t.Errorf("run refusal record: %v", last)
 			}
 		})
 	}
 
-	// No answer: the approval timeout applies, as for any prompt.
+	// Without a PII filter the verdict is answered at plan time, as before.
 	h := newHarness(t, uatProfile())
 	h.sess.plan = heavyPlan()
-	pr := h.plan(t, q, false)
-	h.io.timeout = true
-	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeTimeout)
-	// The audit record keeps the weight reason the human did not see out.
-	recs := h.auditRecords(t)
-	if last := recs[len(recs)-1]; last["event"] != "timeout" || !strings.Contains(fmt.Sprint(last["error"]), "50 000 000") {
-		t.Errorf("timeout record: %v", last)
-	}
-
-	// Without a PII filter the verdict is answered at plan time, as before.
 	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT id FROM users WHERE id = 1 LIMIT 1"})
 	wantCode(t, resp, ipc.CodeRefused)
 	if !strings.HasPrefix(resp.Error.Message, "weight check") {

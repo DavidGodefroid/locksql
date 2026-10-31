@@ -30,8 +30,19 @@ import (
 
 const hubInstanceName = "sql-uat"
 
-// withHub puts the harness console in hub mode against a fake lockhub.
+// withHub puts the harness console in hub mode against a fake lockhub,
+// with typed approvals for the console's own decisions.
 func withHub(t *testing.T, hub **hubtest.Hub) hopt {
+	return func(c *ServerConfig) {
+		c.Approver = nil
+		attachHub(t, hub)(c)
+	}
+}
+
+// attachHub decides the harness console on a fake lockhub; the approver
+// the test set, typed approvals by default, takes the console's own
+// decisions (policy changes, :unmask).
+func attachHub(t *testing.T, hub **hubtest.Hub) hopt {
 	return func(c *ServerConfig) {
 		home := t.TempDir()
 		key, err := hubclient.InstanceKey(home, hubInstanceName)
@@ -48,7 +59,11 @@ func withHub(t *testing.T, hub **hubtest.Hub) hopt {
 			t.Fatal(err)
 		}
 		c.Hub = h
-		c.Approver = h.Approver(newTypedApprover(c.IO))
+		own := c.Approver
+		if own == nil {
+			own = newTypedApprover(c.IO)
+		}
+		c.Approver = h.Approver(own)
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
 		go func() { defer close(done); h.Watch(ctx, c.IO) }()
@@ -74,6 +89,62 @@ func pendingTicket(t *testing.T, resp ipc.Response, status string) string {
 		t.Fatalf("result %s, want %s with a ticket", resp.Result, status)
 	}
 	return m["ticket"]
+}
+
+// runHub is the hub options of a console Run starts in a test: a fake
+// lockhub, its pinned key and the instance key, as lox up writes them.
+func runHub(t *testing.T) kconsole.HubOptions {
+	t.Helper()
+	home := t.TempDir()
+	key, err := hubclient.InstanceKey(home, hubInstanceName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub := hubtest.New(t, hubInstanceName, key.Public().(ed25519.PublicKey))
+	// The pinned key's directory is writable by its owner only.
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keyFile := filepath.Join(dir, "hub.pub")
+	if err := os.WriteFile(keyFile, []byte(base64.StdEncoding.EncodeToString(hub.Pub)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return kconsole.HubOptions{URL: hub.URL(), KeyFile: keyFile, Instance: hubInstanceName, Home: home}
+}
+
+// approveRun runs plan id the way an approved request runs: query.run
+// answers pending with a ticket, the hub approves it, and the ticket runs.
+func (h *harness) approveRun(t *testing.T, id string) ipc.Response {
+	t.Helper()
+	return h.decideRun(t, id, ticket.Approved, "")
+}
+
+// decideRun runs plan id once the hub decided its ticket with out.
+func (h *harness) decideRun(t *testing.T, id string, out ticket.Outcome, reason string) ipc.Response {
+	t.Helper()
+	r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: id})
+	if r.Error != nil {
+		return r
+	}
+	tk := pendingTicket(t, r, "pending")
+	h.hub.Decide(tk, out, reason)
+	return runTicket(t, h, tk)
+}
+
+// okRun is approveRun for a run that must succeed, its result decoded into
+// out (nil: not decoded).
+func (h *harness) okRun(t *testing.T, id string, out any) {
+	t.Helper()
+	r := h.approveRun(t, id)
+	if r.Error != nil {
+		t.Fatalf("query.run: unexpected error %d %q", r.Error.Code, r.Error.Message)
+	}
+	if out != nil {
+		if err := json.Unmarshal(r.Result, out); err != nil {
+			t.Fatalf("query.run: decode result: %v", err)
+		}
+	}
 }
 
 // runTicket runs a ticket until the hub's decision has reached the console.
@@ -130,10 +201,6 @@ func TestHubModePendingThenRun(t *testing.T) {
 	if strings.Contains(h.io.output(), "auto mode:") {
 		t.Error("auto mode in hub mode")
 	}
-	h.s.Key(KeyShiftTab)
-	if h.s.autoApprove() {
-		t.Error("Shift+Tab turned auto mode on in hub mode")
-	}
 }
 
 // A denial reaches the agent with the human's reason, and nothing runs.
@@ -172,7 +239,7 @@ func TestHubModeStale(t *testing.T) {
 	}
 }
 
-// Values typed in the console cannot be typed in hub mode.
+// Placeholders are refused: no value is typed in lockhub.
 func TestHubModeRefusesPlaceholders(t *testing.T) {
 	var hub *hubtest.Hub
 	h := newHarness(t, uatProfile(), withHub(t, &hub))

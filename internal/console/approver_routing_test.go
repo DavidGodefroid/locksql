@@ -29,50 +29,30 @@ func recordsOf(t *testing.T, h *harness, event string) []map[string]any {
 	return out
 }
 
-// A server built with a fingerprint approver audits an approval with the
-// desktop mode and denies a typed yes that no finger confirms.
-func TestServerApprovalUsesApprover(t *testing.T) {
-	v := &fingerprint.Fake{Results: []error{nil, fingerprint.ErrNoMatch}}
+// The hub decides the requests; the console's own decisions stay at the
+// terminal, with the approver of its level: :unmask asks the finger, and
+// a typed yes that no finger confirms leaves it off.
+func TestConsoleDecisionsUseApprover(t *testing.T) {
+	v := &fingerprint.Fake{Results: []error{fingerprint.ErrNoMatch, nil}}
 	io := &fakeIO{}
-	h := newHarness(t, uatProfile(), func(c *ServerConfig) { c.IO = io }, fingerOpt(io, v))
+	h := newHarness(t, uatProfile(), func(c *ServerConfig) { c.IO = io; c.Fingerprint = true }, fingerOpt(io, v))
 	h.io = io
+	h.io.answers = []string{"y"}
+	h.s.Command(context.Background(), ":unmask")
+	if h.s.allowUnmask() || v.Calls != 1 {
+		t.Fatalf("unmask = %v without a finger, calls %d", h.s.allowUnmask(), v.Calls)
+	}
+	h.io.answers = []string{"y"}
+	h.s.Command(context.Background(), ":unmask")
+	if !h.s.allowUnmask() || v.Calls != 2 {
+		t.Fatalf("unmask = %v with a finger, calls %d", h.s.allowUnmask(), v.Calls)
+	}
+	// A request goes to the hub: no prompt, no finger.
+	prompts := h.io.promptCount()
 	pr := h.plan(t, selectUsers, false)
-	h.io.answers = []string{"y"}
-	if r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}); r.Error != nil {
-		t.Fatalf("first run: %s", r.Error.Message)
-	}
-	pr = h.plan(t, selectUsers, false)
-	h.io.answers = []string{"y"}
-	r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
-	if r.Error == nil || !strings.Contains(r.Error.Message, "no fingerprint") {
-		t.Fatalf("second run should be denied: %+v", r)
-	}
-	approved := recordsOf(t, h, string(audit.EventApproved))
-	if len(approved) != 1 || approved[0]["approval"] != "desktop+fingerprint" {
-		t.Fatalf("approved records: %v", approved)
-	}
-	denied := recordsOf(t, h, string(audit.EventDenied))
-	if len(denied) != 1 || denied[0]["reason"] != "no fingerprint" || !strings.Contains(errText(denied[0]), "no match") {
-		t.Fatalf("denied records: %v", denied)
-	}
-	if n := h.sess.runCount(); n != 1 {
-		t.Fatalf("runs = %d, want 1", n)
-	}
-}
-
-func TestServerThreeNoMatchesEndTheConsole(t *testing.T) {
-	v := &fingerprint.Fake{Results: []error{fingerprint.ErrNoMatch, fingerprint.ErrNoMatch, fingerprint.ErrNoMatch}}
-	io := &fakeIO{}
-	h := newHarness(t, uatProfile(), func(c *ServerConfig) { c.IO = io }, fingerOpt(io, v))
-	h.io = io
-	for i := 0; i < 3; i++ {
-		pr := h.plan(t, selectUsers, false)
-		h.io.answers = []string{"y"}
-		h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
-	}
-	reason, ended := h.s.Ended()
-	if !ended || !strings.Contains(reason, "fingerprint") {
-		t.Fatalf("ended = %v %q", ended, reason)
+	pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	if h.io.promptCount() != prompts || v.Calls != 2 {
+		t.Fatalf("a request asked here: prompts %q, finger calls %d", h.io.prompts, v.Calls)
 	}
 }
 
@@ -92,18 +72,6 @@ func TestStartPolicyUsesApprover(t *testing.T) {
 	}
 	if v.Calls != 1 {
 		t.Fatalf("calls = %d", v.Calls)
-	}
-}
-
-// With no approver configured the typed one applies, and the audit says so.
-func TestDefaultApproverAuditsSession(t *testing.T) {
-	h := newHarness(t, uatProfile())
-	pr := h.plan(t, selectUsers, false)
-	h.io.answers = []string{"y"}
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
-	approved := recordsOf(t, h, string(audit.EventApproved))
-	if len(approved) != 1 || approved[0]["approval"] != "session" {
-		t.Fatalf("approved records: %v", approved)
 	}
 }
 

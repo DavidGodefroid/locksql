@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,72 +22,6 @@ func (h *harness) events(t *testing.T) []string {
 	return out
 }
 
-// Shift+Tab switches between manual and auto mode: audited, announced,
-// shown on the status line, and in effect for the next statement.
-func TestShiftTabTogglesMode(t *testing.T) {
-	h := newHarness(t, uatProfile())
-	if h.s.autoApprove() || !strings.Contains(h.io.statusLine(), "mode manual") {
-		t.Fatalf("not manual at start; status %q", h.io.statusLine())
-	}
-	h.s.Key(KeyShiftTab)
-	if !h.s.autoApprove() {
-		t.Fatal("still manual")
-	}
-	if out := h.io.output(); !strings.Contains(out, "auto mode") {
-		t.Errorf("no announcement:\n%s", out)
-	}
-	if st := h.io.statusLine(); !strings.Contains(st, "mode AUTO") {
-		t.Errorf("status %q", st)
-	}
-	pr := h.plan(t, selectUsers, false)
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
-	if h.io.promptCount() != 0 {
-		t.Errorf("auto mode prompted: %q", h.io.prompts)
-	}
-	var st ipc.StatusResult
-	h.ok(t, ipc.MethodStatus, nil, &st)
-	if !st.AutoApprove {
-		t.Error("status does not report auto mode")
-	}
-
-	h.s.Key(KeyShiftTab)
-	if h.s.autoApprove() || !strings.Contains(h.io.statusLine(), "mode manual") {
-		t.Fatalf("not back to manual; status %q", h.io.statusLine())
-	}
-	pr = h.plan(t, selectUsers, false)
-	h.io.answers = []string{"y"}
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
-	if h.io.promptCount() != 1 {
-		t.Errorf("manual mode did not prompt: %q", h.io.prompts)
-	}
-	want := []string{"mode:auto", "auto:auto", "run:ok", "mode:manual", "approved:approved", "run:ok"}
-	if got := h.events(t); fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Errorf("audit events %v, want %v", got, want)
-	}
-}
-
-// A production profile stays in manual mode: the key says so and nothing
-// is audited.
-func TestAutoModeUnavailableOnProduction(t *testing.T) {
-	h := newHarness(t, prodProfile(), skip)
-	if h.s.autoApprove() {
-		t.Fatal("auto on production")
-	}
-	h.s.Key(KeyShiftTab)
-	if h.s.autoApprove() {
-		t.Fatal("Shift+Tab turned auto on, on production")
-	}
-	if out := h.io.output(); !strings.Contains(out, "not available on a production profile") {
-		t.Errorf("no refusal:\n%s", out)
-	}
-	if st := h.io.statusLine(); !strings.Contains(st, "mode manual") || strings.Contains(st, "Tab") {
-		t.Errorf("status %q", st)
-	}
-	if log := h.auditLog(t); strings.TrimSpace(log) != "" {
-		t.Errorf("audited:\n%s", log)
-	}
-}
-
 // Ctrl-O switches the clear results: audited, announced, on the status
 // line and on the next run.
 func TestCtrlOTogglesResults(t *testing.T) {
@@ -99,16 +34,18 @@ func TestCtrlOTogglesResults(t *testing.T) {
 		t.Fatalf("results not on; status %q", h.io.statusLine())
 	}
 	pr := h.plan(t, selectUsers, false)
-	h.io.answers = []string{"y"}
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	if r := h.approveRun(t, pr.PlanID); r.Error != nil {
+		t.Fatal(r.Error.Message)
+	}
 	if out := h.io.output(); !strings.Contains(out, "result in clear") || !strings.Contains(out, "alice@example.com") {
 		t.Errorf("no clear result:\n%s", out)
 	}
 	h.s.Key(KeyCtrlO)
 	before := len(h.io.out)
 	pr = h.plan(t, selectUsers, false)
-	h.io.answers = []string{"y"}
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	if r := h.approveRun(t, pr.PlanID); r.Error != nil {
+		t.Fatal(r.Error.Message)
+	}
 	if out := strings.Join(h.io.out[before:], "\n"); strings.Contains(out, "alice@example.com") {
 		t.Errorf("clear result after Ctrl-O off:\n%s", out)
 	}
@@ -117,31 +54,29 @@ func TestCtrlOTogglesResults(t *testing.T) {
 	if st.ShowResults {
 		t.Error("status reports results on")
 	}
-	if ev := h.events(t); ev[0] != "results:shown" || ev[3] != "results:hidden" {
+	if ev := h.events(t); ev[0] != "results:shown" || !slices.Contains(ev, "results:hidden") {
 		t.Errorf("audit events %v", ev)
 	}
 }
 
-// :mode and :results are the typed equivalents of the keys; :status shows
-// both switches.
-func TestModeAndResultsCommands(t *testing.T) {
+// :results is the typed equivalent of Ctrl-O; :status shows the switches.
+func TestResultsCommand(t *testing.T) {
 	h := newHarness(t, uatProfile())
 	ctx := context.Background()
-	h.s.Command(ctx, ":mode")
 	h.s.Command(ctx, ":results")
-	if !h.s.autoApprove() || !h.s.showResults() {
-		t.Fatal("commands did not switch")
+	if !h.s.showResults() {
+		t.Fatal("command did not switch")
 	}
 	before := len(h.io.out)
 	h.s.Command(ctx, ":status")
 	out := ansi.ReplaceAllString(strings.Join(h.io.out[before:], "\n"), "")
-	for _, want := range []string{"mode", "auto: statements allowed", "results", "shown here in clear", "unmask", "refused", "plans open"} {
+	for _, want := range []string{"results", "shown here in clear", "unmask", "refused", "plans open"} {
 		if !strings.Contains(out, want) {
 			t.Errorf(":status lacks %q:\n%s", want, out)
 		}
 	}
 	h.s.Command(ctx, ":help")
-	if last := h.io.out[len(h.io.out)-1]; !strings.Contains(last, ":mode") || !strings.Contains(last, ":results") {
+	if last := h.io.out[len(h.io.out)-1]; !strings.Contains(last, ":results") {
 		t.Errorf("help %q", last)
 	}
 }
@@ -246,7 +181,7 @@ func TestUnmaskCommandTogglesLive(t *testing.T) {
 	if h.io.promptCount() != prompts {
 		t.Error("turning unmask off prompted")
 	}
-	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	resp := h.approveRun(t, pr.PlanID)
 	wantCode(t, resp, ipc.CodeRefused)
 	if h.sess.runCount() != 0 {
 		t.Fatal("unmask plan ran after :unmask off")
@@ -278,7 +213,7 @@ func TestSwitchesNotReachableFromClients(t *testing.T) {
 		}
 	}
 	h.ok(t, ipc.MethodStatus, nil, nil)
-	if h.s.autoApprove() || h.s.showResults() || h.s.allowUnmask() {
+	if h.s.showResults() || h.s.allowUnmask() {
 		t.Fatal("a client request changed a switch")
 	}
 	if log := h.auditLog(t); strings.TrimSpace(log) != "" {
@@ -292,53 +227,6 @@ func fingerHarness(t *testing.T, v *fingerprint.Fake) *harness {
 		c.Fingerprint = true
 		c.Approver = newFingerprintApprover(c.IO, v, "left-index-finger", time.Second)
 	})
-}
-
-// Level 2: Shift+Tab to auto asks a typed yes and a finger; a typed yes
-// alone, a refused answer or a failed finger leaves manual mode on.
-func TestLevel2AutoModeNeedsFinger(t *testing.T) {
-	v := &fingerprint.Fake{Results: []error{nil}}
-	h := fingerHarness(t, v)
-	h.io.answers = []string{"y"}
-	h.s.Key(KeyShiftTab)
-	if !h.s.autoApprove() || v.Calls != 1 {
-		t.Fatalf("auto = %v, finger calls = %d", h.s.autoApprove(), v.Calls)
-	}
-	if !strings.Contains(h.io.prompts[0], "Switch to auto mode? [y/N] ") {
-		t.Errorf("prompts %q", h.io.prompts)
-	}
-	// Tightening is immediate: no prompt, no finger.
-	h.s.Key(KeyShiftTab)
-	if h.s.autoApprove() || v.Calls != 1 || len(h.io.prompts) != 1 {
-		t.Fatalf("back to manual: auto = %v, calls = %d, prompts %q", h.s.autoApprove(), v.Calls, h.io.prompts)
-	}
-}
-
-func TestLevel2AutoModeRefusals(t *testing.T) {
-	cases := map[string]struct {
-		answers []string
-		results []error
-	}{
-		"typed no":        {[]string{"n"}, nil},
-		"no match":        {[]string{"y"}, []error{fingerprint.ErrNoMatch}},
-		"unavailable":     {[]string{"y"}, []error{fingerprint.ErrUnavailable}},
-		"no typed answer": {nil, nil},
-	}
-	for name, c := range cases {
-		t.Run(name, func(t *testing.T) {
-			v := &fingerprint.Fake{Results: c.results}
-			h := fingerHarness(t, v)
-			h.io.answers = c.answers
-			h.io.timeout = c.answers == nil
-			h.s.Key(KeyShiftTab)
-			if h.s.autoApprove() {
-				t.Fatal("auto mode on without a finger")
-			}
-			if name == "typed no" && v.Calls != 0 {
-				t.Errorf("reader reached by a typed no")
-			}
-		})
-	}
 }
 
 // Level 2: results stay masked; showing them is refused without a prompt,
@@ -355,16 +243,11 @@ func TestLevel2ShowResultsRefused(t *testing.T) {
 	}
 }
 
-// Level 1 (typed approvals on the desktop) toggles the mode freely, but
-// the results stay masked: the agent's account can read the window. Ctrl-O
+// Level 1 (typed approvals on the desktop): the results stay masked: the agent's account can read the window. Ctrl-O
 // and :results are refused without a prompt or an audit record; hiding
 // stays free.
 func TestLevel1ShowResultsRefused(t *testing.T) {
 	h := newHarness(t, uatProfile(), func(c *ServerConfig) { c.Boundary = "your desktop: the agent can read this window and type into it" })
-	h.s.Key(KeyShiftTab)
-	if !h.s.autoApprove() {
-		t.Fatal("auto mode refused at level 1")
-	}
 	h.s.Key(KeyCtrlO)
 	h.s.Command(context.Background(), ":results")
 	if h.s.showResults() || len(h.io.prompts) != 0 {

@@ -47,6 +47,10 @@ type hubPlan struct {
 	// ticket's screen: the run checks it in its own transaction, before
 	// the commit, and rolls back as stale past it (0: not a write).
 	MaxAffected int64 `json:"max_affected,omitempty"`
+	// KWarnings are the k-anonymity warnings of the counts run before the
+	// ticket: the records of its run carry them, as the ticket did. They
+	// name columns and counts, never a value.
+	KWarnings []string `json:"k_warnings,omitempty"`
 }
 
 // hubCaller is the client behind ctx and the agent it reports, the only
@@ -289,10 +293,13 @@ func statementLines(d sqlclass.Dialect, sql string) []render.Line {
 // first (estimates hidden under a PII filter).
 func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, pl *plan, rec audit.Record, hidden *refusal.Error) ipc.Response {
 	if pl.an != nil && len(pl.an.Values) > 0 {
-		return s.refuseRec(id, rec, pl.src, refusal.New(refusal.Placeholder, "placeholders and cell references are typed in the console: not in hub mode; write the statement without them"))
+		return s.refuseRec(id, rec, pl.src, refusal.New(refusal.Placeholder, "placeholders and cell references are not run: requests are decided in lockhub, where no value is typed; write the statement without them"))
 	}
+	var kw []string
 	if hidden == nil {
-		kw, refused, err := s.kCount(ctx, sess, pl)
+		var refused *refusal.Error
+		var err error
+		kw, refused, err = s.kCount(ctx, sess, pl)
 		if refused != nil {
 			return s.refuseWarned(ctx, id, pl, rec.Class, refused)
 		}
@@ -324,7 +331,7 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 	if err != nil {
 		return errResp(id, ipc.CodeInternal, "policy fingerprint: "+err.Error())
 	}
-	body, err := json.Marshal(hubPlan{DB: pl.db, SQL: pl.src, Unmask: pl.unmask, Intent: pl.intent, Refuse: hidden != nil, MaxAffected: pl.maxAffected})
+	body, err := json.Marshal(hubPlan{DB: pl.db, SQL: pl.src, Unmask: pl.unmask, Intent: pl.intent, Refuse: hidden != nil, MaxAffected: pl.maxAffected, KWarnings: kw})
 	if err != nil {
 		return errResp(id, ipc.CodeInternal, err.Error())
 	}
@@ -355,11 +362,6 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 // transaction.
 func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, who ipc.Requester) ipc.Response {
 	h := s.cfg.Hub
-	if h == nil {
-		// Hub mode off (rollback): the start withdrew the plans it left
-		// pending (withdrawStandalone); the agent hears it explicitly.
-		return kconsole.WithdrawnResp(id, ticketID)
-	}
 	caller := hubCaller(ctx, who)
 	var pl *plan
 	var body hubPlan
@@ -420,11 +422,18 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 		finish(false, "refused")
 		return *r
 	}
-	pl.warnings = s.warnings(ctx, sess, pl)
+	pl.warnings = append(s.warnings(ctx, sess, pl), body.KWarnings...)
 	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask,
 		Warnings: pl.warnings, Intent: pl.intent})
 	if body.Refuse || hidden != nil {
 		finish(false, "refused by the weight check")
+		// Audited with its reason and code, as the console shows it; the
+		// client learns the code and its default hint only.
+		rec.Event, rec.Ticket, rec.Code = audit.EventRefused, ticketID, string(refusal.Cost)
+		if hidden != nil {
+			rec.Error, rec.Code = hidden.Reason, string(hidden.Code)
+		}
+		s.audit(rec)
 		return refusedResp(id, hiddenWeightRefusal, refusal.New(refusal.Cost, hiddenWeightRefusal).Info("", 0))
 	}
 	s.println(paint.Step("ticket " + safeText(ticketID, false) + " approved in lockhub: running"))

@@ -61,7 +61,7 @@ func loseConnection(t *testing.T, h *harness) {
 	h.sess.runErr = engine.ErrConnLost
 	pr := h.plan(t, selectUsers, false)
 	h.io.answers = append(h.io.answers, "y")
-	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeConnLost)
+	wantCode(t, h.approveRun(t, pr.PlanID), ipc.CodeConnLost)
 }
 
 func TestReconnectRerunsPrivilegeAuditOnProduction(t *testing.T) {
@@ -137,7 +137,7 @@ func TestReconnectUsesCurrentPolicy(t *testing.T) {
 	h.sess.runErr = engine.ErrConnLost
 	pr := h.plan(t, selectUsers, false)
 	h.io.answers = []string{"uat"}
-	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeConnLost)
+	wantCode(t, h.approveRun(t, pr.PlanID), ipc.CodeConnLost)
 
 	n := h.io.promptCount()
 	wantCode(t, h.call(t, ipc.MethodCatalogList, ipc.TablesParams{DB: "app"}), ipc.CodeConnLost)
@@ -162,19 +162,6 @@ func TestProductionTighteningReauditsLiveSession(t *testing.T) {
 	}
 	if reason, ended := h.s.Ended(); !ended || !strings.Contains(reason, "privilege audit") {
 		t.Fatalf("over-privileged live session kept on production: %q %v", reason, ended)
-	}
-}
-
-func TestReviewWarnsAboutSkipPermissions(t *testing.T) {
-	p := prodProfile()
-	h := newHarness(t, p, func(c *ServerConfig) { c.Auto = true })
-	next := p
-	next.Production = false
-	h.s.setPending(config.NewPolicy(next, []string{"app.users.email"}, nil))
-	h.io.answers = []string{"n"}
-	h.s.Command(context.Background(), ":review")
-	if !strings.Contains(h.io.output(), "without a prompt") {
-		t.Errorf("no warning:\n%s", h.io.output())
 	}
 }
 

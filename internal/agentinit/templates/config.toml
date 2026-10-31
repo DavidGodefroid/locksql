@@ -1,11 +1,11 @@
 # locksql project configuration. See https://github.com/DavidGodefroid/locksql
 #
-# Profiles name the databases agents may query through `locksql console`.
+# Profiles name the databases agents may query through the locksql console.
 # This file never holds a secret: the console asks for the password, or
 # reads it from the OS keychain. Keys that look like secrets are refused.
 #
-# Uncomment and adapt the example, then start the console in a separate
-# terminal with: locksql console --profile dev
+# Uncomment and adapt the example, then start the console with lockhub:
+# lox add locksql sql-dev && lox up
 
 # [profiles.dev]
 # engine      = "postgres"          # mariadb | mysql | postgres | sqlite
@@ -15,7 +15,7 @@
 # database    = ""                  # set: the only database served; empty: chosen per query
 # credentials = "ask"               # ask | keychain
 # tier        = "read"              # read | write | ddl | admin
-# production  = false               # true: stricter limits, typed approval
+# production  = false               # true: stricter limits, typed profile name at start
 
 # [profiles.dev.limits]
 # statement_timeout   = "30s"

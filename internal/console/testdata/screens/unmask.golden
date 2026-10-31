@@ -9,16 +9,8 @@
 "\x1b[38;5;99m│ \x1b[0mreturns at most 1 rows"
 "\x1b[38;5;99m│ \x1b[0m\x1b[1;31mPII columns touched: users.email (select, where)\x1b[0m"
 "\x1b[38;5;99m│ \x1b[0m\x1b[1;31mPII: UNMASKED\x1b[0m"
-"<bell>"
-"? \x1b[38;5;99m╰─ \x1b[0m\x1b[1mApprove? [y/N] \x1b[0m"
-"\x1b[32m✓\x1b[0m done: 1 rows in N ms"
-"\x1b[1;31mPII: UNMASKED result\x1b[0m"
-"  id │ email             │ note"
-"  \x1b[2m───┼───────────────────┼─────────────────────────\x1b[0m"
-"  1  │ alice@example.com │ write to bob@example.org"
-"  \x1b[2m(1 rows)\x1b[0m"
+"\x1b[38;5;99m╰─ \x1b[0mpending: ticket T"
 == response
-ok rows=1 text="id\temail\tnote\n1\talice@example.com\twrite to bob@example.org\n(1 rows)\n"
+ok rows=0 text=""
 == audit
-event=approved decision=approved approval=session class=read verdict=OK unmasked=true sql=SELECT id, email FROM users WHERE email = 'alice@example.com' LIMIT 1
-event=run decision=ok approval=session class=read verdict=OK unmasked=true sql=SELECT id, email FROM users WHERE email = 'alice@example.com' LIMIT 1
+event=pending decision=pending approval=hub class=read verdict=OK unmasked=true sql=SELECT id, email FROM users WHERE email = 'alice@example.com' LIMIT 1

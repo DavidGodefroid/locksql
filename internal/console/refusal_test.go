@@ -155,7 +155,7 @@ func TestRunRefusalsCarryACode(t *testing.T) {
 	h.sess.plan = heavyPlan()
 	pr := h.plan(t, "SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1", false)
 	h.io.answers = []string{""}
-	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	resp := h.approveRun(t, pr.PlanID)
 	wantCode(t, resp, ipc.CodeRefused)
 	want := refusal.Info{Code: refusal.Cost, Retry: refusal.Cost.Retry(), Hint: refusal.Cost.Hint()}
 	if d := resp.Error.Data; *d != want {
@@ -174,7 +174,7 @@ func TestRefusalOverAReferenceHoldsNoValue(t *testing.T) {
 	h.sess.result.Rows[0][1] = v
 	pr := h.plan(t, "SELECT id, email, note FROM users WHERE id = 1 LIMIT 1", false)
 	h.io.answers = []string{"y"}
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	h.okRun(t, pr.PlanID, nil)
 	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT id FROM users WHERE email = '${r1.1.2}' LIMIT 1"})
 	wantCode(t, resp, ipc.CodeRefused)
 	if resp.Error.Data.Code != refusal.Placeholder {

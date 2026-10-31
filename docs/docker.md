@@ -163,14 +163,18 @@ by `locksql init` for example.
 
 ## Run the console
 
-In a terminal you keep in view, from the project directory:
+The console runs attached to lockhub only: from the project directory,
 
 ```sh
-locksql console
+lox add locksql sql-dev
+lox up
 ```
 
-Add `--profile P`, `--show-results`, `--auto` or
-`--allow-unmask` ([Start the console](usage.md#2-start-the-console)). The
+`lox up` starts the console with its hub flags, through the launcher
+(`locksql console --hub URL --hub-key-file PATH --instance NAME`, plus
+`--profile P`, `--show-results` or `--allow-unmask` from the lock's
+settings: [Start the console](usage.md#2-start-the-console)). Started
+without them, `locksql console` exits with ``launched by `lox up` only``. The
 `locksql-home` volume keeps the console account's state from one run to the
 next: the approved policy, the audit log and `~/.ssh/known_hosts` for an
 `ssh` profile. A key for `auth = "key"` must be in that volume, owned by
@@ -341,8 +345,8 @@ build writes them to `allowed_uids` in the image's
 (the console prints them at start). Both refuse root (0), the console's own
 uid (10001) and 65534 (nobody, the kernel's overflow uid). Only whoever
 starts the console sets them: you, through the launcher (which passes the
-flag on) or through `lock up` (lockhub v0.2.5 or later: a lock's
-`allowed_uids` in the lockfamily.yaml lock up reviews with you); no client
+flag on) or through `lox up` (lockhub v0.2.5 or later: a lock's
+`allowed_uids` in the lockfamily.yaml lox up reviews with you); no client
 can. Every process of that uid, in any container that mounts the socket
 volume, may then use the console. It is the uid the kernel reports
 for the agent's process, as the console sees it: the agent container's uid

@@ -16,7 +16,7 @@ import (
 func TestWriteReturningMaskedByProvenance(t *testing.T) {
 	p := uatProfile()
 	p.Tier = config.TierWrite
-	h := newHarness(t, p, skip)
+	h := newHarness(t, p)
 	for _, c := range []struct {
 		sql   string
 		label string
@@ -34,7 +34,7 @@ func TestWriteReturningMaskedByProvenance(t *testing.T) {
 		}
 		pr := h.plan(t, c.sql, false)
 		var rr ipc.RunResult
-		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+		h.okRun(t, pr.PlanID, &rr)
 		if got := fmt.Sprint(rr.Rows[0][0]); got != "<redacted>" {
 			t.Errorf("%s: %v, want <redacted> (no reference)", c.sql, got)
 		}
@@ -46,7 +46,7 @@ func TestWriteReturningMaskedByProvenance(t *testing.T) {
 func TestWriteAnalysisRefusesBeforeRun(t *testing.T) {
 	p := uatProfile()
 	p.Tier = config.TierWrite
-	h := newHarness(t, p, skip)
+	h := newHarness(t, p)
 	for _, q := range []string{
 		"DELETE FROM users WHERE id = 1 RETURNING lower(email) AS x",
 		"INSERT INTO users (id, note) VALUES (9, 'a') RETURNING (SELECT concat(email, '') FROM users LIMIT 1) AS e",
@@ -72,11 +72,11 @@ func TestWriteAnalysisRefusesBeforeRun(t *testing.T) {
 func TestWriteReturningNoRows(t *testing.T) {
 	p := uatProfile()
 	p.Tier = config.TierWrite
-	h := newHarness(t, p, skip)
+	h := newHarness(t, p)
 	h.sess.result = engine.Result{Affected: 1}
 	pr := h.plan(t, "DELETE FROM users WHERE id = 1 RETURNING email", false)
 	var rr ipc.RunResult
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	h.okRun(t, pr.PlanID, &rr)
 }
 
 // write_functions = "allowlist" (issue #60): a write may call allowlisted
@@ -86,7 +86,7 @@ func TestWriteFunctionsAllowlist(t *testing.T) {
 	p := uatProfile()
 	p.Tier = config.TierAdmin
 	p.WriteFunctions = config.WriteFunctionsAllowlist
-	h := newHarness(t, p, skip, allowUnmask)
+	h := newHarness(t, p, allowUnmask)
 	for _, q := range []string{
 		"UPDATE users SET note = myfunc(id) WHERE id = 1",
 		"INSERT INTO orders (id, user_id, total) VALUES (1, 1, shop.price(1))",
@@ -110,7 +110,7 @@ func TestWriteFunctionsAllowlist(t *testing.T) {
 func TestWriteFunctionsDefaultDenylist(t *testing.T) {
 	p := uatProfile()
 	p.Tier = config.TierAdmin
-	h := newHarness(t, p, skip)
+	h := newHarness(t, p)
 	h.plan(t, "UPDATE users SET note = myfunc(id) WHERE id = 1", false)
 	h.plan(t, "CALL refresh_totals()", false)
 }

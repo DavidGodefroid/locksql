@@ -14,7 +14,7 @@ func firstResult(t *testing.T, h *harness) {
 	t.Helper()
 	pr := h.plan(t, "SELECT id, email, note FROM users WHERE id = 1 LIMIT 1", false)
 	h.io.answers = []string{"y"}
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	h.okRun(t, pr.PlanID, nil)
 }
 
 func runWarned(t *testing.T, h *harness, q string) string {
@@ -22,7 +22,7 @@ func runWarned(t *testing.T, h *harness, q string) string {
 	before := len(h.io.out)
 	pr := h.plan(t, q, false)
 	h.io.answers = []string{"n"}
-	h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	h.approveRun(t, pr.PlanID)
 	return strings.Join(h.io.out[before:], "\n")
 }
 
@@ -152,7 +152,7 @@ func TestWarnAuditedOnRefusalAfterApproval(t *testing.T) {
 	// The engine labels the email column otherwise: the result cannot be
 	// masked with certainty.
 	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "id"}}, Rows: [][]any{{int64(1)}}}
-	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeRefused)
+	wantCode(t, h.approveRun(t, pr.PlanID), ipc.CodeRefused)
 	recs := h.auditRecords(t)
 	last := recs[len(recs)-1]
 	if last["event"] != "refused" || !strings.Contains(fmt.Sprint(last["warnings"]), "k-anonymity") {

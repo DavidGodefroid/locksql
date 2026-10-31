@@ -467,8 +467,8 @@ console account's login session.
 | tls_ca, tls_cert, tls_key (per profile) | a file that is missing or holds no PEM certificate, a certificate expired or expiring within 30 days, a key readable by group or others (files the agent's account cannot read are not checked) |
 | server certificate (per profile without `ssh`) | a TLS handshake that sends no user name and no secret: the server offers no TLS under `require` or stronger, its chain does not verify against `tls_ca` (or the system roots), it does not name `host` (or `tls_server_name`) under `verify-full`, it is expired or expires within 30 days; under `prefer` or `require` it says whether `verify-full` would pass |
 | agent wiring | an installed agent is not wired for this account (warns; not checked as root or as the console account) |
-| project access, project .locksql, project .locksql/pii, project config.toml / pii.toml / pii/<set>.toml | separated mode, from an account other than the console's, inside a project: the console account cannot enter a directory down to the project (mode bits and POSIX ACLs), does not own `.locksql/` or `.locksql/pii/` or one is writable by group or others, or cannot read the config or the rule set of a project profile. In a lock up workspace (`lockfamily.yaml` in `.lockfamily/`, or at the project's root when there is no `.lockfamily`), whose consoles lock up runs with `LOCKSQL_PII_DIR`, `.locksql/` or `.locksql/pii/` not owned by the console account only warns, as long as the console account can list and enter it (a console started without `LOCKSQL_PII_DIR` writes there and needs it owned); unreadable by the console account, or writable by group or others, still fails. Doctor's own `LOCKSQL_PII_DIR` changes nothing: the console it starts is handed off with a fresh environment |
-| PII rule sets | never fails: in a lock up workspace, says the console keeps them in its own volume (not checked from here) |
+| project access, project .locksql, project .locksql/pii, project config.toml / pii.toml / pii/<set>.toml | separated mode, from an account other than the console's, inside a project: the console account cannot enter a directory down to the project (mode bits and POSIX ACLs), does not own `.locksql/` or `.locksql/pii/` or one is writable by group or others, or cannot read the config or the rule set of a project profile. In a lox up workspace (`lockfamily.yaml` in `.lockfamily/`, or at the project's root when there is no `.lockfamily`), whose consoles lock up runs with `LOCKSQL_PII_DIR`, `.locksql/` or `.locksql/pii/` not owned by the console account only warns, as long as the console account can list and enter it (a console started without `LOCKSQL_PII_DIR` writes there and needs it owned); unreadable by the console account, or writable by group or others, still fails. Doctor's own `LOCKSQL_PII_DIR` changes nothing: the console it starts is handed off with a fresh environment |
+| PII rule sets | never fails: in a lox up workspace, says the console keeps them in its own volume (not checked from here) |
 | console (per profile) | not running; then, from its `health`: not separated, an X11 display, database privileges beyond the tier, EXPLAIN failing |
 
 #### `locksql doctor --fix`
@@ -496,13 +496,25 @@ container, which runs no console: read the `project` lines.
 
 ## 2. Start the console
 
-In a terminal you keep in view, from the project directory:
+The console runs attached to [lockhub](https://github.com/DavidGodefroid/lockhub)
+only: lockhub starts it and decides every request. From the project
+directory, declare the lock once, then start it:
 
 ```sh
-locksql console [--profile dev] [--auto] [--allow-unmask] [--show-results]
+lox add locksql sql-dev
+lox up
 ```
 
-Without `--profile` the console uses the only profile, or asks which one when
+`lox up` opens the console in a terminal, with the hub flags
+(`--hub URL --hub-key-file PATH --instance NAME`, see
+[Approving in lockhub](#approving-in-lockhub)) and the lock's settings:
+
+```sh
+locksql console --hub URL --hub-key-file PATH --instance NAME [--profile dev] [--allow-unmask] [--show-results]
+```
+
+Started without its hub flags, `locksql console` exits with ``launched by `lox up` only`` (exit code 3) before any prompt or file write. Without
+`--profile` the console uses the only profile, or asks which one when
 there are several. [docker.md](docker.md#run-the-console) has the volumes,
 Vault and the networks a database needs.
 
@@ -511,10 +523,8 @@ the nearest directory up that holds `.locksql/`);
 the console and the agent must agree on it, since it selects the socket. A
 console on a project prints `serving agents in <root>`.
 
-`--auto` starts in auto mode and `--show-results` with the clear results
-on; both are switched while the console runs, with Shift+Tab and Ctrl-O
-(see [Keys and status line](#keys-and-status-line)). `--skip-permissions`
-is the older name of `--auto`.
+`--show-results` starts with the clear results on; Ctrl-O switches them while
+the console runs (see [Keys and status line](#keys-and-status-line)).
 
 `--allowed-uids UID,...` lets these uids connect besides the members of
 `locksql-clients`, as `allowed_uids` in the image's
@@ -523,7 +533,7 @@ container of its own whose uid has no account in the console's image
 ([docker.md](docker.md#agent-in-its-own-container)). Comma-separated decimal
 uids; root (0), 65534 (nobody), leading zeros and the console's own uid are
 refused, and the console prints them at start. Only whoever starts the
-console sets it (you, through the launcher, or `lock up` from a lock's
+console sets it (`lox up`, from a lock's
 `allowed_uids`); no client or config file can.
 
 With the clear results on, the console prints, in clear, the result of each
@@ -537,8 +547,7 @@ default, it is console-only: no client, config file or environment variable
 can turn it on. While it is on, the console warns (in red on a production
 profile, where it is accepted), the status row reads `results clear`, every
 approval screen says `result: shown here in clear`, and `locksql status`
-reports `show results on`. The audit log still holds no row data, and
-references and placeholders work as without it.
+reports `show results on`. The audit log still holds no row data.
 
 The console needs an interactive terminal. At start it:
 
@@ -597,25 +606,25 @@ The console needs an interactive terminal. At start it:
 
 The console runs its own line editor (backspace, Ctrl-U, Ctrl-W; Ctrl-D on
 an empty line or Ctrl-C ends the session). A status row fixed at the
-bottom of the terminal shows the profile and tier, the approval mode, the
+bottom of the terminal shows the profile and tier, the
 results switch, `unmask allowed` when unmasked output is allowed, the open
-plans, and what awaits `:review`. Two keys and one command switch the
+plans, and what awaits `:review`. One key and two commands switch the
 console's behaviour while it runs, without a restart; each change is
-announced, shown on the status row and audited (`mode`, `results`,
-`unmask` records):
+announced, shown on the status row and audited (`results`, `unmask`
+records):
 
 | Key | Typed | Effect |
 |---|---|---|
-| Shift+Tab | `:mode` | manual ⇄ auto approval mode (unavailable on a production profile) |
 | Ctrl-O | `:results` | results masked ⇄ shown here in clear |
 | | `:unmask` | unmasked output off ⇄ allowed; allowing it asks `Allow unmasked output? [y/N]`, turning it off refuses the open unmask plans |
 
-A key pressed while an approval waits takes effect from the next
-statement. Between requests you can also type:
+A key pressed while one of the console's own prompts waits (`:unmask`,
+`:review`) never widens a switch: it is refused until the prompt is
+answered. Between requests you can also type:
 
 | Command | Effect |
 |---|---|
-| `:status` | profile, databases, mode, results, unmask, limits, session time left, open plans, pending policy change |
+| `:status` | profile, databases, the lockhub instance that decides, results, unmask, limits, session time left, open plans, pending policy change |
 | `:review` | show the pending policy change and the agent's change requests |
 | `:unmask` | allow (after `y`) or stop unmasked output; see above |
 | `:quit` | end the session |
@@ -673,7 +682,12 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
   no secret (a profile without `ssh`). See
   [Transport security](security-model.md#out-of-scope-and-limitations) for the modes.
 
-### Approving a query
+### The approval screen
+
+<a id="approving-a-query"></a>
+
+Each `query.run` prints the request's screen in the console's terminal, the
+one lockhub shows you on its ticket with every literal masked:
 
 ```
 ╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
@@ -693,7 +707,7 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
 │ ▲ k-anonymity: the PII filter matches fewer than k=5 rows (1)
 │ ▲ k-anonymity: a group covers fewer than k=5 rows (1)
 │   With a statement like this, the agent could single out one person or infer a masked value (whether an email is present, one person's amount) by cross-checking.
-╰─ Approve? [y/N]
+╰─ pending: ticket 01J…
 ```
 
 - The screen names the requesting uid and pid (as the kernel reports them)
@@ -704,48 +718,42 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
   k-anonymity counts and the row cap.
 - Statement classes other than READ, a WARN verdict, PII columns and
   `PII: UNMASKED` are printed in red.
-- `y` or `Y` approves. On a production profile you type the profile name
-  instead, exactly.
-- `n <reason>` (or `no <reason>`) denies and tells the agent why: it gets
-  `denied by the human: <reason>; do not retry unless asked`, and the audit
-  record keeps the reason (`reason`, at most 200 bytes).
-- Anything else, or no answer within 5 minutes, denies the query without a
-  reason. A client that disconnects while waiting abandons the approval.
-- The console rings the terminal bell when a prompt waits for you: the
-  approval, a placeholder value, the production profile name and `:review`.
-- Pending keystrokes are discarded before each prompt.
+- Nothing is asked on this terminal: you approve or deny the ticket in
+  lockhub (`lox approve`), with a reason the agent reads when you deny
+  (`denied by the human: <reason>; do not retry unless asked`).
 - Requests are served one at a time; other clients wait.
-- Only the console terminal approves; no socket method can.
-- The k-anonymity counts run before the prompt (after the placeholder values,
-  which they may need). Each count under `k_anonymity` adds a `▲ k-anonymity`
-  line just above it: the statement could single out one person or reveal a
-  masked value by cross-checking. Nothing is refused for it: you decide, `y`
-  runs it, `n` denies it as usual. A count that cannot run warns the same
-  way. In auto mode the statement runs; the warning is printed in its frame
-  and kept in the audit record's `warnings`.
-- The agent learns nothing of the counts: no refusal code, the same answer
-  and, in auto mode, the response time levelled from the counts on, whether
-  a count is under k or not.
+- No socket method approves: only lockhub's signed decision runs a ticket.
+- The k-anonymity counts run before the ticket. Each count under
+  `k_anonymity` adds a `k-anonymity` warning to it: the statement could
+  single out one person or reveal a masked value by cross-checking. Nothing
+  is refused for it: you decide in lockhub. A count that cannot run warns
+  the same way. The warnings are kept in the audit records' `warnings`.
+- The agent learns nothing of the counts: no refusal code and the same
+  answer, whether a count is under k or not.
 
-### Approving in lockhub (hub mode)
+### Approving in lockhub
+
+<a id="approving-in-lockhub-hub-mode"></a>
 
 `locksql console --hub URL --hub-key-file PATH --instance NAME` (written by
-`lock up`; `locksql hub-key --instance NAME` prints the instance key to pin)
-sends approvals to lockhub instead of asking on this terminal. The hub URL
+`lox up`; `locksql hub-key --instance NAME` prints the instance key to pin)
+sends every request to lockhub; the console's own decisions (a loosened
+policy at start or at `:review`, `:unmask`) are still asked on its
+terminal. The hub URL
 is `http(s)://host[:port]` only: a path, query, fragment, user or password
 is refused.
 
 Supported lockhub versions: locksql v0.11.x needs lockhub
 v0.2.1 or later, the first whose "Supported locks" (lockhub's CHANGELOG)
 lists locksql v0.11.0, with `devices: true`, reveals and renewals. Under
-`lock up`, use lockhub v0.2.2 or later: it sets `LOCKSQL_PII_DIR` (below)
-and its `lock add` refuses locksql releases before v0.11.0 (lockhub v0.2.0
-and v0.2.1 accept v0.10.0 or later, and their `lock up` refuses a
+`lox up`, use lockhub v0.2.2 or later: it sets `LOCKSQL_PII_DIR` (below)
+and its `lox add` refuses locksql releases before v0.11.0 (lockhub v0.2.0
+and v0.2.1 accept v0.10.0 or later, and their `lox up` refuses a
 `.locksql/` without a PII rule set). From locksql v0.11.1 the console's
 audit records of the hub's decisions carry the hub's signature
-(`hub_sig`): `lock audit verify --lock INSTANCE=PATH` compares them with
+(`hub_sig`): `lox audit verify --lock INSTANCE=PATH` compares them with
 the decisions the hub signed (its data directory and keys, `--data` and
-`--hub-key-file`: `hub-keys.pub` in lock up's state directory). The records of older consoles are reported as unsigned
+`--hub-key-file`: `hub-keys.pub` in lox up's state directory). The records of older consoles are reported as unsigned
 there and checked on ticket, outcome, approver and facade only; and as
 those consoles do not record the hub's denials nor the approvals that
 expired before their run, those show as decisions not in the log, not as
@@ -753,7 +761,7 @@ problems. From locksql v0.11.2, a lock's `allowed_uids` (passed
 as `console --allowed-uids`, for lea's agents) needs lockhub v0.2.5 or
 later on a locksql lock: earlier releases refuse the key there.
 
-In hub mode:
+Then:
 
 - `query.run` answers `{"status":"pending","ticket":…}`: the plan is kept in
   the console's plan store and its screen, every literal masked, goes to
@@ -803,15 +811,15 @@ In hub mode:
 - The screen names the requester as the kernel reports it (uid, pid,
   executable); the lea name the client sends is shown as its claim
   (`claims lea agent "…"`), not verified.
-- PII rule sets under `lock up`: the profile directory is a read-only copy
-  there, so `lock up` sets `LOCKSQL_PII_DIR` to a directory of the console's
+- PII rule sets under `lox up`: the profile directory is a read-only copy
+  there, so `lox up` sets `LOCKSQL_PII_DIR` to a directory of the console's
   own volume. The console keeps its rule sets there (`pii/<set>.toml`): the
   first-run PII proposal, `pii add` and later proposals write there. A set it
   lacks is first copied, once, from the profile's `.locksql/pii/<set>.toml`
   (or the legacy `.locksql/pii.toml` as the `default` set). From then on the
   console's copy is in force: at each start, the mask rules of the profile's
   set that it lacks are added to it (a tightening you made in the workspace
-  and `lock up` reviewed); nothing else of the profile's set is taken (allow
+  and `lox up` reviewed); nothing else of the profile's set is taken (allow
   rules, removed masks, mode changes), and a profile set that still differs
   is told at start. Make those changes at the console (a mask the profile
   still has comes back at the next start: remove it there too), or remove
@@ -977,11 +985,10 @@ locksql doctor   [--profile P]
   When the statement filters on a PII column, the row estimates are hidden
   from the agent and the weight verdict is decided at run time, on the
   console: `plan` answers `OK` with a plan id. A REFUSE verdict is shown to
-  the human on the console before the agent is told: `run` shows the
-  approval screen with the verdict and its reasons, then
-  `verdict REFUSE: this statement cannot be approved` and
-  `Press Enter to refuse` (also in auto mode), and only then
-  answers the agent a generic `refused by the weight check`.
+  the human before the agent is told: `run` shows the approval screen with
+  the verdict and its reasons and sends the ticket to lockhub; only once
+  the human decided it does the run of the ticket answer the agent a
+  generic `refused by the weight check`, whatever the decision.
 - `pii add` adds a mask rule at once, since it only tightens.
 - `request` queues a proposal that the human sees in `:review`. It never
   changes the policy; the human edits the config, and the console then asks
@@ -1058,7 +1065,7 @@ PII columns (columns under a mask rule) may be used as follows:
   the list are not counted. Another count is built from the statement's own
   `FROM`, `WHERE`, `GROUP BY` and `HAVING` text. Fewer than `k_anonymity`
   rows in any count, or in the smallest group, puts a warning on the approval
-  screen and in the audit record (see [Approving a query](#approving-a-query));
+  screen and in the audit record (see [The approval screen](#the-approval-screen));
   it no longer refuses the statement (before v0.5.2 it did, with `E_K_ANON`).
 - `EXPLAIN` of a statement that filters, groups or aggregates PII is refused.
 - Ask for unmasked values with `--unmask`. It is off by default: the console
@@ -1130,83 +1137,14 @@ outside `pg_catalog` also names is refused (see below). Changing `"allowlist"` b
 
 ### Placeholders and cell references
 
-To search on a value the agent does not know, it never asks you to type the
-value in the chat. It writes a placeholder, `'${name}'` (`name`: `a-z`, `0-9`,
-`_`), as the literal of `pii_col = '...'` or `pii_col IN ('${a}', '${b}')` in a
-`WHERE` clause, and you type the value in the console. A redacted cell comes
-back as `<redacted:rN.R.C>` (result N, row R, column number C, all 1-based), and
-`'${rN.R.C}'` filters on it.
-
-Worked example: "find the failed documents of one customer".
-
-1. The agent plans `SELECT d.id, u.email FROM users u JOIN documents d ON
-   d.user_id = u.id WHERE u.email = '${email}' AND d.status = 'failed' LIMIT 20`.
-   The answer to `locksql_plan` lists no typed value yet, so `${email}` is new.
-2. On `locksql_run`, the console shows the statement with
-   `values to type: ${email}`, asks for the value (without echo), then asks
-   you to approve:
-
-   ```
-   value for ${email} (app.users.email):
-   ```
-
-3. The statement runs with your value. The agent receives
-   `<redacted:r1.1.2>` in the `email` cell of the first row (result 1, row 1,
-   column 2); it never sees the address.
-4. The agent now plans `SELECT id, status FROM mail_log d WHERE d.recipient =
-   '${r1.1.2}' LIMIT 20`. The console substitutes the cell's clear value from
-   memory: no second prompt.
-
-The rules:
-
-- A value is asked once per name per session. Later statements reuse it
-  without a prompt; the approval screen shows `${email} = value typed at 14:02`
-  and `r` retypes it. A new name always prompts, and `query.plan` answers list
-  the names already typed (`values`), so the agent can reuse one or pick another.
-- Auto mode skips the approval, never the value prompt. If you
-  cancel the prompt or let it time out, the query is denied and nothing runs.
-  A value with a backslash or a NUL is refused; a reference to a cell holding
-  one is refused as `reference rN.R.C cannot be substituted`, which says
-  nothing more about the value.
-- The console keeps the clear values of the last results in memory only, at
-  most 50 results and 16 MiB; the oldest are forgotten, and a reference to one
-  is refused as `unknown reference rN.R.C`. Cells masked in `partial` or `email`
-  mode, or by a detector, carry no reference. Only a plain column whose every
-  source is under a mask rule gets references: a column that may hold a
-  literal of the statement (`SELECT email ... UNION ALL SELECT 'x'`), a `UNION`
-  arm of an unmasked column (`UNION ALL SELECT note`), an expression or an
-  aggregate gets plain `<redacted>` on every row, since the agent may know
-  the value behind it. `MIN` and `MAX` return a real cell, but which one
-  depends on how the values order, so they get plain `<redacted>` too.
-- A statement that compares a PII column with a literal the agent wrote
-  (`email = 'x'`, `email IN ('x', ...)`, in `WHERE` or `HAVING`, in any `UNION`
-  or `INTERSECT` arm, join or subquery) gives plain `<redacted>` on every
-  column: the agent chose the value behind the cells it selects, and a
-  reference to it would be a lookup without the k-anonymity check. A filter
-  whose values are all placeholders keeps the references.
-- Placeholders work only as the literal side of such a comparison in `WHERE`
-  or `HAVING` (not in a `JOIN` condition), on a masked statement (not `--unmask`); anywhere else the
-  statement is refused (`a placeholder may only be compared with a PII column`),
-  and so is any malformed `${...}` literal. A write (`INSERT`, `UPDATE`,
-  `DELETE`, ...) holding a placeholder is refused at plan time
-  (`placeholders are only allowed in read statements`).
-- A filter made only of placeholders skips the k-anonymity check; an `IN` list
-  that mixes placeholders and literals keeps it.
-- Values never reach the audit log, client answers, plan answers or client
-  errors. When a statement had values substituted, its audit error is generic.
+Requests are decided in lockhub, where no value is typed: a placeholder
+(`'${name}'`) or a cell reference (`'${rN.R.C}'`) is refused at run with
+`E_PLACEHOLDER`; write the statement without them. A write holding one is
+refused at plan time (`placeholders are only allowed in read statements`).
 
 Warnings appear in red on the approval screen and in the `warnings` field of
-the audit record. They never refuse and never carry a value:
-
-- the agent received a value in clear: a literal matched by a detector;
-- a reference filter combined with a filter on a one-column unique key
-  (`= literal`, `IN (literals)` or `BETWEEN` two constants, in the positive
-  part of `WHERE`):
-  `this statement tests whether one row (users.id) has the same value as r1.1.2`;
-- a reference filter with an output that holds no plain column (only counts,
-  aggregates, expressions or constants);
-- the agent filtered on cells of one result in more than `limits.reference_probe`
-  distinct ways (default 5; an `IN` list counts once).
+the audit record. They never refuse and never carry a value: the agent
+received a value in clear (a literal matched by a detector).
 
 ### Refusal codes
 
@@ -1274,7 +1212,7 @@ The retry rules:
 
 `E_K_ANON` (fewer than `k_anonymity` rows behind a PII filter, group or
 aggregate) is no longer emitted since v0.5.2: a count under k is a warning on
-the approval screen (see [Approving a query](#approving-a-query)). The code stays reserved, and
+the approval screen (see [The approval screen](#the-approval-screen)). The code stays reserved, and
 `locksql stats` still counts it in audit logs written before.
 
 ### MCP server
@@ -1345,7 +1283,7 @@ finds the project's consoles.
 | `.locksql/config.toml` | project profiles (no secrets) |
 | `.locksql/pii/<set>.toml` | PII rule sets (project); a legacy `pii.toml` is moved to `pii/default.toml` |
 | `<user config dir>/locksql/pii/<set>.toml` | PII rule sets outside a project |
-| `$LOCKSQL_PII_DIR/pii/<set>.toml` | PII rule sets of a console whose profile directory is read-only (`lock up`), seeded from the profile's |
+| `$LOCKSQL_PII_DIR/pii/<set>.toml` | PII rule sets of a console whose profile directory is read-only (`lox up`), seeded from the profile's |
 | `<user config dir>/locksql/config.toml` | personal profiles |
 | `<user state dir>/locksql/approved/*.json` | last approved policies |
 | `config.toml.bak`, `pii/<set>.toml.bak` | the files before the last `locksql config import` |

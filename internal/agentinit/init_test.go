@@ -472,7 +472,8 @@ func TestTemplatesCarryTheRules(t *testing.T) {
 			"non-production",  // prefer non-production
 			"one targeted",    // one question at a time
 			"locksql_plan",    // show the plan first
-			"600000",          // long Bash timeout for run
+			"pending",         // run answers pending: the ticket runs once decided
+			"lox up",          // lockhub starts the console
 			"denied",          // stop on deny
 			"refused",         // stop on refuse
 			"export",          // no exports

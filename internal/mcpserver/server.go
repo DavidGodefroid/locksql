@@ -217,8 +217,8 @@ func New(o Options) *mcp.Server {
 	no := false
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "locksql_run",
-		Description: "Run a plan from locksql_plan. The human must approve it in the locksql console; this call blocks until they approve, deny, or the 5 minute approval timeout passes, " +
-			"and reports progress meanwhile. Returns the rows (capped and PII-masked) as structured columns and rows plus a text rendering." + guidance,
+		Description: "Run a plan from locksql_plan, or a ticket once decided. A plan answers pending with a ticket the human decides in lockhub: do not retry; once decided, run the ticket. " +
+			"A decided ticket returns the rows (capped and PII-masked) as structured columns and rows plus a text rendering." + guidance,
 		Annotations: &mcp.ToolAnnotations{OpenWorldHint: &no},
 	}, t.run)
 	mcp.AddTool(s, &mcp.Tool{
