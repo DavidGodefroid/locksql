@@ -19,6 +19,9 @@ This file records the changes a user or an agent has to know about.
   and the allowed values, never the value given. A PII rules file error
   names the entry (`[[mask]] entry 2: pii rule: unknown mode (want redact,
   partial or email)`).
+- lockkit v0.7.2 (was v0.7.1): the same for `ssh.credentials` and the
+  `--hub` URL, which the console's errors and start line now show by scheme
+  and host only; a `--hub` URL with a user or password is refused.
 
 ## v0.11.3 (2026-10-31)
 
