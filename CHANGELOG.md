@@ -19,6 +19,16 @@ Supported lockhub: as v0.11.5; the console now needs it
   stops working.
 - Plans a console started with `--hub` left pending are no longer
   withdrawn by a later start without it: there is no such start.
+- **The agent commands reach the console `lox up` runs** (lockhub#78). The
+  launcher's `mcp`, `status`, `tables`, `describe`, `plan`, `run`,
+  `request`, `logout`, `pii` and `doctor` mount the socket volume of the
+  workspace's locksql lock that `lox up` names in `.lockfamily/up.json`,
+  read-only, once Docker confirms it is lox up's (the checks of lea), and
+  no longer the fixed `locksql-run`: without `lox up` they exit 2 and say
+  to run it (`doctor` runs without a socket and says why). With several
+  locksql locks in the workspace, `--instance NAME` picks one (in
+  `.mcp.json`: `"args": ["mcp", "--instance", "NAME"]`). `.mcp.json` is
+  unchanged ([docs/launcher.md](docs/launcher.md#the-socket-of-lox-ups-lock)).
 
 ### Removed
 

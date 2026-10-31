@@ -13,8 +13,10 @@ holds the separated setup:
   `locksql-clients`;
 - `/etc/locksql/system.toml` is owned by root and the binary by root;
 - the socket directory `/run/locksql` (mode 2710, `locksql:locksql-clients`)
-  is a named volume, `locksql-run`, shared by the console container and the
-  agent's containers. The kernel checks every peer on the socket.
+  is a named volume, shared by the console container and the agent's
+  containers (read-only there): `lox up`'s socket volume of the lock
+  (`lockfamily-<hash>_<instance>-run`, named in `.lockfamily/up.json`). The
+  kernel checks every peer on the socket.
 
 ## Install
 
@@ -61,7 +63,8 @@ runs each command with the account it needs:
 | `init`, `config` | you (your uid and gid), with your home mounted: they write the agents' files and your user config; a `config` file must be under the project or your home | |
 | `profile` | you, with `HOME=/tmp` | |
 | `doctor --fix` | root | |
-| everything else: `mcp`, `status`, `tables`, `plan`, `run`, `doctor`, `help`... | `agent` | `locksql-run` |
+| the agent commands: `mcp`, `status`, `tables`, `plan`, `run`, `doctor`... | `agent` | the socket volume of the workspace's locksql lock that `lox up` runs, read-only ([launcher.md](launcher.md#the-socket-of-lox-ups-lock)) |
+| everything else: `help`... | `agent` | none |
 
 The socket name is derived from the project path, so the console and the
 agent see the same one, and the console's hints name real paths.

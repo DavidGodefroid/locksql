@@ -32,14 +32,61 @@ terminals, else `-i`.
 | `init`, `config` | you (`id -u`:`id -g`) | `-e HOME=$HOME -v $HOME:$HOME` | they write your agents' files and your user config, owned by you |
 | `profile` | you | `-e HOME=/tmp` | it writes `.locksql/config.toml`, yours to edit |
 | `doctor --fix` | root (`--user 0`) | | gives `.locksql/` to uid 10001, which exists only in the image |
-| `mcp` | `agent` (uid 10002, image default) | volume `locksql-run`, `-i` only | the agent speaks MCP on stdin/stdout |
-| anything else (`status`, `tables`, `plan`, `run`, `doctor`, `help`, ...) | `agent` | volume `locksql-run` | client commands reach the console through the socket only |
+| `mcp` | `agent` (uid 10002, image default) | lox up's socket volume of the workspace's locksql lock, read-only (below), `-i` only | the agent speaks MCP on stdin/stdout |
+| `status`, `tables`, `describe`, `plan`, `run`, `request`, `logout`, `pii` | `agent` | lox up's socket volume, read-only (below) | client commands reach the console through the socket only |
+| `doctor` | `agent` | lox up's socket volume when there is one; else none, and the launcher says why | the checks run either way |
+| anything else (`help`, ...) | `agent` | | no console to reach |
 | `version` | | | prints `locksql launcher X (image I)`, then runs `I version` |
 | `update [vX.Y.Z]` | (host) | | below |
 
 Invariants: the Docker socket is never mounted; only the console's
-container gets `locksql-home`; the agent's containers share only
-`locksql-run` with it.
+container gets `locksql-home`; the agent's containers share only the
+console's socket volume with it, read-only.
+
+## The socket of lox up's lock
+
+The consoles run hub-attached only, started by `lox up` (lockhub): each
+under compose, with its socket in the volume
+`lockfamily-<8 hex of sha256(workspace)>_<instance>-run`, which `lox up`
+names in `<workspace>/.lockfamily/up.json` (lockhub's `docs/lox-up.md`).
+The agent commands mount that volume on `/run/locksql`, read-only
+(connecting to a socket needs no write), and no other: without it they stop
+(exit 2) and say why, and what to do (`lox up`), never falling back to the
+fixed `locksql-run`. The launcher takes the volume only after the checks
+lea makes for its own agents:
+
+- `up.json` is found in the nearest directory up from here whose
+  `.lockfamily` holds one (that directory is the workspace); the
+  `.lockfamily` directory and `up.json` are no link, are yours, and
+  neither group nor others may write them; `up.json` is lox up's state
+  (version 1, as `lox up` writes it: two-space indented JSON, the values
+  the launcher reads unescaped) of this very workspace (its `workspace`,
+  and its `project` `lockfamily-<8 hex of sha256(workspace)>`);
+- the lock is the workspace's only locksql lock, or the one `--instance
+  NAME` names (the launcher's own option, taken out of the command line;
+  with several and no `--instance`, the error names them). In
+  `.mcp.json`, add it to the arguments: `"args": ["mcp", "--instance",
+  "NAME"]`;
+- its socket volume is the one `lox up` names for it, its clients group
+  the image's (10000);
+- Docker confirms the volume: lox up's labels (compose's project and
+  volume, `dev.lockfamily.role=socket`, its instance, type and workspace),
+  read as JSON and compared whole; and every container compose made that
+  mounts it comes from lox up's own compose run (compose's
+  `project.working_dir` is lox up's state directory,
+  `$XDG_STATE_HOME/lockfamily/<project>` or
+  `~/.local/state/lockfamily/<project>`, and its `config_files` `-` or that
+  directory's `compose.yaml`). A compose file written in the workspace,
+  with lox up's project name and volume, would serve the socket from an
+  image of its own: the launcher trusts none of that socket. Containers
+  no compose made (the agents', as the launcher's own) only reach it.
+
+`up.json` only names the lock: what is mounted is what Docker's labels
+prove. Anything else fails closed.
+
+The socket's name derives from the project (`.locksql/config.toml` up from
+the working directory) and the profile: run the agent from the workspace,
+whose `.locksql` lox up's console serves.
 
 ## Version pinning
 

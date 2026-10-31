@@ -18,7 +18,10 @@ import (
 // "-- -launcher-test-end-". PATH holds only the tools the launcher needs.
 type launcherFixture struct {
 	root, bin, project, calls, script string
-	env                               []string
+	// fake holds what the fake docker prints for lox up's volumes and
+	// containers (launcher_lockup_test.go).
+	fake string
+	env  []string
 }
 
 func newLauncherFixture(t *testing.T) *launcherFixture {
@@ -32,13 +35,14 @@ func newLauncherFixture(t *testing.T) *launcherFixture {
 		bin:     filepath.Join(root, "bin"),
 		project: filepath.Join(root, "project"),
 		calls:   filepath.Join(root, "calls"),
+		fake:    filepath.Join(root, "fake"),
 	}
-	for _, d := range []string{f.bin, filepath.Join(f.project, ".locksql"), filepath.Join(f.project, "sub")} {
+	for _, d := range []string{f.bin, f.fake, filepath.Join(f.project, ".locksql"), filepath.Join(f.project, "sub")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, tool := range []string{"sh", "dirname", "id", "cat", "printf", "awk", "sha256sum", "shasum", "tar", "gzip", "install", "mktemp", "rm", "uname", "sed", "tr", "tail", "grep", "cksum", "stat"} {
+	for _, tool := range []string{"sh", "dirname", "id", "cat", "printf", "awk", "sha256sum", "shasum", "tar", "gzip", "install", "mktemp", "rm", "uname", "sed", "tr", "tail", "grep", "cksum", "stat", "find", "ls", "wc", "sort"} {
 		if p, err := exec.LookPath(tool); err == nil {
 			if err := os.Symlink(p, filepath.Join(f.bin, tool)); err != nil {
 				t.Fatal(err)
@@ -55,6 +59,8 @@ func newLauncherFixture(t *testing.T) *launcherFixture {
 	f.script = filepath.Join(root, "locksql")
 	writeExec(t, f.script, string(launcher))
 	f.env = []string{"PATH=" + f.bin, "HOME=" + filepath.Join(root, "home")}
+	// The workspace (root) runs a locksql lock db under lox up.
+	f.loxUp(t, root, map[string]string{"db": "locksql"})
 	return f
 }
 
@@ -62,9 +68,12 @@ func (f *launcherFixture) fakeDocker(t *testing.T) {
 	writeExec(t, filepath.Join(f.bin, "docker"), `#!/bin/sh
 for a in "$@"; do printf '%s\n' "$a"; done >> '`+f.calls+`'
 echo -- -launcher-test-end- >> '`+f.calls+`'
-case "$1" in
-inspect) printf '%s\n' "${DOCKER_INSPECT:-}" ;;
-run) for a in "$@"; do [ "$a" = version ] && echo "locksql 9.9.9"; done ;;
+case "$1 ${2:-}" in
+"volume inspect") eval "v=\${$#}"; cat '`+f.fake+`'/"volume-$v" 2>/dev/null || exit 1 ;;
+"ps "*) for a in "$@"; do case "$a" in volume=*) cat '`+f.fake+`'/"ps-${a#volume=}" 2>/dev/null ;; esac; done ;;
+"inspect --type") eval "c=\${$#}"; cat '`+f.fake+`'/"container-$c" 2>/dev/null || exit 1 ;;
+"inspect "*) printf '%s\n' "${DOCKER_INSPECT:-}" ;;
+"run "*) for a in "$@"; do [ "$a" = version ] && echo "locksql 9.9.9"; done ;;
 esac
 exit 0
 `)
@@ -347,21 +356,24 @@ func TestLauncherAccountsPerCommand(t *testing.T) {
 	f := newLauncherFixture(t)
 	me := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
 	home := filepath.Join(f.root, "home")
+	// The agent commands: lox up's socket volume, read-only; never the
+	// fixed one of a console the launcher started.
+	sock, fixed := mountOf(f.root, "db"), []string{"-v", "locksql-run:/run/locksql"}
 	for _, tc := range []struct {
 		args       []string
 		want, deny [][]string
 	}{
-		{[]string{"mcp"}, [][]string{{"-i"}, {"-v", "locksql-run:/run/locksql"}}, [][]string{{"-it"}, {"--user"}, {"-v", "locksql-home:/home/locksql"}}},
-		{[]string{"status", "--json"}, [][]string{{"-v", "locksql-run:/run/locksql"}}, [][]string{{"--user"}, {"-v", "locksql-home:/home/locksql"}}},
-		{[]string{"plan", "--profile", "p", "SELECT 1"}, [][]string{{"-v", "locksql-run:/run/locksql"}}, [][]string{{"--user"}}},
-		{[]string{"doctor"}, [][]string{{"-v", "locksql-run:/run/locksql"}}, [][]string{{"--user"}}},
-		{[]string{"doctor", "--fix", "--yes"}, [][]string{{"--user", "0"}}, [][]string{{"-v", "locksql-run:/run/locksql"}}},
-		{[]string{"init", "claude"}, [][]string{{"--user", me}, {"-e", "HOME=" + home}, {"-v", home + ":" + home}}, [][]string{{"-v", "locksql-run:/run/locksql"}}},
-		{[]string{"config", "export", "--output", "team.json"}, [][]string{{"--user", me}, {"-e", "HOME=" + home}, {"-v", home + ":" + home}}, [][]string{{"-v", "locksql-run:/run/locksql"}}},
-		{[]string{"profile", "add"}, [][]string{{"--user", me}, {"-e", "HOME=/tmp"}}, [][]string{{"-v", "locksql-run:/run/locksql"}}},
-		{[]string{"stats", "--top", "3"}, [][]string{{"--user", "locksql"}, {"-v", "locksql-home:/home/locksql"}}, [][]string{{"-v", "locksql-run:/run/locksql"}}},
-		{[]string{"forget", "--profile", "p"}, [][]string{{"--user", "locksql"}, {"-v", "locksql-home:/home/locksql"}}, nil},
-		{nil, [][]string{{"-v", "locksql-run:/run/locksql"}}, [][]string{{"--user"}}},
+		{[]string{"mcp"}, [][]string{{"-i"}, sock}, [][]string{{"-it"}, {"--user"}, {"-v", "locksql-home:/home/locksql"}, fixed}},
+		{[]string{"status", "--json"}, [][]string{sock}, [][]string{{"--user"}, {"-v", "locksql-home:/home/locksql"}, fixed}},
+		{[]string{"plan", "--profile", "p", "SELECT 1"}, [][]string{sock}, [][]string{{"--user"}, fixed}},
+		{[]string{"doctor"}, [][]string{sock}, [][]string{{"--user"}, fixed}},
+		{[]string{"doctor", "--fix", "--yes"}, [][]string{{"--user", "0"}}, [][]string{sock, fixed}},
+		{[]string{"init", "claude"}, [][]string{{"--user", me}, {"-e", "HOME=" + home}, {"-v", home + ":" + home}}, [][]string{sock, fixed}},
+		{[]string{"config", "export", "--output", "team.json"}, [][]string{{"--user", me}, {"-e", "HOME=" + home}, {"-v", home + ":" + home}}, [][]string{sock, fixed}},
+		{[]string{"profile", "add"}, [][]string{{"--user", me}, {"-e", "HOME=/tmp"}}, [][]string{sock, fixed}},
+		{[]string{"stats", "--top", "3"}, [][]string{{"--user", "locksql"}, {"-v", "locksql-home:/home/locksql"}}, [][]string{sock, fixed}},
+		{[]string{"forget", "--profile", "p"}, [][]string{{"--user", "locksql"}, {"-v", "locksql-home:/home/locksql"}}, [][]string{sock, fixed}},
+		{nil, nil, [][]string{{"--user"}, sock, fixed}},
 	} {
 		out, calls, err := f.run(t, f.project, nil, tc.args...)
 		if err != nil {

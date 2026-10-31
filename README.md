@@ -185,7 +185,10 @@ lox approve
 The console runs as the `locksql` account (uid 10001) in its own container,
 the only one that holds the database credentials. The agent's MCP server runs
 as `agent` (uid 10002) in a throwaway container. The two share only the
-socket volume `locksql-run`, and the kernel checks every peer on the socket.
+console's socket volume, which `lox up` names in `.lockfamily/up.json` and the
+launcher mounts read-only once Docker confirms it is lox up's
+([docs/launcher.md](docs/launcher.md#the-socket-of-lox-ups-lock)); the kernel
+checks every peer on the socket.
 
 `init claude` writes `.mcp.json` with `locksql mcp`: the launcher, which
 starts the MCP server in the image (Codex, Gemini CLI and Cursor take the
