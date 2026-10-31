@@ -396,7 +396,11 @@ it append-only for the console account too.
 - **Copies and planted values at higher tiers.** A write (`INSERT ...
   SELECT`, `UPDATE ... SET`, `MERGE`) that copies a rule column into another
   column is refused, with or without `RETURNING`, and so is a write that
-  stores into a rule column anything but `NULL` or `DEFAULT`. Columns match
+  stores into a rule column anything but `NULL` or `DEFAULT`: a masked
+  column holds only values the agent never chose, since a planted value
+  would come back masked yet known to the agent, and joining that column
+  with `=` to another PII column, which no k-anonymity count covers, would
+  tell it whose value matches. Columns match
   by name, so an updatable view that renames a rule column, a trigger, or a
   value written before the rule existed (or by another client) can still put
   a value the agent knows behind a masked cell. For the writes the analysis

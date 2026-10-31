@@ -1087,8 +1087,9 @@ PII columns (columns under a mask rule) may be used as follows:
 - While mask rules exist, a write may store into a column under a mask rule
   (matched by name) only `NULL` or `DEFAULT`: a literal, an expression or
   another column is refused (`a masked column cannot receive values the agent
-  chose`), since the next read would mask it and hand back a reference to a
-  value the agent chose. An `INSERT` without a column list must name its
+  chose`): masked on the next read, the value would still be one the agent
+  knows, and joining that column with `=` to another PII column (which no
+  k-anonymity count covers) would tell it whose value matches. An `INSERT` without a column list must name its
   columns (or store only `NULL`/`DEFAULT`); an `INSERT` into a masked column
   from a query is refused. Writing other columns is unaffected.
 
@@ -1205,7 +1206,7 @@ The retry rules:
 | `E_MASKED_ORDER` | a PII column in `ORDER BY`, `DISTINCT ON`, a window's `PARTITION BY`/`ORDER BY` | rewrite | order or partition by a non-PII column |
 | `E_MASKED_SET_OP` | `UNION`, `INTERSECT`, `EXCEPT` or duplicate removal mixing a PII column with other values | rewrite | `UNION ALL` between PII columns, without `DISTINCT` |
 | `E_MASK_UNCERTAIN` | a result whose masking cannot be proven: an alias, a whole-row reference or a label the engine cannot trace, a result whose columns differ from the analysis | rewrite | PII columns by their plain name |
-| `E_MASKED_WRITE` | a write that copies a PII column or stores a value the agent chose into one | stop | none (a masked column may only be set to `NULL` or `DEFAULT`) |
+| `E_MASKED_WRITE` | a write that copies a PII column or stores a value the agent chose into one | stop | none (a masked column may only be set to `NULL` or `DEFAULT`: it holds no value the agent chose) |
 | `E_STALE` | the definitions the statement resolves to (functions, views, rules, triggers, row-level policies, grants, search path) changed between the plan and the run, or during the run | rewrite | plan the statement again; the human approves the new plan |
 | `E_POLICY` | a refusal no check named (fail-closed; should not happen) | stop | none: report it as a bug |
 

@@ -9,9 +9,9 @@ import (
 
 // While mask rules exist, a write may store into a column under a rule only
 // NULL or DEFAULT: any value the agent chose (a literal, an expression,
-// another column) would be masked on the next read and handed back as a
-// cell reference to a value the agent knows, which it could then look up
-// without the k-anonymity check.
+// another column) would be masked on the next read yet stand for a value
+// the agent knows, and a join of that column with = to another PII column,
+// which no k-anonymity count covers, would tell it whose value matches.
 func TestWritePlantsValueRefused(t *testing.T) {
 	r := Rules{Mask: []string{"*.users.email", "*.big.email"}}
 	refused := []dsql{

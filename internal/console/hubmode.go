@@ -402,8 +402,15 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 		if dec != nil {
 			s.auditHubDenial(ctx, ticketID, dec)
 		}
+		// The human's reason: the decision's, or what follows the
+		// sentinel's own text ("hubclient: denied: <reason>").
+		reason := strings.TrimPrefix(err.Error(), hubclient.ErrDenied.Error())
+		reason = strings.TrimPrefix(reason, ": ")
+		if dec != nil {
+			reason = dec.Reason
+		}
 		msg := "denied by the human; do not retry unless asked"
-		if _, reason, ok := strings.Cut(err.Error(), ": "); ok && reason != "denied" {
+		if reason = strings.TrimSpace(reason); reason != "" {
 			msg = "denied by the human: " + s.safeReason(reason) + "; do not retry unless asked"
 		}
 		return errResp(id, ipc.CodeDenied, msg)

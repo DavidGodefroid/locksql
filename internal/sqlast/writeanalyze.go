@@ -260,14 +260,15 @@ func (an *analyzer) assign(a *Assignment, sc *scope, target *relation, written m
 // carry a PII column's values (a copy would come back unmasked under the
 // name of the column written, through RETURNING or a later read), and a
 // column under a rule may only receive NULL or DEFAULT (any other value is
-// one the agent chose, which a later read would mask and hand back as a
-// cell reference to a value the agent knows).
+// one the agent chose: masked on a later read, it would stand for a value
+// the agent knows, and a join of that column with = to another PII column,
+// which no k-anonymity count covers, would tell it whose value matches).
 func (an *analyzer) store(col *column, p Prov, null bool, written map[string]Prov) error {
 	if p.Sensitive {
 		return refusef(refusal.MaskedWrite, "this write stores values of PII column %s, which could come back unmasked under the name of the column written (through RETURNING or a later read); do not copy PII columns, or run the write as an unmasked query", piiNames(p))
 	}
 	if !null && an.underRule(col.prov) {
-		return refusef(refusal.MaskedWrite, "this write stores into PII column %s a value the agent chose (a literal, an expression or another column); while PII mask rules exist, a masked column cannot receive values the agent chose, since a later read would mask the value and hand it back as a cell reference to a value the agent already knows. Set it to NULL or DEFAULT only, or run the write as an unmasked query", strings.ToLower(col.name))
+		return refusef(refusal.MaskedWrite, "this write stores into PII column %s a value the agent chose (a literal, an expression or another column); while PII mask rules exist, a masked column cannot receive values the agent chose, since a masked column must hold only values the agent never chose: a value it stored there would come back masked yet stand for a value it knows, and joining that column with = to another PII column, which no k-anonymity count covers, would tell it whose value matches. Set it to NULL or DEFAULT only, or run the write as an unmasked query", strings.ToLower(col.name))
 	}
 	if old, ok := written[col.name]; ok {
 		p = union(old, p)

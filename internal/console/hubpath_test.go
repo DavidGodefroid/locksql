@@ -53,7 +53,7 @@ func TestHubProductionTicketFlag(t *testing.T) {
 		hub.Decide(tk, ticket.Denied, "not on prod")
 		r := runTicket(t, h, tk)
 		wantCode(t, r, ipc.CodeDenied)
-		if !strings.Contains(r.Error.Message, "not on prod") || h.sess.runCount() != 0 {
+		if r.Error.Message != "denied by the human: not on prod; do not retry unless asked" || h.sess.runCount() != 0 {
 			t.Errorf("denial %q, runs %d", r.Error.Message, h.sess.runCount())
 		}
 	}
@@ -186,5 +186,20 @@ func TestSocketCannotAnswerConsolePrompts(t *testing.T) {
 			}
 		}
 		writeProjectConfig(t, root, 100)
+	}
+}
+
+// A denial without a reason says so once, without the hub client's own
+// error text.
+func TestHubDenialWithoutReason(t *testing.T) {
+	var hub *hubtest.Hub
+	h := newHarness(t, uatProfile(), withHub(t, &hub))
+	pr := h.plan(t, selectUsers, false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	hub.Decide(tk, ticket.Denied, "")
+	r := runTicket(t, h, tk)
+	wantCode(t, r, ipc.CodeDenied)
+	if r.Error.Message != "denied by the human; do not retry unless asked" {
+		t.Errorf("denial %q", r.Error.Message)
 	}
 }

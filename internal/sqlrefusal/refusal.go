@@ -136,7 +136,7 @@ var table = map[Code]struct {
 	MaskUncertain: {RetryRewrite, "a result whose masking could not be proven",
 		"select PII columns by their plain name, without alias, expression or whole-row reference"},
 	MaskedWrite: {RetryStop, "a write that copies a PII column or stores a chosen value in one",
-		"a masked column may only be set to NULL or DEFAULT; tell the user"},
+		"a masked column may only be set to NULL or DEFAULT (it holds no value the agent chose); tell the user"},
 	Stale: {RetryRewrite, "the database objects the statement uses changed since the plan",
 		"plan the statement again (locksql_plan): the human approves the new plan"},
 }

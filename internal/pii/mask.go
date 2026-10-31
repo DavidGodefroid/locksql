@@ -1358,7 +1358,7 @@ func plantedValue(col string) *sqlclass.Refusal {
 		what = "PII column " + strings.ToLower(col)
 	}
 	return refusal.Newf(refusal.MaskedWrite, "this write stores into %s a value the agent chose (a literal, an expression or another column);"+
-		" while PII mask rules exist, a masked column cannot receive values the agent chose, since a later read would mask the value and hand it back as a cell reference to a value the agent already knows."+
+		" while PII mask rules exist, a masked column cannot receive values the agent chose, since a masked column must hold only values the agent never chose: a value it stored there would come back masked yet stand for a value it knows, and joining that column with = to another PII column, which no k-anonymity count covers, would tell it whose value matches."+
 		" Set it to NULL or DEFAULT only, or run the write as an unmasked query", what)
 }
 

@@ -59,6 +59,14 @@ Supported lockhub: as v0.11.5; the console now needs it
   hint only.
 - The `approved` and `run` records of a ticket carry the k-anonymity
   warnings of its counts, as its `pending` record does.
+- A hub denial reads `denied by the human: <reason>; do not retry unless
+  asked`, no longer `denied by the human: denied: <reason>; ...`; the reason
+  is taken from the hub's decision.
+- The `E_MASKED_WRITE` refusal (a masked column may only be set to `NULL` or
+  `DEFAULT`, unchanged) gives its current reason: a planted value would come
+  back masked yet known to the agent, and a join of that column with `=` to
+  another PII column, which no k-anonymity count covers, would tell it whose
+  value matches. It no longer speaks of cell references.
 - An approved ticket whose statement cannot be planned again before its
   run (the catalog cannot be read, the connection fails) is audited: the
   hub's signed `approved` record, then a `run` record `failed` with the
