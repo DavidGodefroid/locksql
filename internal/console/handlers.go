@@ -74,9 +74,12 @@ func (s *Server) session(ctx context.Context, id int64) (engine.Session, *ipc.Re
 	return sess, nil
 }
 
-// failed maps an engine error to a response, dropping the session on a
-// lost connection.
-func (s *Server) failed(id int64, what string, err error) ipc.Response {
+// failed maps an engine error raised while serving what to a response,
+// dropping the session on a lost connection. The client gets a generic
+// failure, never the database's text (it may quote values); the console
+// shows the detail, redacted as errText does with sql the statement or
+// name the request sent.
+func (s *Server) failed(id int64, what string, err error, sql string) ipc.Response {
 	if errors.Is(err, engine.ErrConnLost) {
 		s.k.Lost()
 		s.println("database connection lost")
@@ -85,7 +88,8 @@ func (s *Server) failed(id int64, what string, err error) ipc.Response {
 		}
 		return errResp(id, ipc.CodeConnLost, "the database connection was lost")
 	}
-	return errResp(id, ipc.CodeInternal, what+": "+secrets.Sanitize(err))
+	s.println(paint.Fail(what + " failed: " + safeText(s.errText(err, sql, false), false)))
+	return errResp(id, ipc.CodeInternal, what+" failed: "+genericDBFailure)
 }
 
 // masking reports whether the session masks anything at all.
@@ -110,13 +114,11 @@ func (s *Server) auditErrText(err error, pl *plan) string {
 	return s.errText(err, pl.st.SQL, false)
 }
 
-// failedPlan is failed for an error raised while serving pl: the text
-// reaching the client is scrubbed of the plan's values.
+// failedPlan is failed for an error raised while serving pl: the console
+// shows the detail redacted against the plan's statement; the client gets
+// the generic failure.
 func (s *Server) failedPlan(id int64, what string, err error, pl *plan) ipc.Response {
-	if errors.Is(err, engine.ErrConnLost) {
-		return s.failed(id, what, err)
-	}
-	return errResp(id, ipc.CodeInternal, what+": "+s.errText(err, pl.st.SQL, false))
+	return s.failed(id, what, err, pl.st.SQL)
 }
 
 // checkDB resolves the database of a request: the given one, or the
@@ -169,9 +171,11 @@ func (s *Server) catalog(ctx context.Context, req ipc.Request) ipc.Response {
 		result, err = sess.Describe(ctx, db, p.Table)
 	}
 	if err != nil {
-		rec.Error = secrets.Sanitize(err)
+		// Audited redacted, as the console shows it: the database's text
+		// may quote values.
+		rec.Error = s.errText(err, p.Table, false)
 		s.audit(rec)
-		return s.failed(req.ID, req.Method, err)
+		return s.failed(req.ID, req.Method, err, p.Table)
 	}
 	s.audit(rec)
 	return okResp(req.ID, result)
@@ -241,7 +245,7 @@ func (s *Server) policyPending(id int64) *ipc.Response {
 func (s *Server) planFailed(id int64, err error, sql string) ipc.Response {
 	if errors.Is(err, engine.ErrConnLost) {
 		s.planErr = "the database connection was lost"
-		return s.failed(id, "plan", err)
+		return s.failed(id, "plan", err, sql)
 	}
 	s.planErr = s.errText(err, sql, false)
 	s.println(paint.Fail("plan failed: " + safeText(s.planErr, false)))
@@ -632,7 +636,7 @@ func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session,
 		s.auditRunFailed(rec, s.auditErrText(err, pl))
 		s.println(paint.Fail("failed: " + safeText(s.errText(err, pl.st.SQL, false), false)))
 		if errors.Is(err, engine.ErrConnLost) {
-			return s.failed(id, "statement failed", err)
+			return s.failed(id, "statement", err, pl.st.SQL)
 		}
 		if errors.Is(rctx.Err(), context.DeadlineExceeded) {
 			return errResp(id, ipc.CodeInternal, "statement timed out (limits.statement_timeout)")

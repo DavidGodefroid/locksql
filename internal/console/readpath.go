@@ -30,6 +30,11 @@ const ResponseQuantum = kconsole.ResponseQuantum
 // statement: never the server's message, which can quote values.
 const genericFailure = "statement refused by the database (the details are shown on the console)"
 
+// genericDBFailure is what a client learns when the database fails any
+// other request (a catalog listing, a check before a run): never the
+// server's message, which can quote values.
+const genericDBFailure = "the database returned an error (the details are shown on the console)"
+
 // catalog resolves table names for the analyser from the column catalog of
 // the session, read once per database and refreshed when a name is
 // unknown.

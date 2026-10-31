@@ -52,6 +52,9 @@ type fakeSession struct {
 	colsErr error               // answers the catalog Columns calls
 	// explainErr answers the EXPLAIN calls.
 	explainErr error
+	// tablesErr and describeErr answer the catalog listing and describe
+	// calls; objectsErr the reads of the object state.
+	tablesErr, describeErr, objectsErr error
 	// objects, when set, makes the session an engine.ObjectGuard reading
 	// that state; duringRun runs between a guarded run's two checks.
 	objects     *engine.ObjectState
@@ -76,6 +79,9 @@ func (f *fakeSession) Triggers(_ context.Context, _ string, names []string) ([]s
 func (f *fakeSession) ObjectState(_ context.Context, _ string, refs engine.ObjectRefs) (engine.ObjectState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.objectsErr != nil {
+		return engine.ObjectState{}, f.objectsErr
+	}
 	if f.objects == nil {
 		return engine.ObjectState{}, engine.ErrNoObjectGuard
 	}
@@ -149,12 +155,18 @@ func (f *fakeSession) Tables(context.Context, string) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.catalog++
+	if f.tablesErr != nil {
+		return nil, f.tablesErr
+	}
 	return []string{"users"}, nil
 }
 func (f *fakeSession) Describe(_ context.Context, db, table string) (engine.TableInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.catalog++
+	if f.describeErr != nil {
+		return engine.TableInfo{}, f.describeErr
+	}
 	return engine.TableInfo{DB: db, Table: table, Columns: []engine.ColumnDesc{{Name: "id", Type: "int"}}, Indexes: f.indexes, EstRows: 3}, nil
 }
 func (f *fakeSession) Columns(_ context.Context, db string) ([]engine.ColumnInfo, error) {

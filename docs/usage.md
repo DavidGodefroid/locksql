@@ -977,6 +977,9 @@ locksql doctor   [--profile P]
   redacted, to the audit log. No timings are returned, and once the
   statement is approved `run` answers on a 250 ms quantum, success or
   failure; a refusal before approval is not quantized.
+  Any other request the database fails (`tables`, `describe`, a check
+  before a run) answers `<operation> failed: the database returned an
+  error (the details are shown on the console)`, never the server's text.
 - `tables` and `describe` are catalog reads: they run SQL built by the
   console, need no approval and are audited. `describe` also marks the
   masked columns.
