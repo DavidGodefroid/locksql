@@ -1128,13 +1128,19 @@ func (st *starter) reconnect(ctx context.Context, p config.Profile) (engine.Sess
 	return sess, nil
 }
 
+// privAuditFailed is the finding of a privilege audit the database failed.
+const privAuditFailed = "privilege audit failed (the details are shown on the console)"
+
 // privileges runs the privilege audit for the tier: refused on production,
 // a typed "continue" otherwise.
 func (st *starter) privileges(ctx context.Context, sess engine.Session) error {
 	p := st.profile
 	warns, err := sess.ExtraPrivileges(ctx, p.Tier)
 	if err != nil {
-		warns = append(warns, "privilege audit failed: "+secrets.Sanitize(err))
+		// The findings reach the agent (status health, doctor): never the
+		// database's text, which the console shows alone.
+		st.io.Println(paint.Fail("privilege audit failed: " + safeText(secrets.Sanitize(err), false)))
+		warns = append(warns, privAuditFailed)
 	}
 	st.privWarns = warns
 	if len(warns) == 0 {

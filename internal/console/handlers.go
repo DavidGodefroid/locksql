@@ -75,7 +75,8 @@ func (s *Server) session(ctx context.Context, id int64) (engine.Session, *ipc.Re
 }
 
 // failed maps an engine error raised while serving what to a response,
-// dropping the session on a lost connection. The client gets a generic
+// dropping the session on a lost connection; a deadline (the statement
+// timeout) answers that it timed out. The client gets a generic
 // failure, never the database's text (it may quote values); the console
 // shows the detail, redacted as errText does with sql the statement or
 // name the request sent.
@@ -88,8 +89,21 @@ func (s *Server) failed(id int64, what string, err error, sql string) ipc.Respon
 		}
 		return errResp(id, ipc.CodeConnLost, "the database connection was lost")
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		s.println(paint.Fail(what + " timed out: " + safeText(s.errText(err, sql, false), false)))
+		return errResp(id, ipc.CodeInternal, what+" timed out (limits.statement_timeout)")
+	}
 	s.println(paint.Fail(what + " failed: " + safeText(s.errText(err, sql, false), false)))
 	return errResp(id, ipc.CodeInternal, what+" failed: "+genericDBFailure)
+}
+
+// ctxErr is err, marked with ctx's error when ctx ended while it ran: a
+// driver error under an expired deadline is a timeout.
+func ctxErr(ctx context.Context, err error) error {
+	if c := ctx.Err(); c != nil && !errors.Is(err, c) {
+		return fmt.Errorf("%w: %w", c, err)
+	}
+	return err
 }
 
 // masking reports whether the session masks anything at all.
@@ -581,6 +595,7 @@ func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session,
 	// the built-in: look them up again.
 	if r, err := s.checkShadows(ctx, sess, pl.db, pl.shadow); err != nil || r != nil {
 		if err != nil {
+			err = ctxErr(ctx, err)
 			s.auditRunFailed(rec, s.auditErrText(err, pl))
 			return s.failedPlan(id, "plan", err, pl)
 		}

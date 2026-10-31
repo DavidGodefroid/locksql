@@ -448,6 +448,9 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 	// The counts call COUNT and MIN and compare: a function or operator
 	// created since the plan would run in them first.
 	if r, err := s.checkShadows(ctx, sess, pl.db, pl.shadow); err != nil || r != nil {
+		if err != nil {
+			err = ctxErr(ctx, err)
+		}
 		return nil, r, err
 	}
 	var out []string
@@ -460,8 +463,8 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 		st := sqlclass.Statement{Class: sqlclass.Read, Kind: "select", SQL: c.SQL, Limit: 1}
 		res, err := sess.Run(ctx, pl.db, st, 1)
 		if err != nil {
-			if errors.Is(err, engine.ErrConnLost) || ctx.Err() != nil {
-				return nil, nil, err
+			if errors.Is(err, engine.ErrConnLost) || ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
+				return nil, nil, ctxErr(ctx, err)
 			}
 			s.println("k-anonymity check failed: " + safeText(s.errText(err, c.SQL, false), false))
 			add("k-anonymity: a count could not run, so the rows this statement covers are unknown")
