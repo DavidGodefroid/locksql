@@ -731,7 +731,9 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
 
 `locksql console --hub URL --hub-key-file PATH --instance NAME` (written by
 `lock up`; `locksql hub-key --instance NAME` prints the instance key to pin)
-sends approvals to lockhub instead of asking on this terminal.
+sends approvals to lockhub instead of asking on this terminal. The hub URL
+is `http(s)://host[:port]` only: a path, query, fragment, user or password
+is refused.
 
 Supported lockhub versions: locksql v0.11.x (lockkit v0.7.1) needs lockhub
 v0.2.1 or later, the first whose "Supported locks" (lockhub's CHANGELOG)

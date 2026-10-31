@@ -80,3 +80,19 @@ func TestDecodeShareDoesNotEchoValues(t *testing.T) {
 		}
 	}
 }
+
+// TestImportDoesNotEchoProfileNames: a --profile or --local naming no
+// profile of the file is named by the flag, never quoted back.
+func TestImportDoesNotEchoProfileNames(t *testing.T) {
+	s := shareOf(t, false)
+	f, err := ParseConfigFile([]byte("[profiles.mine]\nengine = \"postgres\"\nhost = \"db.mine\"\n"), "config.toml", "/home/b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{canaryToken, canaryURL + "/path?token=glsa_Canary"} {
+		_, err := f.Import(s, ImportOptions{Only: []string{"uat", v}})
+		noEcho(t, "--profile "+v, "--profile 2", err)
+		_, err = f.Import(s, ImportOptions{Local: map[string]map[string]string{v: {"tls_ca": "x"}}})
+		noEcho(t, "--local "+v, "--local", err)
+	}
+}

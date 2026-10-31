@@ -4,6 +4,37 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+### Changed
+
+- lockkit v0.8.1 (was v0.7.2). **The `--hub` URL is `http(s)://host[:port]`
+  only**: a path (`https://h/lockhub`, which never reached a working hub:
+  lockhub serves `/v1/` at its root and signs the path), a query, a
+  fragment, an IPv6 zone, a host that is not a DNS name or an IP address, or
+  a port outside 1-65535 is now refused, without quoting the URL. The
+  console's start line and the separated-mode handoff show and pass the hub
+  in that canonical form, and a hub that cannot be reached is named by
+  scheme and host, no longer by the whole request URL (lockkit #107).
+- lockkit v0.8.0: the PII detectors read the `\n`, `\r` and `\t` escapes
+  and the `\u00XX` escapes of `&`, `<`, `>`, `=` and quotes (JSON log lines)
+  as the blank or delimiter they stand for, so a value right after one is
+  masked (`{"msg":"tel:\t0475123456"}`). The new opt-in detectors (`ip`,
+  `secret`, `person_name`) are not enabled: the default detectors mask what
+  they masked before, apart from this.
+
+### Fixed
+
+- **A `--profile` naming no profile is not quoted back** (it may be a token
+  or a URL pasted in the wrong place): the client commands (`tables`,
+  `describe`, `plan`, `run`, `pii ...`), `status`, `mcp`, `forget`,
+  `console`, `config export --profile` and `config import
+  --profile`/`--local` name the flag (and the configured profiles), never
+  the value given. With lockkit v0.8.1, the same holds for an invalid
+  profile name, `--instance`, `--require-device`, `hub-key`'s flags, the
+  console's `--profile` mismatch and its `service_user`/`client_group`
+  refusals.
+
 ## v0.11.4 (2026-10-31)
 
 Supported lockhub: as v0.11.3.

@@ -163,9 +163,11 @@ func exportScope(sc configScope, only []string, noPII, includeUser bool) (config
 	}
 	names := slices.Sorted(maps.Keys(profiles))
 	if len(only) > 0 {
-		for _, n := range only {
+		for i, n := range only {
 			if _, ok := profiles[n]; !ok {
-				return share, nil, fmt.Errorf("no profile %q in %s", n, sc.path)
+				// Named by position, not quoted back: it may be a token
+				// or a URL pasted in the wrong place.
+				return share, nil, fmt.Errorf("--profile %d: no such profile in %s", i+1, sc.path)
 			}
 		}
 		names = only
