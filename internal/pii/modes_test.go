@@ -34,7 +34,7 @@ func TestHashModeIsUnknown(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pii.toml")
 	os.WriteFile(path, []byte("[[mask]]\ncolumn = \"app.users.email\"\nmode = \"hash\"\n"), 0o644)
 	_, err := LoadRulesFile(path)
-	if err == nil || !strings.Contains(err.Error(), `unknown mode "hash" (want redact, partial or email)`) {
+	if err == nil || !strings.Contains(err.Error(), `[[mask]] entry 1: pii rule: unknown mode (want redact, partial or email)`) || strings.Contains(err.Error(), "hash") {
 		t.Fatalf("err = %v", err)
 	}
 }

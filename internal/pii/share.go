@@ -32,17 +32,17 @@ func ToShared(r Rules) config.SharedRules {
 // patterns, modes, and no mode on an allow rule.
 func FromShared(s config.SharedRules) (Rules, error) {
 	var r Rules
-	for _, e := range s.Mask {
+	for i, e := range s.Mask {
 		if err := r.AddMode(e.Column, e.Mode); err != nil {
-			return Rules{}, err
+			return Rules{}, fmt.Errorf("mask entry %d: %w", i+1, err)
 		}
 	}
-	for _, e := range s.Allow {
+	for i, e := range s.Allow {
 		if e.Mode != "" {
-			return Rules{}, fmt.Errorf("pii rule %q: an allow rule has no mode", e.Column)
+			return Rules{}, fmt.Errorf("allow entry %d: pii rule: an allow rule has no mode", i+1)
 		}
 		if err := r.AddAllow(e.Column); err != nil {
-			return Rules{}, err
+			return Rules{}, fmt.Errorf("allow entry %d: %w", i+1, err)
 		}
 	}
 	return r, nil

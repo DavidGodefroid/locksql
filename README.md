@@ -541,7 +541,7 @@ A column covered by several rules with different modes is redacted. Changing
 a mode is a loosening unless the new mode is `redact`.
 
 `mode = "hash"` is no longer a mode: a rules file that uses it is rejected
-(`unknown mode "hash" (want redact, partial or email)`).
+(`[[mask]] entry N: pii rule: unknown mode (want redact, partial or email)`).
 
 On PostgreSQL the first segment is the schema (`public.users.email`).
 

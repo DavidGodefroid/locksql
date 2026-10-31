@@ -4,6 +4,22 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+### Fixed
+
+- **Config errors never quote a value.** A secret pasted in the wrong key
+  (`credentials = "<token>"`) no longer ends up in the terminal, the logs or
+  the agent's output: the errors of the config file (`tier`, `engine`, `tls`,
+  `credentials`, `write_functions`, `detectors`, the `limits` durations), of
+  `config import` (`needs_local`, the PII rule set names), of the PII rules
+  files (a rule's `column` and `mode`), of `locksql profile add` (profile
+  name, engine, credentials, vault path, tls), of `config import --local`
+  without `=` and of `console --instance` and `LOCKSQL_PII_DIR` name the key
+  and the allowed values, never the value given. A PII rules file error
+  names the entry (`[[mask]] entry 2: pii rule: unknown mode (want redact,
+  partial or email)`).
+
 ## v0.11.3 (2026-10-31)
 
 Supported lockhub: as v0.11.2.

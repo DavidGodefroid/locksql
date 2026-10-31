@@ -382,7 +382,7 @@ func Run(ctx context.Context, o Options) error {
 		if o.Hub.KeyFile != "" && o.Hub.URL != "" && o.Hub.Instance != "" {
 			// The instance names the copy of the key: checked first.
 			if !hubclient.ValidInstance(o.Hub.Instance) {
-				return fmt.Errorf("%w: --instance %q is not a valid instance name", ErrConfig, o.Hub.Instance)
+				return fmt.Errorf("%w: --instance is not a valid instance name", ErrConfig)
 			}
 			if o.Hub.KeyFile, err = pinHubKey(o.StateDir, o.Hub.Instance, o.Hub.KeyFile); err != nil {
 				return err
@@ -428,7 +428,7 @@ func Run(ctx context.Context, o Options) error {
 	profileRules := ""
 	if o.PIIDir != "" {
 		if !filepath.IsAbs(o.PIIDir) {
-			return fmt.Errorf("%w: %s must be an absolute path, got %q", ErrConfig, PIIDirEnv, o.PIIDir)
+			return fmt.Errorf("%w: %s must be an absolute path", ErrConfig, PIIDirEnv)
 		}
 		profileRules, rulesDir = rulesDir, o.PIIDir
 		seeded, err := pii.SeedSets(profileRules, rulesDir)
