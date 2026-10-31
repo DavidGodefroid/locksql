@@ -4,7 +4,9 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## Unreleased
+## v0.11.4 (2026-10-31)
+
+Supported lockhub: as v0.11.3.
 
 ### Fixed
 
@@ -15,13 +17,13 @@ This file records the changes a user or an agent has to know about.
   `config import` (`needs_local`, the PII rule set names), of the PII rules
   files (a rule's `column` and `mode`), of `locksql profile add` (profile
   name, engine, credentials, vault path, tls), of `config import --local`,
-  of `console --allowed-uids` and of `console --instance` and `LOCKSQL_PII_DIR` name the key
-  and the allowed values, never the value given. A PII rules file error
-  names the entry (`[[mask]] entry 2: pii rule: unknown mode (want redact,
-  partial or email)`).
+  `console --allowed-uids`, `console --instance` and `LOCKSQL_PII_DIR` name
+  the key and the allowed values, never the value given (#143). A PII rules
+  file error names the entry (`[[mask]] entry 2: pii rule: unknown mode
+  (want redact, partial or email)`).
 - lockkit v0.7.2 (was v0.7.1): the same for `ssh.credentials` and the
   `--hub` URL, which the hub client's errors now show by scheme and host
-  only; a `--hub` URL with a user or password is refused.
+  only; a `--hub` URL with a user or password is refused (#143).
 
 ## v0.11.3 (2026-10-31)
 
