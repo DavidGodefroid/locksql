@@ -75,7 +75,7 @@
 </section>
 <section aria-labelledby="self-approve">
   <h2 id="self-approve">Can the agent approve its own queries, or turn approval off?</h2>
-  <p>Approval comes only from the console terminal: no socket method approves, and no socket method loosens the policy. <a href="../how-it-works/#skip">Auto mode</a> switches only from the console's keyboard; no client or config file can turn it on, and it is unavailable on production profiles. The agent’s account must be separate from the console’s.</p>
+  <p>No. A statement runs only once lockhub's signed decision approves its ticket: no socket method approves, no socket method loosens the policy, and there is no auto mode. The agent’s account must be separate from the console’s.</p>
 </section>
 <section aria-labelledby="own-account">
   <h2 id="own-account">Why does the console need its own OS account?</h2>
@@ -95,7 +95,7 @@
 </section>
 <section aria-labelledby="blind-search">
   <h2 id="blind-search">Can the agent look up a customer by email without seeing it?</h2>
-  <p>Yes. It writes <code>WHERE email = '${email}'</code> and you type the address in the console, without echo; or it filters on the reference of a redacted cell from an earlier result (<code>'${r1.2.3}'</code>), whose clear value only the console holds. The value never reaches the agent, the audit log or a client error. <a href="../how-it-works/#blind-search">More on placeholders and references</a>.</p>
+  <p>Not by a typed value: requests are decided in lockhub, where no value is typed, so a placeholder (<code>'${email}'</code>) or a cell reference (<code>'${r1.2.3}'</code>) is refused at run (<code>E_PLACEHOLDER</code>). <a href="../how-it-works/#blind-search">More</a>.</p>
 </section>
 <section aria-labelledby="see-values">
   <h2 id="see-values">Can I see the real values myself?</h2>
@@ -103,7 +103,7 @@
 </section>
 <section aria-labelledby="k-anonymity">
   <h2 id="k-anonymity">Does k-anonymity stop all inference?</h2>
-  <p>No. It is a decision aid: a query whose PII filter, group or aggregate covers fewer than <code>k</code> rows warns you on the approval screen, and you decide (in auto mode it runs). Even heeded, it does not stop differencing attacks that combine several approved queries. <a href="../security/#k-anonymity">See the example</a>.</p>
+  <p>No. It is a decision aid: a query whose PII filter, group or aggregate covers fewer than <code>k</code> rows warns you on the ticket, and you decide. Even heeded, it does not stop differencing attacks that combine several approved queries. <a href="../security/#k-anonymity">See the example</a>.</p>
 </section>
 <section aria-labelledby="tls">
   <h2 id="tls">Is the connection to the database encrypted?</h2>
@@ -124,10 +124,6 @@
 <section aria-labelledby="audit">
   <h2 id="audit">What is logged?</h2>
   <p>Every login, policy change, refusal, decision, run, catalog read, console switch and logout, in a JSONL audit log (mode 0600); the approval is written before the statement runs, its outcome after. Records contain the SQL and metadata, never secrets and never row data.</p>
-</section>
-<section aria-labelledby="skip-permissions">
-  <h2 id="skip-permissions">What is auto mode for?</h2>
-  <p>Fast local iteration: Shift+Tab in the console (or <code>--auto</code> at start) auto-approves statements that the tier and the weight check allow, until Shift+Tab again. It is unavailable on production profiles, never auto-approves an unmasked query, never overrides a <code>REFUSE</code> verdict, shows on the console's status line, and each switch and each auto-approval is audited.</p>
 </section>
 <section aria-labelledby="sharing">
   <h2 id="sharing">Can several people share one console, or export data?</h2>

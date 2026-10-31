@@ -28,9 +28,6 @@ type Terminal = kconsole.Terminal
 // os.Stdout).
 func NewTerminal(in *os.File, out io.Writer) *Terminal { return kconsole.NewTerminal(in, out) }
 
-// errSecretTimeout is AskSecret's error when no answer comes in time.
-var errSecretTimeout = kconsole.ErrSecretTimeout
-
 // The approvers.
 type (
 	Decision = kconsole.Decision

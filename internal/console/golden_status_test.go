@@ -54,7 +54,7 @@ func TestGoldenStatusAndReview(t *testing.T) {
 	}{
 		{name: "status-uat", profile: uatProfile},
 		{name: "status-production", profile: prodProfile},
-		{name: "status-auto-unmask", profile: uatProfile, opts: []hopt{skip, allowUnmask}},
+		{name: "status-unmask", profile: uatProfile, opts: []hopt{allowUnmask}},
 		{name: "status-desktop-health-pending", profile: uatProfile, opts: []hopt{func(c *ServerConfig) {
 			c.Boundary = "level 1: the agent's account can read this window"
 			c.Health = &ipc.Health{Separated: true, Display: "wayland", Privileges: []string{"INSERT on app.users"}, ExplainOK: true}
@@ -98,15 +98,13 @@ func TestGoldenStatusAndReview(t *testing.T) {
 		{name: "review-refused", start: uatProfile, answer: "n", change: func(p *config.Profile) { p.Limits.MaxRows = 5000 }},
 		{name: "review-production-off", start: prodProfile, answer: "y", change: func(p *config.Profile) { p.Production = false }},
 		// lockkit's FormatChanges, :review wording and adopt differ here:
-		// "- " only for PII rules and detectors, the auto-mode warning, and
-		// the wider connection-change check (tls, ssh, proxy_command).
-		{name: "review-removals-auto-connection", answer: "y", mask: []string{},
+		// "- " only for PII rules and detectors, and the wider connection-change check (tls, ssh, proxy_command).
+		{name: "review-removals-connection", answer: "y", mask: []string{},
 			start: func() config.Profile {
 				p := prodProfile()
 				p.Detectors, p.TLSCA = []string{"email", "iban"}, "/etc/ca.pem"
 				return p
 			},
-			opts:   []hopt{skip},
 			change: func(p *config.Profile) { p.Detectors, p.TLSCA, p.Production = []string{"email"}, "", false }},
 		{name: "review-nothing", start: uatProfile, none: true},
 		{name: "review-requests", start: uatProfile, none: true, requests: []string{"allow unmask on app.users.note", "raise max_rows to \x1b[2J500"}},

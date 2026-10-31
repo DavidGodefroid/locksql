@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/console"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
+	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
@@ -128,8 +128,8 @@ func assertPlanRefused(t *testing.T, s engine.Session, rules pii.Rules, queries 
 	}
 }
 
-// leakServer is a console server on s at tier write that approves every
-// prompt; it returns the client call.
+// leakServer is a console server on s at tier write whose hub approves
+// every request; it returns the client call.
 func leakServer(t *testing.T, s engine.Session, db string, rules pii.Rules) func(method string, params any) ipc.Response {
 	t.Helper()
 	return consoleServer(t, s, db, rules, config.TierWrite, []string{})
@@ -145,17 +145,19 @@ func consoleServer(t *testing.T, s engine.Session, db string, rules pii.Rules, t
 	eng := string(s.Flavor())
 	p := config.Profile{Name: "it", Engine: eng, Host: "127.0.0.1", Tier: tier, Credentials: config.CredentialsAsk,
 		Limits: config.DefaultLimits(false), Detectors: detectors}
+	hub, fake := inProcessHub(t, yesIO{t})
 	srv, err := console.NewServer(console.ServerConfig{
 		Policy: config.NewPolicy(p, rules.Mask, rules.Allow).WithModes(rules.Modes), RulesPath: filepath.Join(t.TempDir(), pii.RulesFile), Session: nopClose{s},
-		DBUser: "it", Databases: []string{db}, Audit: log, IO: yesIO{t}, Version: "it",
+		DBUser: "it", Databases: []string{db}, Audit: log, IO: yesIO{t}, Version: "it", Hub: hub,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return func(method string, params any) ipc.Response {
+	// The hub approves every request.
+	return approving(t, fake, func(method string, params any) ipc.Response {
 		raw, _ := json.Marshal(params)
 		return srv.Handle(context.Background(), ipc.Request{JSONRPC: "2.0", ID: 1, Method: method, Params: raw})
-	}
+	})
 }
 
 // nopClose keeps the shared session open when a test server ends.
@@ -295,12 +297,45 @@ func writeMaskedQueries(d sqlclass.Dialect) []string {
 			"UPDATE big AS b SET status = b.status FROM small s WHERE s.id = b.id RETURNING *",
 			"DELETE FROM small s USING big b WHERE b.id = 1 AND s.id = 9002 RETURNING b.email, s.id",
 			"UPDATE small SET label = label WHERE id = 1 RETURNING (SELECT email FROM big WHERE id = 1) AS e",
-			"WITH u AS (UPDATE big SET status = status WHERE id < 3 RETURNING email AS e) SELECT e AS z FROM u",
-			"WITH d AS (DELETE FROM small WHERE false RETURNING 1) SELECT email AS x FROM big WHERE id < 3 LIMIT 3",
 			"DELETE FROM big WHERE status = 'wret' RETURNING email AS x",
 		}
 	}
 	return nil
+}
+
+// writeNestedQueries hold a data-modifying statement inside a WITH: the
+// plan passes, the run is refused (E_STATEMENT_KIND), its row count would
+// not cover every row it changes.
+func writeNestedQueries(d sqlclass.Dialect) []string {
+	if d != sqlclass.Postgres {
+		return nil
+	}
+	return []string{
+		"WITH u AS (UPDATE big SET status = status WHERE id < 3 RETURNING email AS e) SELECT e AS z FROM u",
+		"WITH d AS (DELETE FROM small WHERE false RETURNING 1) SELECT email AS x FROM big WHERE id < 3 LIMIT 3",
+	}
+}
+
+// assertRunRefused requires that each statement plans and that its run is
+// refused with code before anything is decided or run.
+func assertRunRefused(t *testing.T, s engine.Session, rules pii.Rules, code string, queries []string) {
+	t.Helper()
+	call := leakServer(t, s, "app", rules)
+	for _, q := range queries {
+		resp := call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
+		if resp.Error != nil {
+			t.Errorf("%s: plan refused: %s", q, resp.Error.Message)
+			continue
+		}
+		var pr ipc.PlanResult
+		if err := json.Unmarshal(resp.Result, &pr); err != nil {
+			t.Fatal(err)
+		}
+		resp = call(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+		if resp.Error == nil || resp.Error.Data == nil || string(resp.Error.Data.Code) != code {
+			t.Errorf("%s: run %s %+v, want %s", q, resp.Result, resp.Error, code)
+		}
+	}
 }
 
 // writeRefusedQueries copy big.email into another column or transform it

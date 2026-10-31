@@ -35,6 +35,19 @@ import (
 // lockkit's, which the isolation checks wrap too.
 var ErrConfig = kconsole.ErrConfig
 
+// ErrNoHub refuses a console started without its hub: the console runs
+// hub-attached only, started by `lox up`.
+// It is an ErrConfig (exit code 3).
+var ErrNoHub error = noHubError{}
+
+type noHubError struct{}
+
+func (noHubError) Error() string {
+	return "launched by `lox up` only: requests are decided in lockhub (--hub, --hub-key-file and --instance are missing)"
+}
+
+func (noHubError) Unwrap() error { return ErrConfig }
+
 // errPrivilegeAudit marks a reconnection stopped by the privilege audit:
 // the console ends, as it would have at start-up.
 var errPrivilegeAudit = errors.New("privilege audit")
@@ -323,6 +336,11 @@ func Run(ctx context.Context, o Options) error {
 	if o.IO == nil {
 		return errors.New("console: no terminal")
 	}
+	// One mode: requests are decided in lockhub, and `lox up` starts the
+	// console with its hub. Refused before any prompt or file write.
+	if !o.Hub.Enabled() {
+		return ErrNoHub
+	}
 	// Same-user mode, then any other isolation failure, is refused before
 	// any prompt or file write: nothing is audited, the state directory is
 	// not touched.
@@ -340,17 +358,13 @@ func Run(ctx context.Context, o Options) error {
 	}
 	// Level 2 widens nothing from a typed answer: the start-up widening
 	// flags are refused before any prompt or file write.
-	if iso.verifier != nil && (o.Auto || o.AllowUnmask || o.ShowResults) {
-		return fmt.Errorf("%w: level 2 does not accept --auto, --allow-unmask or --show-results", ErrConfig)
+	if iso.verifier != nil && (o.AllowUnmask || o.ShowResults) {
+		return fmt.Errorf("%w: level 2 does not accept --allow-unmask or --show-results", ErrConfig)
 	}
 	// Level 1: the agent's account can read the console window, so the
-	// clear results would reach it. --auto and --allow-unmask stay.
+	// clear results would reach it. --allow-unmask stays.
 	if iso.desktop && iso.verifier == nil && o.ShowResults {
 		return fmt.Errorf("%w: level 1 does not accept --show-results: the agent's account can read this window", ErrConfig)
-	}
-	// Hub mode: lockhub decides, with its own auto mode.
-	if o.Hub.Enabled() && o.Auto {
-		return fmt.Errorf("%w: --auto is refused with --hub: lockhub decides", ErrConfig)
 	}
 	hardenErr := hardenProcess()
 	if hardenErr != nil {
@@ -375,33 +389,27 @@ func Run(ctx context.Context, o Options) error {
 		}
 		o.StateDir = d
 	}
-	var hub *kconsole.Hub
-	if o.Hub.Enabled() {
-		// The flags, the pinned hub key and the instance key are checked
-		// before any prompt.
-		if o.Hub.KeyFile != "" && o.Hub.URL != "" && o.Hub.Instance != "" {
-			// The instance names the copy of the key: checked first.
-			if !hubclient.ValidInstance(o.Hub.Instance) {
-				return fmt.Errorf("%w: --instance is not a valid instance name", ErrConfig)
-			}
-			if o.Hub.KeyFile, err = pinHubKey(o.StateDir, o.Hub.Instance, o.Hub.KeyFile); err != nil {
-				return err
-			}
-			if err := pinAnchors(o.StateDir, &o.Hub); err != nil {
-				return err
-			}
+	// The flags, the pinned hub key and the instance key are checked
+	// before any prompt.
+	if o.Hub.KeyFile != "" && o.Hub.URL != "" && o.Hub.Instance != "" {
+		// The instance names the copy of the key: checked first.
+		if !hubclient.ValidInstance(o.Hub.Instance) {
+			return fmt.Errorf("%w: --instance is not a valid instance name", ErrConfig)
 		}
-		if hub, err = kconsole.OpenHub(product.P, o.Hub, o.StateDir, o.Now); err != nil {
+		if o.Hub.KeyFile, err = pinHubKey(o.StateDir, o.Hub.Instance, o.Hub.KeyFile); err != nil {
 			return err
 		}
-		// The plans store holds a lock file: closed on every return, after
-		// the watch has stopped (deferred later, so run first).
-		defer hub.Close()
-	} else {
-		// Rollback of hub mode: the plans a run with --hub left pending
-		// are withdrawn, and a run of their tickets is refused.
-		withdrawStandalone(o.IO, o.StateDir)
+		if err := pinAnchors(o.StateDir, &o.Hub); err != nil {
+			return err
+		}
 	}
+	hub, err := kconsole.OpenHub(product.P, o.Hub, o.StateDir, o.Now)
+	if err != nil {
+		return err
+	}
+	// The plans store holds a lock file: closed on every return, after the
+	// watch has stopped (deferred later, so run first).
+	defer hub.Close()
 
 	cfg, err := config.Load(o.Cwd)
 	if err != nil {
@@ -559,9 +567,6 @@ func Run(ctx context.Context, o Options) error {
 		if !ok || strings.TrimSpace(ans) != p.Name {
 			return errors.New("console: production profile not confirmed")
 		}
-		if o.Auto {
-			o.IO.Println("--auto is ignored on production profiles: every statement is prompted")
-		}
 	}
 
 	for _, l := range flagNotices(o, p) {
@@ -639,16 +644,13 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 
-	approver := st.approver
-	if hub != nil {
-		// Decisions come from lockhub; this terminal keeps the console's own
-		// decisions (policy changes, :unmask).
-		approver = hub.Approver(approver)
-	}
+	// Decisions come from lockhub; this terminal keeps the console's own
+	// decisions (policy changes, :unmask).
+	approver := hub.Approver(st.approver)
 	s, err := NewServer(ServerConfig{
 		Policy: approved, RulesPath: rulesPath, StateDir: o.StateDir, ApprovedKey: key, Refused: refusedFP,
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Approver: approver, Fingerprint: iso.verifier != nil, Boundary: iso.boundary(), Now: o.Now,
-		Auto: o.Auto, AllowUnmask: o.AllowUnmask, ShowResults: o.ShowResults, Version: o.Version, LoadPolicy: loadPolicy,
+		AllowUnmask: o.AllowUnmask, ShowResults: o.ShowResults, Version: o.Version, LoadPolicy: loadPolicy,
 		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health, Hub: hub,
 		RefuseProduction: refuseProduction,
 	})
@@ -669,13 +671,11 @@ func Run(ctx context.Context, o Options) error {
 	if ls, ok := o.IO.(LineSource); ok {
 		lines = ls.Lines()
 	}
-	if hub != nil {
-		wctx, stopWatch := context.WithCancel(ctx)
-		watched := make(chan struct{})
-		go func() { defer close(watched); hub.Watch(wctx, o.IO) }()
-		defer func() { stopWatch(); <-watched }()
-		s.println(paint.Step("hub mode: requests are decided in lockhub (instance " + safeText(o.Hub.Instance, false) + ")"))
-	}
+	wctx, stopWatch := context.WithCancel(ctx)
+	watched := make(chan struct{})
+	go func() { defer close(watched); hub.Watch(wctx, o.IO) }()
+	defer func() { stopWatch(); <-watched }()
+	s.println(paint.Step("hub mode: requests are decided in lockhub (instance " + safeText(o.Hub.Instance, false) + ")"))
 	serveErr := s.Serve(ctx, ln, lines)
 	s.Close()
 	reason, _ := s.Ended()
@@ -1323,7 +1323,7 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 func flagNotices(o Options, p config.Profile) []string {
 	var out []string
 	if o.AllowUnmask {
-		out = append(out, paint.Warn("--allow-unmask: clients may ask for unmasked PII output; each such query is approved here, never auto-approved (:unmask: off)"))
+		out = append(out, paint.Warn("--allow-unmask: clients may ask for unmasked PII output; each such query is decided by a human in lockhub (:unmask: off)"))
 	}
 	if o.ShowResults {
 		msg := "--show-results: the result of each query is printed here in clear, PII included; the agent still gets it masked (Ctrl-O: hide)"
@@ -1346,8 +1346,8 @@ func readyLines(socket, root string, showResults bool) []string {
 	if showResults {
 		out = append(out, "  "+paint.Dim("results  ")+paint.Yellow("shown in clear in this console (--show-results)"))
 	}
-	out = append(out, "  "+paint.Dim("keys     ")+paint.Accent("Shift+Tab")+" manual/auto mode  "+paint.Accent("Ctrl-O")+" results masked/clear"+paint.Dim(" · the status line below shows both"))
-	return append(out, "  "+paint.Dim("commands ")+paint.Accent(":review")+"  "+paint.Accent(":status")+"  "+paint.Accent(":mode")+"  "+paint.Accent(":results")+"  "+paint.Accent(":unmask")+"  "+paint.Accent(":quit")+paint.Dim(" · Ctrl-C ends the session"))
+	out = append(out, "  "+paint.Dim("keys     ")+paint.Accent("Ctrl-O")+" results masked/clear"+paint.Dim(" · the status line below shows them"))
+	return append(out, "  "+paint.Dim("commands ")+paint.Accent(":review")+"  "+paint.Accent(":status")+"  "+paint.Accent(":results")+"  "+paint.Accent(":unmask")+"  "+paint.Accent(":quit")+paint.Dim(" · Ctrl-C ends the session"))
 }
 
 // servedDatabases is what the console serves: the profile's database alone

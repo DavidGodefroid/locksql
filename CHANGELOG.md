@@ -4,6 +4,50 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+Supported lockhub: as v0.11.5; the console now needs it
+([docs/usage.md](docs/usage.md#2-start-the-console), lockkit#110).
+
+### Upgrading
+
+- **The console runs attached to lockhub only.** `locksql console` without
+  `--hub`, `--hub-key-file` and `--instance` exits with ``launched by `lox
+  up` only`` (exit code 3), before any prompt or file write: start it with
+  `lox add locksql <instance>` and `lox up`, and decide the requests with
+  `lox approve`. A script or service that started a standalone console
+  stops working.
+- Plans a console started with `--hub` left pending are no longer
+  withdrawn by a later start without it: there is no such start.
+
+### Removed
+
+- **Standalone mode**: the per-request approval prompt on the console's
+  terminal (`Approve? [y/N]`, the production profile name, `n <reason>`,
+  `Press Enter to refuse`), its timeout and its typed approvals. Every
+  `query.run` of a plan answers pending with a ticket decided in lockhub.
+  The console's own decisions are still asked on its terminal: a loosened
+  policy (at start and at `:review`) and `:unmask`, with the approver of
+  its security level (typed, or the fingerprint at level 2).
+- **Auto mode**: `--auto`, its older name `--skip-permissions`, Shift+Tab
+  and `:mode` no longer switch anything (lockhub decides every statement),
+  and the `:status` mode row is replaced by the lockhub instance that
+  decides. `locksql status` no longer prints `auto-approve`; the
+  `auto_approve` field of the JSON status stays, always false.
+- **Typed values**: placeholders (`'${name}'`) and cell references
+  (`'${rN.R.C}'`) are refused at run with `E_PLACEHOLDER`, as they already
+  were under `--hub` (no value is typed in lockhub). The "agent received
+  this value in clear" warning no longer suggests a placeholder.
+
+### Fixed
+
+- The run of a ticket the weight check refused under a PII filter is
+  audited (`refused`, with the weight reason and `E_COST`), as the terminal
+  refusal it replaces was; the client still gets the code and its default
+  hint only.
+- The `approved` and `run` records of a ticket carry the k-anonymity
+  warnings of its counts, as its `pending` record does.
+
 ## v0.11.5 (2026-10-31)
 
 Supported lockhub: as v0.11.4 (lockhub serves `/v1/` at its root, so the

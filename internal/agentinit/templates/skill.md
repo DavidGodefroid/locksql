@@ -6,8 +6,8 @@ description: Use when the user explicitly asks to look something up in a databas
 # locksql: gated database lookups
 
 **Purpose:** debugging and finding facts, one targeted question at a time. Every query is approved by
-the human in their `locksql console`, a separate terminal that holds the credentials and the only
-database connection. The console is the enforcement point; this skill keeps you from wasting the
+the human in lockhub; the `locksql console`, a separate process that `lox up` starts, holds the
+credentials and the only database connection. The console is the enforcement point; this skill keeps you from wasting the
 human's time or leaking anything around it.
 
 Use locksql only on the user's explicit request. If a database fact would merely help, propose the
@@ -21,9 +21,7 @@ directory. Both talk to the same console.
 1. **Target.** Prefer a non-production profile unless the question is about real production data.
    Find the database and table from the code first.
 2. **Console?** `locksql_status` (or `locksql status --profile P`). If no console runs (CLI exit
-   code 2), pass on the command the status gives (the exact `locksql console ... --project DIR`;
-   `locksql doctor` checks the setup): *"Run it in the locksql account's own session, then tell
-   me."* and stop. Never start one yourself. Once it runs, status lists the databases and limits.
+   code 2), ask the user to start it with `lox up` (`locksql doctor` checks the setup) and stop. Never start one yourself. Once it runs, status lists the databases and limits.
 3. **Schema, if needed.** `locksql_list_tables` / `locksql_describe` (CLI `tables`, `describe`).
    These need no approval and show which columns are masked.
 4. **Plan.** `locksql_plan` (CLI `locksql plan --profile P --db D "SQL"`).
@@ -35,12 +33,12 @@ directory. Both talk to the same console.
    - Pass `intent`: one line saying why, in the user's terms (the human reads it on the approval
      screen without the chat). CLI: `--intent "..."`.
 5. **Show the user** in chat, before running: target (profile, host, database), the SQL, the EXPLAIN
-   summary and the verdict. Then say: *"Waiting for your approval in the console."* When the
+   summary and the verdict. Then say: *"Waiting for your approval in lockhub (`lox approve`)."* When the
    statement filters on a PII column the verdict is decided on the console at run time and may still
    be refused there.
-6. **Run.** `locksql_run` with the plan id, or `locksql run --profile P PLAN_ID` with the Bash tool
-   **`timeout: 600000`** (approval can take up to 5 minutes; a short default timeout kills the
-   wait). Plans are one-shot and expire after 10 minutes.
+6. **Run.** `locksql_run` with the plan id, or `locksql run --profile P PLAN_ID`: it answers pending
+   with a ticket. Do not retry; once the human decided in lockhub, run the ticket (`locksql run
+   --profile P TICKET`). Plans are one-shot and expire after 10 minutes.
 7. **Report** the answer to the user's question, quoting rows as returned. Masked values stay masked.
 
 ## What a statement may do
@@ -75,7 +73,7 @@ it points at). Follow the retry rule of the code:
   `E_MULTI_STATEMENT` (one statement), `E_FORBIDDEN_TOKEN` (no comments, variables or bind
   parameters), `E_STATEMENT_KIND`, `E_SYSTEM_OBJECT` (use `locksql_list_tables` /
   `locksql_describe`), `E_UNKNOWN_NAME` (check the names with describe), `E_FUNCTION` (an
-  allowlisted function), `E_PLACEHOLDER` (`col = '${name}'` in `WHERE`), `E_COST` (an indexed,
+  allowlisted function), `E_PLACEHOLDER` (no `'${...}'`: no value is typed in lockhub), `E_COST` (an indexed,
   narrower filter), `E_MASKED_FILTER` (filter on a non-PII key, or `=`, `IN`, `IS NULL` under
   `AND`), `E_MASKED_EXPRESSION` (the plain column, or `COUNT`/`MIN`/`MAX`), `E_MASKED_ORDER` (order
   by a non-PII column), `E_MASKED_SET_OP` (`UNION ALL` between PII columns), `E_MASK_UNCERTAIN`
@@ -123,7 +121,7 @@ locksql status   [--profile P]                        # consoles, databases, lim
 locksql tables   --profile P [--db D]
 locksql describe --profile P [--db D] TABLE
 locksql plan     --profile P [--db D] [--unmask] [--intent TEXT] "SQL" # validate + EXPLAIN -> plan id
-locksql run      --profile P PLAN_ID                  # the human approves in the console
+locksql run      --profile P PLAN_ID|TICKET           # pending, then the ticket once approved in lockhub
 locksql request  --profile P "limits.max_rows=500"    # queued for the human, never applied
 ```
 

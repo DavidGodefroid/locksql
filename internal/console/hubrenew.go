@@ -12,7 +12,6 @@ import (
 	"github.com/DavidGodefroid/lockkit/ticket"
 
 	"github.com/DavidGodefroid/locksql/internal/ipc"
-	"github.com/DavidGodefroid/locksql/internal/product"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 )
 
@@ -233,19 +232,4 @@ func (s *Server) hubRecompute(p *plans.Plan) (string, string, map[string]string,
 		inputs[k] = ticket.UncheckedInput
 	}
 	return v.fp, p.Binding.PlanHash, inputs, nil
-}
-
-// withdrawStandalone is the rollback of hub mode at a standalone start:
-// the plans a run with --hub left pending are withdrawn (the hub hears of
-// it at the next start with --hub), and a run of their tickets is refused
-// (queryRunTicket answers kconsole.WithdrawnResp).
-func withdrawStandalone(io IO, stateDir string) {
-	ws, err := kconsole.WithdrawStandalone(product.P, stateDir)
-	for _, w := range ws {
-		io.Println(paint.Warn(fmt.Sprintf("hub mode is off: %d pending ticket(s) of %s withdrawn; the hub hears of it at the next start with --hub --instance %s",
-			len(w.Tickets), safeText(w.Instance, false), safeText(w.Instance, false))))
-	}
-	if err != nil {
-		io.Println(paint.Warn("hub mode is off, and its pending plans could not all be withdrawn (they stay pending and could run after a restart with --hub; deny them in lockhub): " + safeText(err.Error(), false)))
-	}
 }

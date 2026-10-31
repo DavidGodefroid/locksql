@@ -12,14 +12,9 @@
 "\x1b[38;5;99m│ \x1b[0mk-anonymity count (k=5): SELECT COUNT(*) FROM users WHERE email = 'alice@example.com'"
 "\x1b[38;5;99m│ \x1b[0mrow estimates are hidden from the agent: the statement filters on a PII column"
 "\x1b[38;5;99m│ \x1b[0mPII: masked (1 column rules; detectors: email)"
-"\x1b[38;5;99m│ \x1b[0m\x1b[1;31mwarning: the agent received this value in clear (it is in its statement): next time, have it write a placeholder '${name}' and type the value here\x1b[0m"
-"\x1b[38;5;99m│ \x1b[0m\x1b[1;31m▲ k-anonymity: the PII filter matches fewer than k=5 rows (2)\x1b[0m"
-"\x1b[38;5;99m│ \x1b[0m  \x1b[2mWith a statement like this, the agent could single out one person or infer a masked value (whether an email is present, one person's amount) by cross-checking.\x1b[0m"
-"<bell>"
-"? \x1b[38;5;99m╰─ \x1b[0m\x1b[1mApprove? [y/N] \x1b[0m"
-"\x1b[32m✓\x1b[0m done: 1 rows in N ms"
+"\x1b[38;5;99m│ \x1b[0m\x1b[1;31mwarning: the agent received this value in clear (it is in its statement)\x1b[0m"
+"\x1b[38;5;99m╰─ \x1b[0mpending: ticket T"
 == response
-ok rows=1 text="id\n1\n(1 rows)\n"
+ok rows=0 text=""
 == audit
-event=approved decision=approved approval=session class=read verdict=OK warnings=[the agent received this value in clear (it is in its statement): next time, have it write a placeholder '${name}' and type the value here k-anonymity: the PII filter matches fewer than k=5 rows (2)] sql=SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1
-event=run decision=ok approval=session class=read verdict=OK warnings=[the agent received this value in clear (it is in its statement): next time, have it write a placeholder '${name}' and type the value here k-anonymity: the PII filter matches fewer than k=5 rows (2)] sql=SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1
+event=pending decision=pending approval=hub class=read verdict=OK warnings=[the agent received this value in clear (it is in its statement) k-anonymity: the PII filter matches fewer than k=5 rows (2)] sql=SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1

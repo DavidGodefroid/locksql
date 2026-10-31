@@ -368,7 +368,7 @@ func TestConsoleHandoffUpdateCheck(t *testing.T) {
 			}
 			e, out := handoffTestEnv(t, h)
 			e.chk = f.env()
-			if code := runEnv(e, []string{"console"}); code != exitOK {
+			if code := runEnv(e, hubbed("console")); code != exitOK {
 				t.Fatalf("code %d\n%s", code, out)
 			}
 			joined := strings.Join(*ran, " ")
@@ -386,7 +386,7 @@ func TestConsoleHandoffUpdateCheck(t *testing.T) {
 		h, _ := fakeHandoff(1000, "sudo")
 		e, _ := handoffTestEnv(t, h)
 		e.chk = f.env()
-		runEnv(e, []string{"console"})
+		runEnv(e, hubbed("console"))
 		if f.hits.Load() != 0 {
 			t.Errorf("agent's account checked")
 		}
@@ -406,9 +406,9 @@ func TestConsoleUpdateNotice(t *testing.T) {
 		optOut bool
 		notice bool
 	}{
-		"checks":          {args: []string{"console"}, notice: true},
-		"forwarded flag":  {args: []string{"console", noUpdateCheckFlag}},
-		"environment var": {args: []string{"console"}, optOut: true},
+		"checks":          {args: hubbed("console"), notice: true},
+		"forwarded flag":  {args: hubbed("console", noUpdateCheckFlag)},
+		"environment var": {args: hubbed("console"), optOut: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newCheckFixture(t, "v1.2.0")

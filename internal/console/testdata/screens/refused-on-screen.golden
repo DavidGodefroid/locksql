@@ -14,12 +14,9 @@
 "\x1b[38;5;99m│ \x1b[0mk-anonymity count (k=5): SELECT COUNT(*) FROM users WHERE email = 'alice@example.com'"
 "\x1b[38;5;99m│ \x1b[0mrow estimates are hidden from the agent: the statement filters on a PII column"
 "\x1b[38;5;99m│ \x1b[0mPII: masked (1 column rules; detectors: email)"
-"\x1b[38;5;99m│ \x1b[0m\x1b[1;31mwarning: the agent received this value in clear (it is in its statement): next time, have it write a placeholder '${name}' and type the value here\x1b[0m"
-"\x1b[38;5;99m│ \x1b[0m\x1b[1;31mverdict REFUSE: this statement cannot be approved\x1b[0m"
-"<bell>"
-"? \x1b[38;5;99m╰─ \x1b[0m\x1b[1mPress Enter to refuse \x1b[0m"
-"\x1b[1;31m✗\x1b[0m refused [E_COST]: weight check: estimated rows examined 50 000 000 > 1 000 000; full scan of users (~50 000 000 rows) > 1 000 000"
+"\x1b[38;5;99m│ \x1b[0m\x1b[1;31mwarning: the agent received this value in clear (it is in its statement)\x1b[0m"
+"\x1b[38;5;99m╰─ \x1b[0mpending: ticket T"
 == response
-error -32001 "refused by the weight check (the details are shown on the console)"
+ok rows=0 text=""
 == audit
-event=refused error=weight check: estimated rows examined 50 000 000 > 1 000 000; full scan of users (~50 000 000 rows) > 1 000 000 code=E_COST class=read verdict=REFUSE warnings=[the agent received this value in clear (it is in its statement): next time, have it write a placeholder '${name}' and type the value here] sql=SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1
+event=pending decision=pending approval=hub class=read verdict=REFUSE warnings=[the agent received this value in clear (it is in its statement)] sql=SELECT id FROM users WHERE email = 'alice@example.com' LIMIT 1

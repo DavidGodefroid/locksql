@@ -41,7 +41,7 @@ type helpRow struct{ name, args, desc string }
 var helpSections = []helpSection{
 	{title: "Human commands", rows: []helpRow{
 		{"profile", "add [--project DIR] [--engine E ...]", "add a database profile to the project"},
-		{"console", "[--profile P] [--project DIR] [--skip-permissions]", "run the approval console"},
+		{"console", "--hub URL --hub-key-file PATH --instance NAME ...", "run the console (launched by `lox up` only)"},
 		{"forget", "--profile P", "remove the keychain secret"},
 		{"update", "[vX.Y.Z]", "update the launcher and its image (on the host;\ncosign signature and checksum checked)"},
 		{"doctor", "[--profile P] [--fix [--yes]]", "check the setup\n(--fix: repair permissions, socket dir, wiring)"},

@@ -88,7 +88,7 @@ func TestRunAllowedUIDs(t *testing.T) {
 	newIsolationEnv = func(*os.File) isolationEnv { return allowedIsolation(separated()) }
 	t.Cleanup(func() { newIsolationEnv = old })
 	io := &fakeIO{}
-	err := Run(context.Background(), Options{Profile: "uat", IO: io, StateDir: t.TempDir(), Cwd: root, AllowedUIDs: []int{4242, 900}})
+	err := Run(context.Background(), Options{Hub: runHub(t), Profile: "uat", IO: io, StateDir: t.TempDir(), Cwd: root, AllowedUIDs: []int{4242, 900}})
 	if err == nil || !strings.Contains(err.Error(), "may also connect as a client") {
 		t.Fatalf("err = %v, want the console's uid refused", err)
 	}

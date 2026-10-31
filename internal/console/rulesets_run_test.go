@@ -46,7 +46,7 @@ func TestRunMigratesLegacyRules(t *testing.T) {
 	run := func() *fakeIO {
 		io := &fakeIO{}
 		// Ends at the password prompt, which gets no answer.
-		_ = Run(context.Background(), Options{Profile: "uat", IO: io, StateDir: state, Cwd: root})
+		_ = Run(context.Background(), Options{Hub: runHub(t), Profile: "uat", IO: io, StateDir: state, Cwd: root})
 		return io
 	}
 	io := run()
@@ -118,7 +118,7 @@ func TestRunPIIDir(t *testing.T) {
 	run := func(d string) (*fakeIO, error) {
 		io := &fakeIO{}
 		// Ends at the password prompt, which gets no answer.
-		err := Run(context.Background(), Options{Profile: "uat", IO: io, StateDir: state, Cwd: root, PIIDir: d})
+		err := Run(context.Background(), Options{Hub: runHub(t), Profile: "uat", IO: io, StateDir: state, Cwd: root, PIIDir: d})
 		return io, err
 	}
 	io, _ := run(piiDir)

@@ -45,6 +45,12 @@ func fakeHandoff(uid int, onPath ...string) (*handoffEnv, *[]string) {
 	}, &ran
 }
 
+// hubArgs are the hub flags lox up starts a console with.
+var hubArgs = []string{"--hub", "http://lockhub:8443", "--hub-key-file", "/k/hub.pub", "--instance", "sql-dev", "--hub-plain-http"}
+
+// hubbed is a console command line with the hub flags lox up adds.
+func hubbed(args ...string) []string { return append(args, hubArgs...) }
+
 func handoffTestEnv(t *testing.T, h *handoffEnv) (env, *bytes.Buffer) {
 	var out bytes.Buffer
 	return env{stdout: &out, stderr: &out, cwd: t.TempDir(), tty: true, handoff: h,
@@ -57,7 +63,7 @@ func TestConsoleFromAgentAccountIsNotHandedOff(t *testing.T) {
 	h, ran := fakeHandoff(1000, "sudo", "machinectl", "su")
 	e, out := handoffTestEnv(t, h)
 	writeHandoffConfig(t, e.cwd, "dev")
-	if code := runEnv(e, []string{"console", "--profile", "dev"}); code != exitFail {
+	if code := runEnv(e, hubbed("console", "--profile", "dev")); code != exitFail {
 		t.Fatalf("code %d\n%s", code, out)
 	}
 	if *ran != nil {
@@ -87,7 +93,7 @@ func TestConsoleHandoffHelpers(t *testing.T) {
 		h.goos = c.goos
 		e, out := handoffTestEnv(t, h)
 		proj := filepath.Join(e.cwd, "it's")
-		if code := runEnv(e, []string{"console", "--project", proj, "--auto", "--show-results"}); code != exitOK {
+		if code := runEnv(e, hubbed("console", "--project", proj, "--show-results")); code != exitOK {
 			t.Fatalf("%v: code %d\n%s", c.onPath, code, out)
 		}
 		got := *ran
@@ -95,10 +101,13 @@ func TestConsoleHandoffHelpers(t *testing.T) {
 			t.Fatalf("%v on %s: argv %q, want prefix %q", c.onPath, c.goos, got, c.want)
 		}
 		rest := got[len(c.want):]
-		args := []string{"console", "--project", proj, "--auto", "--show-results"}
+		args := hubbed("console", "--project", proj, "--show-results")
 		if c.want[0] == "/usr/bin/su" {
 			// One shell command line, every word quoted.
-			want := "'/usr/local/bin/locksql' 'console' '--project' '" + strings.ReplaceAll(proj, "'", `'\''`) + "' '--auto' '--show-results'"
+			want := "'/usr/local/bin/locksql' 'console' '--project' '" + strings.ReplaceAll(proj, "'", `'\''`) + "' '--show-results'"
+			for _, a := range hubArgs {
+				want += " '" + a + "'"
+			}
 			if len(rest) != 1 || rest[0] != want {
 				t.Errorf("su command %q, want %q", rest, want)
 			}
@@ -114,7 +123,7 @@ func TestConsoleHandoffHelpers(t *testing.T) {
 func TestConsoleHandoffRefusals(t *testing.T) {
 	h, ran := fakeHandoff(1500)
 	e, out := handoffTestEnv(t, h)
-	if code := runEnv(e, []string{"console"}); code != exitFail || *ran != nil {
+	if code := runEnv(e, hubbed("console")); code != exitFail || *ran != nil {
 		t.Fatalf("no helper: code %d, ran %v\n%s", code, *ran, out)
 	}
 	if !strings.Contains(out.String(), "no sudo, machinectl or su") || !strings.Contains(out.String(), "locksql console --project "+e.cwd) {
@@ -124,7 +133,7 @@ func TestConsoleHandoffRefusals(t *testing.T) {
 	h, ran = fakeHandoff(1500, "sudo")
 	h.binary = func() (string, error) { return "", errors.New("no root-owned locksql binary") }
 	e, out = handoffTestEnv(t, h)
-	if code := runEnv(e, []string{"console"}); code != exitFail || *ran != nil {
+	if code := runEnv(e, hubbed("console")); code != exitFail || *ran != nil {
 		t.Fatalf("untrusted binary: code %d, ran %v\n%s", code, *ran, out)
 	}
 	if !strings.Contains(out.String(), "no root-owned locksql binary") {
@@ -225,7 +234,7 @@ func TestHandoffForwardsEveryHubFlag(t *testing.T) {
 func TestHandoffAllowedUIDs(t *testing.T) {
 	h, ran := fakeHandoff(1500, "sudo")
 	e, out := handoffTestEnv(t, h)
-	if code := runEnv(e, []string{"console", "--allowed-uids", "4242,4242,4243"}); code != exitOK {
+	if code := runEnv(e, hubbed("console", "--allowed-uids", "4242,4242,4243")); code != exitOK {
 		t.Fatalf("code %d\n%s", code, out)
 	}
 	if !hasArgs(*ran, "--allowed-uids", "4242,4243") {
@@ -235,7 +244,7 @@ func TestHandoffAllowedUIDs(t *testing.T) {
 	h, ran = fakeHandoff(1500, "sudo")
 	h.clientAllowed = func(sys *sysconf.Config, uid int) bool { return uid == 1000 || slices.Contains(sys.AllowedUIDs, uid) }
 	e, out = handoffTestEnv(t, h)
-	if code := runEnv(e, []string{"console", "--allowed-uids", "1500"}); code != exitFail || *ran != nil {
+	if code := runEnv(e, hubbed("console", "--allowed-uids", "1500")); code != exitFail || *ran != nil {
 		t.Fatalf("an allowed uid's account: code %d, ran %v\n%s", code, *ran, out)
 	}
 	if !strings.Contains(out.String(), "--allowed-uids 1500") || !strings.Contains(out.String(), "the database password") {

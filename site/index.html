@@ -160,9 +160,10 @@ locksql init claude
 locksql profile add
 locksql doctor --fix --yes
 
-# 3. In a terminal you keep in view, start the console
-locksql console</code></pre>
-  <p class="prose">Then ask your agent, in the project: “how many orders were placed yesterday?”. Each query waits for your <code>y</code> in the console.</p>
+# 3. Declare the lock in lockhub and start it: lox up opens the console
+lox add locksql sql-dev
+lox up</code></pre>
+  <p class="prose">Then ask your agent, in the project: “how many orders were placed yesterday?”. Each query waits for your decision in lockhub: <code>lox approve</code>. The console runs attached to <a href="https://github.com/DavidGodefroid/lockhub">lockhub</a> only.</p>
   <p class="prose">Every command runs in the image, with the account it needs: the console as <code>locksql</code> in its own container, the agent’s MCP server as <code>agent</code> in a throwaway one. A database on your machine is <code>host.docker.internal</code>, and <code>credentials = "keychain"</code> is not available in a container: use <code>ask</code> or <code>vault</code>.</p>
   <p><a href="install/">The full Docker setup</a></p>
 </section>

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	kaudit "github.com/DavidGodefroid/lockkit/audit"
-	kipc "github.com/DavidGodefroid/lockkit/ipc"
 	"github.com/DavidGodefroid/lockkit/ticket"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
@@ -25,18 +24,6 @@ func TestChangeRequestOverflowRefused(t *testing.T) {
 	}
 	wantCode(t, h.call(t, ipc.MethodChangeRequest, ipc.ChangeParams{Change: "one too many"}), ipc.CodeInvalidRequest)
 	wantCode(t, h.call(t, ipc.MethodChangeRequest, ipc.ChangeParams{Change: ""}), ipc.CodeInvalidParams)
-}
-
-// A request naming a hub ticket on a console without its hub is answered
-// withdrawn before locksql sees it, whatever the method.
-func TestTicketWithoutHubWithdrawn(t *testing.T) {
-	h := newHarness(t, uatProfile())
-	for _, m := range []string{ipc.MethodQueryRun, ipc.MethodQueryPlan, ipc.MethodCatalogList} {
-		wantCode(t, h.call(t, m, map[string]any{"ticket": "t-1"}), kipc.CodeWithdrawn)
-	}
-	if h.sess.runCount() != 0 {
-		t.Fatal("ran")
-	}
 }
 
 // A tightening that cannot be saved still applies (the looser policy

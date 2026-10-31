@@ -22,7 +22,7 @@ func (s *Server) warnings(ctx context.Context, sess engine.Session, pl *plan) []
 	}
 	var out []string
 	if s.clearLiteral(pl.st.SQL) {
-		out = append(out, "the agent received this value in clear (it is in its statement): next time, have it write a placeholder '${name}' and type the value here")
+		out = append(out, "the agent received this value in clear (it is in its statement)")
 	}
 	var refs []sqlast.ValueUse
 	for _, v := range pl.an.Values {

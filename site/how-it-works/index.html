@@ -134,10 +134,10 @@
     <li>Anything else, or no answer within 5 minutes, denies the query.</li>
     <li>Pending keystrokes are discarded before each prompt.</li>
     <li>Requests are served one at a time; other clients wait.</li>
-    <li>Only the console terminal approves; no socket method can.</li>
-    <li>The k-anonymity counts run before the prompt. Each count under <code>k_anonymity</code> adds a <code>▲ k-anonymity</code> warning just above it; nothing is refused, you decide. In auto mode the statement runs and the warning goes to the console and the audit log. The agent learns nothing of the counts.</li>
+    <li>Only lockhub's signed decision runs a ticket; no socket method can approve.</li>
+    <li>The k-anonymity counts run before the ticket goes to lockhub. Each count under <code>k_anonymity</code> adds a <code>k-anonymity</code> warning to it; nothing is refused, you decide. The warning goes to the audit log too. The agent learns nothing of the counts.</li>
   </ul>
-  <p class="prose">locksql never rewrites SQL: what the human approves is what runs. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#approving-a-query">Approving a query, in the usage guide</a>.</p>
+  <p class="prose">locksql never rewrites SQL: what the human approves is what runs. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#the-approval-screen">The approval screen, in the usage guide</a>.</p>
 </section>
 
 <section aria-labelledby="agent">
@@ -254,25 +254,9 @@ account that cannot read what the agent must never see.</p>
 </section>
 
 <section aria-labelledby="blind-search">
-  <h2 id="blind-search">Search without seeing: placeholders and references</h2>
+  <h2 id="blind-search">No typed values</h2>
   <div class="prose">
-    <p>To filter a PII column on a value the agent does not know, it writes a <strong>placeholder</strong>: <code>col = '${email}'</code> or <code>col IN ('${a}', '${b}')</code>. The console asks you for the value (no echo), once per name per session; <code>r</code> at the approval prompt retypes it. <code>--skip-permissions</code> skips the approval, never the value prompt.</p>
-    <p>Redacted cells come back as <code>&lt;redacted:r1.2.3&gt;</code> (result, row, column). The agent filters on one with <code>col = '${r1.2.3}'</code>; the console substitutes the clear value, which it keeps in memory only (the last 50 results, 16 MiB at most; an older reference is unknown).</p>
-  </div>
-  <pre tabindex="0"><code><span class="cmt">-- query 1: the agent gets references</span>
-SELECT c.id, c.name, c.email FROM customers c WHERE c.country = 'BE' LIMIT 3
-<span class="cmt">-- → 548 | &lt;redacted:r1.1.2&gt; | &lt;redacted:r1.1.3&gt;</span>
-
-<span class="cmt">-- query 2: it filters on them, without ever seeing an address</span>
-SELECT u.customer_id, u.reason FROM newsletter_unsubscribes u
- WHERE u.email IN ('${r1.1.3}', '${r1.2.3}', '${r1.3.3}') LIMIT 3
-
-<span class="cmt">-- query 3: you type the value in the console</span>
-SELECT COUNT(*) FROM orders o JOIN customers c ON o.customer_id = c.id
- WHERE c.email = '${email}' LIMIT 1</code></pre>
-  <div class="prose">
-    <p>Both work only compared with a PII column with <code>=</code> or <code>IN</code> in <code>WHERE</code> or <code>HAVING</code>, and skip the k-anonymity count, since the agent did not choose the value. Typed and referenced values never reach the agent, the audit log or a client error. The approval screen warns, in red and in the audit log, when the agent put a clear value in its statement, when a reference is combined with a unique-key filter or an output with no plain column, and when one result’s cells are filtered on one by one beyond <code>limits.reference_probe</code> (default 5). Warnings never refuse and never carry a value.</p>
-    <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#placeholders-and-cell-references">Placeholders and references, in the usage guide</a></p>
+    <p>Requests are decided in lockhub, where no value is typed: a placeholder (<code>col = '${email}'</code>) or a cell reference (<code>col = '${r1.2.3}'</code>) is refused at run (<code>E_PLACEHOLDER</code>). The approval screen warns, in red and in the audit log, when the agent put a clear value in its statement.</p>
   </div>
 </section>
 
@@ -304,19 +288,6 @@ SELECT COUNT(*) FROM orders o JOIN customers c ON o.customer_id = c.id
   <h2 id="show-results">See the rows yourself: Ctrl-O</h2>
   <div class="prose">
     <p>Ctrl-O in the console (or <code>locksql console --show-results</code> to start that way) prints in the console, in clear, the result of each masked query it runs, as an aligned table, so you see who the rows are while the agent still gets the masked cells. The cells the agent got masked are highlighted and carry their reference (<code>‹r1.1.2›</code>); the output caps apply as for the agent. It is console-only, off by default: no client or config file can turn it on. The console warns when it goes on (in red on production), the status line fixed at the bottom of the terminal reads <code>results clear</code>, every approval screen says so, and <code>locksql status</code> reports it. The audit log still holds no row data, and the clear rows stay in your terminal's scrollback. It is unavailable when the console runs in a desktop terminal (security levels 1 and 2): the agent's account can read that window, so <code>--show-results</code> is refused and Ctrl-O leaves the results masked.</p>
-  </div>
-</section>
-
-<section aria-labelledby="skip">
-  <h2 id="skip">Fast local iteration: auto mode (Shift+Tab)</h2>
-  <div class="prose">
-    <p>The console starts in manual mode, where every statement is prompted. Shift+Tab (or <code>locksql console --profile dev --auto</code> to start that way) switches to auto mode, where statements that the tier and the weight check allow run without a prompt. It exists for fast local iteration, and it is deliberately narrow:</p>
-    <ul>
-      <li>it switches only from the console's keyboard; no client or config file can turn it on;</li>
-      <li>it is <strong>unavailable on production profiles</strong> (the key says so and the console prompts as usual);</li>
-      <li>it never auto-approves an unmasked query and never overrides a <code>REFUSE</code> verdict;</li>
-      <li>the status line reads <code>mode AUTO</code>, each auto-approved frame ends with <code>auto-approved</code>, each auto-approval is audited with <code>decision: "auto"</code> and the switch itself as a <code>mode</code> record.</li>
-    </ul>
   </div>
 </section>
 

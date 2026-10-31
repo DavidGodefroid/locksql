@@ -2,12 +2,15 @@
 
 // Package firstquery checks the README's quick start end to end and
 // without a human, through the launcher and the image: locksql init,
-// profile add and doctor --fix, then locksql console in a terminal. The
-// agent's two calls (plan, run) and the human's approval in the console
-// follow; approval stays a keystroke in the console's terminal, which the
-// test types as the human would. It uses Docker volumes (locksql-run,
-// locksql-home) and the container name locksql-console: CI runs it on a
-// throwaway runner.
+// profile add and doctor --fix, then the console in a terminal, attached
+// to a lockhub as `lox up` starts it (here a fake lockhub served by the
+// test, reached over the host network). The console's start-up prompts
+// stay keystrokes in its terminal, which the test types as the human
+// would; the agent's plan and run follow, the run answers pending with a
+// ticket, the test approves it in the fake lockhub as the human would, and
+// the run of the ticket returns the rows. It uses Docker volumes
+// (locksql-run, locksql-home) and the container name locksql-console: CI
+// runs it on a throwaway runner.
 //
 //	docker build -t locksql .
 //	LOCKSQL_FIRSTQUERY=1 LOCKSQL_FIRSTQUERY_LAUNCHER=$PWD/scripts/locksql \
@@ -19,7 +22,9 @@ package firstquery
 
 import (
 	"bufio"
+	"crypto/ed25519"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -30,9 +35,63 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DavidGodefroid/lockkit/hubclient/hubtest"
+	"github.com/DavidGodefroid/lockkit/ticket"
 	"github.com/creack/pty"
 	_ "modernc.org/sqlite"
 )
+
+// instances counts the fake lockhubs: each knows its console by an
+// instance name of its own, as the console keeps the hub state of an
+// instance (its watch cursor) in the home volume, from one start to the
+// next.
+var instances int
+
+// imageName is the image the launcher of a clone runs.
+func imageName() string {
+	if image := os.Getenv("LOCKSQL_IMAGE"); image != "" {
+		return image
+	}
+	return "locksql"
+}
+
+// fakeHub serves a fake lockhub for the console whose home is the volume
+// homeVol, as lox up pins it: the console's instance key (made in that
+// volume by locksql hub-key) at the hub, the hub's key in a directory of
+// the project (mounted in the console's container) owned by the console
+// account. It returns the hub and the
+// console's hub flags; the console reaches the hub on the host network
+// (LOCKSQL_DOCKER_ARGS=--network host, or --network host for docker run).
+func fakeHub(t *testing.T, homeVol, project string) (*hubtest.Hub, []string) {
+	t.Helper()
+	instances++
+	instance := fmt.Sprintf("sql-dev-%d-%d", os.Getpid(), instances)
+	out, err := exec.Command("docker", "run", "--rm", "--user", "locksql", "-v", homeVol+":/home/locksql",
+		imageName(), "hub-key", "--instance", instance).Output()
+	if err != nil {
+		t.Fatalf("locksql hub-key: %v", err)
+	}
+	pub, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		t.Fatalf("locksql hub-key printed %q: %v", out, err)
+	}
+	hub := hubtest.New(t, instance, ed25519.PublicKey(pub))
+	// The console reads the hub's key only from a directory root or its
+	// own account owns, as lox up's: given to the console account.
+	dir := filepath.Join(project, ".hub")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	keyFile := filepath.Join(dir, "hub.pub")
+	if err := os.WriteFile(keyFile, []byte(base64.StdEncoding.EncodeToString(hub.Pub)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("docker", "run", "--rm", "--user", "0", "--entrypoint", "chown", "-v", dir+":"+dir,
+		imageName(), "-R", "locksql:locksql", dir).CombinedOutput(); err != nil {
+		t.Fatalf("chown %s: %v\n%s", dir, err, out)
+	}
+	return hub, []string{"--hub", hub.URL(), "--hub-key-file", keyFile, "--instance", instance}
+}
 
 // launcher is the locksql launcher under test (scripts/locksql).
 var launcher string
@@ -169,14 +228,12 @@ func TestConsoleRefusesAnotherLocksqlDir(t *testing.T) {
 	project := demoProject(t)
 	human(t, 1, project, []string{"init", "claude"})
 	human(t, 2, project, []string{"doctor", "--fix", "--yes"}, 1)
-	image := os.Getenv("LOCKSQL_IMAGE")
-	if image == "" {
-		image = "locksql"
-	}
+	image := imageName()
+	_, hubFlags := fakeHub(t, "locksql-home", project)
 	dir := filepath.Join(project, ".locksql")
-	cmd := exec.Command("docker", "run", "-it", "--rm", "--user", "locksql", "-v", project+":"+project+":ro",
-		"-v", dir+":"+dir, "-v", "locksql-run:/run/locksql", "-v", "locksql-home:/home/locksql",
-		"-e", "LOCKSQL_EXPECT_DIR=0:0", image, "console", "--project", project)
+	cmd := exec.Command("docker", append([]string{"run", "-it", "--rm", "--network", "host", "--user", "locksql", "-v", project + ":" + project + ":ro",
+		"-v", dir + ":" + dir, "-v", "locksql-run:/run/locksql", "-v", "locksql-home:/home/locksql",
+		"-e", "LOCKSQL_EXPECT_DIR=0:0", image, "console", "--project", project}, hubFlags...)...)
 	scr, _, end := startConsole(t, cmd)
 	defer end()
 	scr.waitFor(t, 0, time.Minute, "is not the directory the launcher checked")
@@ -230,10 +287,12 @@ func firstQuery(t *testing.T, env []string) {
 	human(t, 2, project, []string{"profile", "add", "--profile", "dev", "--engine", "sqlite", "--path", "demo.db"})
 	human(t, 3, project, []string{"doctor", "--fix", "--yes"}, 1)
 
-	// The console, in a terminal: the launcher runs it as the console
-	// account, in its own container.
-	t.Logf("command 4: %s locksql console", strings.Join(env, " "))
-	cmd := exec.Command("sh", launcher, "console")
+	// The console, in a terminal, as lox up starts it: the launcher runs it
+	// as the console account, in its own container, attached to the hub.
+	hub, hubFlags := fakeHub(t, "locksql-home", project)
+	env = append(env, "LOCKSQL_DOCKER_ARGS=--network host")
+	t.Logf("command 4: %s locksql console %s", strings.Join(env, " "), strings.Join(hubFlags, " "))
+	cmd := exec.Command("sh", append([]string{launcher, "console"}, hubFlags...)...)
 	cmd.Dir = project
 	cmd.Env = append(os.Environ(), env...)
 	scr, tty, end := startConsole(t, cmd)
@@ -254,7 +313,8 @@ func firstQuery(t *testing.T, env []string) {
 		}
 	}
 
-	// The agent plans a query, then runs it; the human approves it.
+	// The agent plans a query, then runs it: pending, until the human
+	// approves its ticket in lockhub; then the run of the ticket.
 	out, err := agent(t, project, "plan", "--profile", "dev", "--db", "main", "--json", "SELECT count(*) AS n, sum(amount) AS total FROM orders LIMIT 1")
 	if err != nil {
 		t.Fatalf("plan: %v\n%s", err, out)
@@ -267,32 +327,38 @@ func firstQuery(t *testing.T, env []string) {
 		t.Fatalf("plan output %q: %v", out, err)
 	}
 	t.Logf("plan %s, verdict %s", plan.PlanID, plan.Verdict)
-	type result struct {
-		out string
-		err error
+	out, err = agent(t, project, "run", "--profile", "dev", "--json", plan.PlanID)
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
 	}
-	ran := make(chan result, 1)
-	go func() {
-		out, err := agent(t, project, "run", "--profile", "dev", "--json", plan.PlanID)
-		ran <- result{out, err}
-	}()
-	_, at = scr.waitFor(t, at, time.Minute, "Approve? [y/N] ")
-	tty.Write([]byte("y\n"))
-	var res result
-	select {
-	case res = <-ran:
-	case <-time.After(time.Minute):
-		t.Fatal("run: no answer a minute after the approval")
+	var pending struct {
+		Status string `json:"status"`
+		Ticket string `json:"ticket"`
 	}
-	if res.err != nil {
-		t.Fatalf("run: %v\n%s", res.err, res.out)
+	if err := json.Unmarshal([]byte(out), &pending); err != nil || pending.Status != "pending" || pending.Ticket == "" {
+		t.Fatalf("run output %q, want pending with a ticket: %v", out, err)
+	}
+	if strings.Contains(scr.String()[at:], "Approve?") {
+		t.Fatal("the console asked for the approval in its terminal")
+	}
+	hub.Decide(pending.Ticket, ticket.Approved, "")
+	deadline := time.Now().Add(time.Minute)
+	for {
+		out, err = agent(t, project, "run", "--profile", "dev", "--json", pending.Ticket)
+		if err == nil || !strings.Contains(out, "no decision") || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("run of the ticket: %v\n%s", err, out)
 	}
 	var rows struct {
 		Columns []string `json:"columns"`
 		Rows    [][]any  `json:"rows"`
 	}
-	if err := json.Unmarshal([]byte(res.out), &rows); err != nil {
-		t.Fatalf("run output %q: %v", res.out, err)
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatalf("run output %q: %v", out, err)
 	}
 	if len(rows.Rows) != 1 || fmt.Sprint(rows.Rows[0]) != "[3 42]" {
 		t.Fatalf("first query: %v %v, want [[3 42]]", rows.Columns, rows.Rows)
@@ -310,10 +376,7 @@ func TestConsoleAllowedUIDs(t *testing.T) {
 	project := demoProject(t)
 	human(t, 1, project, []string{"profile", "add", "--profile", "dev", "--engine", "sqlite", "--path", "demo.db"})
 	human(t, 2, project, []string{"doctor", "--fix", "--yes"}, 1)
-	image := os.Getenv("LOCKSQL_IMAGE")
-	if image == "" {
-		image = "locksql"
-	}
+	image := imageName()
 	runVol, homeVol := "locksql-e2e-allowed-run", "locksql-e2e-allowed-home"
 	t.Cleanup(func() {
 		for _, n := range []string{"locksql-e2e-allowed-1", "locksql-e2e-allowed-2", "locksql-e2e-allowed-3"} {
@@ -321,10 +384,11 @@ func TestConsoleAllowedUIDs(t *testing.T) {
 		}
 		exec.Command("docker", "volume", "rm", runVol, homeVol).Run()
 	})
+	_, hubFlags := fakeHub(t, homeVol, project)
 	console := func(name string, extra ...string) *exec.Cmd {
-		return exec.Command("docker", append([]string{"run", "-it", "--rm", "--name", name, "--user", "locksql",
+		return exec.Command("docker", append(append([]string{"run", "-it", "--rm", "--network", "host", "--name", name, "--user", "locksql",
 			"-v", project + ":" + project, "-v", runVol + ":/run/locksql", "-v", homeVol + ":/home/locksql",
-			image, "console", "--project", project}, extra...)...)
+			image, "console", "--project", project}, hubFlags...), extra...)...)
 	}
 	// listen answers the first start's prompts until the console listens.
 	listen := func(scr *screen, tty *os.File) {
@@ -383,7 +447,7 @@ func TestConsoleAllowedUIDs(t *testing.T) {
 	scr, _, end = startConsole(t, console("locksql-e2e-allowed-3", "--allowed-uids", "10001"))
 	scr.waitFor(t, 0, time.Minute, "may also connect as a client")
 	end()
-	out, err := exec.Command("docker", "run", "--rm", "--user", "locksql", image, "console", "--allowed-uids", "0").CombinedOutput()
+	out, err := exec.Command("docker", append([]string{"run", "--rm", "--user", "locksql", image, "console", "--allowed-uids", "0"}, hubFlags...)...).CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "leading zero") {
 		t.Errorf("--allowed-uids 0: %v\n%s", err, out)
 	}

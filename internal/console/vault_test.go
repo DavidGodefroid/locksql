@@ -13,7 +13,6 @@ import (
 	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
-	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
@@ -286,7 +285,7 @@ func TestVaultLeaseReconnects(t *testing.T) {
 	run := func() {
 		pr := h.plan(t, selectUsers, false)
 		h.io.answers = append(h.io.answers, "y")
-		h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+		h.okRun(t, pr.PlanID, nil)
 	}
 	run()
 	if logins != 1 {

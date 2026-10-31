@@ -26,7 +26,7 @@ func TestRunUnknownProfileIsNotEchoed(t *testing.T) {
 	t.Cleanup(func() { newIsolationEnv = old })
 	for _, v := range []string{"glsa_CanarySecretToken123", "https://user:glsa_Canary@h/path?token=glsa_Canary"} {
 		io := &fakeIO{}
-		err := Run(context.Background(), Options{Profile: v, IO: io, StateDir: t.TempDir(), Cwd: root})
+		err := Run(context.Background(), Options{Hub: runHub(t), Profile: v, IO: io, StateDir: t.TempDir(), Cwd: root})
 		if !errors.Is(err, ErrConfig) || !strings.Contains(err.Error(), "--profile") || !strings.Contains(err.Error(), "uat") {
 			t.Fatalf("--profile %s: err = %v", v, err)
 		}

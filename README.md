@@ -28,16 +28,18 @@
 
 ---
 
-locksql puts a **human-held console** between your AI agent and MariaDB, MySQL,
-PostgreSQL or SQLite. The agent proposes SQL; the console, running in a
-terminal you keep in view, holds the credentials, parses and weighs every
-statement, masks personal data and waits for **your** approval. The agent
-never sees a credential and never opens a connection.
+locksql puts a **console** between your AI agent and MariaDB, MySQL,
+PostgreSQL or SQLite. The agent proposes SQL; the console holds the
+credentials, parses and weighs every statement, masks personal data and
+sends it to [lockhub](https://github.com/DavidGodefroid/lockhub), where
+**you** approve it (`lox approve`). The agent never sees a credential and
+never opens a connection. The console runs attached to lockhub only:
+`lox up` starts it.
 
 <p align="center">
   <img alt="Demo: Claude Code (left) asks for the top Belgian customers; the locksql console (right) shows each query for approval. Claude gets names and emails as redacted references, filters on them in a follow-up query, then searches on an email the human types in the console." src="docs/assets/demo.gif" width="900">
 </p>
-<p align="center"><sub>Claude Code (left, account <code>alice</code>) and the locksql console (right, account <code>locksql</code>, started with <code>--show-results</code>). Claude gets <code>&lt;redacted:rN.R.C&gt;</code> references, filters on them without seeing a value, then searches on an email the human types in the console.</sub></p>
+<p align="center"><sub>Claude Code (left, account <code>alice</code>) and the locksql console (right, account <code>locksql</code>, started with <code>--show-results</code>). Recorded before the console ran attached to lockhub only: approvals are now given in lockhub, and placeholders and cell references are refused.</sub></p>
 
 > [!NOTE]
 > **Pre-release** (`v0.11.x`). See [Install](#install).
@@ -78,8 +80,8 @@ messages.
 <td width="50%" valign="top">
 
 **👤 Human in the loop**<br>
-Every statement is shown with its plan, cost and PII footprint. On production
-you type the profile name, not `y`.
+Every statement goes to lockhub with its plan, cost and PII footprint, and
+runs only once you approve it there (`lox approve`).
 
 </td>
 </tr>
@@ -118,9 +120,9 @@ checks every peer on the socket.
 <tr>
 <td valign="top">
 
-**🔎 Blind search**<br>
-The agent filters on `'${email}'` and you type the value in the console, or
-on a redacted cell's reference (`'${r1.2.3}'`). The value never reaches it.
+**🔎 Literals masked on the ticket**<br>
+The ticket lockhub shows carries every literal of the statement masked;
+the clear screen is revealed or sealed to your pinned devices only.
 
 </td>
 <td valign="top">
@@ -147,8 +149,10 @@ itself, checks the bastion's host key and listens on no local port.
 ## Quick start
 
 locksql runs in Docker: nothing on your machine but Docker and the
-`locksql` launcher, which runs every command in the image. A first approved
-query, from your project directory:
+`locksql` launcher, which runs every command in the image. The console runs
+under [lockhub](https://github.com/DavidGodefroid/lockhub), which starts it
+and where you decide each query. A first approved query, from your project
+directory:
 
 ```sh
 # 1. Install the launcher (it runs every locksql command in Docker)
@@ -162,12 +166,21 @@ locksql init claude
 locksql profile add
 locksql doctor --fix --yes
 
-# 3. In a terminal you keep in view, start the console
-locksql console
+# 3. Declare the lock in lockhub and start it: lox up opens the console
+#    (the policy, the PII rules and the password are asked there)
+lox add locksql sql-dev
+lox up
 ```
 
 Then ask your agent, in the project: "how many orders were placed
-yesterday?". Each query waits for your `y` in the console.
+yesterday?". Each query waits for your decision in lockhub:
+
+```sh
+lox approve
+```
+
+`locksql console` is started by `lox up` only: without its hub flags
+(`--hub`, `--hub-key-file`, `--instance`) it exits with ``launched by `lox up` only``.
 
 The console runs as the `locksql` account (uid 10001) in its own container,
 the only one that holds the database credentials. The agent's MCP server runs
@@ -202,8 +215,10 @@ sequenceDiagram
     C-->>A: plan id + verdict (OK / WARN / REFUSE)
     A->>C: run PLAN_ID
     C->>D: k-anonymity counts
-    C->>H: approval screen (warns of a count under k)
-    H-->>C: y
+    C-->>A: pending, ticket T
+    C->>H: ticket T in lockhub (warns of a count under k)
+    H-->>C: lox approve: signed decision
+    A->>C: run T
     C->>D: the statement
     D-->>C: rows
     C-->>A: masked, capped rows (untrusted data)
@@ -214,9 +229,10 @@ sequenceDiagram
    column of every output, runs `EXPLAIN`, weighs the plan and returns a
    one-shot plan id with a verdict (`OK`, `WARN` or `REFUSE`).
 2. The agent calls `locksql run PLAN_ID`. When the statement filters, groups
-   or aggregates PII, the console first runs its k-anonymity counts. It shows
-   you the approval screen, with a `▲ k-anonymity` warning above the prompt
-   for each count under `k_anonymity`, and waits:
+   or aggregates PII, the console first runs its k-anonymity counts. It prints
+   the approval screen in its terminal, sends the request to lockhub as a
+   ticket (every literal masked, with a `k-anonymity` warning for each count
+   under `k_anonymity`) and answers the agent `pending` with the ticket:
 
    ```
    ╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
@@ -231,10 +247,12 @@ sequenceDiagram
    │ PII columns touched: customers.email (select)
    │ masked outputs: email → redact
    │ PII: masked (4 column rules; detectors: email, phone, iban, card)
-   ╰─ Approve? [y/N]
+   ╰─ pending: ticket 01J…
    ```
 
-3. On approval the console runs the statement, masks PII, caps the output
+3. You decide the ticket in lockhub (`lox approve`). The agent runs the
+   ticket (`locksql run TICKET`); the console checks the hub's signed
+   decision, plans the statement again, runs it, masks PII, caps the output
    and hands the rows back to the agent, framed as untrusted data.
 
 <details>
@@ -290,11 +308,10 @@ only guide the agent; the console's checks are the guarantee.
   the console's own account could read or type into its terminal. Whoever can
   run `docker` commands can still reach the console's container: see
   [what Docker does and does not separate](docs/docker.md#what-docker-does-and-does-not-separate).
-- **Human approval.** Every statement is shown and approved in the console
-  terminal; no socket method can approve. On a production profile you type the
-  profile name, not `y`. Pending keystrokes are flushed before each prompt, so
-  type-ahead never approves. No answer within 5 minutes means denied. You can
-  deny with a reason the agent reads (`n use the orders table`).
+- **Human approval.** Every statement goes to lockhub as a ticket and runs
+  only once lockhub's signed decision approves it; no socket method can
+  approve. You can deny with a reason the agent reads. The console's own
+  decisions (a loosened policy, `:unmask`) stay at its terminal.
 - **Fail closed.** A dialect-aware classifier refuses anything it cannot
   classify with certainty: several statements, comments, variables, bind
   parameters, file and OS access, sleeps and locks, session tampering. Reads
@@ -328,22 +345,14 @@ only guide the agent; the console's checks are the guarantee.
   filtered with `=`, `IN (literals)` or `IS NULL`. Expressions over them,
   `LIKE`, ranges and `ORDER BY` are refused. A filter, grouping or aggregate on
   PII that covers fewer than `k_anonymity` rows (default 5, production 10)
-  warns you on the approval screen, since it could single out one person; you
-  decide. In auto mode it runs, and the warning goes to the console and the
-  audit log. The agent is told nothing of the count.
-- **Placeholders and references.** To filter a PII column on a value the agent
-  does not know, it writes `col = '${email}'` and the human types the value in
-  the console (no echo); the value never reaches the agent, the audit log or a
-  client error. Redacted cells come back as `<redacted:r1.2.3>` (result, row,
-  column), and the agent filters on one with `col = '${r1.2.3}'`; the console
-  keeps the clear values of the last results in memory only. Both work only
-  compared with a PII column, and skip the k-anonymity count, since the agent
-  did not choose the value. The approval screen warns, in red and in the audit
-  log, when the agent put a clear value in its statement, when a reference is
-  combined with a unique-key filter or an output with no plain column, and
-  when one result's cells are filtered on one by one beyond
-  `limits.reference_probe`.
-  Warnings never refuse and never carry a value.
+  warns you on the ticket, since it could single out one person; you decide.
+  The warning is kept in the audit log. The agent is told nothing of the
+  count.
+- **No typed values.** A placeholder (`col = '${email}'`) or a cell
+  reference (`col = '${r1.2.3}'`) is refused at run (`E_PLACEHOLDER`): no
+  value is typed in lockhub. The approval screen warns, in red and in the
+  audit log, when the agent put a clear value in its statement. Warnings
+  never refuse and never carry a value.
 - **Quiet failures.** Clients get a generic message, never the server's error
   text, and no timings; once the statement is approved, `query.run` answers
   on a 250 ms quantum (a refusal before approval is not quantized).
@@ -460,7 +469,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `vault_path` | required with `credentials = "vault"` | the Vault path read with `vault read`, such as `database/creds/<role>` or `secret/data/<name>`; any change is a loosening |
 | `credentials_ttl` | none | a duration of at least `1m` (`"20m"`, `"1h"`): the connection is closed and the secret asked again once it is that old |
 | `tier` | `read` | highest statement class allowed |
-| `production` | `false` | stricter limits, typed approval, auto mode unavailable |
+| `production` | `false` | stricter limits, production banner and typed profile name at console start |
 | `detectors` | `email`, `phone`, `iban`, `card` | also `be_niss`, `fr_nir`, `nl_bsn`, `us_ssn` and `phone_loose`; `[]` disables them. `phone` masks `+` and 8 to 15 digits, `00` and 10 to 17 digits, or a national number with a trunk 0 (9 to 11 digits, a first group of at least 2 digits); `phone_loose` adds national numbers without a trunk 0 (`(415) 555-2671`, `612 345 678`: 9 to 11 digits in at least two groups, the first of 2 to 4) and also masks some grouped amounts (`123 456 789`). Every detector reads U+00A0, U+202F and U+2009 as a space and full-width digits as digits |
 | `pii_rules` | the profile name, in lower case | the PII rule set, `pii/<set>.toml`; 1 to 64 lower-case letters, digits, `_`, `-` or `.`; profiles on isomorphic databases share a set by naming it; any change is a loosening |
 | `limits.statement_timeout` | 30s (production 10s) | |
@@ -581,27 +590,27 @@ The file describes your databases: keep it in a private repository.
 
 An agent can ask for unmasked PII output (`locksql plan --unmask`, or
 `unmask` in the MCP `locksql_plan` tool) only when the human allowed it in
-the console: `locksql console --allow-unmask` at start, or `:unmask` while
-it runs (confirmed with `y`; `:unmask` again turns it off). Without it, the
-console refuses every unmask request before anything runs and audits the
-refusal. Like auto mode, it is console-only: no client or config file can
-turn it on, and each change is audited (`unmask` record). With it, each unmasked query still needs the human's
-approval, shown as `PII: UNMASKED` in red, and is never auto-approved. The
-console then prints the clear result, so you see exactly what the agent
-received (the audit log still holds no row data).
+the console: `--allow-unmask` at start (from the lock's settings in `lox
+up`), or `:unmask` while it runs (confirmed with `y` at the console's
+terminal; `:unmask` again turns it off). Without it, the console refuses
+every unmask request before anything runs and audits the refusal. It is
+console-only: no client or config file can turn it on, and each change is
+audited (`unmask` record). With it, each unmasked query is still decided by
+the human in lockhub, shown as `PII: UNMASKED` in red. The console then
+prints the clear result, so you see exactly what the agent received (the
+audit log still holds no row data).
 
 ## Console keys and status line
 
-The console runs its own line editor, so two keys and one command switch
+The console runs its own line editor, so one key and two commands switch
 its behaviour while it runs, without a restart, and a status row fixed at
-the bottom of the terminal always shows the state: the profile and tier, the approval mode, whether results
+the bottom of the terminal always shows the state: the profile and tier, whether results
 are shown in clear, `unmask allowed`, the open plans and what awaits
 `:review`. The switches are console-only (no client, config file or
 environment variable can set them) and each change is audited.
 
 | Key | Typed | Effect |
 |---|---|---|
-| Shift+Tab | `:mode` | manual ⇄ auto approval mode |
 | Ctrl-O | `:results` | results masked ⇄ shown here in clear |
 | | `:unmask` | unmasked output off ⇄ allowed (allowing asks for `y`) |
 
@@ -620,24 +629,6 @@ desktop terminal (security levels 1 and 2): the agent's account can read
 that window, so `--show-results` is refused and Ctrl-O leaves the results
 masked.
 
-## Approval mode (Shift+Tab)
-
-The console starts in **manual** mode: every statement is prompted.
-Shift+Tab (or `locksql console --auto` to start that way) switches to
-**auto** mode, where statements that the tier and the weight check allow
-run without a prompt. It exists for fast local iteration, and it is
-deliberately narrow:
-
-- it switches only from the console's keyboard; no client or config file
-  can turn it on;
-- it is **unavailable on production profiles** (the key says so and the
-  console prompts as usual);
-- it never auto-approves an unmasked query and never overrides a REFUSE
-  verdict;
-- the status row reads `mode AUTO`, each auto-approved frame ends with
-  `auto-approved`, and each auto-approval is audited with
-  `decision: "auto"`; the switch itself is audited as `mode`.
-
 ## Limitations
 
 - **The console runs only in a separate account.** The image sets it up;
@@ -649,14 +640,10 @@ deliberately narrow:
   ([docs/docker.md](docs/docker.md#agent-in-its-own-container)).
   Malware running as the console account, or as root, is out of scope.
 - **k-anonymity is a decision aid, not a guarantee.** A count under `k` warns
-  you before you approve; it refuses nothing, and in auto mode the statement
-  runs. Even heeded, it is a query-set-size control: it does not stop
+  you before you approve; it refuses nothing. Even heeded, it is a query-set-size control: it does not stop
   differencing attacks that combine several approved queries.
-- **Placeholders leave room for a patient agent.** Equality probing through
-  cell references only raises a warning: an agent that spreads its probes
-  under `limits.reference_probe`, across results or sessions, is not stopped.
-  The unmasked columns of a targeted row still identify it, and free text
-  without a detector is not masked.
+- **Masking has limits.** The unmasked columns of a targeted row still
+  identify it, and free text without a detector is not masked.
 - **Clear results stay on the console's screen.** With the clear results on
   (Ctrl-O, `--show-results`) and for an unmasked run, the clear rows stay in the scrollback of the console's
   terminal, visible to anyone who sees that screen (screen sharing, recording,

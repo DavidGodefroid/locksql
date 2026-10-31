@@ -35,7 +35,7 @@ func TestPolicyTextIsEscaped(t *testing.T) {
 // A plan's weight verdict is checked again, under the limits in force, when
 // it runs.
 func TestRunReassessesWeightAfterTightening(t *testing.T) {
-	h := newHarness(t, uatProfile(), skip)
+	h := newHarness(t, uatProfile())
 	h.sess.plan = engine.Plan{Root: engine.PlanNode{Detail: "QUERY", EstRows: -1, Children: []engine.PlanNode{
 		{Table: "users", Access: engine.AccessFull, EstRows: 150_000},
 	}}}
@@ -48,7 +48,7 @@ func TestRunReassessesWeightAfterTightening(t *testing.T) {
 	if err := h.s.adopt(next, "tightened"); err != nil {
 		t.Fatal(err)
 	}
-	wantCode(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), ipc.CodeRefused)
+	wantCode(t, h.approveRun(t, pr.PlanID), ipc.CodeRefused)
 	if h.sess.runCount() != 0 || h.io.promptCount() != 0 {
 		t.Fatal("stale plan ran")
 	}

@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -237,15 +236,12 @@ key = "~/.ssh/id_ed25519"
 	if e := cl.call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: "SELECT 1 AS one LIMIT 1"}, &pr); e != nil {
 		t.Fatalf("plan: %v", e)
 	}
-	cl.send(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
-	c.expect("Approve? [y/N] ")
-	c.send("y\n")
-	resp, err := cl.recv(30 * time.Second)
-	if err != nil || resp.Error != nil {
-		t.Fatalf("run: %+v %v", resp, err)
+	var rr ipc.RunResult
+	if e := cl.run(c.hub, pr.PlanID, &rr); e != nil {
+		t.Fatalf("run: %v", e)
 	}
-	if !strings.Contains(string(resp.Result), "1") {
-		t.Errorf("result %s", resp.Result)
+	if len(rr.Rows) != 1 || !strings.Contains(rr.Text, "1") {
+		t.Errorf("result %+v", rr)
 	}
 	c.send("\x03")
 	if err := c.wait(); err != nil {

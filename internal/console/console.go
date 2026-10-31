@@ -53,9 +53,6 @@ func bell(io IO) { kconsole.Bell(io) }
 // Options configure Run.
 type Options struct {
 	Profile string
-	// Auto starts the console in auto mode (--auto); Shift+Tab switches
-	// the mode while it runs.
-	Auto bool
 	// AllowUnmask lets clients ask for unmasked output (--allow-unmask).
 	AllowUnmask bool
 	// ShowResults starts with the clear results on (--show-results);
@@ -78,8 +75,9 @@ type Options struct {
 	// TTY is the console's terminal device (nil when unknown): its owner
 	// must be the console's account in a separated setup.
 	TTY *os.File
-	// Hub is the hub mode (--hub, --hub-key-file, --instance): the human
-	// decides in lockhub, query.run answers pending with a ticket.
+	// Hub is the lockhub the console is decided on (--hub, --hub-key-file,
+	// --instance, as lox up passes them): required. The human decides in
+	// lockhub, query.run answers pending with a ticket.
 	Hub kconsole.HubOptions
 	// AllowedUIDs (--allowed-uids) may connect besides the members of the
 	// client group, as allowed_uids of the system setup: an agent in a
@@ -106,7 +104,9 @@ type ServerConfig struct {
 	Databases []string
 	Audit     *audit.Log
 	IO        IO
-	// Approver takes every human decision; nil means typed approvals.
+	// Approver takes every human decision: the hub's asynchronous
+	// approver, which keeps the console's own decisions (policy changes,
+	// :unmask) on this terminal. nil means Hub's around typed approvals.
 	Approver Approver
 	// Fingerprint is true when Approver is the fingerprint approver
 	// (level 2): a typed answer alone then never widens anything.
@@ -115,11 +115,6 @@ type ServerConfig struct {
 	// the session shape).
 	Boundary string
 	Now      func() time.Time
-	// Auto starts in auto mode: on non-production profiles, statements
-	// allowed by the tier and the weight check run without a prompt (never
-	// unmask, never REFUSE). Shift+Tab switches the mode while the console
-	// runs.
-	Auto bool
 	// AllowUnmask starts with unmasked output allowed: clients may ask for
 	// it, and each such query is approved in the console. Without it an
 	// unmask plan is refused before anything else. :unmask switches it
@@ -154,8 +149,7 @@ type ServerConfig struct {
 	// Refused is the fingerprint of a loosening the human refused at start,
 	// not announced again until the files change.
 	Refused string
-	// Hub is the hub mode (nil: the human decides on this terminal); the
-	// Approver is then its asynchronous approver.
+	// Hub is the lockhub the requests are decided on (required).
 	Hub *kconsole.Hub
 }
 
@@ -277,8 +271,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	// One mode: requests are decided in lockhub.
+	if cfg.Hub == nil {
+		return nil, ErrNoHub
+	}
 	if cfg.Approver == nil {
-		cfg.Approver = newTypedApprover(cfg.IO)
+		cfg.Approver = cfg.Hub.Approver(newTypedApprover(cfg.IO))
 	}
 	cfg.Databases = servedDatabases(cfg.Policy.Profile.Database, cfg.Databases)
 	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, probes: map[int]map[string]bool{}, keys: map[string]bool{}, quantum: cfg.Quantum}
@@ -296,7 +294,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	kc := kconsole.ServerConfig{
 		Product: p, Backend: s, Policy: kpolicy{cfg.Policy}, StateDir: cfg.StateDir, ApprovedKey: cfg.ApprovedKey,
 		Session: cfg.Session, Audit: cfg.Audit, IO: cfg.IO, Approver: cfg.Approver, Level: level, Boundary: cfg.Boundary,
-		Now: cfg.Now, Auto: cfg.Auto, AllowUnmask: cfg.AllowUnmask, ShowResults: cfg.ShowResults && level == 0,
+		Now: cfg.Now, AllowUnmask: cfg.AllowUnmask, ShowResults: cfg.ShowResults && level == 0,
 		Quantum: cfg.Quantum, PeerAllowed: cfg.PeerAllowed, Refused: cfg.Refused, Hub: cfg.Hub,
 	}
 	if refuseProd := cfg.RefuseProduction; refuseProd != nil {
@@ -318,9 +316,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 	s.k = k
-	if cfg.Hub != nil {
-		s.hubWire()
-	}
+	s.hubWire()
 	return s, nil
 }
 
@@ -387,14 +383,6 @@ func (s *Server) host() string {
 // asker takes the human decisions of s (lockkit's console).
 func (s *Server) asker() kconsole.Asker { return s.k.Asker() }
 
-// waiting counts a prompt that waits for the human: a control key or a
-// command meanwhile never widens a switch.
-func (s *Server) waiting(on bool) {
-	if w := s.k.Asker().Waiting; w != nil {
-		w(on)
-	}
-}
-
 // End stops the session after the current request.
 func (s *Server) End(reason string) { s.k.End(reason) }
 
@@ -435,7 +423,6 @@ func (s *Server) CheckPolicy() {
 }
 
 // The live switches and the policy review, as lockkit's console holds them.
-func (s *Server) autoApprove() bool   { return s.k.Auto() }
 func (s *Server) showResults() bool   { return s.k.ShowResults() }
 func (s *Server) allowUnmask() bool   { return s.k.UnmaskAllowed() }
 func (s *Server) pendingPolicy() bool { return s.k.PolicyPending() }

@@ -1,8 +1,8 @@
 ## Database access (locksql)
 
 Agents get database access only through locksql: every query is approved by the human
-in their `locksql console`, a separate terminal that holds the credentials and the only database
-connection. Use it for debugging and finding facts, one targeted question at a time, and only on the
+in lockhub; the `locksql console`, a separate process that `lox up` starts, holds the credentials and
+the only database connection. Use it for debugging and finding facts, one targeted question at a time, and only on the
 user's explicit request. If a database fact would merely help, propose the query and wait.
 
 Workflow (MCP tools `locksql_*`, or the `locksql` CLI from any directory):
@@ -10,8 +10,7 @@ Workflow (MCP tools `locksql_*`, or the `locksql` CLI from any directory):
 1. Prefer a non-production profile unless the question is about real production data. Find the
    database and table from the code first.
 2. `locksql_status` (CLI `locksql status`). If no console runs (CLI exit code 2), ask the user to
-   run the command the status gives in the locksql account's own session (the exact
-   `locksql console ... --project DIR`; `locksql doctor` checks the setup) and stop. Never start one yourself.
+   start it with `lox up` (`locksql doctor` checks the setup) and stop. Never start one yourself.
 3. `locksql_list_tables` / `locksql_describe` if needed (no approval).
 4. `locksql_plan` with one narrow statement: indexed predicates, an explicit `LIMIT`, no comments, no
    variables. Use `unmask` only if the user asked to see personal data in clear; it is refused unless
@@ -19,10 +18,10 @@ Workflow (MCP tools `locksql_*`, or the `locksql` CLI from any directory):
    Pass `intent`: one line saying why, in the user's terms (the human reads it on the approval
    screen without the chat).
 5. Show the user the target, the SQL, the EXPLAIN summary and the verdict, then say you are waiting
-   for their approval in the console. When the statement filters on a PII column the verdict is decided on the
+   for their approval in lockhub (`lox approve`). When the statement filters on a PII column the verdict is decided on the
    console at run time and may still be refused there.
-6. `locksql_run` with the plan id, or `locksql run --profile P PLAN_ID` with a long command timeout
-   (600000 ms): approval can take up to 5 minutes.
+6. `locksql_run` with the plan id, or `locksql run --profile P PLAN_ID`: it answers pending with a
+   ticket. Do not retry; once the human decided, run the ticket (`locksql run --profile P TICKET`).
 7. Report the answer, quoting rows as returned; masked values stay masked.
 
 What a statement may do (the console parses it and resolves every column to its source):
@@ -48,7 +47,7 @@ it points at). Follow the retry rule of the code:
   `E_MULTI_STATEMENT` (one statement), `E_FORBIDDEN_TOKEN` (no comments, variables or bind
   parameters), `E_STATEMENT_KIND`, `E_SYSTEM_OBJECT` (use `locksql_list_tables` /
   `locksql_describe`), `E_UNKNOWN_NAME` (check the names with describe), `E_FUNCTION` (an
-  allowlisted function), `E_PLACEHOLDER` (`col = '${name}'` in `WHERE`), `E_COST` (an indexed,
+  allowlisted function), `E_PLACEHOLDER` (no `'${...}'`: no value is typed in lockhub), `E_COST` (an indexed,
   narrower filter), `E_MASKED_FILTER` (filter on a non-PII key, or `=`, `IN`, `IS NULL` under
   `AND`), `E_MASKED_EXPRESSION` (the plain column, or `COUNT`/`MIN`/`MAX`), `E_MASKED_ORDER` (order
   by a non-PII column), `E_MASKED_SET_OP` (`UNION ALL` between PII columns), `E_MASK_UNCERTAIN`

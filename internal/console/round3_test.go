@@ -11,12 +11,12 @@ import (
 )
 
 // A write whose RETURNING list moves a PII column under another label is
-// refused at plan time, before it can run, even under --skip-permissions;
+// refused at plan time, before it reaches lockhub;
 // so is a read of the planner statistics.
 func TestWriteReturningPIIRefusedBeforeRun(t *testing.T) {
 	p := uatProfile()
 	p.Tier = config.TierWrite
-	h := newHarness(t, p, skip)
+	h := newHarness(t, p)
 	for _, q := range []string{
 		"UPDATE users SET note = note WHERE id < 3 RETURNING upper(email)",
 		"DELETE FROM users WHERE id = 1 RETURNING concat(email, '') AS x",
@@ -36,7 +36,7 @@ func TestWriteReturningPIIRefusedBeforeRun(t *testing.T) {
 	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "x"}}, Rows: [][]any{{"Alice"}}}
 	pr := h.plan(t, "WITH c AS (SELECT email FROM users) SELECT (SELECT * FROM c LIMIT 1) AS x LIMIT 5", false)
 	var rr ipc.RunResult
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	h.okRun(t, pr.PlanID, &rr)
 	if got := rr.Rows[0][0]; !strings.HasPrefix(fmt.Sprint(got), "<redacted") {
 		t.Errorf("nested PII source not masked: %v", got)
 	}
@@ -60,7 +60,7 @@ func TestWriteReturningHonoursMaskMode(t *testing.T) {
 	pr := h.plan(t, "UPDATE users SET note = 'x' WHERE id = 1 RETURNING id, email", false)
 	h.io.answers = []string{"y"}
 	var rr ipc.RunResult
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, &rr)
+	h.okRun(t, pr.PlanID, &rr)
 	if len(rr.Rows) != 1 || len(rr.Rows[0]) != 2 || rr.Rows[0][1] != "<redacted>" {
 		t.Errorf("RETURNING rows = %v, want the email <redacted>", rr.Rows)
 	}

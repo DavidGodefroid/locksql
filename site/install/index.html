@@ -146,11 +146,12 @@ key         = "~/.ssh/id_ed25519"   # in the locksql-home volume, owned by locks
 
 <section aria-labelledby="console">
   <h2 id="console">Start the console</h2>
-  <p class="prose">In a terminal you keep in view, from the project directory:</p>
-  <pre tabindex="0"><code>locksql console</code></pre>
+  <p class="prose">The console runs attached to <a href="https://github.com/DavidGodefroid/lockhub">lockhub</a> only. From the project directory:</p>
+  <pre tabindex="0"><code>lox add locksql sql-dev
+lox up</code></pre>
   <div class="prose">
-    <p>Then ask your agent, in the project: “how many orders were placed yesterday?”. Each query waits for your <code>y</code> in the console.</p>
-    <p>Add <code>--profile P</code>, <code>--show-results</code>, <code>--auto</code> or <code>--allow-unmask</code>. The console runs as the <code>locksql</code> account in its own container, one per project. The <code>locksql-home</code> volume keeps the console account’s state from one run to the next: the approved policy, the audit log and <code>~/.ssh/known_hosts</code> for an <code>ssh</code> profile.</p>
+    <p>Then ask your agent, in the project: “how many orders were placed yesterday?”. Each query waits for your decision in lockhub: <code>lox approve</code>.</p>
+    <p><code>lox up</code> starts <code>locksql console</code> with its hub flags and the lock's settings (<code>--profile P</code>, <code>--show-results</code> or <code>--allow-unmask</code>); without its hub flags the console exits with <code>launched by `lox up` only</code>. The console runs as the <code>locksql</code> account in its own container, one per project. The <code>locksql-home</code> volume keeps the console account’s state from one run to the next: the approved policy, the audit log and <code>~/.ssh/known_hosts</code> for an <code>ssh</code> profile.</p>
     <p>With <code>credentials = "vault"</code>, run <code>LOCKSQL_VAULT=1 VAULT_ADDR=https://vault.example.com locksql console</code>. The console account needs no <code>vault login</code>: at start the console asks for the Vault token in its terminal (no echo) and keeps it in memory for the session, never on disk. When Vault refuses a read (expired or revoked token, or a policy that may not read the path), it asks again.</p>
     <p>Get the token without storing it in your account, where the agent runs, then paste it at the prompt:</p>
   </div>

@@ -66,32 +66,12 @@ func (s *Server) screen(ctx context.Context, pl *plan) {
 	}
 }
 
-// kRisk explains a k-anonymity warning to the human.
-const kRisk = "With a statement like this, the agent could single out one person or infer a masked value (whether an email is present, one person's amount) by cross-checking."
-
-// showKWarnings adds the k-anonymity warnings of a plan to its approval
-// frame, just above the prompt.
-func (s *Server) showKWarnings(kw []string) {
-	bar := paint.Paint(s.frameColour(), "│ ")
-	for _, w := range kw {
-		s.println(bar + red + "▲ " + safeText(w, false) + reset)
-	}
-	if len(kw) > 0 {
-		s.println(bar + "  " + paint.Dim(kRisk))
-	}
-}
-
 // frameColour is the colour of the approval frame.
 func (s *Server) frameColour() string {
 	if s.profile.Production {
 		return ui.Red
 	}
 	return ui.Violet
-}
-
-// frameEnd closes the approval frame in front of text (the prompt).
-func (s *Server) frameEnd(text string) string {
-	return paint.Paint(s.frameColour(), "╰─ ") + text
 }
 
 // screenBody is the requester, the agent's intent, the statement and the

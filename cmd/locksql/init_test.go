@@ -33,7 +33,7 @@ func TestInitCommand(t *testing.T) {
 		}
 	}
 	s := out.String()
-	for _, want := range []string{"created    .mcp.json", "[mcp_servers.locksql]", "locksql console --project " + root, filepath.Join(root, ".locksql", "config.toml")} {
+	for _, want := range []string{"created    .mcp.json", "[mcp_servers.locksql]", "lox up", filepath.Join(root, ".locksql", "config.toml")} {
 		if !strings.Contains(s, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, s)
 		}

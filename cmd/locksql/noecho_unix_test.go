@@ -67,7 +67,7 @@ func TestHandoffDoesNotEchoUncheckedProfile(t *testing.T) {
 			h, ran := fakeHandoff(uid, "sudo")
 			e, out := handoffTestEnv(t, h)
 			writeHandoffConfig(t, e.cwd, "uat")
-			code := runEnv(e, []string{"console", "--profile", v})
+			code := runEnv(e, hubbed("console", "--profile", v))
 			if code != exitUsage || *ran != nil || strings.Contains(out.String(), "glsa_Canary") || !strings.Contains(out.String(), "--profile names none of the project's profiles (uat)") {
 				t.Errorf("uid %d: code %d, ran %v\n%s", uid, code, *ran, out)
 			}
@@ -77,7 +77,7 @@ func TestHandoffDoesNotEchoUncheckedProfile(t *testing.T) {
 	h, ran := fakeHandoff(1500, "sudo")
 	e, out := handoffTestEnv(t, h)
 	writeHandoffConfig(t, e.cwd, "uat")
-	if code := runEnv(e, []string{"console", "--profile", "uat"}); code != exitOK || !strings.Contains(strings.Join(*ran, " "), "--profile uat") {
+	if code := runEnv(e, hubbed("console", "--profile", "uat")); code != exitOK || !strings.Contains(strings.Join(*ran, " "), "--profile uat") {
 		t.Errorf("known profile: code %d, ran %v\n%s", code, *ran, out)
 	}
 }

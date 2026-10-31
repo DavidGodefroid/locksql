@@ -185,11 +185,13 @@ type RunResult struct {
 
 // StatusResult describes the console session.
 type StatusResult struct {
-	Profile        string        `json:"profile"`
-	Engine         string        `json:"engine"`
-	Host           string        `json:"host"`
-	HostConfirmed  bool          `json:"host_confirmed"`
-	Production     bool          `json:"production"`
+	Profile       string `json:"profile"`
+	Engine        string `json:"engine"`
+	Host          string `json:"host"`
+	HostConfirmed bool   `json:"host_confirmed"`
+	Production    bool   `json:"production"`
+	// AutoApprove is always false: lockhub decides every statement. Kept
+	// for the clients that read it.
 	AutoApprove    bool          `json:"auto_approve"`
 	AllowUnmask    bool          `json:"allow_unmask"`
 	ShowResults    bool          `json:"show_results"`

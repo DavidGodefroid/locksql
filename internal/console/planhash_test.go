@@ -3,6 +3,7 @@ package console
 import (
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/DavidGodefroid/locksql/internal/engine"
@@ -37,8 +38,7 @@ func TestPlanHashOfTheStatement(t *testing.T) {
 		t.Errorf("hashes %s %s %s", a.PlanHash, b.PlanHash, c.PlanHash)
 	}
 	// An engine that cannot read definitions runs the statement as before.
-	h.io.answers = []string{"y"}
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: a.PlanID}, nil)
+	h.okRun(t, a.PlanID, nil)
 	if h.sess.guardedRuns != 0 || h.sess.runCount() != 1 {
 		t.Errorf("guarded runs %d, runs %d", h.sess.guardedRuns, h.sess.runCount())
 	}
@@ -53,8 +53,7 @@ func TestPlanHashStale(t *testing.T) {
 	h := newHarness(t, uatProfile())
 	st := guarded(h)
 	pr := h.plan(t, q, false)
-	h.io.answers = []string{"y"}
-	h.ok(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}, nil)
+	h.okRun(t, pr.PlanID, nil)
 	if h.sess.guardedRuns != 1 {
 		t.Fatalf("guarded runs %d", h.sess.guardedRuns)
 	}
@@ -72,7 +71,7 @@ func TestPlanHashStale(t *testing.T) {
 		pr := h.plan(t, q, false)
 		change()
 		prompts, runs := h.io.promptCount(), h.sess.runCount()
-		resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+		resp := h.approveRun(t, pr.PlanID)
 		wantStale(t, resp)
 		if h.io.promptCount() != prompts || h.sess.runCount() != runs {
 			t.Errorf("a stale plan was prompted (%d) or run (%d)", h.io.promptCount()-prompts, h.sess.runCount()-runs)
@@ -80,12 +79,14 @@ func TestPlanHashStale(t *testing.T) {
 		*st = before
 	}
 
-	// A change during the statement: it ran, its result is dropped.
+	// A change during the statement: it ran, its result is dropped, and
+	// the agent gets a new ticket for the statement as it now resolves.
 	pr = h.plan(t, q, false)
 	h.sess.duringRun = func() { st.Objects[0].Def = "r rls" }
-	h.io.answers = []string{"y"}
-	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
-	wantStale(t, resp)
+	resp := h.approveRun(t, pr.PlanID)
+	if pendingTicket(t, resp, "stale"); strings.Contains(string(resp.Result), "alice@") {
+		t.Fatalf("stale answer %s", resp.Result)
+	}
 }
 
 func wantStale(t *testing.T, resp ipc.Response) {

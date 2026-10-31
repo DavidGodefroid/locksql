@@ -187,7 +187,7 @@ func TestConsoleWithoutProfileSameUserRefused(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(e.cwd, ".locksql", "config.toml"), []byte(conf), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if code := runEnv(e, []string{"console"}); code != exitFail {
+	if code := runEnv(e, hubbed("console")); code != exitFail {
 		t.Fatalf("code %d\n%s", code, out)
 	}
 	for _, want := range []string{"separate account", "through the launcher", "locksql doctor"} {

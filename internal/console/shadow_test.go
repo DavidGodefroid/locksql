@@ -188,10 +188,10 @@ func TestShadowedOperatorsRefused(t *testing.T) {
 // the lookup runs again just before the statement.
 func TestShadowedCheckedAgainAtRun(t *testing.T) {
 	ss := &shadowSession{}
-	h := newHarness(t, uatProfile(), withShadows(ss), skip)
+	h := newHarness(t, uatProfile(), withShadows(ss))
 	pr := h.plan(t, "SELECT upper(note) AS n FROM users LIMIT 1", false)
 	ss.shadowed = []string{"upper"}
-	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	resp := h.approveRun(t, pr.PlanID)
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "outside pg_catalog") {
 		t.Fatalf("run after CREATE FUNCTION: %+v", resp)
 	}
@@ -205,10 +205,10 @@ func TestShadowedCheckedAgainAtRun(t *testing.T) {
 // E_FUNCTION refusal, and nothing runs.
 func TestShadowedCheckedBeforeKCounts(t *testing.T) {
 	ss := &shadowSession{}
-	h := newHarness(t, uatProfile(), withShadows(ss), skip)
+	h := newHarness(t, uatProfile(), withShadows(ss))
 	pr := h.plan(t, "SELECT id FROM users WHERE email = 'a@example.com' LIMIT 1", false)
 	ss.shadowed = []string{"count"}
-	resp := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	resp := h.approveRun(t, pr.PlanID)
 	wantCode(t, resp, ipc.CodeRefused)
 	if resp.Error != nil && (!strings.Contains(resp.Error.Message, "outside pg_catalog") || strings.Contains(resp.Error.Message, "k-anonymity check")) {
 		t.Errorf("refusal %q", resp.Error.Message)

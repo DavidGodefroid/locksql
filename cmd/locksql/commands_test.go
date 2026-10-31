@@ -5,6 +5,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -13,11 +15,17 @@ import (
 	"testing"
 	"time"
 
+	kconsole "github.com/DavidGodefroid/lockkit/console"
+	"github.com/DavidGodefroid/lockkit/hubclient"
+	"github.com/DavidGodefroid/lockkit/hubclient/hubtest"
+	"github.com/DavidGodefroid/lockkit/ticket"
+
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/console"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/pii"
+	"github.com/DavidGodefroid/locksql/internal/product"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
@@ -101,12 +109,6 @@ func (f *scriptIO) Ask(ctx context.Context, _ string, _ time.Duration) (string, 
 
 func (f *scriptIO) AskSecret(context.Context, string) ([]byte, error) { return nil, nil }
 
-func (f *scriptIO) answer(a ...string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.answers = append(f.answers, a...)
-}
-
 const uatConfig = `
 [profiles.uat]
 engine = "mariadb"
@@ -148,9 +150,16 @@ func project(t *testing.T, cfg string) string {
 	return dir
 }
 
+// testConsole is an in-process console: its scripted IO and the fake
+// lockhub it is decided on.
+type testConsole struct {
+	*scriptIO
+	hub *hubtest.Hub
+}
+
 // startConsole serves profile from dir's config with an in-process console
-// server and returns its scripted IO.
-func startConsole(t *testing.T, dir, profile string) *scriptIO {
+// server, decided on a fake lockhub.
+func startConsole(t *testing.T, dir, profile string) *testConsole {
 	t.Helper()
 	cfg, err := config.LoadFrom(dir, "")
 	if err != nil {
@@ -166,11 +175,29 @@ func startConsole(t *testing.T, dir, profile string) *scriptIO {
 		t.Fatal(err)
 	}
 	sio := &scriptIO{}
+	home := t.TempDir()
+	key, err := hubclient.InstanceKey(home, "sql-"+profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := hubtest.New(t, "sql-"+profile, key.Public().(ed25519.PublicKey))
+	keyDir := t.TempDir()
+	if err := os.Chmod(keyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keyFile := filepath.Join(keyDir, "hub.pub")
+	if err := os.WriteFile(keyFile, []byte(base64.StdEncoding.EncodeToString(fake.Pub)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hub, err := kconsole.OpenHub(product.P, kconsole.HubOptions{URL: fake.URL(), KeyFile: keyFile, Instance: "sql-" + profile, Home: home}, t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s, err := console.NewServer(console.ServerConfig{
 		Policy:    config.NewPolicy(p, []string{"app.users.email"}, nil),
 		RulesPath: filepath.Join(dir, pii.RulesFile), StateDir: state, ApprovedKey: config.ApprovedKey(dir, profile),
 		Session: fakeSession{}, DBUser: p.User, Databases: []string{"app"},
-		Audit: log, IO: sio, Version: "test",
+		Audit: log, IO: sio, Version: "test", Hub: hub,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -189,11 +216,38 @@ func startConsole(t *testing.T, dir, profile string) *scriptIO {
 		defer close(done)
 		_ = s.Serve(ctx, ln, nil)
 	}()
+	watched := make(chan struct{})
+	go func() { defer close(watched); hub.Watch(ctx, sio) }()
 	t.Cleanup(func() {
 		cancel()
 		<-done
+		<-watched
+		_ = hub.Close()
 	})
-	return sio
+	return &testConsole{scriptIO: sio, hub: fake}
+}
+
+// decided runs plan id through the CLI as an agent does: run answers
+// pending with a ticket, the hub decides it with out, and the run of the
+// ticket gives the outcome. args are added to both runs.
+func (c *testConsole) decided(t *testing.T, dir, id string, out ticket.Outcome, args ...string) outcome {
+	t.Helper()
+	o := cli(t, dir, "", append([]string{"run", "--profile", "uat", id, "--json"}, args...)...)
+	o.want(t, exitOK)
+	var rr ipc.RunResult
+	decodeJSON(t, o.stdout, &rr)
+	if rr.Status != "pending" || rr.Ticket == "" {
+		t.Fatalf("run = %+v, want pending", rr)
+	}
+	c.hub.Decide(rr.Ticket, out, "")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		o = cli(t, dir, "", append([]string{"run", "--profile", "uat", rr.Ticket}, args...)...)
+		if !strings.Contains(o.stdout+o.stderr, "no decision") || time.Now().After(deadline) {
+			return o
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 type outcome struct {
@@ -321,8 +375,7 @@ func TestPlanAndRun(t *testing.T) {
 		t.Fatalf("plan = %+v", pl)
 	}
 
-	sio.answer("y")
-	o = cli(t, dir, "", "run", "--profile", "uat", pl.PlanID)
+	o = sio.decided(t, dir, pl.PlanID, ticket.Approved)
 	o.want(t, exitOK, "id\temail\n", "1\t<redacted:r1.1.2>")
 	if strings.Contains(o.stdout, "alice@example.com") {
 		t.Fatalf("unmasked output: %s", o.stdout)
@@ -334,8 +387,7 @@ func TestPlanAndRun(t *testing.T) {
 	// JSON run, with the flag after the plan id.
 	o = cli(t, dir, "", "plan", "--profile", "uat", "--json", "SELECT id, email FROM users WHERE id = 1 LIMIT 5")
 	decodeJSON(t, o.stdout, &pl)
-	sio.answer("y")
-	o = cli(t, dir, "", "run", "--profile", "uat", pl.PlanID, "--json")
+	o = sio.decided(t, dir, pl.PlanID, ticket.Approved, "--json")
 	o.want(t, exitOK)
 	var rr ipc.RunResult
 	decodeJSON(t, o.stdout, &rr)
@@ -386,8 +438,7 @@ func TestPlanRefusedAndRunDenied(t *testing.T) {
 	o = cli(t, dir, "", "plan", "--profile", "uat", "--json", "SELECT id, email FROM users WHERE id = 1 LIMIT 1")
 	var pl ipc.PlanResult
 	decodeJSON(t, o.stdout, &pl)
-	sio.answer("n")
-	cli(t, dir, "", "run", "--profile", "uat", pl.PlanID).want(t, exitFail, "denied")
+	sio.decided(t, dir, pl.PlanID, ticket.Denied).want(t, exitFail, "denied")
 }
 
 // --intent reaches the approval screen; the plan's output is unchanged.
@@ -401,8 +452,7 @@ func TestPlanIntentReachesTheScreen(t *testing.T) {
 	}
 	var pl ipc.PlanResult
 	decodeJSON(t, o.stdout, &pl)
-	sio.answer("y")
-	cli(t, dir, "", "run", "--profile", "uat", pl.PlanID).want(t, exitOK)
+	sio.decided(t, dir, pl.PlanID, ticket.Approved).want(t, exitOK)
 	sio.mu.Lock()
 	screen := strings.Join(sio.out, "\n")
 	sio.mu.Unlock()
@@ -413,17 +463,20 @@ func TestPlanIntentReachesTheScreen(t *testing.T) {
 		want(t, exitFail, "intent must be one line of at most 200 bytes")
 }
 
+// The run of a plan never waits at the console: it answers pending with a
+// ticket the human decides in lockhub, and the ticket waits for that
+// decision.
 func TestRunWaitsForTheHuman(t *testing.T) {
 	dir := project(t, uatConfig)
-	sio := startConsole(t, dir, "uat")
+	startConsole(t, dir, "uat")
 	o := cli(t, dir, "", "plan", "--profile", "uat", "--json", "SELECT id, email FROM users WHERE id = 1 LIMIT 1")
 	var pl ipc.PlanResult
 	decodeJSON(t, o.stdout, &pl)
-	sio.mu.Lock()
-	sio.delay = 300 * time.Millisecond
-	sio.mu.Unlock()
-	sio.answer("y")
-	cli(t, dir, "", "run", "--profile", "uat", pl.PlanID).want(t, exitOK, "id\temail")
+	o = cli(t, dir, "", "run", "--profile", "uat", pl.PlanID)
+	o.want(t, exitOK, "Pending human approval: ticket ")
+	if strings.Contains(o.stdout, "alice") {
+		t.Fatalf("pending output: %s", o.stdout)
+	}
 }
 
 func TestPIIAndRequest(t *testing.T) {
