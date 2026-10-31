@@ -387,7 +387,9 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 		}
 	}
 	if onlyProfile != "" && len(names) == 0 {
-		add(checkFail, "profile "+onlyProfile, "not in the configuration", "")
+		// Not quoted back: --profile may be a token or a URL pasted in
+		// the wrong place.
+		add(checkFail, "profile", "--profile names none of the configured profiles: "+listOrNone(profileNames(cfg)), "")
 		return out
 	}
 	slices.Sort(names)

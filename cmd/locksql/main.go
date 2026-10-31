@@ -188,7 +188,9 @@ func runEnv(e env, args []string) int {
 	case "tables", "describe", "plan", "run", "request", "logout":
 		return runClient(e, cmd, args[1:])
 	default:
-		fmt.Fprintf(stderr, "locksql: unknown command %q\n\n%s", cmd, usageText)
+		// Not quoted back: it may be a token or a URL pasted in the
+		// wrong place.
+		fmt.Fprintf(stderr, "locksql: unknown command\n\n%s", usageText)
 		return exitUsage
 	}
 }

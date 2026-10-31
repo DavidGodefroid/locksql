@@ -22,16 +22,29 @@ This file records the changes a user or an agent has to know about.
   masked (`{"msg":"tel:\t0475123456"}`). The new opt-in detectors (`ip`,
   `secret`, `person_name`) are not enabled: the default detectors mask what
   they masked before, apart from this.
+- lockkit v0.8.0: the Claude Code wiring, merging into the user's
+  `~/.claude/settings.json`, writes the `permissions.allow` entries already there with
+  `&`, `<` and `>` as written instead of `\u0026`-style escapes. locksql's
+  own entries and note hold none of these characters: what it adds is
+  unchanged.
+- **`console --profile` in a separated setup is checked before the
+  handoff**: started from another account than the console's, the console
+  command is printed or run through sudo, machinectl or su only for a
+  profile of the project's `.locksql/config.toml`; another `--profile` is
+  refused (`unknown profile: --profile names none of the project's profiles
+  (...)`) instead of being put on a command line every account can read. A
+  profile kept only in the console account's own user config is started from
+  that account.
 
 ### Fixed
 
 - **A `--profile` naming no profile is not quoted back** (it may be a token
   or a URL pasted in the wrong place): the client commands (`tables`,
   `describe`, `plan`, `run`, `pii ...`), `status`, `mcp`, `forget`,
-  `console`, `config export --profile` and `config import
+  `console`, `doctor`, `config export --profile` and `config import
   --profile`/`--local` name the flag (and the configured profiles), never
-  the value given. With lockkit v0.8.1, the same holds for an invalid
-  profile name, `--instance`, `--require-device`, `hub-key`'s flags, the
+  the value given. An unknown command is not quoted back either. With
+  lockkit v0.8.1, the same holds for an invalid profile name, `--instance`, `--require-device`, `hub-key`'s flags, the
   console's `--profile` mismatch and its `service_user`/`client_group`
   refusals.
 

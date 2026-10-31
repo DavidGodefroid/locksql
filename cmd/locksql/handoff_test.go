@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,6 +56,7 @@ func handoffTestEnv(t *testing.T, h *handoffEnv) (env, *bytes.Buffer) {
 func TestConsoleFromAgentAccountIsNotHandedOff(t *testing.T) {
 	h, ran := fakeHandoff(1000, "sudo", "machinectl", "su")
 	e, out := handoffTestEnv(t, h)
+	writeHandoffConfig(t, e.cwd, "dev")
 	if code := runEnv(e, []string{"console", "--profile", "dev"}); code != exitFail {
 		t.Fatalf("code %d\n%s", code, out)
 	}
@@ -248,4 +250,20 @@ func hasArgs(argv []string, seq ...string) bool {
 		}
 	}
 	return false
+}
+
+// writeHandoffConfig writes a project config in dir with the profiles
+// names.
+func writeHandoffConfig(t *testing.T, dir string, names ...string) {
+	t.Helper()
+	var b strings.Builder
+	for _, n := range names {
+		fmt.Fprintf(&b, "[profiles.%s]\nengine = \"mariadb\"\nhost = \"db.example.com\"\n\n", n)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".locksql"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".locksql", "config.toml"), []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
