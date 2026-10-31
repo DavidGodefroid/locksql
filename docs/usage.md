@@ -539,9 +539,8 @@ console sets it (`lox up`, from a lock's
 With the clear results on, the console prints, in clear, the result of each
 masked query it runs, as an aligned table under `result in clear (shown
 here only; the agent got it masked)`; the agent still gets the masked cells
-(`<redacted:rN.R.C>`, `a***(17)`). The cells the agent got masked are
-yellow, followed by their reference (`‹r1.1.2›`) when they have one, so you
-can tie what you read to what the agent handles. `max_rows`,
+(`<redacted>`, `a***(17)`). The cells the agent got masked are
+yellow, so you can tie what you read to what the agent handles. `max_rows`,
 `max_cell_chars` and `max_output_bytes` apply as for the agent. Off by
 default, it is console-only: no client, config file or environment variable
 can turn it on. While it is on, the console warns (in red on a production
@@ -833,7 +832,8 @@ The console watches the config and PII files while it runs.
   larger `k_anonymity`, a new mask rule or detector, a mode changed to
   `redact`) is applied at once.
 - A change that loosens it (higher tier, `production = true → false`, larger
-  limits, a smaller `k_anonymity`, a larger `reference_probe`, a longer
+  limits, a smaller `k_anonymity`, a larger `reference_probe` (kept for
+  compatibility, without effect since cell references are not supported), a longer
   `idle_timeout` or `max_session`, a higher or removed
   `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
   host, port, engine, user or database, a weaker `tls` or any change of `tls_ca`,
@@ -1061,8 +1061,7 @@ PII columns (columns under a mask rule) may be used as follows:
   (`SELECT COUNT(*) FROM db.table WHERE db.table.col = 'literal'`), so a
   join cannot multiply them. `IN (literals)` counts each value apart and
   takes the smallest count (`SELECT MIN(locksql_n) FROM (... UNION ALL ...)`),
-  so a value absent from the table warns about the list; placeholder values in
-  the list are not counted. Another count is built from the statement's own
+  so a value absent from the table warns about the list. Another count is built from the statement's own
   `FROM`, `WHERE`, `GROUP BY` and `HAVING` text. Fewer than `k_anonymity`
   rows in any count, or in the smallest group, puts a warning on the approval
   screen and in the audit record (see [The approval screen](#the-approval-screen));
@@ -1088,8 +1087,9 @@ PII columns (columns under a mask rule) may be used as follows:
 - While mask rules exist, a write may store into a column under a mask rule
   (matched by name) only `NULL` or `DEFAULT`: a literal, an expression or
   another column is refused (`a masked column cannot receive values the agent
-  chose`), since the next read would mask it and hand back a reference to a
-  value the agent chose. An `INSERT` without a column list must name its
+  chose`): masked on the next read, the value would still be one the agent
+  knows, and joining that column with `=` to another PII column (which no
+  k-anonymity count covers) would tell it whose value matches. An `INSERT` without a column list must name its
   columns (or store only `NULL`/`DEFAULT`); an `INSERT` into a masked column
   from a query is refused. Writing other columns is unaffected.
 
@@ -1137,10 +1137,12 @@ outside `pg_catalog` also names is refused (see below). Changing `"allowlist"` b
 
 ### Placeholders and cell references
 
-Requests are decided in lockhub, where no value is typed: a placeholder
-(`'${name}'`) or a cell reference (`'${rN.R.C}'`) is refused at run with
-`E_PLACEHOLDER`; write the statement without them. A write holding one is
-refused at plan time (`placeholders are only allowed in read statements`).
+Placeholders (`'${name}'`) and cell references (`'${rN.R.C}'`) are not
+supported: requests are decided in lockhub, where no value is typed, and
+masked cells come back as plain `<redacted>`, without a reference to their
+value. A statement holding a string literal of that shape, read or write,
+well-formed or not, is refused at plan time with `E_PLACEHOLDER`, before it
+is analysed; write the value itself as a literal, or leave the filter out.
 
 Warnings appear in red on the approval screen and in the `warnings` field of
 the audit record. They never refuse and never carry a value: the agent
@@ -1163,7 +1165,7 @@ JSON-RPC error's `data`) holds:
 The `token` is a keyword, an operator, a punctuation sign or a name as the
 agent wrote it, never a literal. The hint and the message are written by
 locksql: neither quotes the database's text nor a value the agent could not
-see (a typed value, a referenced cell). A refusal decided on the console under
+see. A refusal decided on the console under
 a PII filter (the weight check) carries only its code and the code's hint.
 The audit record of a refusal holds the `code` and the `span`.
 
@@ -1182,7 +1184,7 @@ The retry rules:
 |---|---|---|---|
 | `E_UNSUPPORTED_SYNTAX` | a construct the parser cannot read with certainty (an operator, a clause, a MySQL double-quoted string, unbalanced parentheses) | rewrite | plainer SQL: standard operators, `CONCAT()` instead of `\|\|` in MySQL, a CTE or subquery instead of the construct |
 | `E_MULTI_STATEMENT` | several statements (`;` chaining) | rewrite | one statement per plan |
-| `E_FORBIDDEN_TOKEN` | a comment, a variable (`@x`, `:=`), a bind parameter (`?`, `$1`, `:name`), a backslash, a Unicode escape, a control character | rewrite | remove it; write values as literals, or as `'${name}'` placeholders against a PII column |
+| `E_FORBIDDEN_TOKEN` | a comment, a variable (`@x`, `:=`), a bind parameter (`?`, `$1`, `:name`), a backslash, a Unicode escape, a control character | rewrite | remove it; write values as literals |
 | `E_STATEMENT_KIND` | a statement this path does not run: `SHOW`, `DESCRIBE`, `PRAGMA`, `EXPLAIN` of a write, a data-modifying CTE, an unknown leading word | rewrite | `SELECT`, `WITH ... SELECT` or `EXPLAIN SELECT`; `tables` / `describe` for metadata |
 | `E_INVALID_SQL` | a statement the engine would reject too: arms with different column counts, a derived table without alias, a position out of range, a window function without `OVER` | rewrite | fix it as the message says |
 | `E_UNKNOWN_NAME` | an unknown table, column or database, or a table several schemas hold | rewrite | check the names with `tables` / `describe`; qualify the table |
@@ -1198,13 +1200,13 @@ The retry rules:
 | `E_UNMASK_OFF` | `--unmask` while unmasked output is off in the console (`:unmask` or `--allow-unmask` turns it on), or turned off since the plan | ask_user | run it masked |
 | `E_COST` | the weight check: rows examined, full scans, cartesian joins, `explain_cost_refuse` | rewrite | a selective filter on an indexed column, a narrower range, fewer joins |
 | `E_ENGINE` | the database could not plan the statement or its k-anonymity counts; the details stay on the console | stop | none: the human sees the database's message |
-| `E_PLACEHOLDER` | a placeholder or cell reference used outside `pii_col = '${...}'` in `WHERE`/`HAVING`, malformed, unknown, unusable, or in a write | rewrite | `col = '${name}'` or `col IN ('${a}', '${b}')` in the `WHERE` of a read |
-| `E_MASKED_FILTER` | a PII column filtered or joined other than by equality: `LIKE`, ranges, negations, `OR`, a comparison with a non-PII column, a filter in a `JOIN` condition, `EXPLAIN` of a PII filter | rewrite | filter on a non-PII key, or `=`, `IN` (literals or placeholders), `IS NULL` under `AND` |
+| `E_PLACEHOLDER` | a placeholder or cell reference (a string literal `'${...}'`, in any statement): not supported | rewrite | write the statement without `'${...}'` |
+| `E_MASKED_FILTER` | a PII column filtered or joined other than by equality: `LIKE`, ranges, negations, `OR`, a comparison with a non-PII column, a filter in a `JOIN` condition, `EXPLAIN` of a PII filter | rewrite | filter on a non-PII key, or `=`, `IN` (literals), `IS NULL` under `AND` |
 | `E_MASKED_EXPRESSION` | a function or expression over a PII column | rewrite | the plain column (masked), or `COUNT` |
 | `E_MASKED_ORDER` | a PII column in `ORDER BY`, `DISTINCT ON`, a window's `PARTITION BY`/`ORDER BY` | rewrite | order or partition by a non-PII column |
 | `E_MASKED_SET_OP` | `UNION`, `INTERSECT`, `EXCEPT` or duplicate removal mixing a PII column with other values | rewrite | `UNION ALL` between PII columns, without `DISTINCT` |
 | `E_MASK_UNCERTAIN` | a result whose masking cannot be proven: an alias, a whole-row reference or a label the engine cannot trace, a result whose columns differ from the analysis | rewrite | PII columns by their plain name |
-| `E_MASKED_WRITE` | a write that copies a PII column or stores a value the agent chose into one | stop | none (a masked column may only be set to `NULL` or `DEFAULT`) |
+| `E_MASKED_WRITE` | a write that copies a PII column or stores a value the agent chose into one | stop | none (a masked column may only be set to `NULL` or `DEFAULT`: it holds no value the agent chose) |
 | `E_STALE` | the definitions the statement resolves to (functions, views, rules, triggers, row-level policies, grants, search path) changed between the plan and the run, or during the run | rewrite | plan the statement again; the human approves the new plan |
 | `E_POLICY` | a refusal no check named (fail-closed; should not happen) | stop | none: report it as a bug |
 
@@ -1257,21 +1259,14 @@ finds the project's consoles.
   the console more; the cut text ends with `…` and drops a value split by
   the cut. The number of cells cut, by either cap, is reported: `cut_cells`
   in JSON and in the MCP structured content, and a
-  `[N cells cut: ...]` line in TSV. A cell cut by the engine carries no
-  reference (`<redacted>`), since it holds only the start of its value.
+  `[N cells cut: ...]` line in TSV.
 - Control and bidirectional characters are escaped. NULL prints as `NULL`.
 - Masked cells follow the rule's mode: `redact` (the default for a rule
-  without `mode`) gives `<redacted:rN.R.C>` (result, row, column; plain
-  `<redacted>` when the console cannot hold the cell), including the
-  `RETURNING` list of a write, which gets plain `<redacted>`; `partial` keeps
-  the first character and the length (`a***(17)`), `email` keeps the first
-  character and the domain (`a***@example.com`). `partial`, `email` and
-  detector-masked cells carry no reference, nor does any column but a plain
-  one whose every source is under a mask rule (a `UNION` with a constant or
-  an unmasked column, an expression or an aggregate (`MIN`/`MAX` included)
-  gives `<redacted>`), nor any column of a statement that filters a PII
-  column on a literal the agent wrote. Several rules with different modes on one
-  column give `redact`. Masked binary cells in `partial` mode
+  without `mode`) gives `<redacted>`, including the `RETURNING` list of a
+  write; `partial` keeps the first character and the length (`a***(17)`),
+  `email` keeps the first character and the domain (`a***@example.com`). No
+  masked cell carries a reference to its value. Several rules with different
+  modes on one column give `redact`. Masked binary cells in `partial` mode
   become `<masked bytes:N>`.
 - A result whose column count or labels differ from the analysis is dropped,
   since masking by position could hit the wrong column.

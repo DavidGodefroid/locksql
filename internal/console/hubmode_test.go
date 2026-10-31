@@ -26,6 +26,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/product"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
+	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
 )
 
 const hubInstanceName = "sql-uat"
@@ -239,15 +240,36 @@ func TestHubModeStale(t *testing.T) {
 	}
 }
 
-// Placeholders are refused: no value is typed in lockhub.
-func TestHubModeRefusesPlaceholders(t *testing.T) {
+// Placeholders and cell references are not supported: query.plan refuses
+// them (E_PLACEHOLDER, saying so), reads and writes alike, before the
+// statement is analysed or a ticket is pushed, and the refusal is audited.
+func TestPlaceholdersRefusedAtPlan(t *testing.T) {
 	var hub *hubtest.Hub
-	h := newHarness(t, uatProfile(), withHub(t, &hub))
-	pr := h.plan(t, typedQ, false)
-	r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
-	wantCode(t, r, ipc.CodeRefused)
-	if hub.Pushed() != 0 || h.io.promptCount() != 0 {
-		t.Fatalf("pushed %d prompts %q", hub.Pushed(), h.io.prompts)
+	p := uatProfile()
+	p.Tier = config.TierWrite
+	h := newHarness(t, p, withHub(t, &hub))
+	for _, q := range []string{
+		"SELECT id FROM users WHERE email = '${email}' LIMIT 10",
+		"SELECT id FROM users WHERE email IN ('${r1.1.2}', '${r1.2.2}') LIMIT 10",
+		"SELECT id FROM users WHERE note = '${bad name}' LIMIT 10",
+		"EXPLAIN SELECT id FROM users WHERE email = '${email}' LIMIT 10",
+		"UPDATE users SET note = 'x' WHERE email = '${r1.1.2}'",
+	} {
+		explains := len(h.sess.explains)
+		r := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
+		wantCode(t, r, ipc.CodeRefused)
+		if r.Error.Data.Code != refusal.Placeholder || !strings.Contains(r.Error.Message, "not supported") {
+			t.Errorf("%s: %s %q", q, r.Error.Data.Code, r.Error.Message)
+		}
+		if len(h.sess.explains) != explains {
+			t.Errorf("%s: explained before the refusal: %q", q, h.sess.explains[explains:])
+		}
+	}
+	if hub.Pushed() != 0 || h.io.promptCount() != 0 || h.sess.runCount() != 0 {
+		t.Fatalf("pushed %d prompts %q runs %d", hub.Pushed(), h.io.prompts, h.sess.runCount())
+	}
+	if n := strings.Count(h.auditLog(t), "E_PLACEHOLDER"); n < 5 {
+		t.Fatalf("%d placeholder refusals audited, want 5:\n%s", n, h.auditLog(t))
 	}
 }
 

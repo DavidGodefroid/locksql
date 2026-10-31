@@ -28,27 +28,17 @@ func (s *Server) width() int {
 	return defaultWidth
 }
 
-// cell is one cell of a console table: its text, whether the client got
-// it masked, and the reference it then carries.
+// cell is one cell of a console table: its text, and whether the client
+// got it masked.
 type cell struct {
 	text   string
 	masked bool
-	ref    string
-}
-
-// display is the cell's visible text: the value, then its reference.
-func (c cell) display() string {
-	if c.ref != "" {
-		return c.text + " ‹" + c.ref + "›"
-	}
-	return c.text
 }
 
 // showTable prints a result in the console, under the profile's output
 // caps, so that the human sees the clear values. With masked, the result
-// as the client got it, each cell the client got masked is yellow and
-// followed by its reference name when it has one. The audit log never
-// holds row data.
+// as the client got it, each cell the client got masked is yellow. The
+// audit log never holds row data.
 func (s *Server) showTable(title string, res engine.Result, masked *engine.Result) {
 	t := render.TSVTable(res, s.profile.Limits)
 	var m render.Table
@@ -62,9 +52,6 @@ func (s *Server) showTable(title string, res engine.Result, masked *engine.Resul
 			c := cell{text: safeText(v, false)}
 			if i < len(m.Rows) && j < len(m.Rows[i]) && m.Rows[i][j] != v {
 				c.masked = true
-				if mc := m.Rows[i][j]; strings.HasPrefix(mc, "<redacted:") && strings.HasSuffix(mc, ">") {
-					c.ref = safeText(strings.TrimSuffix(strings.TrimPrefix(mc, "<redacted:"), ">"), false)
-				}
 			}
 			rows[i][j] = c
 		}
@@ -85,7 +72,7 @@ func (s *Server) showTable(title string, res engine.Result, masked *engine.Resul
 // layoutTable aligns a table in at most width columns: each column takes
 // the width of its widest cell, capped, and the widest columns are
 // narrowed first when the table does not fit. A masked column's header is
-// yellow, a masked cell yellow with its reference dimmed.
+// yellow, a masked cell yellow.
 func layoutTable(header []string, rows [][]cell, width int) []string {
 	n := len(header)
 	widths := make([]int, n)
@@ -98,7 +85,7 @@ func layoutTable(header []string, rows [][]cell, width int) []string {
 			if j >= n {
 				continue
 			}
-			widths[j] = max(widths[j], min(runeLen(c.display()), maxColWidth))
+			widths[j] = max(widths[j], min(runeLen(c.text), maxColWidth))
 			if c.masked {
 				maskedCol[j] = true
 			}
@@ -143,11 +130,8 @@ func layoutTable(header []string, rows [][]cell, width int) []string {
 			painted := ""
 			if c.masked {
 				painted = paint.Yellow(c.text)
-				if c.ref != "" {
-					painted += " " + paint.Dim("‹"+c.ref+"›")
-				}
 			}
-			cells[j] = pad(c.display(), painted, widths[j])
+			cells[j] = pad(c.text, painted, widths[j])
 		}
 		out = append(out, strings.TrimRight(strings.Join(cells, " │ "), " "))
 	}

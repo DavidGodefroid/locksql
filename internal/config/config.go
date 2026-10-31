@@ -89,9 +89,9 @@ type Limits struct {
 	// on a PII column or an aggregate of one may cover without a warning
 	// on the approval screen.
 	KAnonymity int `toml:"k_anonymity" json:"k_anonymity,omitempty"`
-	// ReferenceProbe is how many distinct cells of one result the agent may
-	// filter on, one statement each, before the console warns of equality
-	// probing; raising it is a loosening.
+	// ReferenceProbe has no effect since cell references are not
+	// supported; it is still read, so that existing configs load, and
+	// raising it is still a loosening.
 	ReferenceProbe int `toml:"reference_probe" json:"reference_probe,omitempty"`
 	// IdleTimeout ends the console session after that long without
 	// activity, MaxSession after that long in all; raising either is a

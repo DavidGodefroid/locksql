@@ -249,9 +249,6 @@ func TestKCheckINCountsEachValue(t *testing.T) {
 		"SELECT id FROM users WHERE email IN ('a') LIMIT 1": `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" = 'a'`,
 		// A value repeated is counted once.
 		"SELECT id FROM users WHERE email IN ('a', 'a') LIMIT 1": `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" = 'a'`,
-		// Placeholders mixed with literals: only the literals are counted.
-		"SELECT id FROM users WHERE email IN ('${e}', 'a', 'b') LIMIT 1": `SELECT MIN(locksql_n) FROM (SELECT COUNT(*) AS locksql_n FROM "app"."users" WHERE "app"."users"."email" = 'a' UNION ALL SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" = 'b') AS locksql_k`,
-		"SELECT id FROM users WHERE email IN ('${e}', 'a') LIMIT 1":      `SELECT COUNT(*) FROM "app"."users" WHERE "app"."users"."email" = 'a'`,
 	}
 	for sql, want := range cases {
 		a, err := analyze(t, sqlclass.Postgres, sql)
@@ -261,24 +258,6 @@ func TestKCheckINCountsEachValue(t *testing.T) {
 		if len(a.KChecks) != 2 || a.KChecks[0] != (KCheck{SQL: want}) {
 			t.Errorf("%s:\n got %+v\nwant first %q", sql, a.KChecks, want)
 		}
-	}
-	// Placeholders only: no check.
-	a, err := analyze(t, sqlclass.Postgres, "SELECT id FROM users WHERE email IN ('${e}', '${f}') LIMIT 1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(a.KChecks) != 0 {
-		t.Errorf("placeholder-only IN list: checks %+v, want none", a.KChecks)
-	}
-}
-
-func TestQuoteLiteral(t *testing.T) {
-	got, err := quoteLiteral(sqlclass.Postgres, "o'k")
-	if err != nil || got != "'o''k'" {
-		t.Errorf("quoteLiteral = %q, %v", got, err)
-	}
-	if _, err := quoteLiteral(sqlclass.Postgres, `a\b`); err == nil {
-		t.Error("a backslash was accepted")
 	}
 }
 
@@ -380,35 +359,6 @@ func TestRecursiveCTELiteralKeepsLit(t *testing.T) {
 	}
 	if a.Outputs[0].Prov.Lit {
 		t.Errorf("plain recursive column marked Lit: %+v", a.Outputs[0].Prov)
-	}
-}
-
-// LitFilter marks a statement that filters a PII column with a literal the
-// agent wrote, wherever it sits; placeholders and IS NULL do not count.
-func TestLitFilter(t *testing.T) {
-	cases := map[string]bool{
-		"SELECT email FROM users WHERE email = 'v@x.com' LIMIT 5":                                             true,
-		"SELECT email FROM users WHERE email IN ('v@x.com', 'b@x.com') LIMIT 5":                               true,
-		"SELECT email FROM users GROUP BY email HAVING email = 'v@x.com' LIMIT 5":                             true,
-		"SELECT email FROM users INTERSECT SELECT email FROM contacts WHERE email = 'v@x.com' LIMIT 5":        true,
-		"SELECT b.email FROM users a JOIN contacts b ON a.email = b.email WHERE a.email = 'v@x.com' LIMIT 5":  true,
-		"SELECT email FROM users WHERE id IN (SELECT id FROM users WHERE email = 'v@x.com') LIMIT 5":          true,
-		"SELECT email FROM users WHERE email IN ('${email}', 'v@x.com') LIMIT 5":                              true,
-		"SELECT email FROM users LIMIT 5":                                                                     false,
-		"SELECT email FROM users WHERE id = 1 LIMIT 5":                                                        false,
-		"SELECT email FROM users WHERE email IS NULL LIMIT 5":                                                 false,
-		"SELECT email FROM users WHERE email = '${email}' LIMIT 5":                                            false,
-		"SELECT email FROM users WHERE email IN ('${email}', '${other}') LIMIT 5":                             false,
-		"SELECT b.email FROM users a JOIN contacts b ON a.email = b.email WHERE a.email = '${email}' LIMIT 5": false,
-	}
-	for sql, want := range cases {
-		a, err := analyze(t, sqlclass.MySQL, sql)
-		if err != nil {
-			t.Fatalf("%s: %v", sql, err)
-		}
-		if a.LitFilter != want {
-			t.Errorf("%s: LitFilter %v, want %v", sql, a.LitFilter, want)
-		}
 	}
 }
 

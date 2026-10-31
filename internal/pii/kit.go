@@ -32,13 +32,6 @@ const DetectLimit = kpii.DetectLimit
 // MaskValue masks one non-NULL cell in mode.
 func MaskValue(v any, mode string) any { return kpii.MaskValue(v, mode) }
 
-// CellText is the text of a cell value, as compared and substituted.
-func CellText(v any) string { return kpii.CellText(v) }
-
-// RedactedRef is a redacted cell that carries a reference to its value,
-// which the console alone keeps.
-func RedactedRef(name string) string { return kpii.RedactedRef(name) }
-
 // Detects reports whether a detector would mask something in s.
 func Detects(s string, ds []Detector) bool { return kpii.Detects(s, ds) }
 

@@ -74,8 +74,8 @@
   <h2 id="life">The life of a query</h2>
   <ol class="steps prose">
     <li>The agent submits SQL with <code>locksql plan</code> (or the <code>locksql_plan</code> MCP tool). The console classifies it, parses and analyses a read down to the source column of every output, runs <code>EXPLAIN</code>, weighs the plan and returns a one-shot plan id with a verdict (<code>OK</code>, <code>WARN</code> or <code>REFUSE</code>). The plan id is valid once, for 10 minutes. A <code>REFUSE</code> verdict gives no plan id; a refused statement gets a <a href="#refusals">refusal code</a> instead.</li>
-    <li>The agent calls <code>locksql run PLAN_ID</code>. The console shows you the approval screen and waits.</li>
-    <li>On approval the console runs the statement, masks PII, caps the output and hands the rows back to the agent, framed as untrusted data. The console keeps at most 64 KiB of each cell while it reads the result, so a huge value never costs it more, and <code>cut_cells</code> tells the agent how many cells were cut.</li>
+    <li>The agent calls <code>locksql run PLAN_ID</code>. The console shows the approval screen and sends it, every literal masked, as a ticket to lockhub; the agent gets <code>pending</code> with the ticket.</li>
+    <li>Once you approve the ticket in lockhub (<code>lox approve</code>) and the agent runs it, the console runs the statement, masks PII, caps the output and hands the rows back to the agent, framed as untrusted data. The console keeps at most 64 KiB of each cell while it reads the result, so a huge value never costs it more, and <code>cut_cells</code> tells the agent how many cells were cut.</li>
   </ol>
 
   <h3 id="sequence">Message by message</h3>
@@ -86,9 +86,11 @@
     <li>Database → console: plan &amp; row estimate</li>
     <li>Console → agent: plan id + verdict (<code>OK</code> / <code>WARN</code> / <code>REFUSE</code>)</li>
     <li>Agent → console: <code>run PLAN_ID</code></li>
-    <li>Console → you: approval screen</li>
-    <li>You → console: <code>y</code></li>
-    <li>Console → database: k-anonymity counts, before the approval screen; then the statement</li>
+    <li>Console → database: k-anonymity counts</li>
+    <li>Console → lockhub: the ticket (approval screen, literals masked); console → agent: <code>pending</code></li>
+    <li>You → lockhub: approve</li>
+    <li>Agent → console: <code>run TICKET</code></li>
+    <li>Console → database: the statement</li>
     <li>Database → console: rows</li>
     <li>Console → agent: masked, capped rows (untrusted data)</li>
   </ol>
@@ -108,7 +110,7 @@
 │ PII columns touched: customers.email (select)
 │ masked outputs: email → redact
 │ PII: masked (4 column rules; detectors: email, phone, iban, card)
-╰─ Approve? [y/N]</code></pre>
+╰─ pending: ticket 01J…</code></pre>
   <h3 id="pii-read">A read that filters on personal data</h3>
   <pre tabindex="0" class="term"><code>╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
 │ requested by uid 1000 (alice) · pid 48211 (claude)
@@ -126,13 +128,11 @@
 │ ▲ k-anonymity: the PII filter matches fewer than k=5 rows (1)
 │ ▲ k-anonymity: a group covers fewer than k=5 rows (1)
 │   With a statement like this, the agent could single out one person or infer a masked value (whether an email is present, one person's amount) by cross-checking.
-╰─ Approve? [y/N]</code></pre>
+╰─ pending: ticket 01J…</code></pre>
   <h3 id="approval-rules">Approval rules</h3>
   <ul class="prose">
     <li>The screen names the requesting uid and pid (as the kernel reports them) and the process (its executable when readable, else its self-reported name, labelled as such), the relations read, the PII columns touched and in which clause (highlighted in red in the SQL), each masked output and its mode, the k-anonymity counts and the row cap.</li>
-    <li>On a production profile you type the profile name instead of <code>y</code>.</li>
-    <li>Anything else, or no answer within 5 minutes, denies the query.</li>
-    <li>Pending keystrokes are discarded before each prompt.</li>
+    <li>Nothing is asked in the console’s terminal: you approve or deny the ticket in lockhub (<code>lox approve</code>), with a reason the agent reads when you deny. On a production profile lockhub asks for the typed instance name.</li>
     <li>Requests are served one at a time; other clients wait.</li>
     <li>Only lockhub's signed decision runs a ticket; no socket method can approve.</li>
     <li>The k-anonymity counts run before the ticket goes to lockhub. Each count under <code>k_anonymity</code> adds a <code>k-anonymity</code> warning to it; nothing is refused, you decide. The warning goes to the audit log too. The agent learns nothing of the counts.</li>
@@ -230,7 +230,7 @@ store into a masked column only <code>NULL</code> or <code>DEFAULT</code>.</p>
 <caption>Mask modes</caption>
 <thead><tr><th scope="col">Mode</th><th scope="col">Output</th><th scope="col">Notes</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code>redact</code> (default)</th><td><code>&lt;redacted:rN.R.C&gt;</code></td><td>a rule without <code>mode</code> is <code>redact</code>; <code>rN.R.C</code> (result, row, column) is a reference the agent can filter on; plain <code>&lt;redacted&gt;</code> when the console cannot hold the cell</td></tr>
+<tr><th scope="row"><code>redact</code> (default)</th><td><code>&lt;redacted&gt;</code></td><td>a rule without <code>mode</code> is <code>redact</code>; no masked cell carries a reference to its value</td></tr>
 <tr><th scope="row"><code>partial</code></th><td><code>j***(12)</code></td><td>first character and length</td></tr>
 <tr><th scope="row"><code>email</code></th><td><code>j***@example.com</code></td><td>first character and domain; other values as <code>partial</code></td></tr>
 </tbody>
@@ -256,7 +256,7 @@ account that cannot read what the agent must never see.</p>
 <section aria-labelledby="blind-search">
   <h2 id="blind-search">No typed values</h2>
   <div class="prose">
-    <p>Requests are decided in lockhub, where no value is typed: a placeholder (<code>col = '${email}'</code>) or a cell reference (<code>col = '${r1.2.3}'</code>) is refused at run (<code>E_PLACEHOLDER</code>). The approval screen warns, in red and in the audit log, when the agent put a clear value in its statement.</p>
+    <p>Placeholders (<code>col = '${email}'</code>) and cell references (<code>col = '${r1.2.3}'</code>) are not supported: requests are decided in lockhub, where no value is typed, so a statement holding one is refused at plan time (<code>E_PLACEHOLDER</code>), and masked cells come back as plain <code>&lt;redacted&gt;</code>. The approval screen warns, in red and in the audit log, when the agent put a clear value in its statement.</p>
   </div>
 </section>
 
@@ -280,14 +280,14 @@ account that cannot read what the agent must never see.</p>
 <section aria-labelledby="unmask">
   <h2 id="unmask">Raw values: <code>--allow-unmask</code> and <code>:unmask</code></h2>
   <div class="prose">
-    <p>An agent can ask for unmasked PII output only when the human allowed it in the console: <code>locksql console --allow-unmask</code> at start, or <code>:unmask</code> while it runs, without a restart. <code>:unmask</code> asks <code>Allow unmasked output? [y/N]</code>; typed again, it turns unmasked output off at once and refuses the open unmask plans. It is never a single key, the status line reads <code>unmask allowed</code> while it is on, and each switch is audited (an <code>unmask</code> record). Without it, every unmask request is refused before anything runs, and the refusal is audited. It is console-only: no client or config file can turn it on. With it, each unmasked query still needs the human's approval, shown as <code>PII: UNMASKED</code> in red, and is never auto-approved. The console then prints the clear result, so you see exactly what the agent received; the audit log still holds no row data.</p>
+    <p>An agent can ask for unmasked PII output only when the human allowed it in the console: <code>locksql console --allow-unmask</code> at start, or <code>:unmask</code> while it runs, without a restart. <code>:unmask</code> asks <code>Allow unmasked output? [y/N]</code>; typed again, it turns unmasked output off at once and refuses the open unmask plans. It is never a single key, the status line reads <code>unmask allowed</code> while it is on, and each switch is audited (an <code>unmask</code> record). Without it, every unmask request is refused before anything runs, and the refusal is audited. It is console-only: no client or config file can turn it on. With it, each unmasked query still needs the human's approval, shown as <code>PII: UNMASKED</code> in red. The console then prints the clear result, so you see exactly what the agent received; the audit log still holds no row data.</p>
   </div>
 </section>
 
 <section aria-labelledby="show-results">
   <h2 id="show-results">See the rows yourself: Ctrl-O</h2>
   <div class="prose">
-    <p>Ctrl-O in the console (or <code>locksql console --show-results</code> to start that way) prints in the console, in clear, the result of each masked query it runs, as an aligned table, so you see who the rows are while the agent still gets the masked cells. The cells the agent got masked are highlighted and carry their reference (<code>‹r1.1.2›</code>); the output caps apply as for the agent. It is console-only, off by default: no client or config file can turn it on. The console warns when it goes on (in red on production), the status line fixed at the bottom of the terminal reads <code>results clear</code>, every approval screen says so, and <code>locksql status</code> reports it. The audit log still holds no row data, and the clear rows stay in your terminal's scrollback. It is unavailable when the console runs in a desktop terminal (security levels 1 and 2): the agent's account can read that window, so <code>--show-results</code> is refused and Ctrl-O leaves the results masked.</p>
+    <p>Ctrl-O in the console (or <code>locksql console --show-results</code> to start that way) prints in the console, in clear, the result of each masked query it runs, as an aligned table, so you see who the rows are while the agent still gets the masked cells. The cells the agent got masked are highlighted; the output caps apply as for the agent. It is console-only, off by default: no client or config file can turn it on. The console warns when it goes on (in red on production), the status line fixed at the bottom of the terminal reads <code>results clear</code>, every approval screen says so, and <code>locksql status</code> reports it. The audit log still holds no row data, and the clear rows stay in your terminal's scrollback. It is unavailable when the console runs in a desktop terminal (security levels 1 and 2): the agent's account can read that window, so <code>--show-results</code> is refused and Ctrl-O leaves the results masked.</p>
   </div>
 </section>
 

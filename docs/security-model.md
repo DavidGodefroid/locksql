@@ -66,14 +66,14 @@ root. Access to the Docker daemon is such a way: an agent that can run
 | Alias or expression bypass | Every output column of a read is resolved to its base source columns through aliases, functions, subqueries, CTEs (recursive ones by fixpoint), set operations, joins and `*`, and masked on that source, not on its label. Expressions and functions over PII columns are refused; aggregates other than `COUNT` are redacted (`MIN` and `MAX` included: which cell they return depends on how the values order). The result's column count and labels must match the analysis or the result is dropped; the engine's origin metadata is a second check. |
 | Predicate oracles | A PII column may only be compared for equality with a literal (`=`, `IN (literals)`, `IS NULL`) in `WHERE`/`HAVING`, or joined with `=` (also `IN (subquery)`, `USING`, `NATURAL`) to another PII column: a join with an unmasked column would copy its values where no mask applies. These atoms must be positive and reached through `AND` only: a PII atom under `NOT`, `OR` or `XOR`, and `<>`, `!=`, `NOT IN`, `IS NOT NULL`, `IS DISTINCT FROM` on a PII column, would select the complement of what the k-anonymity check counts and are refused. A scalar subquery returning a PII value cannot be a filter operand. A `UNION`, `INTERSECT` or `EXCEPT` between a PII column and a non-PII arm (a literal, an expression, an unmasked column) is refused, because `INTERSECT`, `EXCEPT` and the duplicate removal of `UNION` are equality tests no k-anonymity check counts; `UNION ALL` compares nothing and stays allowed, but `DISTINCT`, an aggregate's `DISTINCT` or `GROUP BY` over a column it mixed is refused for the same reason. `LIKE`, ranges, functions over it, `ORDER BY`, window `PARTITION BY`/`ORDER BY`, `FILTER`, `DISTINCT ON` and constant comparisons in `JOIN ... ON` are refused, so a query cannot compare it character by character with generated values. |
 | Inference through aggregates and filters | A filter, grouping, duplicate removal (`DISTINCT`) or aggregate on a PII column runs console-built `COUNT` queries (from the statement's own `FROM`, `WHERE`, `GROUP BY` and `HAVING`, shown on the approval screen) before the ticket goes to lockhub. Fewer than `k_anonymity` rows (default 5, production 10) puts a warning on the ticket: the statement could single out one person or reveal a masked value by cross-checking. Since v0.5.2 it no longer refuses: the human decides in lockhub, and the warning goes to the ticket and to the audit records' `warnings`. This is a decision aid, not a guarantee (see the limitations). The agent learns nothing of the counts: no refusal code and the same answer, whether a count is under k or not. Row estimates are hidden from the agent, a filter on a PII column has its weight verdict decided at run time on the console (`query.plan` answers `OK`; a REFUSE verdict is shown to the human on the console before the agent is told, without its reasons), and `EXPLAIN` is refused for such statements, since the planner's figures would answer the same question. |
-| Inference by equality probing | Placeholders (`'${name}'`) and cell references (`'${rN.R.C}'`) are refused at run (`E_PLACEHOLDER`): requests are decided in lockhub, where no value is typed. The console warns (approval screen and audit `warnings`, never a refusal) when the agent wrote a clear value in its statement. |
+| Inference by equality probing | Placeholders (`'${name}'`) and cell references (`'${rN.R.C}'`) are not supported: a statement holding one is refused at plan time (`E_PLACEHOLDER`), before it is analysed, since requests are decided in lockhub, where no value is typed. Masked cells come back as plain `<redacted>`, and the console keeps no value of a result. The console warns (approval screen and audit `warnings`, never a refusal) when the agent wrote a clear value in its statement. |
 | Timing and error channels | Clients get a generic failure message, never the server's text (shown on the console, redacted in the audit log). No timings are returned, and `query.run` answers on a 250 ms quantum, success or failure, once the statement is approved; refusals before approval are not quantized, except a weight refusal under a PII filter, which waits for the human's decision in lockhub. A refusal's structured form (code, retry rule, hint, span) is written by locksql: its span points into the agent's own statement and names a keyword, an operator or a name, never a literal, the database's text or a substituted value; a weight refusal under a PII filter carries its code and the code's hint only. |
 | Statement text | Some server views hold the text of past statements, literals included: `pg_stat_statements` and `pg_stat_activity` on PostgreSQL; `information_schema.PROCESSLIST`, every `performance_schema` and `sys` relation (`threads`, `events_statements_*`, `session`, `statement_analysis`, ...), `mysql.general_log` and `mysql.slow_log` on MySQL and MariaDB. The read path refuses every system schema, these included; the write path (`INSERT ... SELECT`, ...) refuses these names while mask rules exist. |
 | Prompt injection through data | Rows are framed as untrusted data in every output; the generated agent instructions say so; control and bidirectional characters are escaped in client output and on the console screen, so data cannot spoof the approval prompt. |
 | Type-ahead approval | Pending input is flushed before each prompt (`tcflush`). |
 | The agent mimics the human | In separated mode the console refuses to start as any account but `service_user`, when that account may also connect as a client, when started through `sudo`/`su` from the login session (`loginuid`) of an account that may reach the console, or when its terminal belongs to such an account (an unknown uid counts as one); a `machinectl shell` session is refused unless every running `machinectl shell` process belongs to an account outside the client group, and an SSH login from this machine is refused, since both relay the caller's terminal while naming the console account; the session or terminal of an account outside the client group, which the agent's account cannot read, is accepted, so that an administrator can hand the console off. `locksql console` run from the agent's account does not hand off: it prints the command for the console account's own session. An X11 session, where any client can read and inject input, is refused on production profiles and with `x11 = "refuse"`, and warned about otherwise. The binary and `system.toml` are root-owned; `doctor` fails on password-less `sudo` for the agent's account. |
 | Hub mode: a ticket run by another agent, or on other rows | A plan and its ticket are bound to the client's uid, the hash of the requesting agent's lea token, the policy fingerprint and the plan hash; another token is refused (`CodeWrongRequester`). **Residual**: agents of one account can read each other's token, so this catches mistakes, not a hostile agent of the same workspace. A write's run counts the rows it changed in its own transaction and rolls back past the bound shown on the ticket (stale, new ticket), and checks the plan hash before and after the statement in that transaction; **residual**: a `CREATE OR REPLACE FUNCTION` between the check after the statement and the `COMMIT` goes unseen (a very short window). |
-| Approval spoofing through the socket | Approval comes only from the console terminal; no socket method approves, and no socket method loosens policy. The approval screen names the requesting uid and pid as the kernel reports them, and the process by its executable path when the kernel lets the console read it (a process of its own account), else by its self-reported name, labelled as such. |
+| Approval spoofing through the socket | A request is approved only by lockhub's signed decision, and the console's own prompts (`:review`, `:unmask`) are answered only at its terminal; no socket method approves, and no socket method loosens policy. The approval screen names the requesting uid and pid as the kernel reports them, and the process by its executable path when the kernel lets the console read it (a process of its own account), else by its self-reported name, labelled as such. |
 | A client stuck or killed during an approval | The approval is abandoned or times out after 5 minutes; the socket keeps serving. |
 | A fake console | In separated mode clients check through peer credentials that the socket is served by `service_user`, and the socket directory is owned by it. |
 | Another local user | The socket directory is `service_user:client_group` mode 2710 on Linux (0710 on macOS), the socket 0660, and each peer is checked with `SO_PEERCRED` (Linux) or `LOCAL_PEERCRED` (macOS): the console's own uid, a member of `client_group` or an `allowed_uids` entry. |
@@ -86,7 +86,8 @@ root. Access to the Docker daemon is such a way: an agent that can run
   relations read, the PII columns touched and in which clause, the masked
   outputs and their modes, the k-anonymity counts, the row cap and the PII state;
   then, just above the prompt, a warning for each k-anonymity count under k.
-- Approval comes only from the console terminal.
+- A request is approved only by lockhub's signed decision; the console's
+  terminal answers only its own prompts (`:review`, `:unmask`).
 - locksql never rewrites SQL: what the human approves is what runs.
 - Production profiles need the profile name typed, not `y`.
 - REFUSE verdicts cannot be overridden from the console; the human has to
@@ -309,7 +310,7 @@ it append-only for the console account too.
   a CTE; a target column returned by an `INSERT` or an `UPDATE` carries both
   its own provenance and that of the values the statement stores in it. The
   rows are masked by that provenance, whatever label or origin the engine
-  reports, and carry no cell reference. Those parts follow the read rules:
+  reports. Those parts follow the read rules:
   an expression over a masked column, an `ORDER BY` of one, a set operation
   that compares one, a function outside the allowlist, a whole-row
   reference, an aggregate in `RETURNING` and anything the parser does not
@@ -346,11 +347,10 @@ it append-only for the console account too.
   other Unicode compatibility forms are not folded, and a float column is
   scanned only for integral values. Use a database account that cannot read
   what the agent must never see.
-- **Probing under the threshold.** The probing warnings do not refuse. An
-  agent that spreads equality probes through references under
-  `limits.reference_probe`, across results or sessions, can still learn which
-  cells are equal; the human reading the warnings is the control. The unmasked
-  columns of a row the agent targets can identify it, and free text without a
+- **Probing under the threshold.** The clear-value warning does not
+  refuse: an agent that writes a value it knows in an equality filter learns
+  whether it matches, under the k-anonymity warning; the human reading the
+  ticket is the control. The unmasked columns of a row the agent targets can identify it, and free text without a
   detector is not masked.
 - **Duplicate removal on chosen rows.** `DISTINCT` or `COUNT(DISTINCT ...)`
   over a PII column compares its rows with each other, so on rows the agent
@@ -364,8 +364,8 @@ it append-only for the console account too.
   under `k` refuses nothing: it warns the human on the ticket, who may
   approve anyway. A human who approves a warned statement lets the agent
   single out one person: whether an email is present, one customer's total. The structural
-  rules (equality only on PII, no `LIKE`, range or negation, masking, cell
-  references, placeholders) are unchanged and still refuse. The counts
+  rules (equality only on PII, no `LIKE`, range or negation, masking, no
+  placeholders or cell references) are unchanged and still refuse. The counts
   remain a query-set-size control, and what follows bounds what a warning
   can tell the human. Each
   constant PII filter is counted twice: the subjects of the column in its own
@@ -396,10 +396,14 @@ it append-only for the console account too.
 - **Copies and planted values at higher tiers.** A write (`INSERT ...
   SELECT`, `UPDATE ... SET`, `MERGE`) that copies a rule column into another
   column is refused, with or without `RETURNING`, and so is a write that
-  stores into a rule column anything but `NULL` or `DEFAULT`. Columns match
+  stores into a rule column anything but `NULL` or `DEFAULT`: a masked
+  column holds only values the agent never chose, since a planted value
+  would come back masked yet known to the agent, and joining that column
+  with `=` to another PII column, which no k-anonymity count covers, would
+  tell it whose value matches. Columns match
   by name, so an updatable view that renames a rule column, a trigger, or a
   value written before the rule existed (or by another client) can still put
-  a value the agent knows behind a reference. For the writes the analysis
+  a value the agent knows behind a masked cell. For the writes the analysis
   above reads, these checks also follow provenance: a value stored from a
   query (`INSERT ... SELECT`, a subquery in `SET` or `VALUES`, an
   `ON CONFLICT` update) that derives from a masked column through an alias,

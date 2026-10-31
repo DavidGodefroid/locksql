@@ -209,7 +209,7 @@ func FormatPlan(w io.Writer, p ipc.PlanResult) {
 		kv("unmask", "yes: the human must approve unmasked output")
 	}
 	kv("sql", clean(p.SQL))
-	fmt.Fprintf(w, "next: locksql run --profile %s %s  (one-shot, valid 10 min; the human approves it in the console)\n",
+	fmt.Fprintf(w, "next: locksql run --profile %s %s  (one-shot, valid 10 min; it answers pending with a ticket the human decides in lockhub)\n",
 		p.Profile, p.PlanID)
 }
 
@@ -386,7 +386,7 @@ func clean(s string) string {
 
 func allowedOff(b bool) string {
 	if b {
-		return "allowed (each query approved in the console)"
+		return "allowed (each query decided in lockhub)"
 	}
 	return "off (allowed only by the human in the console: --allow-unmask or :unmask)"
 }

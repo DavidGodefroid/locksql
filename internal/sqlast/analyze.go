@@ -79,10 +79,6 @@ type Env struct {
 	// Masking is false for an unmask plan: provenance and functions are
 	// still checked, but not the PII usage rules.
 	Masking bool
-	// Value resolves a placeholder: the value the human typed for a name, or
-	// the value of a referenced cell. ok is false when the console does not
-	// know it (yet, for a typed name).
-	Value func(kind ValueKind, name string) (value string, ok bool)
 	// WriteFuncs also allows the write built-ins (write_functions =
 	// "allowlist", see CheckWriteFunctions).
 	WriteFuncs bool
@@ -113,13 +109,6 @@ type KCheck struct {
 	Grouped bool
 }
 
-// Replacement substitutes a token literal with the value it stands for in
-// the statement that runs.
-type Replacement struct {
-	Span Span
-	Text string
-}
-
 // Analysis is what Analyze finds.
 type Analysis struct {
 	Outputs []Output
@@ -132,25 +121,8 @@ type Analysis struct {
 	// PIIFilter is set when a PII column is compared with a constant: row
 	// estimates must not reach the agent.
 	PIIFilter bool
-	// LitFilter is set when a PII column is compared for equality with a
-	// literal the agent wrote (not a placeholder, not IS NULL), anywhere in
-	// the statement. Its results carry no cell references: the agent chose
-	// the value behind them, and the rows it selected may be linked to the
-	// literal through any join, subquery or set operation.
-	LitFilter    bool
-	Replacements []Replacement
-	// Values are the placeholders compared with PII columns.
-	Values []ValueUse
-	// KeyFilters are the non-PII columns compared with = and a literal in
-	// WHERE (the console checks whether one is a unique key).
-	KeyFilters []Source
 	// Funcs are the functions the statement calls, folded, each once.
 	Funcs []string
-}
-
-// RunSQL is the statement with its replacements applied.
-func (a *Analysis) RunSQL(sql string) string {
-	return applyReplacements(sql, Span{0, len(sql)}, a.Replacements)
 }
 
 // Masked reports whether some output is masked.
@@ -233,8 +205,8 @@ func Analyze(st *Statement, env Env) (*Analysis, error) {
 	if env.Rule == nil {
 		env.Rule = func(Source) (string, bool) { return "", false }
 	}
-	if env.Value == nil {
-		env.Value = func(ValueKind, string) (string, bool) { return "", false }
+	if HasPlaceholder(st.Dialect, st.SQL) {
+		return nil, refuse(refusal.Placeholder, PlaceholderRefusal)
 	}
 	an := &analyzer{env: env, st: st, d: st.Dialect, a: &Analysis{}, relations: map[string]bool{}, uses: map[Use]bool{}}
 	var cols []column
@@ -247,10 +219,10 @@ func Analyze(st *Statement, env Env) (*Analysis, error) {
 	if err != nil {
 		return nil, err
 	}
-	if an.writes && (an.a.PIIFilter || len(an.a.KChecks) > 0 || len(an.a.Values) > 0) {
+	if an.writes && (an.a.PIIFilter || len(an.a.KChecks) > 0) {
 		// The count would run before the statement, with its WITH: the
 		// data-modifying CTEs would run twice.
-		return nil, refuse(refusal.MaskedFilter, "a statement that modifies data cannot filter, group or aggregate a PII column under the k-anonymity check (nor take placeholders): read the rows in a separate statement")
+		return nil, refuse(refusal.MaskedFilter, "a statement that modifies data cannot filter, group or aggregate a PII column under the k-anonymity check: read the rows in a separate statement")
 	}
 	for _, c := range cols {
 		label := ""
@@ -278,9 +250,6 @@ func Analyze(st *Statement, env Env) (*Analysis, error) {
 		}
 		return an.a.Uses[i].Clause < an.a.Uses[j].Clause
 	})
-	if err := an.strayPlaceholders(); err != nil {
-		return nil, err
-	}
 	return an.a, nil
 }
 
@@ -1396,7 +1365,7 @@ func (an *analyzer) call(f *FuncCall, sc *scope, clause string) (Prov, error) {
 		// MIN and MAX return a real cell, but the order of the values picks
 		// which one: over a PII column the result carries an ordering a
 		// plain reference does not, so it is an aggregate (plain
-		// <redacted>, no cell reference, no comparison). ANY_VALUE picks
+		// <redacted>, no comparison). ANY_VALUE picks
 		// none by order.
 		if arg.Sensitive && !strings.EqualFold(f.Name, "ANY_VALUE") {
 			arg.Kind = max(arg.Kind, KindAggregate)
@@ -1578,21 +1547,9 @@ func (an *analyzer) filter(e Expr, sc *scope, clause string, pos bool) (err erro
 	case *In:
 		return an.inFilter(e, sc, clause, pos)
 	case *Between:
-		// Checked as a value (a PII operand is refused there); a positive
-		// range between constants on a plain column is a key filter.
-		p, err := an.value(e, sc, clause)
-		if err != nil {
-			return err
-		}
-		if ref, ok := e.X.(*ColumnRef); ok && !e.Not && !p.Sensitive {
-			// Resolved again: a plain column, so no side effect repeats.
-			x, err := an.value(ref, sc, clause)
-			if err != nil {
-				return err
-			}
-			an.keyFilterOf(x, clause, pos, e.Lo, e.Hi)
-		}
-		return nil
+		// Checked as a value (a PII operand is refused there).
+		_, err := an.value(e, sc, clause)
+		return err
 	case *Exists:
 		// The subquery is a node of its own: its filters start positive
 		// and its k-anonymity checks run on their own.
@@ -1697,185 +1654,23 @@ func (an *analyzer) constFilter(sc *scope, clause string, col Prov, preds ...str
 	return nil
 }
 
-// valueLiterals records the placeholders among lits, compared with the PII
-// column col, and plans the substitution of those whose value is known.
-// human reports that every literal is a placeholder: the agent chose none
-// of the values, so the filter needs no k-anonymity check. agent are the
-// literals that are not placeholders, the values the agent chose.
-func (an *analyzer) valueLiterals(col Prov, lits []Expr, inList bool) (human bool, agent []Expr, err error) {
-	human = len(lits) > 0
-	var target Source
-	for _, s := range col.Sources {
-		if _, ok := an.env.Rule(s); ok {
-			target = s
-			break
-		}
-	}
-	for _, lit := range lits {
-		e := lit
-		for {
-			p, ok := e.(*Paren)
-			if !ok {
-				break
-			}
-			e = p.X
-		}
-		l, ok := e.(*Literal)
-		if !ok || l.Kind != LitString {
-			human = false
-			agent = append(agent, lit)
-			continue
-		}
-		body, ok := unquote(an.d, l.Text)
-		if !ok {
-			human = false
-			agent = append(agent, lit)
-			continue
-		}
-		kind, name, isPH, valid := ParsePlaceholder(body)
-		if !isPH {
-			human = false
-			agent = append(agent, lit)
-			continue
-		}
-		if !valid {
-			return false, nil, refusef(refusal.Placeholder, "malformed placeholder %q: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}'", body)
-		}
-		if an.dry == 0 {
-			an.a.Values = append(an.a.Values, ValueUse{Kind: kind, Name: name, Column: target, InList: inList, Span: l.Sp})
-		}
-		value, known := an.env.Value(kind, name)
-		if !known {
-			if kind == ValueRef {
-				return false, nil, refusef(refusal.Placeholder, "unknown reference %s: it is not from this console session, or its result is too old", name)
-			}
-			continue // the console asks the human before the run
-		}
-		q, err := quoteLiteral(an.d, value)
-		if err != nil {
-			if kind == ValueRef {
-				// The agent never saw this value: the refusal must not
-				// tell it what the value holds.
-				return false, nil, refusef(refusal.Placeholder, "reference %s cannot be substituted", name)
-			}
-			return false, nil, err
-		}
-		if an.dry == 0 {
-			an.a.Replacements = append(an.a.Replacements, Replacement{Span: l.Sp, Text: q})
-		}
-	}
-	return human, agent, nil
-}
-
-// humanFilter is a PII filter whose values all come from placeholders: no
-// k-anonymity check, but row estimates stay hidden from the agent.
-func (an *analyzer) humanFilter(clause string) error {
-	if clause == "join" {
-		return refuse(refusal.Placeholder, "compare PII columns with placeholders in WHERE, not in a JOIN condition")
-	}
-	an.a.PIIFilter = an.a.PIIFilter || an.dry == 0
-	return nil
-}
-
-// litFilter notes a PII filter on a literal the agent wrote.
-func (an *analyzer) litFilter() {
-	an.a.LitFilter = an.a.LitFilter || an.dry == 0
-}
-
-// keyFilter records a non-PII column compared with = and a literal in
-// WHERE.
-func (an *analyzer) keyFilter(op string, l, r Prov, le, re Expr, clause string, pos bool) {
-	if op != "=" {
-		return
-	}
-	col := l
-	if l.Kind != KindIdentity {
-		col = r
-		re = le
-	}
-	an.keyFilterOf(col, clause, pos, re)
-}
-
-// keyFilterOf records col as a key filter when the positive WHERE atom
-// pins it to constants: = a literal, IN (literals) or BETWEEN two
-// constants all narrow it to as few rows as a unique key holds values.
-func (an *analyzer) keyFilterOf(col Prov, clause string, pos bool, consts ...Expr) {
-	if an.dry > 0 || clause != "where" || !pos || col.Kind != KindIdentity || col.Sensitive || len(consts) == 0 {
-		return
-	}
-	for _, c := range consts {
-		if !isConstant(c) {
-			return
-		}
-	}
-	for _, s := range col.Sources {
-		if !slices.Contains(an.a.KeyFilters, s) {
-			an.a.KeyFilters = append(an.a.KeyFilters, s)
-		}
-	}
-}
-
-// strayPlaceholders refuses a placeholder that did not end up compared
-// with a PII column: anywhere else its value could come back unmasked.
-func (an *analyzer) strayPlaceholders() error {
-	lits, err := placeholderLits(an.d, an.st.SQL)
-	if err != nil {
-		return refuse(refusal.Placeholder, "the statement could not be checked for placeholders")
-	}
-	for _, l := range lits {
-		if !l.plain {
-			// E'...', $$...$$ and the like are never substituted: a
-			// placeholder written that way is malformed.
-			return refusef(refusal.Placeholder, "malformed placeholder %s: write '${name}' (a-z, 0-9, _; 32 at most) or '${rN.R.C}' as a plain single-quoted string", l.text)
-		}
-		if !slices.ContainsFunc(an.a.Values, func(v ValueUse) bool { return v.Span.Pos == l.pos }) {
-			return refuse(refusal.Placeholder, "a placeholder may only be compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")
-		}
-	}
-	return nil
-}
-
 // HasPlaceholder reports whether sql holds a placeholder: a plain string
 // literal '${...}', or "${" in any other string form. A statement that
 // cannot be lexed is reported as holding one.
 func HasPlaceholder(d sqlclass.Dialect, sql string) bool {
-	lits, err := placeholderLits(d, sql)
-	return err != nil || len(lits) > 0
-}
-
-// phLit is a string literal of a statement that is or may be a placeholder.
-type phLit struct {
-	pos  int
-	text string
-	// plain is set for a plain single-quoted string whose body has the
-	// '${...}' shape; otherwise the literal is another string form that
-	// holds "${".
-	plain bool
-}
-
-// placeholderLits lists the string literals of sql that are placeholders.
-func placeholderLits(d sqlclass.Dialect, sql string) ([]phLit, error) {
 	toks, err := sqlclass.Lex(d, sql)
 	if err != nil {
-		return nil, err
+		return true
 	}
-	var out []phLit
 	for _, t := range toks {
 		if t.Kind != sqlclass.TokString {
 			continue
 		}
-		body, ok := unquote(d, t.Text)
-		if !ok {
-			if strings.Contains(t.Text, "${") {
-				out = append(out, phLit{pos: t.Pos, text: t.Text})
-			}
-			continue
-		}
-		if _, _, isPH, _ := ParsePlaceholder(body); isPH {
-			out = append(out, phLit{pos: t.Pos, text: t.Text, plain: true})
+		if body, ok := unquote(d, t.Text); ok && isPlaceholder(body) || !ok && strings.Contains(t.Text, "${") {
+			return true
 		}
 	}
-	return out, nil
+	return false
 }
 
 // quoteIdent quotes a catalog name as an identifier of the dialect.
@@ -1889,9 +1684,8 @@ func (an *analyzer) quoteIdent(name string) string {
 
 // locate points a refusal that has no position yet at e: the innermost
 // node whose check failed. The token is e's operator or keyword, or the
-// column or function name as the agent wrote it; never a literal, and
-// never text with placeholder values substituted (an.st.SQL is the
-// agent's statement as sent).
+// column or function name as the agent wrote it; never a literal (an.st.SQL
+// is the agent's statement as sent).
 func (an *analyzer) locate(err error, e Expr) error {
 	if err == nil || e == nil {
 		return err
@@ -1949,9 +1743,9 @@ func leadingName(src string) string {
 	return src[:n]
 }
 
-// frag is the text of sp with the token replacements applied.
+// frag is the text of sp in the statement.
 func (an *analyzer) frag(sp Span) string {
-	return applyReplacements(an.st.SQL, sp, an.a.Replacements)
+	return an.st.SQL[sp.Pos:sp.End]
 }
 
 // comparison checks l op r in a filter. A PII column may be compared for
@@ -1968,7 +1762,6 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 		return err
 	}
 	if !an.env.Masking || !l.Sensitive && !r.Sensitive {
-		an.keyFilter(op, l, r, le, re, clause, pos)
 		return nil
 	}
 	if l.Sensitive && l.Kind != KindIdentity || r.Sensitive && r.Kind != KindIdentity {
@@ -1992,14 +1785,6 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 		if !isConstant(otherExpr) {
 			return refusef(refusal.MaskedFilter, "a PII column (%s) may only be compared with a literal", piiNames(col))
 		}
-		human, _, err := an.valueLiterals(col, []Expr{otherExpr}, false)
-		if err != nil {
-			return err
-		}
-		if human {
-			return an.humanFilter(clause)
-		}
-		an.litFilter()
 		return an.constFilter(sc, clause, col, op+" "+an.frag(otherExpr.Span()))
 	case KindIdentity:
 		if !other.Sensitive {
@@ -2104,9 +1889,6 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 		listProv = an.mix(listProv, p)
 	}
 	if !an.env.Masking || !x.Sensitive && !listProv.Sensitive {
-		if !e.Not && !listProv.Sensitive {
-			an.keyFilterOf(x, clause, pos, e.List...)
-		}
 		return nil
 	}
 	if x.Sensitive && x.Kind != KindIdentity || listProv.Sensitive {
@@ -2123,18 +1905,9 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 			return refusef(refusal.MaskedFilter, "a PII column (%s) may only be tested against a list of literals", piiNames(x))
 		}
 	}
-	human, agent, err := an.valueLiterals(x, e.List, true)
-	if err != nil {
-		return err
-	}
-	if human {
-		return an.humanFilter(clause)
-	}
-	an.litFilter()
-	// Each value the agent wrote is counted apart; placeholder values are
-	// the human's.
+	// Each value is counted apart.
 	var preds []string
-	for _, it := range agent {
+	for _, it := range e.List {
 		if p := "= " + an.frag(it.Span()); !slices.Contains(preds, p) {
 			preds = append(preds, p)
 		}
@@ -2151,8 +1924,8 @@ func unquote(d sqlclass.Dialect, text string) (string, bool) {
 }
 
 // StringValue returns the value of a string-literal token ('...', "..." in
-// MySQL, E'...', N'...', $tag$...$tag$), or false for any other text. Unlike
-// the substitution path it does not refuse backslashes: it serves warnings.
+// MySQL, E'...', N'...', $tag$...$tag$), or false for any other text. It
+// serves warnings.
 func StringValue(d sqlclass.Dialect, text string) (string, bool) {
 	if len(text) >= 2 && text[0] == '$' {
 		if i := strings.Index(text[1:], "$"); i >= 0 {
@@ -2171,16 +1944,6 @@ func StringValue(d sqlclass.Dialect, text string) (string, bool) {
 	}
 	q := string(text[0])
 	return strings.ReplaceAll(text[1:len(text)-1], q+q, q), true
-}
-
-// quoteLiteral quotes a value as a string literal of the dialect. Values
-// with a backslash or a NUL are refused: their meaning depends on server
-// settings.
-func quoteLiteral(d sqlclass.Dialect, v string) (string, error) {
-	if strings.ContainsAny(v, "\\\x00") {
-		return "", refuse(refusal.Placeholder, "the value behind this token holds a backslash or a NUL; it cannot be substituted safely")
-	}
-	return "'" + strings.ReplaceAll(v, "'", "''") + "'", nil
 }
 
 // joinEquality checks the equality of a USING or NATURAL join: a PII column
@@ -2353,7 +2116,7 @@ func (an *analyzer) withPrefix() string {
 	for _, w := range an.withs {
 		recursive = recursive || w.Recursive
 		for _, c := range w.CTEs {
-			parts = append(parts, applyReplacements(an.st.SQL, c.Sp, an.a.Replacements))
+			parts = append(parts, an.frag(c.Sp))
 		}
 	}
 	head := "WITH "
@@ -2361,25 +2124,6 @@ func (an *analyzer) withPrefix() string {
 		head = "WITH RECURSIVE "
 	}
 	return head + strings.Join(parts, ", ")
-}
-
-// applyReplacements returns sql[sp] with the replacements inside sp
-// applied.
-func applyReplacements(sql string, sp Span, reps []Replacement) string {
-	var b strings.Builder
-	pos := sp.Pos
-	sorted := slices.Clone(reps)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Span.Pos < sorted[j].Span.Pos })
-	for _, r := range sorted {
-		if r.Span.Pos < sp.Pos || r.Span.End > sp.End || r.Span.Pos < pos {
-			continue
-		}
-		b.WriteString(sql[pos:r.Span.Pos])
-		b.WriteString(r.Text)
-		pos = r.Span.End
-	}
-	b.WriteString(sql[pos:sp.End])
-	return b.String()
 }
 
 // String describes a Kind.

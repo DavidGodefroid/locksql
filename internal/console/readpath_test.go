@@ -378,25 +378,6 @@ func TestNoReferenceForLiteralColumn(t *testing.T) {
 	}
 }
 
-// The plan of EXPLAIN quotes the statement's literals: with a placeholder
-// it would hand the agent the value behind it.
-func TestExplainWithPlaceholderRefused(t *testing.T) {
-	h := newHarness(t, uatProfile())
-	pr := h.plan(t, "SELECT id, email, note FROM users WHERE id = 1 LIMIT 1", false)
-	h.io.answers = []string{"y"}
-	h.okRun(t, pr.PlanID, nil)
-	for _, q := range []string{
-		"EXPLAIN SELECT id FROM users WHERE email = '${r1.1.2}' LIMIT 1",
-		"EXPLAIN SELECT id FROM users WHERE email = '${email}' LIMIT 1",
-	} {
-		resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
-		wantCode(t, resp, ipc.CodeRefused)
-		if !strings.Contains(resp.Error.Message, "EXPLAIN") {
-			t.Errorf("%s: refusal %q", q, resp.Error.Message)
-		}
-	}
-}
-
 // A UNION arm of an unmasked column, or an aggregate of a PII column, gets
 // no reference: the agent may know the value behind it.
 func TestNoReferenceForMixedOrAggregateColumn(t *testing.T) {
@@ -418,14 +399,14 @@ func TestNoReferenceForMixedOrAggregateColumn(t *testing.T) {
 			}
 		}
 	}
-	// A plain column keeps its references.
+	// A plain column is plain <redacted> too: no cell carries a reference.
 	h := newHarness(t, uatProfile())
 	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "email"}}, Rows: [][]any{{"alice@example.com"}}}
 	pr := h.plan(t, "SELECT email FROM users WHERE id = 1 LIMIT 5", false)
 	h.io.answers = []string{"y"}
 	var rr ipc.RunResult
 	h.okRun(t, pr.PlanID, &rr)
-	if rr.Rows[0][0] != "<redacted:r1.1.1>" {
+	if rr.Rows[0][0] != "<redacted>" {
 		t.Errorf("plain column: %v", rr.Rows[0])
 	}
 }

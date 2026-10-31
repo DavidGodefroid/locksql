@@ -107,12 +107,10 @@ const guidance = "\n\nSafety rules: use locksql only when the user explicitly as
 // instructions are the server instructions shown to the model.
 const instructions = "locksql gives read access (or more, if the human's policy allows) to a database through a console the human runs in a terminal. " +
 	"Workflow: locksql_status, then locksql_list_tables / locksql_describe, then locksql_plan with one SQL statement, then locksql_run with the plan_id; " +
-	"the human approves each run in the console. A policy can only be changed by the human: locksql_request_change merely queues a proposal. " +
+	"locksql_run answers pending with a ticket the human decides in lockhub; run the ticket once told it is decided. A policy can only be changed by the human: locksql_request_change merely queues a proposal. " +
 	"Statements are parsed and every column resolved to its source: PII columns may be selected (masked), counted or aggregated, joined with = and filtered with =, IN or IS NULL against literals; " +
 	"keep filters, groups and aggregates on PII broad: when one covers fewer than k rows (k-anonymity) the human is warned before approving and may deny the run. " +
-	"To filter a PII column on a value you do not know, never ask the user to type it in the chat: write a placeholder, col = '${name}' or col IN ('${a}', '${b}') (name: a-z, 0-9, _), and the human types the value in the console; reuse a name listed in the plan's values for the same value, pick a new name for another one. " +
-	"Redacted cells come back as <redacted:rN.R.C>; filter on such a cell with col = '${rN.R.C}'. Placeholders work only compared with a PII column. " +
-	"A statement that filters a PII column on a literal you wrote returns plain <redacted> cells, without references; at write tiers a masked column may only be set to NULL or DEFAULT. " +
+	"Masked cells come back as <redacted> and cannot be filtered on; placeholders ('${...}') are not supported and are refused (E_PLACEHOLDER). Never ask the user to type a PII value in the chat; at write tiers a masked column may only be set to NULL or DEFAULT. " +
 	"If no console runs, ask the user to run locksql in a separate terminal; never start one yourself. Never edit the locksql config, and never reach a database with mysql, psql, sqlite3, a driver or a container shell." + guidance
 
 // Tool inputs.
@@ -132,7 +130,7 @@ type (
 	PlanIn struct {
 		Profile string `json:"profile,omitempty" jsonschema:"Profile name from the locksql config. Optional when the server was started with --profile or exactly one profile is configured."`
 		DB      string `json:"db,omitempty" jsonschema:"Database. Defaults to the profile's database."`
-		SQL     string `json:"sql" jsonschema:"Exactly one SELECT, WITH ... SELECT or EXPLAIN SELECT (or a write if the tier allows). A SELECT needs a LIMIT. PII columns only plainly, counted/aggregated, joined with = or filtered with =, IN or IS NULL against literals. PII columns may be compared with placeholders '${name}' (typed by the human) or '${rN.R.C}' (a redacted cell). No bind parameters, no statement chaining."`
+		SQL     string `json:"sql" jsonschema:"Exactly one SELECT, WITH ... SELECT or EXPLAIN SELECT (or a write if the tier allows). A SELECT needs a LIMIT. PII columns only plainly, counted/aggregated, joined with = or filtered with =, IN or IS NULL against literals. No placeholders ('${...}'), no bind parameters, no statement chaining."`
 		Unmask  bool   `json:"unmask,omitempty" jsonschema:"Ask the human to approve unmasked PII output. Only when the user explicitly needs the raw values. Refused unless the human allowed it in the console (--allow-unmask or :unmask; see locksql_status)."`
 		Intent  string `json:"intent,omitempty" jsonschema:"One line (max 200 bytes) telling the human why this query is needed; it is shown on the approval screen next to the SQL. Treated as untrusted text."`
 	}
@@ -419,7 +417,7 @@ func (t *tools) plan(ctx context.Context, _ *mcp.CallToolRequest, in PlanIn) (*m
 				w.WriteString(l)
 			}
 		}
-		fmt.Fprintf(w, "next: show this plan to the user, then call locksql_run with plan_id %s (one-shot, valid 10 min; the human approves it in the console)\n", r.PlanID)
+		fmt.Fprintf(w, "next: show this plan to the user, then call locksql_run with plan_id %s (one-shot, valid 10 min; it answers pending with a ticket the human decides in lockhub)\n", r.PlanID)
 	}), PlanOut{PlanResult: r}, nil
 }
 
