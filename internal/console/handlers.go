@@ -96,30 +96,18 @@ func (s *Server) masking() bool {
 // errText is the text of a statement error for the client, the console and
 // the audit log. With masking on, a value the server quotes in its message
 // (a failed cast in a WHERE clause) is redacted: it reaches no result row,
-// so neither the rules nor the detectors would mask it otherwise. The
-// values substituted for the placeholders of pl are removed.
-func (s *Server) errText(err error, sql string, unmask bool, pl *plan) string {
-	msg := secrets.Sanitize(err, s.planValues(pl)...)
+// so neither the rules nor the detectors would mask it otherwise.
+func (s *Server) errText(err error, sql string, unmask bool) string {
+	msg := secrets.Sanitize(err)
 	if unmask || !s.masking() {
 		return msg
 	}
 	return pii.RedactMessage(msg, sql, s.detectors)
 }
 
-// auditErrText is the text of a statement error for the audit log. When
-// the plan substituted values, none of the database's text is kept: it may
-// echo a value in a form no scrubbing recognises (cut, re-quoted).
+// auditErrText is the text of a statement error for the audit log.
 func (s *Server) auditErrText(err error, pl *plan) string {
-	if pl.an == nil || len(pl.an.Values) == 0 {
-		return s.errText(err, pl.st.SQL, false, pl)
-	}
-	switch {
-	case errors.Is(err, engine.ErrConnLost):
-		return "the database connection was lost"
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
-		return "statement interrupted"
-	}
-	return "statement refused by the database (the text is withheld: the statement holds placeholder values)"
+	return s.errText(err, pl.st.SQL, false)
 }
 
 // failedPlan is failed for an error raised while serving pl: the text
@@ -128,7 +116,7 @@ func (s *Server) failedPlan(id int64, what string, err error, pl *plan) ipc.Resp
 	if errors.Is(err, engine.ErrConnLost) {
 		return s.failed(id, what, err)
 	}
-	return errResp(id, ipc.CodeInternal, what+": "+s.errText(err, pl.st.SQL, false, pl))
+	return errResp(id, ipc.CodeInternal, what+": "+s.errText(err, pl.st.SQL, false))
 }
 
 // checkDB resolves the database of a request: the given one, or the
@@ -270,7 +258,7 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	return okResp(req.ID, ipc.PlanResult{
 		PlanID: pl.id, Profile: s.profile.Name, Host: s.host(), DB: db, SQL: pl.st.SQL,
 		Class: class, Verdict: verdict, Summary: summary, Reasons: reasons, Unmask: pl.unmask,
-		Values: s.typedNames(), PlanHash: pl.hash,
+		PlanHash: pl.hash,
 	})
 }
 
@@ -312,10 +300,11 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 		return nil, ptr(s.refuse(ctx, id, p.Intent, db, st.SQL, class, "", p.SQL, refusal.Newf(refusal.Tier,
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier)))
 	}
-	if st.Class != sqlclass.Read && sqlast.HasPlaceholder(s.dialect, st.SQL) {
-		// A write is never analysed for placeholders: it would run with
-		// the literal text '${...}'.
-		return nil, ptr(s.refuse(ctx, id, p.Intent, db, st.SQL, class, "", p.SQL, refusal.New(refusal.Placeholder, "placeholders are only allowed in read statements, compared with a PII column: col = '${name}' or col IN ('${a}', '${b}')")))
+	if sqlast.HasPlaceholder(s.dialect, st.SQL) {
+		// Placeholders and cell references are not supported: refused
+		// before anything is analysed, so that no value is looked up and
+		// a write never runs with the literal text '${...}'.
+		return nil, ptr(s.refuse(ctx, id, p.Intent, db, st.SQL, class, "", p.SQL, refusal.New(refusal.Placeholder, sqlast.PlaceholderRefusal)))
 	}
 	sess, r := s.session(ctx, id)
 	if r != nil {
@@ -498,7 +487,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 			return s.refuse(ctx, req.ID, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, refusal.New(refusal.Stale, errStale{}.Error()))
 		}
 	}
-	pl.warnings = s.warnings(ctx, sess, pl)
+	pl.warnings = s.warnings(pl)
 	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask, Warnings: pl.warnings, Intent: pl.intent})
 
 	s.screen(ctx, pl)
@@ -568,23 +557,6 @@ func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session,
 		s.println(paint.Fail("plan expired while waiting for approval: not run"))
 		return errResp(id, ipc.CodeNoSuchPlan, "the plan expired while waiting for approval; plan the query again")
 	}
-	if pl.an != nil && len(pl.an.Values) > 0 {
-		// The values are known now: analyse again, so that the statement
-		// carries them. pl.st.SQL is the statement as the agent wrote it,
-		// placeholders included: the audit keeps it.
-		if r, err := s.analyzeRead(ctx, sess, pl, pl.st.SQL); err != nil || r != nil {
-			if err != nil {
-				// Approved already: the failure is audited like a run's.
-				s.auditRunFailed(rec, s.auditErrText(err, pl))
-				return s.failedPlan(id, "plan", err, pl)
-			}
-			return s.refuseWarned(ctx, id, pl, class, r)
-		}
-		if missing, _ := s.placeholders(pl); len(missing) > 0 {
-			return s.refuseWarned(ctx, id, pl, class, refusal.New(refusal.Placeholder, "a placeholder has no value"))
-		}
-	}
-
 	// A function or operator created since the plan would run instead of
 	// the built-in: look them up again.
 	if r, err := s.checkShadows(ctx, sess, pl.db, pl.shadow); err != nil || r != nil {
@@ -642,7 +614,7 @@ func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session,
 	if err != nil {
 		// The audit log never holds row data, even for an unmask run.
 		s.auditRunFailed(rec, s.auditErrText(err, pl))
-		s.println(paint.Fail("failed: " + safeText(s.errText(err, pl.st.SQL, false, pl), false)))
+		s.println(paint.Fail("failed: " + safeText(s.errText(err, pl.st.SQL, false), false)))
 		if errors.Is(err, engine.ErrConnLost) {
 			return s.failed(id, "statement failed", err)
 		}

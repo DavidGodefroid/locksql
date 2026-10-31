@@ -4,7 +4,6 @@ package integration
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -16,12 +15,11 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 )
 
-// assertPlaceholderRefused runs, through a console server on a real
+// assertPlaceholderRefused plans, through a console server on a real
 // engine, a typed placeholder on the masked big.email and references to
-// cells: no value is typed in lockhub, so the placeholder's run is refused
-// (E_PLACEHOLDER) before anything reaches the hub or the engine, and a
-// reference, which no result of the session made, is refused at plan
-// time. The row holding the value is never found.
+// cells: neither is supported, so each is refused at plan time
+// (E_PLACEHOLDER, saying so) before anything reaches the hub or the
+// engine. The row holding the value is never found.
 func assertPlaceholderRefused(t *testing.T, s engine.Session, rules pii.Rules) {
 	t.Helper()
 	call := consoleServer(t, s, "app", rules, config.TierRead, []string{"email"})
@@ -31,22 +29,8 @@ func assertPlaceholderRefused(t *testing.T, s engine.Session, rules pii.Rules) {
 		"SELECT id FROM big WHERE email IN ('${r3.1.2}') LIMIT 5",
 	} {
 		resp := call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
-		if strings.Contains(q, "${r") {
-			if resp.Error == nil || !strings.Contains(resp.Error.Message, "unknown reference") {
-				t.Errorf("%s: plan %s %+v, want an unknown reference", q, resp.Result, resp.Error)
-			}
-			continue
-		}
-		if resp.Error != nil {
-			t.Fatalf("%s: plan: %s", q, resp.Error.Message)
-		}
-		var pr ipc.PlanResult
-		if err := json.Unmarshal(resp.Result, &pr); err != nil {
-			t.Fatal(err)
-		}
-		resp = call(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
-		if resp.Error == nil || resp.Error.Data == nil || resp.Error.Data.Code != "E_PLACEHOLDER" {
-			t.Errorf("%s: run %s %+v, want E_PLACEHOLDER", q, resp.Result, resp.Error)
+		if resp.Error == nil || resp.Error.Data == nil || resp.Error.Data.Code != "E_PLACEHOLDER" || !strings.Contains(resp.Error.Message, "not supported") {
+			t.Errorf("%s: plan %s %+v, want E_PLACEHOLDER (not supported)", q, resp.Result, resp.Error)
 		}
 		if resp.Error != nil && strings.Contains(resp.Error.Message, "brien") {
 			t.Errorf("%s: the refusal names the value: %q", q, resp.Error.Message)

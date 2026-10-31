@@ -151,13 +151,6 @@ func (s *Server) readDetails(pl *plan, add func(string)) {
 		if len(masks) > 0 {
 			add("masked outputs: " + safeText(strings.Join(masks, ", "), false))
 		}
-		_, reused := s.placeholders(pl)
-		for _, n := range reused {
-			add(fmt.Sprintf("${%s} = value typed at %s", n, s.typed[n].at.Format("15:04")))
-		}
-		if missing, _ := s.placeholders(pl); len(missing) > 0 {
-			add("values to type: ${" + strings.Join(missing, "}, ${") + "}")
-		}
 		if k := s.profile.Limits.KAnonymity; k > 1 {
 			for _, c := range an.KChecks {
 				add(fmt.Sprintf("k-anonymity count (k=%d): %s", k, safeText(c.SQL, false)))

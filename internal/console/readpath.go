@@ -174,13 +174,6 @@ func (s *Server) astEnv(ctx context.Context, sess engine.Session, db string, unm
 			return s.rules.Mode(src.DB, src.Table, src.Column)
 		},
 		Masking: !unmask,
-		Value: func(kind sqlast.ValueKind, name string) (string, bool) {
-			if kind == sqlast.ValueRef {
-				return s.refs.get(name)
-			}
-			tv, ok := s.typed[name]
-			return tv.value, ok
-		},
 	}
 }
 
@@ -208,7 +201,7 @@ func (s *Server) readPlan(ctx context.Context, sess engine.Session, pl *plan, sq
 		if errors.Is(err, engine.ErrConnLost) {
 			return nil, err
 		}
-		s.println("EXPLAIN failed: " + safeText(s.errText(err, pl.runSQL, false, pl), false))
+		s.println("EXPLAIN failed: " + safeText(s.errText(err, pl.runSQL, false), false))
 		return refusal.New(refusal.Engine, "EXPLAIN failed: "+genericFailure), nil
 	}
 	pl.explain = &ep
@@ -218,7 +211,7 @@ func (s *Server) readPlan(ctx context.Context, sess engine.Session, pl *plan, sq
 			if errors.Is(err, engine.ErrConnLost) {
 				return nil, err
 			}
-			s.println("EXPLAIN of the k-anonymity check failed: " + safeText(s.errText(err, k.SQL, false, pl), false))
+			s.println("EXPLAIN of the k-anonymity check failed: " + safeText(s.errText(err, k.SQL, false), false))
 			return refusal.New(refusal.Engine, "the k-anonymity check of this statement cannot be planned: "+genericFailure), nil
 		}
 		pl.kExplains = append(pl.kExplains, kp)
@@ -241,7 +234,7 @@ func (s *Server) assessK(pl *plan) *refusal.Error {
 }
 
 // analyzeRead parses and analyses a read statement and sets the plan's
-// analysis and the statement that runs (placeholder values substituted).
+// analysis and the statement that runs.
 // sql starts where the agent's statement does, pl.base bytes into pl.src.
 // It returns the refusal, if any; an error is the engine's.
 func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan, sql string) (*refusal.Error, error) {
@@ -265,7 +258,7 @@ func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan,
 	if len(s.rules.Mask) > 0 {
 		for _, rel := range an.Relations {
 			if pii.StatementTextRelation(s.dialect, rel) {
-				return refusal.New(refusal.SystemObject, rel[strings.LastIndexByte(rel, '.')+1:]+" holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist"), nil
+				return refusal.New(refusal.SystemObject, rel[strings.LastIndexByte(rel, '.')+1:]+" holds the text of past statements, their literals included; it cannot be read while PII mask rules exist"), nil
 			}
 		}
 	}
@@ -274,7 +267,7 @@ func (s *Server) analyzeRead(ctx context.Context, sess engine.Session, pl *plan,
 	if parsed.Explain {
 		body = parsed.SQL[parsed.Query.Sp.Pos:parsed.Query.Sp.End]
 	}
-	pl.runSQL = an.RunSQL(body)
+	pl.runSQL = body
 	return nil, nil
 }
 
@@ -402,7 +395,7 @@ func (s *Server) writePlan(ctx context.Context, sess engine.Session, pl *plan) (
 	}
 	for _, rel := range an.Relations {
 		if pii.StatementTextRelation(s.dialect, rel) {
-			return refusal.New(refusal.SystemObject, rel[strings.LastIndexByte(rel, '.')+1:]+" holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist"), nil
+			return refusal.New(refusal.SystemObject, rel[strings.LastIndexByte(rel, '.')+1:]+" holds the text of past statements, their literals included; it cannot be read while PII mask rules exist"), nil
 		}
 	}
 	pl.an, pl.runSQL = an, st.SQL
@@ -434,24 +427,13 @@ const hiddenWeightRefusal = "refused by the weight check (the details are shown 
 
 // kCount runs the k-anonymity row counts of a plan before its approval
 // and returns a warning for each count under k. A count never refuses: it
-// helps the human decide, and the agent learns nothing of it. A plan with
-// placeholder values is counted with them substituted. The refusal is
+// helps the human decide, and the agent learns nothing of it. The refusal is
 // checkShadows' (a function or operator created since the plan); the
 // error is the connection's.
 func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]string, *refusal.Error, error) {
 	k := s.profile.Limits.KAnonymity
 	if pl.an == nil || pl.unmask || k <= 1 {
 		return nil, nil, nil
-	}
-	counted := pl
-	if len(pl.an.Values) > 0 {
-		// Analysed again once approved: a refusal or a failure here is
-		// that analysis's to report.
-		cp := *pl
-		if r, err := s.analyzeRead(ctx, sess, &cp, pl.st.SQL); err != nil || r != nil {
-			return nil, nil, nil
-		}
-		counted = &cp
 	}
 	if t := s.profile.Limits.StatementTimeout; t > 0 {
 		var cancel context.CancelFunc
@@ -460,7 +442,7 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 	}
 	// The counts call COUNT and MIN and compare: a function or operator
 	// created since the plan would run in them first.
-	if r, err := s.checkShadows(ctx, sess, pl.db, counted.shadow); err != nil || r != nil {
+	if r, err := s.checkShadows(ctx, sess, pl.db, pl.shadow); err != nil || r != nil {
 		return nil, r, err
 	}
 	var out []string
@@ -469,14 +451,14 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 			out = append(out, w)
 		}
 	}
-	for _, c := range counted.an.KChecks {
+	for _, c := range pl.an.KChecks {
 		st := sqlclass.Statement{Class: sqlclass.Read, Kind: "select", SQL: c.SQL, Limit: 1}
 		res, err := sess.Run(ctx, pl.db, st, 1)
 		if err != nil {
 			if errors.Is(err, engine.ErrConnLost) || ctx.Err() != nil {
 				return nil, nil, err
 			}
-			s.println("k-anonymity check failed: " + safeText(s.errText(err, c.SQL, false, counted), false))
+			s.println("k-anonymity check failed: " + safeText(s.errText(err, c.SQL, false), false))
 			add("k-anonymity: a count could not run, so the rows this statement covers are unknown")
 			continue
 		}
@@ -555,13 +537,6 @@ func (s *Server) maskRead(res *engine.Result, pl *plan, sess engine.Session) err
 	if pl.st.Class != sqlclass.Read && len(res.Columns) == 0 {
 		return nil // a write that returned no rows (SQLite does not read them)
 	}
-	// A PII filter on a literal of the agent: the agent chose the value
-	// behind every cell it selects, so no cell gets a reference. Nor does
-	// a write's: it keeps no result in the reference store.
-	var cell func(row, col int, v any) string
-	if !pl.an.LitFilter && pl.st.Class == sqlclass.Read {
-		n := s.refs.begin()
-		cell = func(row, col int, v any) string { return s.refs.put(n, row, col, pii.CellText(v)) }
-	}
-	return pii.MaskOutputs(res, pl.an.Outputs, s.rules, s.detectors, cell, sess.OriginColumns())
+	// A masked cell is <redacted>: no reference to its value is kept.
+	return pii.MaskOutputs(res, pl.an.Outputs, s.rules, s.detectors, sess.OriginColumns())
 }

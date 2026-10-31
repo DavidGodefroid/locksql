@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -599,11 +600,31 @@ func TestExactCellKeepsLargeIntegersExact(t *testing.T) {
 
 func TestInstructionsCarryAgentRules(t *testing.T) {
 	for _, want := range []string{"never start one yourself", "Never edit the locksql config", "psql", "k-anonymity",
-		"'${", "<redacted:r", "never ask the user to type"} {
+		"lockhub", "placeholders ('${...}') are not supported", "<redacted>", "Never ask the user to type"} {
 		if !strings.Contains(instructions, want) {
 			t.Errorf("instructions lack %q", want)
 		}
 	}
+	// Neither placeholders nor cell references are taught: hub mode
+	// refuses them (E_PLACEHOLDER).
+	for _, bad := range []string{"'${name}'", "${rN.R.C}", "<redacted:r", "types the value in the console", "approves each run in the console"} {
+		if strings.Contains(instructions, bad) {
+			t.Errorf("instructions still teach %q", bad)
+		}
+	}
+	if sql := planSQLSchema(t); strings.Contains(sql, "'${name}'") || strings.Contains(sql, "${rN.R.C}") {
+		t.Errorf("the sql schema still teaches placeholders: %q", sql)
+	}
+}
+
+// planSQLSchema is the jsonschema text of PlanIn.SQL.
+func planSQLSchema(t *testing.T) string {
+	t.Helper()
+	f, ok := reflect.TypeOf(PlanIn{}).FieldByName("SQL")
+	if !ok {
+		t.Fatal("PlanIn has no SQL field")
+	}
+	return f.Tag.Get("jsonschema")
 }
 
 // In hub mode a pending run is the lock's standard pending answer, with

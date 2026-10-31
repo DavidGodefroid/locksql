@@ -1213,7 +1213,7 @@ func TestShowResultsOffByDefault(t *testing.T) {
 }
 
 // With --show-results the human sees the clear rows, the masked cells
-// marked with their reference; the client still gets them masked.
+// highlighted; the client still gets them masked.
 func TestShowResultsPrintsClearRows(t *testing.T) {
 	h := newHarness(t, uatProfile(), showResults)
 	pr := h.plan(t, selectUsers, false)
@@ -1227,7 +1227,7 @@ func TestShowResultsPrintsClearRows(t *testing.T) {
 	if i, j := strings.Index(out, "result: shown here in clear"), strings.Index(out, "result in clear"); i < 0 || j < i {
 		t.Errorf("reminder not before the result:\n%s", out)
 	}
-	for _, want := range []string{"result in clear (shown here only; the agent got it masked)", "alice@example.com", "write to bob@example.org", "‹r1.1.2›", "(1 rows)"} {
+	for _, want := range []string{"result in clear (shown here only; the agent got it masked)", "alice@example.com", "write to bob@example.org", "(1 rows)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("console lacks %q:\n%s", want, out)
 		}
@@ -1245,8 +1245,6 @@ func TestShowResultsPrintsClearRows(t *testing.T) {
 	if strings.Contains(h.auditLog(t), "alice@example.com") || strings.Contains(h.auditLog(t), "bob@example.org") {
 		t.Error("row data in the audit log")
 	}
-	// The reference still resolves for the agent.
-	h.plan(t, "SELECT id FROM users WHERE email = '${r1.1.2}' LIMIT 1", false)
 	var st ipc.StatusResult
 	h.ok(t, ipc.MethodStatus, nil, &st)
 	if !st.ShowResults {

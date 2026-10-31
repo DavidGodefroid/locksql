@@ -116,7 +116,7 @@ type ServerConfig struct {
 	Boundary string
 	Now      func() time.Time
 	// AllowUnmask starts with unmasked output allowed: clients may ask for
-	// it, and each such query is approved in the console. Without it an
+	// it, and each such query is decided in lockhub. Without it an
 	// unmask plan is refused before anything else. :unmask switches it
 	// while the console runs.
 	AllowUnmask bool
@@ -230,16 +230,6 @@ type Server struct {
 	sess engine.Session
 	now  func() time.Time
 
-	// refs keeps the values behind the references of redacted cells.
-	refs refStore
-	// typed keeps the values the human typed for placeholder names.
-	typed map[string]typedValue
-	// probes are, per result number, the reference uses seen as filters
-	// (a single reference, or one IN list of references).
-	probes map[int]map[string]bool
-	// keys caches whether "db.table.column" is a one-column unique key.
-	keys map[string]bool
-
 	plans map[string]*plan
 
 	// catalogCache holds the column catalog per database for the analyser.
@@ -279,7 +269,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		cfg.Approver = cfg.Hub.Approver(newTypedApprover(cfg.IO))
 	}
 	cfg.Databases = servedDatabases(cfg.Policy.Profile.Database, cfg.Databases)
-	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, typed: map[string]typedValue{}, probes: map[int]map[string]bool{}, keys: map[string]bool{}, quantum: cfg.Quantum}
+	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, quantum: cfg.Quantum}
 	// The security level: 2 with the fingerprint approver, 1 on the
 	// desktop with typed approvals, 0 in a session of the console account.
 	level := 0

@@ -294,7 +294,7 @@ func StatsViolation(st sqlclass.Statement, r Rules, d sqlclass.Dialect) error {
 			rel += "." + a.name(j+2)
 		}
 		if StatementTextRelation(d, rel) {
-			return refusal.Newf(refusal.SystemObject, "%s holds the text of past statements, substituted values included; it cannot be read while PII mask rules exist", strings.ToLower(rel)).At(toks[i].Pos, sqlclass.TokenText(toks[i]))
+			return refusal.Newf(refusal.SystemObject, "%s holds the text of past statements, their literals included; it cannot be read while PII mask rules exist", strings.ToLower(rel)).At(toks[i].Pos, sqlclass.TokenText(toks[i]))
 		}
 	}
 	return nil

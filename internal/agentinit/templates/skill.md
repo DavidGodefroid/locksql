@@ -73,7 +73,7 @@ it points at). Follow the retry rule of the code:
   `E_MULTI_STATEMENT` (one statement), `E_FORBIDDEN_TOKEN` (no comments, variables or bind
   parameters), `E_STATEMENT_KIND`, `E_SYSTEM_OBJECT` (use `locksql_list_tables` /
   `locksql_describe`), `E_UNKNOWN_NAME` (check the names with describe), `E_FUNCTION` (an
-  allowlisted function), `E_PLACEHOLDER` (no `'${...}'`: no value is typed in lockhub), `E_COST` (an indexed,
+  allowlisted function), `E_PLACEHOLDER` (placeholders and cell references `'${...}'` are not supported), `E_COST` (an indexed,
   narrower filter), `E_MASKED_FILTER` (filter on a non-PII key, or `=`, `IN`, `IS NULL` under
   `AND`), `E_MASKED_EXPRESSION` (the plain column, or `COUNT`/`MIN`/`MAX`), `E_MASKED_ORDER` (order
   by a non-PII column), `E_MASKED_SET_OP` (`UNION ALL` between PII columns), `E_MASK_UNCERTAIN`

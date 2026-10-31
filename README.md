@@ -348,9 +348,10 @@ only guide the agent; the console's checks are the guarantee.
   warns you on the ticket, since it could single out one person; you decide.
   The warning is kept in the audit log. The agent is told nothing of the
   count.
-- **No typed values.** A placeholder (`col = '${email}'`) or a cell
-  reference (`col = '${r1.2.3}'`) is refused at run (`E_PLACEHOLDER`): no
-  value is typed in lockhub. The approval screen warns, in red and in the
+- **No typed values.** Placeholders (`col = '${email}'`) and cell
+  references (`col = '${r1.2.3}'`) are not supported: a statement holding
+  one is refused at plan time (`E_PLACEHOLDER`), since no value is typed in
+  lockhub, and masked cells come back as plain `<redacted>`. The approval screen warns, in red and in the
   audit log, when the agent put a clear value in its statement. Warnings
   never refuse and never carry a value.
 - **Quiet failures.** Clients get a generic message, never the server's error
@@ -479,7 +480,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `limits.max_cell_chars` | 200 | longer cells are cut with `…` |
 | `limits.max_output_bytes` | 65 536 | output is cut with a marker |
 | `limits.k_anonymity` | 5 (production 10) | a PII filter, a group or an aggregate of a PII column covering fewer rows warns on the approval screen (it no longer refuses); lowering it is a loosening |
-| `limits.reference_probe` | 5 | distinct cells of one result the agent may filter on one by one before the console warns (an `IN` list counts once); raising it is a loosening |
+| `limits.reference_probe` | 5 | no effect: cell references are not supported; kept so that existing configs load (raising it is still recorded as a loosening) |
 | `limits.idle_timeout` | 20m (production 10m), or `max_session` when that is shorter | the console session ends after this long without activity; at least `1m` and at most `max_session`; raising it is a loosening |
 | `limits.max_session` | 4h (production 2h) | the console session ends after this long in all; at most `24h`; raising it is a loosening |
 | `limits.explain_cost_refuse` | 0 (off) | refuse plans above this total cost, in the engine's own units; SQLite reports no cost and is not checked |
@@ -533,7 +534,7 @@ mode   = "email"                      # j***@example.com
 column = "app.users.customer_ref"
 mode   = "partial"                    # j***(12)
 [[mask]]
-column = "*.*.recipient_reference"    # <redacted:rN.R.C> (default)
+column = "*.*.recipient_reference"    # <redacted> (default)
 [[allow]]                             # explicit exception: never mask
 column = "app.templates.name"
 [[mask]]                              # '*' prefix/suffix inside a segment:
@@ -542,7 +543,7 @@ column = "*.*.*email*"                # contact_email, email_backup, Email
 
 | Mode | Output | Notes |
 |---|---|---|
-| `redact` (default) | `<redacted:rN.R.C>` (result, row, column: a reference the agent can filter on; plain `<redacted>` if the console cannot hold the cell, or for any column but a plain one whose every source is under a mask rule); `partial`, `email` and detector-masked cells carry no reference | a rule without `mode` is `redact` |
+| `redact` (default) | `<redacted>` | a rule without `mode` is `redact`; no masked cell carries a reference to its value |
 | `partial` | `j***(12)` | first character and length |
 | `email` | `j***@example.com` | first character and domain; other values as `partial` |
 

@@ -20,6 +20,7 @@ import (
 
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
+	"github.com/DavidGodefroid/locksql/internal/pii"
 	"github.com/DavidGodefroid/locksql/internal/product"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
@@ -292,9 +293,6 @@ func statementLines(d sqlclass.Dialect, sql string) []render.Line {
 // gets pending with the ticket. hidden is a refusal the human must see
 // first (estimates hidden under a PII filter).
 func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, pl *plan, rec audit.Record, hidden *refusal.Error) ipc.Response {
-	if pl.an != nil && len(pl.an.Values) > 0 {
-		return s.refuseRec(id, rec, pl.src, refusal.New(refusal.Placeholder, "placeholders and cell references are not run: requests are decided in lockhub, where no value is typed; write the statement without them"))
-	}
 	var kw []string
 	if hidden == nil {
 		var refused *refusal.Error
@@ -388,6 +386,12 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 		return s.hubRenew(ctx, id, ticketID, caller, who, dec)
 	case errors.Is(err, errReplan):
 		s.withdraw(ctx, ticketID, caller)
+		if e := planResp.Error; e != nil && e.Data == nil && dec != nil && dec.Decision == ticket.Approved {
+			// Approved in lockhub, but the statement could not be planned
+			// again: the run failed. A refusal, which carries its data, is
+			// audited by buildPlan.
+			s.auditReplanFailed(ctx, ticketID, body, dec, e.Message)
+		}
 		return *planResp
 	case errors.Is(err, plans.ErrStale):
 		// Ended by Begin when the hash differs; a recheck refusal leaves
@@ -422,7 +426,7 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 		finish(false, "refused")
 		return *r
 	}
-	pl.warnings = append(s.warnings(ctx, sess, pl), body.KWarnings...)
+	pl.warnings = append(s.warnings(pl), body.KWarnings...)
 	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask,
 		Warnings: pl.warnings, Intent: pl.intent})
 	if body.Refuse || hidden != nil {
@@ -459,6 +463,22 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 	}
 	finish(true, "")
 	return resp
+}
+
+// auditReplanFailed records an approved ticket whose statement could not
+// be planned again before its run: the hub's approval, with its
+// signature, then the failed run, as runApproved records them.
+func (s *Server) auditReplanFailed(ctx context.Context, ticketID string, body hubPlan, dec *ticket.Decision, msg string) {
+	rec := withPeerRecord(ctx, audit.Record{Event: audit.EventApproved, Decision: "approved", DB: body.DB, SQL: capSQL(body.SQL),
+		Unmasked: body.Unmask, Intent: body.Intent, Approval: kconsole.HubApproval, Ticket: ticketID,
+		Approver: &dec.Approver, Facade: dec.Facade, HubSig: dec.Sig})
+	s.audit(rec)
+	rec.HubSig = ""
+	if s.masking() {
+		// As errText: a value the message quotes is redacted.
+		msg = pii.RedactMessage(msg, body.SQL, s.detectors)
+	}
+	s.auditRunFailed(rec, msg)
 }
 
 // auditHubDenial records the hub's denial of ticket ticketID, as the run

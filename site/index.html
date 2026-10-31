@@ -77,7 +77,7 @@
       <img src="assets/demo-poster.jpg" alt="The locksql console asking for approval of a query written by Claude Code" width="1700" height="940">
     </video>
     <script>if (matchMedia("(prefers-reduced-motion: reduce)").matches) { const v = document.currentScript.previousElementSibling; v.removeAttribute("autoplay"); v.pause(); }</script>
-    <figcaption id="demo-caption">Claude Code (left, account <code>alice</code>) asks for the top Belgian customers; the locksql console (right, account <code>locksql</code>, started with <code>--show-results</code>) stops each query for approval. Claude gets names and emails as <code>&lt;redacted:rN.R.C&gt;</code> references and filters on them in a follow-up query without seeing an address. Then it searches on an email the human types in the console.</figcaption>
+    <figcaption id="demo-caption">Claude Code (left, account <code>alice</code>) asks for the top Belgian customers; the locksql console (right, account <code>locksql</code>, started with <code>--show-results</code>) stops each query for approval. Recorded before the console ran attached to lockhub only: approvals are now given in lockhub, masked cells come back as plain <code>&lt;redacted&gt;</code>, and placeholders and cell references are not supported.</figcaption>
   </figure>
 </section>
 
@@ -109,7 +109,7 @@
 
 <section aria-labelledby="approve">
   <h2 id="approve">See what you approve</h2>
-  <p class="prose">When the agent calls <code>locksql run PLAN_ID</code>, the console shows you this screen and waits. The statement runs only after you approve it.</p>
+  <p class="prose">When the agent calls <code>locksql run PLAN_ID</code>, the console shows this screen and sends it, every literal masked, as a ticket to <a href="https://github.com/DavidGodefroid/lockhub">lockhub</a>. The statement runs only after you approve the ticket there (<code>lox approve</code>).</p>
   <figure>
     <pre tabindex="0" class="term"><code>╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
 │ requested by uid 1000 (alice) · pid 48211 (claude)
@@ -122,22 +122,22 @@
 │ PII columns touched: customers.email (select)
 │ masked outputs: email → redact
 │ PII: masked (4 column rules; detectors: email, phone, iban, card)
-╰─ Approve? [y/N]</code></pre>
+╰─ pending: ticket 01J…</code></pre>
     <figcaption>On approval the console runs the statement, masks PII, caps the output and hands the rows back to the agent, framed as untrusted data.</figcaption>
   </figure>
-  <p class="prose">On a production profile you type the profile name, not <code>y</code>. No answer within 5 minutes means denied.</p>
+  <p class="prose">Nothing is asked in the console’s terminal: you approve or deny the ticket in lockhub, which asks for the typed instance name on a production profile.</p>
 </section>
 
 <section aria-labelledby="highlights">
   <h2 id="highlights">Highlights</h2>
   <ul class="cards">
     <li><span class="icon" aria-hidden="true">🔑</span><h3>One key holder</h3><p>Credentials are typed at console start, or read from HashiCorp Vault. Never in argv, env, files, logs, the socket or error messages.</p></li>
-    <li><span class="icon" aria-hidden="true">👤</span><h3>Human in the loop</h3><p>Every statement is shown with its plan, cost and PII footprint. On production you type the profile name, not <code>y</code>.</p></li>
+    <li><span class="icon" aria-hidden="true">👤</span><h3>Human in the loop</h3><p>Every statement is shown with its plan, cost and PII footprint, and runs only once you approve its ticket in lockhub.</p></li>
     <li><span class="icon" aria-hidden="true">🧱</span><h3>Fail closed</h3><p>A dialect-aware classifier refuses anything it cannot classify with certainty. Reads are parsed in full; unknown syntax is refused.</p></li>
     <li><span class="icon" aria-hidden="true">🕶️</span><h3>PII masking</h3><p>Every output column is traced to its source through aliases, CTEs, unions and joins, then masked (<code>redact</code> by default, <code>partial</code> or <code>email</code>).</p></li>
     <li><span class="icon" aria-hidden="true">⚖️</span><h3>Weight check</h3><p><code>LIMIT</code> is mandatory, <code>EXPLAIN</code> runs first, and plans that would scan too many rows are refused before they run.</p></li>
     <li><span class="icon" aria-hidden="true">🛡️</span><h3>OS separation</h3><p>The console runs as its own account in its own container, the agent’s MCP server in another; the kernel checks every peer on the socket they share.</p></li>
-    <li><span class="icon" aria-hidden="true">🔎</span><h3>Blind search</h3><p>The agent filters on <code>'${email}'</code> and you type the value in the console, or on a redacted cell’s reference (<code>'${r1.2.3}'</code>). The value never reaches it.</p></li>
+    <li><span class="icon" aria-hidden="true">🔎</span><h3>No typed values</h3><p>Masked cells come back as <code>&lt;redacted&gt;</code>, with no reference to their value; placeholders (<code>'${...}'</code>) are not supported and are refused at plan time.</p></li>
     <li><span class="icon" aria-hidden="true">👁️</span><h3>Clear for you only</h3><p>Ctrl-O in the console prints the clear rows there while the agent gets them masked; <code>--allow-unmask</code> (or <code>:unmask</code> in the console) is the only way an agent can ask for raw PII.</p></li>
     <li><span class="icon" aria-hidden="true">🔐</span><h3>Remote, verified</h3><p>TLS verifies the server certificate by default, with an optional client certificate, and an <code>ssh</code> table reaches a database behind a bastion: the console opens the tunnel itself, checks the host key and listens on no local port.</p></li>
     <li><span class="icon" aria-hidden="true">✍️</span><h3>Writes analysed too</h3><p>A write whose rows come back (<code>RETURNING</code>, data-modifying CTEs) or that stores a query’s rows (<code>INSERT ... SELECT</code>) is parsed like a read, and the rows it returns are masked by where they come from.</p></li>

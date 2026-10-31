@@ -44,12 +44,6 @@ func fuzzEnv(masking bool) Env {
 			return m, ok
 		},
 		Masking: masking,
-		Value: func(_ ValueKind, name string) (string, bool) {
-			if name == "email" || name == "r1.1.1" {
-				return "o'brien@example.com", true
-			}
-			return "", false
-		},
 	}
 }
 
@@ -219,15 +213,13 @@ func checkSpans(t *testing.T, st *Statement) {
 //     masked source it only counts (n + 1 over COUNT(email)), so it is
 //     left to the wraps and the oracle below;
 //   - a plain reference to a column that only a masked column can be is
-//     never returned unmasked;
-//   - the statement with its replacements applied can be built.
+//     never returned unmasked.
 //
 // With masking on, it also wraps the statement in a subquery and in a CTE:
 // each wrap is refused or keeps the provenance (see compareAnalyses).
 // depth is 1 for a statement that is already a rewrite: it is not wrapped.
 func checkAnalysis(t *testing.T, st *Statement, env Env, a *Analysis, depth int) {
 	t.Helper()
-	_ = a.RunSQL(st.SQL)
 	where := func() string {
 		return st.Dialect.String() + " masking=" + strconv.FormatBool(env.Masking) + " " + strconv.Quote(st.SQL)
 	}

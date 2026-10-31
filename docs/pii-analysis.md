@@ -30,8 +30,9 @@ A `query.plan` request goes through these steps in the console
 3. **Analyze** (`sqlast.Analyze`, `analyze.go`), with an `Env`: a
    `Catalog` that resolves table names from the session's column catalog
    (`console/readpath.go`), `Rule`, which says whether a base column is
-   under a mask rule and in which mode, and `Value`, which resolves
-   placeholders and cell references. The result is an `Analysis` (below).
+   under a mask rule and in which mode. A statement holding a placeholder
+   or a cell reference (`'${...}'`) is refused first (`E_PLACEHOLDER`):
+   neither is supported. The result is an `Analysis` (below).
 4. **Weigh.** The console runs `EXPLAIN` on the statement and on each
    k-anonymity count, and `internal/weight` turns the plans into a verdict.
 5. **Count.** Before the ticket goes to lockhub, the k-anonymity counts run
@@ -132,11 +133,6 @@ prompt (`console.kCount`):
   of that value's subjects in the column's own base table, so that a join
   cannot inflate it. An `IN` list counts each value apart and checks the
   smallest.
-- When every compared value is a placeholder (`'${name}'`, typed by the
-  human) or a cell reference (`'${r1.2.3}'`), the agent chose none of them:
-  the filter skips the counts and the console warns instead
-  (`console/warnings.go`). `Analysis.Replacements` substitutes the values
-  into the statement that runs; the agent never sees them.
 
 A count under `k_anonymity` (or one that cannot run) does not refuse the
 statement. `kCount` returns it as a warning: the console adds it to the
@@ -146,8 +142,7 @@ structural rules that make a count meaningful (equality only, `AND` only,
 no self-comparison, no view column under a constant filter) still refuse.
 
 `PIIFilter` marks a statement whose row estimates must stay on the
-console; `LitFilter` marks one that compares a PII column with a literal
-the agent wrote, whose results then carry no cell references.
+console.
 
 ## Masking the result
 
@@ -167,12 +162,8 @@ masking by position could hit the wrong column. Then, per column:
   national numbers, phone numbers, typographic spaces and full-width
   digits), which mask what they find inside the text.
 
-A `redact` cell of a plain column whose every source is under a rule
-(`referenceable`) gets a reference (`<redacted:r1.2.3>`) to its value,
-which only the console keeps (`console/refs.go`). Any other masked cell
-gets plain `<redacted>`: the agent might know the value behind it (a
-literal, an unmasked `UNION` arm, an aggregate) and could look up a row
-with it without the counts.
+A `redact` cell is plain `<redacted>`: no cell carries a reference to its
+value, and the console keeps no value of a result.
 
 ## The rules and where they come from
 

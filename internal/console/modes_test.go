@@ -108,7 +108,7 @@ func TestStatusLineContent(t *testing.T) {
 
 func TestLayoutTable(t *testing.T) {
 	rows := [][]cell{
-		{{text: "1"}, {text: "alice@example.com", masked: true, ref: "r1.1.2"}, {text: "short"}},
+		{{text: "1"}, {text: "alice@example.com", masked: true}, {text: "short"}},
 		{{text: "22"}, {text: "bob@example.org", masked: true}, {text: "a much longer note than the column allows"}},
 	}
 	lines := layoutTable([]string{"id", "email", "note"}, rows, 60)
@@ -117,10 +117,10 @@ func TestLayoutTable(t *testing.T) {
 		plain[i] = ansi.ReplaceAllString(l, "")
 	}
 	want := []string{
-		"id │ email                      │ note",
-		"───┼────────────────────────────┼───────────────────────────",
-		"1  │ alice@example.com ‹r1.1.2› │ short",
-		"22 │ bob@example.org            │ a much longer note than t…",
+		"id │ email             │ note",
+		"───┼───────────────────┼────────────────────────────────────",
+		"1  │ alice@example.com │ short",
+		"22 │ bob@example.org   │ a much longer note than the column…",
 	}
 	if strings.Join(plain, "\n") != strings.Join(want, "\n") {
 		t.Errorf("table:\n%s\nwant:\n%s", strings.Join(plain, "\n"), strings.Join(want, "\n"))

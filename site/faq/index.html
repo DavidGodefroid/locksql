@@ -83,7 +83,7 @@
 </section>
 <section aria-labelledby="timeout">
   <h2 id="timeout">What happens if I don’t answer the approval prompt?</h2>
-  <p>No answer within 5 minutes means denied. Anything other than <code>y</code> (or the profile name on a production profile) denies the query.</p>
+  <p>Nothing runs. Requests are decided in lockhub, not in the console’s terminal: the agent gets <code>pending</code> with a ticket, and the statement runs only once you approve that ticket (<code>lox approve</code>). A denial reaches the agent with your reason.</p>
 </section>
 <section aria-labelledby="writes">
   <h2 id="writes">Can locksql run writes or DDL?</h2>
@@ -95,7 +95,7 @@
 </section>
 <section aria-labelledby="blind-search">
   <h2 id="blind-search">Can the agent look up a customer by email without seeing it?</h2>
-  <p>Not by a typed value: requests are decided in lockhub, where no value is typed, so a placeholder (<code>'${email}'</code>) or a cell reference (<code>'${r1.2.3}'</code>) is refused at run (<code>E_PLACEHOLDER</code>). <a href="../how-it-works/#blind-search">More</a>.</p>
+  <p>Not by a typed value: placeholders (<code>'${email}'</code>) and cell references (<code>'${r1.2.3}'</code>) are not supported, since requests are decided in lockhub, where no value is typed; a statement holding one is refused at plan time (<code>E_PLACEHOLDER</code>), and masked cells come back as plain <code>&lt;redacted&gt;</code>. <a href="../how-it-works/#blind-search">More</a>.</p>
 </section>
 <section aria-labelledby="see-values">
   <h2 id="see-values">Can I see the real values myself?</h2>

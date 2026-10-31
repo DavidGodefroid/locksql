@@ -142,9 +142,6 @@ type PlanResult struct {
 	Summary string   `json:"summary"`
 	Reasons []string `json:"reasons,omitempty"`
 	Unmask  bool     `json:"unmask,omitempty"`
-	// Values are the placeholder names the human typed in this console
-	// session: '${name}' reuses a value without a prompt.
-	Values []string `json:"values,omitempty"`
 	// PlanHash binds the plan to what it resolves to: the statement, the
 	// policy and, on PostgreSQL, the definitions of the objects it uses
 	// ("sha256:…"). The run refuses with E_STALE once it no longer matches.

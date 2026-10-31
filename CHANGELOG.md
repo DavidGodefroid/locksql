@@ -34,10 +34,22 @@ Supported lockhub: as v0.11.5; the console now needs it
   and the `:status` mode row is replaced by the lockhub instance that
   decides. `locksql status` no longer prints `auto-approve`; the
   `auto_approve` field of the JSON status stays, always false.
-- **Typed values**: placeholders (`'${name}'`) and cell references
-  (`'${rN.R.C}'`) are refused at run with `E_PLACEHOLDER`, as they already
-  were under `--hub` (no value is typed in lockhub). The "agent received
-  this value in clear" warning no longer suggests a placeholder.
+- **Typed values and cell references**: placeholders (`'${name}'`) and
+  cell references (`'${rN.R.C}'`) are not supported (no value is typed in
+  lockhub). `query.plan` now refuses a statement holding one, read or
+  write, with `E_PLACEHOLDER` and a reason saying so, before it is analysed
+  (it used to be planned and refused only at run). Masked cells come back as
+  plain `<redacted>`, never `<redacted:rN.R.C>`: the console no longer keeps
+  the clear values of masked cells in memory, nor resolves references while
+  it plans. The `--show-results` table no longer marks cells with
+  `‹rN.R.C›`, the plan answer has no `values` field, and the reference
+  probing warnings are gone (`limits.reference_probe` is still read, without
+  effect). The "agent received this value in clear" warning no longer
+  suggests a placeholder. The MCP instructions, the `locksql_plan` `sql`
+  schema, the `E_PLACEHOLDER`, `E_FORBIDDEN_TOKEN` and `E_MASKED_FILTER`
+  hints, the agent instructions written by `locksql init`, the docs and the
+  site no longer teach placeholders, references, terminal approval or auto
+  mode.
 
 ### Fixed
 
@@ -47,6 +59,10 @@ Supported lockhub: as v0.11.5; the console now needs it
   hint only.
 - The `approved` and `run` records of a ticket carry the k-anonymity
   warnings of its counts, as its `pending` record does.
+- An approved ticket whose statement cannot be planned again before its
+  run (the catalog cannot be read, the connection fails) is audited: the
+  hub's signed `approved` record, then a `run` record `failed` with the
+  error; the run answered the error but left no record before.
 
 ## v0.11.5 (2026-10-31)
 
