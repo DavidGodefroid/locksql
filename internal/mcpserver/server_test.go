@@ -306,7 +306,9 @@ func TestDefaultProgressIntervalIsUnderTenSeconds(t *testing.T) {
 	// Clamping of Options.ProgressEvery: lockkit mcpkit.ProgressInterval.
 }
 
-func TestNoConsoleInProjectHintNamesProject(t *testing.T) {
+// Inside a project the hint still names no project (nor profile flag): it
+// asks for `lox up`, which starts the console on the project.
+func TestNoConsoleInProjectHintNamesNoProject(t *testing.T) {
 	o := Options{
 		Profile: "uat",
 		Dial: func(p string) (Conn, error) {
@@ -316,8 +318,8 @@ func TestNoConsoleInProjectHintNamesProject(t *testing.T) {
 	cs := connect(t, o, nil)
 	for _, name := range []string{"locksql_status", "locksql_list_tables"} {
 		got := text(call(t, cs, name, map[string]any{}))
-		if !strings.Contains(got, "locksql console --profile uat --project /work/app") || strings.Contains(got, "run `locksql`") {
-			t.Errorf("%s: hint does not name the project:\n%s", name, got)
+		if !strings.Contains(got, client.StartHint) || strings.Contains(got, "/work/app") || strings.Contains(got, "--profile") || strings.Contains(got, "run `locksql`") {
+			t.Errorf("%s: hint is not the start hint, or carries a value:\n%s", name, got)
 		}
 	}
 }
@@ -343,8 +345,8 @@ func TestNoConsoleErrorCarriesStartCommand(t *testing.T) {
 	for _, name := range specTools {
 		r := call(t, cs, name, args[name])
 		got := text(r)
-		if !strings.Contains(got, "locksql console --profile uat") {
-			t.Errorf("%s: output lacks the start command:\n%s", name, got)
+		if !strings.Contains(got, client.StartHint) || !strings.Contains(got, "lox up") || strings.Contains(got, "--profile") {
+			t.Errorf("%s: output lacks the start hint, or carries a value:\n%s", name, got)
 		}
 		if name != "locksql_status" && !r.IsError {
 			t.Errorf("%s: no console is not an error", name)

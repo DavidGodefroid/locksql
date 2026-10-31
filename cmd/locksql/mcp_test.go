@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DavidGodefroid/locksql/internal/client"
 )
 
 // mcpSession runs `locksql mcp args...` in dir over pipes and returns a
@@ -91,11 +93,12 @@ func TestMCPOverStdio(t *testing.T) {
 	}
 	txt, isErr = toolText(t, call("tools/call", map[string]any{"name": "locksql_plan",
 		"arguments": map[string]any{"profile": "prod", "sql": "SELECT 1 LIMIT 1"}}))
-	if !isErr || !strings.Contains(txt, "locksql console --profile prod") {
+	if !isErr || !strings.Contains(txt, client.StartHint) || strings.Contains(txt, "--profile") || strings.Contains(txt, dir) {
 		t.Fatalf("no console: %q (error %v)", txt, isErr)
 	}
 	txt, _ = toolText(t, call("tools/call", map[string]any{"name": "locksql_status", "arguments": map[string]any{}}))
-	if !strings.Contains(txt, "uat: console running") || !strings.Contains(txt, "locksql console --profile prod") {
+	if !strings.Contains(txt, "uat: console running") || !strings.Contains(txt, "prod: no console (start: lox up)") ||
+		!strings.Contains(txt, "No console runs for profile prod: "+client.StartHint) || strings.Contains(txt, dir) {
 		t.Fatalf("status: %q", txt)
 	}
 }

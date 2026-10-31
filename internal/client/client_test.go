@@ -116,19 +116,24 @@ func TestDialWithoutConsoleIsErrNoConsole(t *testing.T) {
 	if !errors.As(err, &nc) || nc.Profile != "uat" {
 		t.Fatalf("err = %#v, want a *NoConsoleError for uat", err)
 	}
-	if !strings.Contains(err.Error(), "locksql console --profile uat") {
-		t.Fatalf("message lacks the start command: %q", err.Error())
+	// The hint is StartHint: `lox up`, the only start, with no value.
+	if !strings.Contains(err.Error(), StartHint) || !strings.Contains(StartHint, "lox up") {
+		t.Fatalf("message lacks the start hint: %q", err.Error())
 	}
-	if StartCommand("uat", "") != "locksql console --profile uat" {
-		t.Fatalf("StartCommand = %q", StartCommand("uat", ""))
+	if StartCommand("uat", "") != "lox up" || nc.Command() != "lox up" {
+		t.Fatalf("StartCommand = %q, Command = %q", StartCommand("uat", ""), nc.Command())
 	}
-	if !strings.Contains(err.Error(), "--project DIR") || !strings.Contains(err.Error(), "locksql doctor") || strings.Contains(err.Error(), "run `locksql`") || nc.Project != "" {
+	if h := nc.Hint(); !strings.HasPrefix(h, StartHint) || !strings.Contains(h, "locksql doctor") || strings.Contains(h, "uat") || strings.Contains(h, "--profile") || strings.Contains(h, "--project") {
+		t.Fatalf("hint %q", h)
+	}
+	if !strings.Contains(err.Error(), "locksql doctor") || strings.Contains(err.Error(), "run `locksql`") || nc.Project != "" {
 		t.Fatalf("outside a project: %q (project %q)", err.Error(), nc.Project)
 	}
 }
 
-// Inside a project the socket key is the project's: the hint names the
-// project, since a bare `locksql` elsewhere would serve the user key.
+// Inside a project the socket key is the project's (nc.Project), but the
+// hint and the start command name no project: `lox up` starts the
+// console on it, and no value is put in what an agent passes on.
 func TestDialWithoutConsoleInProjectNamesProject(t *testing.T) {
 	runtimeDir(t)
 	root := t.TempDir()
@@ -141,15 +146,15 @@ func TestDialWithoutConsoleInProjectNamesProject(t *testing.T) {
 	if !errors.As(err, &nc) || nc.Project != root {
 		t.Fatalf("err = %#v", err)
 	}
-	want := "locksql console --profile uat --project " + root
-	if nc.Command() != want || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "run `locksql`") {
+	if nc.Command() != "lox up" || !strings.Contains(err.Error(), StartHint) || strings.Contains(err.Error(), root) ||
+		strings.Contains(nc.Hint(), "uat") || strings.Contains(err.Error(), "run `locksql`") {
 		t.Fatalf("hint %q / command %q", err.Error(), nc.Command())
 	}
-	if got := DescribeError(err).Start; got != want {
-		t.Fatalf("json start = %q", got)
+	if got := DescribeError(err); got.Start != "lox up" || strings.Contains(got.Message, root) {
+		t.Fatalf("json = %+v", got)
 	}
-	if got := StartCommand("uat", "/a b/it's"); got != `locksql console --profile uat --project '/a b/it'\''s'` {
-		t.Fatalf("quoting: %s", got)
+	if got := StartCommand("uat", "/a b/it's"); got != "lox up" {
+		t.Fatalf("a project value in the start command: %s", got)
 	}
 }
 

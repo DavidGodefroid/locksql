@@ -61,7 +61,7 @@
   <h2 id="trusted">Who is trusted</h2>
   <ul class="prose">
     <li><strong>Assets:</strong> database credentials; the data (in particular personal data); the availability of the database server; the integrity of the data and of the policy that governs access.</li>
-    <li><strong>The human</strong> runs <code>locksql console</code> in a terminal and is trusted.</li>
+    <li><strong>The human</strong> starts <code>locksql console</code> with <code>lox up</code>, answers it in a terminal (<code>lox attach</code>) and is trusted.</li>
     <li><strong>The agent</strong> (and anything that can steer it, such as text stored in the database or in files it reads) is <em>not</em> trusted. It runs the client commands and the MCP server.</li>
     <li><strong>Other local users</strong> are not trusted.</li>
   </ul>
