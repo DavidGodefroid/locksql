@@ -323,8 +323,11 @@ update() {
 # the user's own regular file (no link) that no one else can write, in a
 # .lockfamily of the same kind, of this very workspace; then Docker must
 # confirm the volume: lox up's labels (project, role socket, instance,
-# type, workspace), and every container compose made that mounts it run
-# from lox up's own state directory. up.json only names the instance:
+# type, workspace), and every container that mounts it is lox up's (run
+# by compose from lox up's own state directory) or mounts it read-only.
+# These checks catch mistakes and files others can write; an agent that
+# runs as you with Docker access gets past any of them (docs/launcher.md).
+# up.json only names the instance:
 # what is mounted is what Docker's labels prove, read as JSON, compared
 # whole; anything else fails closed.
 
@@ -530,12 +533,14 @@ EOF_STATE
 		lockup_why="lock $lu_name: volume $lu_vol is not lox up's socket volume of it (its labels): locksql trusts none of it; run \`lox up\`"
 		return 1
 	fi
-	# Every container compose made that mounts the volume must come from
-	# lox up's own compose run: from its state directory, with the file on
-	# stdin or that directory's compose.yaml. Compose's project label alone
-	# is anyone's: a compose file an agent wrote, run by you, would serve
-	# the socket from an image of its own. Containers no compose made (an
-	# agent's, as this one) only reach the socket.
+	# Every container that mounts the volume, running or not, must be lox
+	# up's own or unable to serve a socket there. lox up's: compose ran it
+	# from lox up's state directory, with the file on stdin or that
+	# directory's compose.yaml (compose's project label alone is anyone's: a
+	# compose file written in the workspace, run by you, would serve the
+	# socket from an image of its own). Any other container, compose's or
+	# not, must mount the volume read-only (an agent's, as this one): with
+	# a read-write mount it could listen on the socket's path.
 	lu_state_dir=$(printf '%s' "${XDG_STATE_HOME:-${HOME:-}/.local/state}/lockfamily/$lu_project" | sed -e 's#//*#/#g')
 	if ! json_safe "$lu_state_dir"; then
 		lockup_why="lox up's state directory $lu_state_dir holds a quote, a backslash or a control character: locksql cannot check lox up's containers"
@@ -550,27 +555,32 @@ EOF_STATE
 		return 1
 	fi
 	for lu_id in $lu_ids; do
+		# Compose's project, working directory and files, as JSON; then
+		# rw or ro for each mount of the volume (its name: checked
+		# characters).
 		lu_c=$(docker inspect --type container -f '{{json (index .Config.Labels "com.docker.compose.project")}}
 {{json (index .Config.Labels "com.docker.compose.project.working_dir")}}
-{{json (index .Config.Labels "com.docker.compose.project.config_files")}}{{range $k, $v := .Config.Labels}}
-{{json $k}}{{end}}' "$lu_id" 2>/dev/null) || {
+{{json (index .Config.Labels "com.docker.compose.project.config_files")}}
+{{range .Mounts}}{{if eq .Name "'"$lu_vol"'"}}{{if .RW}}rw {{else}}ro {{end}}{{end}}{{end}}' "$lu_id" 2>/dev/null) || {
 			lockup_why="lock $lu_name: cannot read the containers of $lu_vol (docker inspect $lu_id)"
 			return 1
 		}
-		case "$lu_c" in
-		*'
-"com.docker.compose.'*) ;;
-		*) continue ;; # no compose made it: it only reaches the socket
-		esac
+		lu_rw=$(printf '%s\n' "$lu_c" | sed -n 4p)
 		lu_c=$(printf '%s\n' "$lu_c" | sed -n 1,3p)
-		if [ "$lu_c" != "\"$lu_project\"
+		if [ "$lu_c" = "\"$lu_project\"
 \"$lu_state_dir\"
-\"-\"" ] && [ "$lu_c" != "\"$lu_project\"
+\"-\"" ] || [ "$lu_c" = "\"$lu_project\"
 \"$lu_state_dir\"
 \"$lu_state_dir/compose.yaml\"" ]; then
-			lockup_why="lock $lu_name: volume $lu_vol is mounted by container $lu_id, which lox up did not start (compose run from elsewhere than $lu_state_dir): locksql trusts none of its socket; run \`lox up\`"
-			return 1
+			continue # lox up's
 		fi
+		# Read-only mounts only (none listed: not one docker shows by name).
+		case " $lu_rw" in
+		" " | *" rw "*)
+			lockup_why="lock $lu_name: volume $lu_vol is mounted read-write by container $lu_id, which lox up did not start (not compose run from $lu_state_dir): locksql trusts none of its socket; remove that container, then run \`lox up\`"
+			return 1
+			;;
+		esac
 	done
 	lockup_vol=$lu_vol
 }

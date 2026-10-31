@@ -77,7 +77,7 @@ func (f *launcherFixture) loxUp(t *testing.T, ws string, locks map[string]string
 		f.dockerVolume(t, l.Socket, volumeLabels(p, name, typ, ws))
 		h := sha256.Sum256([]byte(name))
 		id := hex.EncodeToString(h[:])
-		f.dockerContainers(t, l.Socket, map[string]string{id: containerLabels(p, f.stateDir(p), "-", true)})
+		f.dockerContainers(t, l.Socket, map[string]string{id: containerLabels(p, f.stateDir(p), "-", "rw ")})
 	}
 	f.writeUpState(t, ws, s)
 	return s
@@ -128,19 +128,11 @@ func volumeLabels(project, name, typ, ws string) string {
 }
 
 // containerLabels is what the launcher's docker inspect prints for a
-// container: compose's project, working directory and files, then every
-// label's name (compose's when compose made it, else one of its own).
-func containerLabels(project, wd, files string, compose bool) string {
-	if !compose {
-		return `""` + "\n" + `""` + "\n" + `""` + "\n" + `"dev.example.agent"` + "\n"
-	}
-	keys := []string{"com.docker.compose.project", "com.docker.compose.project.config_files", "com.docker.compose.project.working_dir", "com.docker.compose.service"}
-	sort.Strings(keys)
-	out := []string{jsonString(project), jsonString(wd), jsonString(files)}
-	for _, k := range keys {
-		out = append(out, jsonString(k))
-	}
-	return strings.Join(out, "\n") + "\n"
+// container: compose's project, working directory and files (empty
+// strings when compose did not make it), then rw or ro for each of its
+// mounts of the volume.
+func containerLabels(project, wd, files, mounts string) string {
+	return strings.Join([]string{jsonString(project), jsonString(wd), jsonString(files), mounts}, "\n") + "\n"
 }
 
 // dockerVolume makes the fake docker know the volume vol, with labels (its
@@ -348,14 +340,25 @@ func TestLauncherLockUpRefusals(t *testing.T) {
 		{"a compose container run from elsewhere", func(t *testing.T, f *launcherFixture) {
 			p := loxProject(f.root)
 			f.dockerContainers(t, p+"_db-run", map[string]string{
-				strings.Repeat("a", 64): containerLabels(p, f.stateDir(p), "-", true),
-				strings.Repeat("b", 64): containerLabels(p, f.root, f.root+"/compose.yaml", true),
+				strings.Repeat("a", 64): containerLabels(p, f.stateDir(p), "-", "rw "),
+				strings.Repeat("b", 64): containerLabels(p, f.root, f.root+"/compose.yaml", "rw "),
 			})
 		}, "which lox up did not start", nil, false},
 		{"a compose container of another file", func(t *testing.T, f *launcherFixture) {
 			p := loxProject(f.root)
-			f.dockerContainers(t, p+"_db-run", map[string]string{strings.Repeat("a", 64): containerLabels(p, f.stateDir(p), f.root+"/compose.yaml", true)})
+			f.dockerContainers(t, p+"_db-run", map[string]string{strings.Repeat("a", 64): containerLabels(p, f.stateDir(p), f.root+"/compose.yaml", "rw ")})
 		}, "which lox up did not start", nil, false},
+		{"a container docker made, read-write", func(t *testing.T, f *launcherFixture) {
+			p := loxProject(f.root)
+			f.dockerContainers(t, p+"_db-run", map[string]string{
+				strings.Repeat("a", 64): containerLabels(p, f.stateDir(p), "-", "rw "),
+				strings.Repeat("e", 64): containerLabels("", "", "", "ro rw "),
+			})
+		}, "is mounted read-write by container eeee", nil, false},
+		{"a container with no mount by that name", func(t *testing.T, f *launcherFixture) {
+			p := loxProject(f.root)
+			f.dockerContainers(t, p+"_db-run", map[string]string{strings.Repeat("e", 64): containerLabels("", "", "", "")})
+		}, "is mounted read-write by container eeee", nil, false},
 		{"a container docker cannot inspect", func(t *testing.T, f *launcherFixture) {
 			p := loxProject(f.root)
 			os.WriteFile(filepath.Join(f.fake, "ps-"+p+"_db-run"), []byte(strings.Repeat("c", 64)+"\n"), 0o644)
@@ -434,16 +437,17 @@ func TestLauncherLockUpInstance(t *testing.T) {
 	}
 }
 
-// Containers no compose made (an agent's) only reach the socket; lox up's
-// own compose run, with the file on stdin or its state directory's
-// compose.yaml, is trusted; so is XDG_STATE_HOME's state directory.
+// lox up's own compose run, with the file on stdin or its state
+// directory's compose.yaml, is trusted (XDG_STATE_HOME's state directory
+// too); any other container only if it mounts the volume read-only.
 func TestLauncherLockUpContainers(t *testing.T) {
 	f := newLauncherFixture(t)
 	p := loxProject(f.root)
 	f.dockerContainers(t, p+"_db-run", map[string]string{
-		strings.Repeat("a", 64): containerLabels(p, f.stateDir(p), "-", true),
-		strings.Repeat("b", 64): containerLabels(p, f.stateDir(p), f.stateDir(p)+"/compose.yaml", true),
-		strings.Repeat("d", 64): containerLabels("", "", "", false),
+		strings.Repeat("a", 64): containerLabels(p, f.stateDir(p), "-", "rw "),
+		strings.Repeat("b", 64): containerLabels(p, f.stateDir(p), f.stateDir(p)+"/compose.yaml", "rw "),
+		strings.Repeat("d", 64): containerLabels("", "", "", "ro "),
+		strings.Repeat("e", 64): containerLabels(p, f.root, "-", "ro ro "),
 	})
 	if out, calls, err := f.run(t, f.project, nil, "mcp"); err != nil || !hasSeq(lastRun(t, calls), mountOf(f.root, "db")...) {
 		t.Errorf("%v\n%s", err, out)
@@ -452,7 +456,7 @@ func TestLauncherLockUpContainers(t *testing.T) {
 	if out, _, err := f.run(t, f.project, []string{"XDG_STATE_HOME=" + state}, "mcp"); exitCode(err) != 2 || !strings.Contains(out, "which lox up did not start") {
 		t.Errorf("XDG_STATE_HOME ignored: %v\n%s", err, out)
 	}
-	f.dockerContainers(t, p+"_db-run", map[string]string{strings.Repeat("a", 64): containerLabels(p, state+"/lockfamily/"+p, "-", true)})
+	f.dockerContainers(t, p+"_db-run", map[string]string{strings.Repeat("a", 64): containerLabels(p, state+"/lockfamily/"+p, "-", "rw ")})
 	if out, calls, err := f.run(t, f.project, []string{"XDG_STATE_HOME=" + state + "/"}, "mcp"); err != nil || !hasSeq(lastRun(t, calls), mountOf(f.root, "db")...) {
 		t.Errorf("XDG_STATE_HOME: %v\n%s", err, out)
 	}

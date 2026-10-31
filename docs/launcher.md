@@ -71,18 +71,29 @@ lea makes for its own agents:
   the image's (10000);
 - Docker confirms the volume: lox up's labels (compose's project and
   volume, `dev.lockfamily.role=socket`, its instance, type and workspace),
-  read as JSON and compared whole; and every container compose made that
-  mounts it comes from lox up's own compose run (compose's
-  `project.working_dir` is lox up's state directory,
-  `$XDG_STATE_HOME/lockfamily/<project>` or
-  `~/.local/state/lockfamily/<project>`, and its `config_files` `-` or that
-  directory's `compose.yaml`). A compose file written in the workspace,
-  with lox up's project name and volume, would serve the socket from an
-  image of its own: the launcher trusts none of that socket. Containers
-  no compose made (the agents', as the launcher's own) only reach it.
+  read as JSON and compared whole; and every container that mounts it is
+  lox up's own (compose ran it from lox up's state directory: its
+  `project.working_dir` is `$XDG_STATE_HOME/lockfamily/<project>` or
+  `~/.local/state/lockfamily/<project>`, its `config_files` `-` or that
+  directory's `compose.yaml`) or mounts it read-only (the agents', as the
+  launcher's own). A compose file written in the workspace, with lox up's
+  project name and volume, or any container mounting the volume
+  read-write, could serve the socket from an image of its own: the
+  launcher then trusts none of that socket.
 
 `up.json` only names the lock: what is mounted is what Docker's labels
 prove. Anything else fails closed.
+
+What these checks are for: mistakes (a stale or copied `up.json`, another
+workspace's lock, a volume or compose file of the same name) and files
+others than you can write. They are no boundary against an agent that
+runs as you on the host with Docker access (Claude Code started in a
+terminal usually does): it can write `up.json`, make volumes and
+containers with any labels, or `docker exec` into lox up's containers.
+Even then it holds none of the console's credentials and cannot sign a
+decision (the hub signs them, the console checks the hub's key), but it
+could serve an impostor socket to another agent. To contain the agent
+itself, run it in lea, whose containers have no Docker access.
 
 The socket's name derives from the project (`.locksql/config.toml` up from
 the working directory) and the profile: run the agent from the workspace,

@@ -23,7 +23,8 @@ Supported lockhub: as v0.11.5; the console now needs it
   launcher's `mcp`, `status`, `tables`, `describe`, `plan`, `run`,
   `request`, `logout`, `pii` and `doctor` mount the socket volume of the
   workspace's locksql lock that `lox up` names in `.lockfamily/up.json`,
-  read-only, once Docker confirms it is lox up's (the checks of lea), and
+  read-only, once Docker confirms it is lox up's (the checks of lea; no container
+  lox up did not start may mount it read-write), and
   no longer the fixed `locksql-run`: without `lox up` they exit 2 and say
   to run it (`doctor` runs without a socket and says why). With several
   locksql locks in the workspace, `--instance NAME` picks one (in
