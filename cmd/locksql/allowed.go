@@ -20,7 +20,7 @@ func parseAllowedUIDs(s string) ([]int, error) {
 	var uids []int
 	for _, f := range strings.Split(s, ",") {
 		if f == "" || strings.Trim(f, "0123456789") != "" {
-			return nil, fmt.Errorf("--allowed-uids: comma-separated uids, got %q", s)
+			return nil, errors.New("--allowed-uids: comma-separated uids")
 		}
 		if f[0] == '0' {
 			return nil, fmt.Errorf("--allowed-uids: %s is root or has a leading zero", f)

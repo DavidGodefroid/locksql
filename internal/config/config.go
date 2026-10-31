@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,7 +45,7 @@ func ParseTier(s string) (Tier, error) {
 			return Tier(i), nil
 		}
 	}
-	return TierRead, fmt.Errorf("unknown tier %q (want read, write, ddl or admin)", s)
+	return TierRead, errors.New("unknown tier (want read, write, ddl or admin)")
 }
 
 func (t Tier) String() string {
@@ -366,7 +368,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	case "":
 		return Profile{}, errf("engine is required (mariadb, mysql, postgres or sqlite)")
 	default:
-		return Profile{}, errf("unknown engine %q (want mariadb, mysql, postgres or sqlite)", p.Engine)
+		return Profile{}, errf("unknown engine (want mariadb, mysql, postgres or sqlite)")
 	}
 	if p.Port < 0 || p.Port > 65535 {
 		return Profile{}, errf("port %d out of range", p.Port)
@@ -381,17 +383,17 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		return Profile{}, errf("tls_server_name: want a DNS name or an IP address")
 	}
 	if p.TLS != "" && TLSRank(p.TLS) < 0 {
-		return Profile{}, errf("unknown tls mode %q (want disable, prefer, require, verify-ca or verify-full)", p.TLS)
+		return Profile{}, errf("unknown tls mode (want disable, prefer, require, verify-ca or verify-full)")
 	}
 	socket := strings.HasPrefix(p.Host, "/")
 	if socket && TLSRank(p.TLS) > TLSRank(TLSPrefer) {
-		return Profile{}, errf("tls %q needs a TCP host; a Unix socket is not encrypted", p.TLS)
+		return Profile{}, errf("tls = \"require\", \"verify-ca\" or \"verify-full\" needs a TCP host; a Unix socket is not encrypted")
 	}
 
 	if r.Tier != "" {
 		t, err := ParseTier(r.Tier)
 		if err != nil {
-			return Profile{}, errf("%v", err)
+			return Profile{}, errf("tier: %v", err)
 		}
 		p.Tier = t
 	}
@@ -413,18 +415,18 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 			return Profile{}, errf("vault_path: want a path such as \"database/creds/<role>\", without spaces and not starting with '-' or '/'")
 		}
 	default:
-		return Profile{}, errf("unknown credentials mode %q (want ask, keychain or vault)", p.Credentials)
+		return Profile{}, errf("unknown credentials mode (want ask, keychain or vault)")
 	}
 	switch r.WriteFunctions {
 	case "", WriteFunctionsDenylist:
 	case WriteFunctionsAllowlist:
 		p.WriteFunctions = WriteFunctionsAllowlist
 	default:
-		return Profile{}, errf("unknown write_functions mode %q (want denylist or allowlist)", r.WriteFunctions)
+		return Profile{}, errf("unknown write_functions mode (want denylist or allowlist)")
 	}
-	for _, d := range p.Detectors {
+	for i, d := range p.Detectors {
 		if !knownDetectors[d] {
-			return Profile{}, errf("unknown detector %q", d)
+			return Profile{}, errf("detectors: unknown detector (entry %d; known: %s)", i+1, strings.Join(slices.Sorted(maps.Keys(knownDetectors)), ", "))
 		}
 	}
 
@@ -441,7 +443,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		}
 		d, err := time.ParseDuration(f.val)
 		if err != nil {
-			return Profile{}, errf("limits.%s: invalid duration %q", f.key, f.val)
+			return Profile{}, errf("limits.%s: invalid duration (want a Go duration such as \"30s\" or \"5m\")", f.key)
 		}
 		*f.dst = d
 	}

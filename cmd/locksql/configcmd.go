@@ -314,7 +314,8 @@ func parseLocals(vals []string) (map[string]map[string]string, error) {
 	for _, v := range vals {
 		lhs, val, ok := strings.Cut(v, "=")
 		if !ok || val == "" {
-			return nil, fmt.Errorf("--local %s: want NAME.KEY=VALUE", lhs)
+			// Without '=', lhs is the whole argument: perhaps a value.
+			return nil, errors.New("--local: want NAME.KEY=VALUE")
 		}
 		found := false
 		for _, k := range config.LocalKeys {
@@ -328,7 +329,7 @@ func parseLocals(vals []string) (map[string]map[string]string, error) {
 			}
 		}
 		if !found {
-			return nil, fmt.Errorf("--local %s: only %s can be given (NAME.KEY=VALUE)", lhs, strings.Join(config.LocalKeys, ", "))
+			return nil, fmt.Errorf("--local: only %s can be given (NAME.KEY=VALUE)", strings.Join(config.LocalKeys, ", "))
 		}
 	}
 	return out, nil

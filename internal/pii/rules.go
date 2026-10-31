@@ -72,14 +72,14 @@ func LoadRulesFile(path string) (Rules, error) {
 		return Rules{}, fmt.Errorf("pii: %s: unknown key %q", name, und[0].String())
 	}
 	var r Rules
-	for _, e := range f.Mask {
+	for i, e := range f.Mask {
 		if err := r.AddMode(e.Column, e.Mode); err != nil {
-			return Rules{}, fmt.Errorf("pii: %s: %w", name, err)
+			return Rules{}, fmt.Errorf("pii: %s: [[mask]] entry %d: %w", name, i+1, err)
 		}
 	}
-	for _, e := range f.Allow {
+	for i, e := range f.Allow {
 		if err := r.AddAllow(e.Column); err != nil {
-			return Rules{}, fmt.Errorf("pii: %s: %w", name, err)
+			return Rules{}, fmt.Errorf("pii: %s: [[allow]] entry %d: %w", name, i+1, err)
 		}
 	}
 	return r, nil
@@ -167,7 +167,7 @@ func (r *Rules) AddMode(pattern, mode string) error {
 		mode = ModeRedact
 	}
 	if !ValidMode(mode) {
-		return fmt.Errorf("pii rule %q: unknown mode %q (want redact, partial or email)", pattern, mode)
+		return errors.New("pii rule: unknown mode (want redact, partial or email)")
 	}
 	if err := r.Add(pattern); err != nil {
 		return err
@@ -374,16 +374,17 @@ func isASCII(s string) bool {
 // '*' or a name without '.', quotes, blanks, control characters or format
 // characters (bidi controls, zero-width marks), with at most one leading
 // and one trailing '*'. Patterns are shown to the human in review diffs,
-// where such characters could hide text.
+// where such characters could hide text. Errors never quote the pattern,
+// which may be a secret pasted in the wrong place.
 func parsePattern(p string) (string, error) {
 	segs := strings.Split(p, ".")
 	if len(segs) != 3 {
-		return "", fmt.Errorf("pii rule %q: want db.table.column ('*' allowed per segment)", p)
+		return "", errors.New("pii rule: want db.table.column ('*' allowed per segment)")
 	}
 	for _, s := range segs {
 		lit, _, _ := splitSeg(s)
 		if s == "" || (s != "*" && (lit == "" || strings.ContainsAny(lit, "*\"'`"))) || strings.IndexFunc(s, unsafeRune) >= 0 {
-			return "", fmt.Errorf("pii rule %q: each segment is '*' or a plain name, optionally with a leading or trailing '*'", p)
+			return "", errors.New("pii rule: each segment is '*' or a plain name, optionally with a leading or trailing '*'")
 		}
 	}
 	return p, nil

@@ -255,15 +255,15 @@ func DecodeShare(data []byte) (*Share, error) {
 		if p.PIIRules != "" && !ValidRuleSet(p.PIIRules) {
 			return nil, fmt.Errorf("config import: profile %q: invalid pii_rules", name)
 		}
-		for _, k := range p.NeedsLocal {
+		for i, k := range p.NeedsLocal {
 			if !IsLocalKey(k) && !slices.Contains(HandLocalKeys, k) {
-				return nil, fmt.Errorf("config import: profile %q: needs_local names %q, which is not a local key (%s)", name, k, strings.Join(LocalKeys, ", "))
+				return nil, fmt.Errorf("config import: profile %q: needs_local entry %d is not a local key (%s)", name, i+1, strings.Join(LocalKeys, ", "))
 			}
 		}
 	}
 	for _, set := range sortedKeys(s.PII) {
 		if !ValidRuleSet(set) {
-			return nil, fmt.Errorf("config import: invalid PII rule set name %q", set)
+			return nil, errors.New("config import: invalid PII rule set name (want 1 to 64 lower-case letters, digits, '_', '-' or '.', starting with a letter or digit)")
 		}
 	}
 	return &s, nil

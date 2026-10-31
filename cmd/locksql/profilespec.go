@@ -38,10 +38,10 @@ func completeSpec(s profileSpec) (profileSpec, error) {
 		s.name = "dev"
 	}
 	if !setupNameRe.MatchString(s.name) {
-		return s, fmt.Errorf("profile name %q: letters, digits, - and _ only", s.name)
+		return s, errors.New("profile name: letters, digits, - and _ only, starting with a letter or digit, at most 64")
 	}
 	if !slices.Contains(setupEngines, s.engine) {
-		return s, fmt.Errorf("engine %q: want %s", s.engine, strings.Join(setupEngines, ", "))
+		return s, fmt.Errorf("engine: want %s", strings.Join(setupEngines, ", "))
 	}
 	for what, v := range map[string]string{"host": s.host, "user": s.user, "database": s.database, "path": s.path, "vault path": s.vaultPath} {
 		if strings.IndexFunc(v, func(r rune) bool { return unicode.IsControl(r) }) >= 0 || len(v) > 512 {
@@ -78,16 +78,16 @@ func completeSpec(s profileSpec) (profileSpec, error) {
 			return s, errors.New("credentials vault needs the vault path, such as database/creds/<role>")
 		}
 		if strings.HasPrefix(s.vaultPath, "-") || strings.HasPrefix(s.vaultPath, "/") || strings.IndexFunc(s.vaultPath, unicode.IsSpace) >= 0 {
-			return s, fmt.Errorf("vault path %q: no spaces, and not starting with - or /", s.vaultPath)
+			return s, errors.New("vault path: no spaces, and not starting with - or /")
 		}
 	default:
-		return s, fmt.Errorf("credentials %q: want ask, keychain or vault", s.credentials)
+		return s, errors.New("credentials: want ask, keychain or vault")
 	}
 	if s.vaultPath != "" && s.credentials != config.CredentialsVault {
 		return s, errors.New("a vault path needs credentials vault")
 	}
 	if s.tls != "" && config.TLSRank(s.tls) < 0 {
-		return s, fmt.Errorf("tls %q: want disable, prefer, require, verify-ca or verify-full", s.tls)
+		return s, errors.New("tls: want disable, prefer, require, verify-ca or verify-full")
 	}
 	return s, nil
 }
