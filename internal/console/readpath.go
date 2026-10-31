@@ -30,6 +30,11 @@ const ResponseQuantum = kconsole.ResponseQuantum
 // statement: never the server's message, which can quote values.
 const genericFailure = "statement refused by the database (the details are shown on the console)"
 
+// genericDBFailure is what a client learns when the database fails any
+// other request (a catalog listing, a check before a run): never the
+// server's message, which can quote values.
+const genericDBFailure = "the database returned an error (the details are shown on the console)"
+
 // catalog resolves table names for the analyser from the column catalog of
 // the session, read once per database and refreshed when a name is
 // unknown.
@@ -443,6 +448,9 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 	// The counts call COUNT and MIN and compare: a function or operator
 	// created since the plan would run in them first.
 	if r, err := s.checkShadows(ctx, sess, pl.db, pl.shadow); err != nil || r != nil {
+		if err != nil {
+			err = ctxErr(ctx, err)
+		}
 		return nil, r, err
 	}
 	var out []string
@@ -455,8 +463,8 @@ func (s *Server) kCount(ctx context.Context, sess engine.Session, pl *plan) ([]s
 		st := sqlclass.Statement{Class: sqlclass.Read, Kind: "select", SQL: c.SQL, Limit: 1}
 		res, err := sess.Run(ctx, pl.db, st, 1)
 		if err != nil {
-			if errors.Is(err, engine.ErrConnLost) || ctx.Err() != nil {
-				return nil, nil, err
+			if errors.Is(err, engine.ErrConnLost) || ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
+				return nil, nil, ctxErr(ctx, err)
 			}
 			s.println("k-anonymity check failed: " + safeText(s.errText(err, c.SQL, false), false))
 			add("k-anonymity: a count could not run, so the rows this statement covers are unknown")

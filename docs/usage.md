@@ -973,10 +973,18 @@ locksql doctor   [--profile P]
   `explain_ok` and `read_only`.
 - A failed statement gives a generic message
   (`statement refused by the database (the details are shown on the
-  console)`), never the server's text; the details go to the console and,
-  redacted, to the audit log. No timings are returned, and once the
+  console)`), never the server's text; the details go to the console and
+  to the audit log, with the values they quote redacted when the session
+  masks. No timings are returned, and once the
   statement is approved `run` answers on a 250 ms quantum, success or
   failure; a refusal before approval is not quantized.
+  Any other request the database fails (`tables`, `describe`, a check
+  before a run) answers `<operation> failed: the database returned an
+  error (the details are shown on the console)`, never the server's text;
+  a check cut by the statement timeout answers `<operation> timed out
+  (limits.statement_timeout)`. A privilege audit the database fails shows
+  in `status` as `privilege audit failed (the details are shown on the
+  console)`.
 - `tables` and `describe` are catalog reads: they run SQL built by the
   console, need no approval and are audited. `describe` also marks the
   masked columns.

@@ -76,6 +76,21 @@ Supported lockhub: as v0.11.5; the console now needs it
   lookup) answers the agent `plan failed: statement refused by the database
   (the details are shown on the console)`, no longer `plan: <the database's
   text>`, which could quote a value; the console shows the redacted detail.
+- The other requests the database fails no longer hand its text to the
+  agent either: `catalog.list` and `catalog.describe`, and the checks before
+  a ticket is submitted or run (the object state of a guarded plan, the
+  function lookup of the k-anonymity counts) answer `<operation> failed:
+  the database returned an error (the details are shown on the console)`
+  instead of `<operation>: <the database's text>`, which could quote a
+  value. The console shows the detail, redacted when the session masks; a
+  failed catalog request is audited with it redacted too (it was audited
+  unredacted). A lost connection still answers `conn_lost`, and a check
+  cut by the statement timeout answers `<operation> timed out
+  (limits.statement_timeout)`.
+- A privilege audit the database fails at start shows in `status` (and so
+  in `locksql_status` and `doctor`) as `privilege audit failed (the details
+  are shown on the console)`, no longer with the database's text; the
+  console shows the detail.
 
 ## v0.11.5 (2026-10-31)
 

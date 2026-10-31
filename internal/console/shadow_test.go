@@ -20,13 +20,17 @@ type shadowSession struct {
 	shadowed []string
 	ops      []string // operators also defined outside pg_catalog
 	err      error
+	// failAt, when set, makes err answer only the failAt-th lookup (the
+	// functions' and the operators' counted together).
+	failAt   int
+	lookups  int
 	asked    [][]string
 	askedOps [][]string
 }
 
 func (s *shadowSession) ShadowedOperators(_ context.Context, _ string, names []string) ([]string, error) {
 	s.askedOps = append(s.askedOps, slices.Clone(names))
-	if s.err != nil {
+	if s.fails() {
 		return nil, s.err
 	}
 	var out []string
@@ -38,11 +42,17 @@ func (s *shadowSession) ShadowedOperators(_ context.Context, _ string, names []s
 	return out, nil
 }
 
+// fails counts a lookup and reports whether it answers err.
+func (s *shadowSession) fails() bool {
+	s.lookups++
+	return s.err != nil && (s.failAt == 0 || s.lookups == s.failAt)
+}
+
 func (s *shadowSession) Flavor() engine.Flavor { return engine.FlavorPostgres }
 
 func (s *shadowSession) ShadowedFunctions(_ context.Context, _ string, names []string) ([]string, error) {
 	s.asked = append(s.asked, slices.Clone(names))
-	if s.err != nil {
+	if s.fails() {
 		return nil, s.err
 	}
 	var out []string
