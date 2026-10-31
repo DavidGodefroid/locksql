@@ -233,6 +233,21 @@ func (s *Server) policyPending(id int64) *ipc.Response {
 	return &r
 }
 
+// planFailed answers an engine error raised while planning: the client
+// gets the generic failure, never the database's text (it may quote
+// values); the console shows the detail, redacted as errText does, and
+// keeps it in s.planErr for the caller that audits it (a hub replan).
+// A lost connection is failed's.
+func (s *Server) planFailed(id int64, err error, sql string) ipc.Response {
+	if errors.Is(err, engine.ErrConnLost) {
+		s.planErr = "the database connection was lost"
+		return s.failed(id, "plan", err)
+	}
+	s.planErr = s.errText(err, sql, false)
+	s.println(paint.Fail("plan failed: " + safeText(s.planErr, false)))
+	return errResp(id, ipc.CodeInternal, "plan failed: "+genericFailure)
+}
+
 func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 	if r := s.policyPending(req.ID); r != nil {
 		return *r
@@ -266,6 +281,7 @@ func (s *Server) queryPlan(ctx context.Context, req ipc.Request) ipc.Response {
 // that refuses it (audited). query.plan stores the plan; a hub-mode run
 // plans again from the stored statement (hubmode.go).
 func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*plan, *ipc.Response) {
+	s.planErr = ""
 	if strings.TrimSpace(p.SQL) == "" {
 		return nil, ptr(errResp(id, ipc.CodeInvalidParams, "query.plan needs sql"))
 	}
@@ -314,7 +330,7 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 	if s.profile.WriteFunctions == config.WriteFunctionsAllowlist {
 		r, sn, err := s.strictWriteFunctions(ctx, sess, db, st)
 		if err != nil {
-			return nil, ptr(s.failed(id, "plan", err))
+			return nil, ptr(s.planFailed(id, err, p.SQL))
 		}
 		if r != nil {
 			return nil, ptr(s.refuse(ctx, id, p.Intent, db, st.SQL, class, "", p.SQL, shifted(r, base)))
@@ -328,7 +344,7 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 		// result afterwards would not undo the write.
 		r, err := s.writePlan(ctx, sess, pl)
 		if err != nil {
-			return nil, ptr(s.failed(id, "plan", err))
+			return nil, ptr(s.planFailed(id, err, p.SQL))
 		}
 		if r != nil {
 			return nil, ptr(s.refuse(ctx, id, p.Intent, db, st.SQL, class, "", p.SQL, r))
@@ -340,7 +356,7 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 		full := strings.TrimSpace(p.SQL)
 		r, err := s.readPlan(ctx, sess, pl, full)
 		if err != nil {
-			return nil, ptr(s.failed(id, "plan", err))
+			return nil, ptr(s.planFailed(id, err, p.SQL))
 		}
 		if r != nil {
 			return nil, ptr(s.refuse(ctx, id, p.Intent, db, auditSQL, class, "", p.SQL, r))
@@ -359,7 +375,7 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 	pl.refs = objectRefs(s.dialect, pl)
 	state, err := s.planState(ctx, sess, pl)
 	if err != nil {
-		return nil, ptr(s.failed(id, "plan", err))
+		return nil, ptr(s.planFailed(id, err, p.SQL))
 	}
 	pl.guarded = state != nil
 	switch {
@@ -370,12 +386,12 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 		// tables the write names, for its ticket.
 		tr, err := engine.TriggersOf(ctx, sess, pl.db, pl.refs.Relations)
 		if err != nil && !errors.Is(err, engine.ErrNoTriggerList) {
-			return nil, ptr(s.failed(id, "plan", err))
+			return nil, ptr(s.planFailed(id, err, p.SQL))
 		}
 		pl.sideEffects = tr
 	}
 	if pl.hash, pl.inputs, err = s.planDigests(pl, state); err != nil {
-		return nil, ptr(s.failed(id, "plan", err))
+		return nil, ptr(s.planFailed(id, err, p.SQL))
 	}
 
 	return pl, nil

@@ -231,6 +231,9 @@ type Server struct {
 	now  func() time.Time
 
 	plans map[string]*plan
+	// planErr is the redacted detail of the last engine failure of
+	// buildPlan ("" for none); requests are served one at a time.
+	planErr string
 
 	// catalogCache holds the column catalog per database for the analyser.
 	catalogCache map[string][]engine.ColumnInfo

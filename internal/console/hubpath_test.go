@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -60,11 +61,15 @@ func TestHubProductionTicketFlag(t *testing.T) {
 }
 
 // The run of an approved ticket plans the statement again; when that
-// analysis fails (the catalog cannot be read), nothing runs and the
-// failure is audited with the ticket, a value its message quotes redacted.
+// analysis fails (the catalog cannot be read), nothing runs, the agent
+// gets the generic failure, never the database's text, and the failure is
+// audited with the ticket: the approval with the class, verdict and
+// k-anonymity warnings the human saw, then the failed run, a value its
+// message quotes redacted.
 func TestHubRunTimeAnalysisFailureAudited(t *testing.T) {
 	var hub *hubtest.Hub
 	h := newHarness(t, uatProfile(), withHub(t, &hub))
+	h.sess.count = countResult(int64(2))
 	pr := h.plan(t, "SELECT id, email, note FROM users WHERE email = 'bob@example.com' LIMIT 5", false)
 	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
 	hub.Decide(tk, ticket.Approved, "")
@@ -78,6 +83,12 @@ func TestHubRunTimeAnalysisFailureAudited(t *testing.T) {
 	if h.sess.runCount() != runs {
 		t.Fatal("a statement ran")
 	}
+	if m := r.Error.Message; strings.Contains(m, "carol@") || strings.Contains(m, "catalog read failed") || !strings.Contains(m, genericFailure) {
+		t.Errorf("client message %q", m)
+	}
+	if !strings.Contains(h.io.output(), "catalog read failed") {
+		t.Errorf("the console does not show the failure:\n%s", h.io.output())
+	}
 	recs := auditRecords(t, h, "run", tk)
 	if len(recs) == 0 {
 		t.Fatalf("no audit record of the failed run:\n%s", h.auditLog(t))
@@ -86,15 +97,40 @@ func TestHubRunTimeAnalysisFailureAudited(t *testing.T) {
 	if last["decision"] != "failed" || errText(last) == "" || strings.Contains(errText(last), "carol@") {
 		t.Errorf("run record %v", last)
 	}
-	if ap := auditRecords(t, h, "approved", tk); len(ap) != 1 || ap[0]["hub_sig"] == nil {
-		t.Errorf("no signed approval record before the failed run: %v", ap)
+	ap := auditRecords(t, h, "approved", tk)
+	if len(ap) != 1 || ap[0]["hub_sig"] == nil {
+		t.Fatalf("no signed approval record before the failed run: %v", ap)
+	}
+	if ap[0]["class"] != "read" || ap[0]["verdict"] == "" || !strings.Contains(fmt.Sprint(ap[0]["warnings"]), "k-anonymity") {
+		t.Errorf("approval record without the ticket's class, verdict or warnings: %v", ap[0])
 	}
 }
 
-// A client of the socket cannot answer the console's own terminal prompts
-// (:unmask, :review): whatever it writes while a prompt waits, the
-// decision stays the human's and nothing is approved.
-func TestSocketCannotAnswerConsolePrompts(t *testing.T) {
+// A plan that fails in the engine (the catalog cannot be read) answers the
+// generic failure: the database's text stays on the console.
+func TestPlanFailureIsGeneric(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	h.sess.colsErr = errors.New("catalog read failed near carol@example.net")
+	r := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: selectUsers})
+	if r.Error == nil {
+		t.Fatal("the plan succeeded")
+	}
+	if m := r.Error.Message; r.Error.Code != ipc.CodeInternal || strings.Contains(m, "carol@") || strings.Contains(m, "catalog read failed") || !strings.Contains(m, genericFailure) {
+		t.Errorf("client error %d %q", r.Error.Code, m)
+	}
+	out := h.io.output()
+	if !strings.Contains(out, "catalog read failed") || strings.Contains(out, "carol@example.net") {
+		t.Errorf("console:\n%s", out)
+	}
+}
+
+// While the console's own terminal prompt waits (:unmask, :review), what a
+// socket client writes (raw answers, a JSON-RPC result, a request) neither
+// turns unmasked output on nor applies or saves the loosening. The fake
+// terminal cannot receive the socket's bytes by construction (it answers
+// nothing while it blocks), so this guards the socket side: no method and
+// no stray input changes these decisions, and the loop still stops.
+func TestSocketWritesDuringConsolePrompt(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("needs the peer credentials of a Unix socket")
 	}

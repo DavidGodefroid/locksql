@@ -69,8 +69,13 @@ Supported lockhub: as v0.11.5; the console now needs it
   value matches. It no longer speaks of cell references.
 - An approved ticket whose statement cannot be planned again before its
   run (the catalog cannot be read, the connection fails) is audited: the
-  hub's signed `approved` record, then a `run` record `failed` with the
+  hub's signed `approved` record, with the class, verdict and k-anonymity
+  warnings of its ticket, then a `run` record `failed` with the redacted
   error; the run answered the error but left no record before.
+- A plan that fails in the engine (catalog or `EXPLAIN` read, object
+  lookup) answers the agent `plan failed: statement refused by the database
+  (the details are shown on the console)`, no longer `plan: <the database's
+  text>`, which could quote a value; the console shows the redacted detail.
 
 ## v0.11.5 (2026-10-31)
 
