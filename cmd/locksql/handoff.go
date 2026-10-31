@@ -100,13 +100,45 @@ type consoleArgs struct {
 	// noUpdateCheck forwards LOCKSQL_NO_UPDATE_CHECK, which the helper
 	// does not pass on, as an internal flag.
 	noUpdateCheck bool
+	// profileChecked is set once profile is known to name a profile of
+	// the project (checkProfile). Until then argv passes a placeholder the
+	// console refuses: an unchecked --profile may be a token or a URL
+	// pasted in the wrong place, and the handoff prints the command and
+	// puts it in a helper's argv that every account can read.
+	profileChecked bool
+}
+
+// uncheckedProfile stands for a --profile not checked against the
+// project's profiles: not a valid profile name, so the console refuses it.
+const uncheckedProfile = "refused:profile"
+
+// checkProfile checks a.profile against the profiles of the project's
+// .locksql/config.toml, the profiles a console started by a handoff
+// serves. The error names the flag, never the value.
+func (a *consoleArgs) checkProfile() error {
+	if a.profile == "" {
+		return nil
+	}
+	cfg, err := config.LoadFrom(a.project, "")
+	if err != nil {
+		return fmt.Errorf("--profile cannot be checked against the project's profiles: %w", err)
+	}
+	if _, ok := cfg.Profiles[a.profile]; !ok {
+		return fmt.Errorf("unknown profile: --profile names none of the project's profiles (%s); in separated mode the console serves the profiles of the project's .locksql/config.toml", listOrNone(profileNames(cfg)))
+	}
+	a.profileChecked = true
+	return nil
 }
 
 // argv is the console command line, after the binary.
 func (a consoleArgs) argv() []string {
 	out := []string{"console", "--project", a.project}
 	if a.profile != "" {
-		out = append(out, "--profile", a.profile)
+		p := a.profile
+		if !a.profileChecked {
+			p = uncheckedProfile
+		}
+		out = append(out, "--profile", p)
 	}
 	if a.auto {
 		out = append(out, "--auto")
@@ -208,6 +240,11 @@ func handoffConsole(e env, a consoleArgs) (code int, handled bool) {
 	uid := h.uid()
 	if uid == svcUID {
 		return 0, false
+	}
+	// From here on the command is printed or run as the console account.
+	if err := a.checkProfile(); err != nil {
+		fmt.Fprintln(e.stderr, "locksql console:", err)
+		return exitUsage, true
 	}
 	if h.clientAllowed(sys, uid) {
 		fmt.Fprintf(e.stderr, `locksql console: the console does not run in this terminal: it belongs to %s, an account that

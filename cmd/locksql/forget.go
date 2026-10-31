@@ -42,8 +42,10 @@ func runForget(e env, args []string) int {
 	}
 	p, ok := cfg.Profiles[*profile]
 	if !ok {
-		fmt.Fprintf(e.stderr, "locksql forget: unknown profile %q; configured profiles: %s\n",
-			*profile, listOrNone(profileNames(cfg)))
+		// The name is not quoted back: it may be a token or a URL
+		// pasted in the wrong place.
+		fmt.Fprintf(e.stderr, "locksql forget: unknown profile: --profile names none of the configured profiles: %s\n",
+			listOrNone(profileNames(cfg)))
 		return exitUsage
 	}
 	if !stdinIsTerminal(e.stdin) {

@@ -342,16 +342,20 @@ type Skipped struct{ Profile, Reason string }
 func (f *ConfigFile) Import(s *Share, o ImportOptions) ([]Skipped, error) {
 	names := sortedKeys(s.Profiles)
 	if len(o.Only) > 0 {
-		for _, n := range o.Only {
+		for i, n := range o.Only {
 			if _, ok := s.Profiles[n]; !ok {
-				return nil, fmt.Errorf("config import: profile %q is not in the file", n)
+				// Named by position, not quoted back: it may be a token
+				// or a URL pasted in the wrong place.
+				return nil, fmt.Errorf("config import: --profile %d: no such profile in the file", i+1)
 			}
 		}
 		names = o.Only
 	}
 	for pn, kv := range o.Local {
 		if _, ok := s.Profiles[pn]; !ok {
-			return nil, fmt.Errorf("config import: --local names profile %q, which is not in the file", pn)
+			// Not quoted back: the left side of --local may be a token
+			// or a URL pasted in the wrong place.
+			return nil, fmt.Errorf("config import: --local names a profile that is not in the file")
 		}
 		for k := range kv {
 			if !IsLocalKey(k) {

@@ -414,7 +414,9 @@ func Run(ctx context.Context, o Options) error {
 			names = append(names, n)
 		}
 		sort.Strings(names)
-		return fmt.Errorf("%w: no profile %q (profiles: %s)", ErrConfig, o.Profile, strings.Join(names, ", "))
+		// The name is not quoted back: it may be a token or a URL pasted
+		// in the wrong place.
+		return fmt.Errorf("%w: no such profile: --profile names none of the profiles (%s)", ErrConfig, strings.Join(names, ", "))
 	}
 	var ucp string
 	if cfg.ProjectRoot == "" {

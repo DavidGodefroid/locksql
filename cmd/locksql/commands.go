@@ -217,7 +217,9 @@ func resolveProfile(e env, name string) (string, error) {
 	names := profileNames(cfg)
 	if name != "" {
 		if _, ok := cfg.Profiles[name]; !ok {
-			return "", usagef("unknown profile %q; configured profiles: %s", name, listOrNone(names))
+			// The name is not quoted back: it may be a token or a URL
+			// pasted in the wrong place.
+			return "", usagef("unknown profile: --profile names none of the configured profiles: %s", listOrNone(names))
 		}
 		return name, nil
 	}
