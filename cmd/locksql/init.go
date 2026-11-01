@@ -82,6 +82,6 @@ func runInit(e env, args []string) int {
 // project has a .locksql/config.toml now, so its agents dial the project's
 // socket key: only a console started on the project serves them.
 func initNextSteps(root string) string {
-	return fmt.Sprintf("Next: add the database profile to %s,\nthen start the console with lockhub, from %s, and keep it running while the agent works\n(lox attach answers its questions: the policy, the PII rules, the password):\n  lox add locksql <instance>\n  lox up\n  lox attach <instance>\n",
+	return fmt.Sprintf("Next: add the database profile to %s (locksql profile add),\nthen start the console with lockhub, from %s, and keep it running while the agent works\n(lox attach answers its questions: the policy, the PII rules, the password):\n  lox add locksql <instance>\n  lox up\n  lox attach <instance>\n",
 		filepath.Join(root, ".locksql", "config.toml"), root)
 }

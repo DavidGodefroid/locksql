@@ -398,7 +398,7 @@ func firstQuery(t *testing.T, readOnly bool) {
 	// exits 1: the console's checks fail from its container, which runs
 	// none).
 	human(t, 1, project, []string{"init", "claude"})
-	human(t, 2, project, []string{"profile", "add", "--profile", "dev", "--engine", "sqlite", "--path", "demo.db"})
+	human(t, 2, project, []string{"profile", "add", "--non-interactive", "--profile", "dev", "--engine", "sqlite", "--path", "demo.db"})
 	human(t, 3, project, []string{"doctor", "--fix", "--yes"}, 1)
 
 	// The console, in a terminal, as lox up starts it: as the console
@@ -502,7 +502,7 @@ func firstQuery(t *testing.T, readOnly bool) {
 func TestConsoleAllowedUIDs(t *testing.T) {
 	setup(t)
 	project := demoProject(t)
-	human(t, 1, project, []string{"profile", "add", "--profile", "dev", "--engine", "sqlite", "--path", "demo.db"})
+	human(t, 1, project, []string{"profile", "add", "--non-interactive", "--profile", "dev", "--engine", "sqlite", "--path", "demo.db"})
 	human(t, 2, project, []string{"doctor", "--fix", "--yes"}, 1)
 	image := imageName()
 	runVol, homeVol := "locksql-e2e-allowed-run", "locksql-e2e-allowed-home"

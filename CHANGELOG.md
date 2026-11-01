@@ -32,9 +32,42 @@ release: it breaks standalone use (see Upgrading).
   locksql locks in the workspace, `--instance NAME` picks one (in
   `.mcp.json`: `"args": ["mcp", "--instance", "NAME"]`). `.mcp.json` is
   unchanged ([docs/launcher.md](docs/launcher.md#the-socket-of-lox-ups-lock)).
+- **`profile add` without a terminal needs `--non-interactive`**
+  (lockkit#111, the launcher verbs `lox init` calls). A script that passed
+  `--engine` and its flags without a terminal now gets a usage error:
+  add `--non-interactive`. There `--credentials keychain` is refused
+  (`ask` or `vault` only); the wizard still offers the keychain outside a
+  container. A profile already in the config exits 3 as before, and a
+  flag's errors name it without quoting the value.
+- **`doctor --fix` asks before each repair** on a terminal, the ones of
+  this account (wiring the agents) as well as the root ones, unless
+  `--yes`; without a terminal `--fix` needs `--yes` and is refused before
+  any check runs (it used to run the checks and make this account's
+  repairs first).
+
+### Added
+
+- **The launcher verbs `lox init` drives** (lockkit GUIDE §14,
+  lockkit#111): `locksql init <agent>`, `locksql profile add`,
+  `locksql doctor`, with the shapes every lock shares
+  ([docs/usage.md](docs/usage.md#locksql-profile-add)).
+  - `profile add --non-interactive` never reads the terminal and takes
+    everything from the flags; a missing `--engine` or `--path` is a usage
+    error naming the flag. It checks its arguments with lockkit's `verbs`
+    before writing anything: a flag named like a secret (`--password`), a
+    value that embeds a password, a positional argument and any
+    credential source other than `ask` or `vault` are refused.
+  - `profile add --production` writes a production profile; the wizard
+    asks for it too. The wizard asks only for what the flags did not give.
+  - `profile add --json` and `doctor --json` print exactly one line of
+    JSON on stdout (`{"lock","profile","config","production","credentials"}`,
+    `{"lock","ok","fixed","checks"}`, or `{"lock","code","error"}` with
+    `code` `usage`, `secret`, `exists` or `failed` on failure); the human
+    text goes to stderr.
 
 ### Changed
 
+- lockkit v0.10.0 (was v0.9.1): the launcher verbs contract (`verbs`).
 - lockkit v0.9.1 (was v0.9.0). **When no console runs, the hint is `lox
   up`**: the CLI (exit code 2), every `locksql_*` tool and `status` answer
   ``the console is started by `lox up` only: ask the user to run `lox up` ``,

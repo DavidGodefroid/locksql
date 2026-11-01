@@ -21,12 +21,19 @@ access, then start the console.
 ### `locksql profile add`
 
 ```sh
-locksql profile add [--project DIR] [--profile NAME --engine E (--path FILE | --host H [--port N]
-                      [--user U] [--database D] [--tls MODE]
-                      [--credentials ask|vault [--vault-path P]])]
+locksql profile add [--non-interactive] [--json] [--project DIR] [--profile NAME] [--production]
+                    [--credentials ask|vault [--vault-path P]]
+                    --engine postgres|mysql|mariadb|sqlite (--path FILE | --host H [--port N]
+                    [--user U] [--database D] [--tls MODE])
 ```
 
-It asks for the profile's name (default `dev`), engine (`sqlite`,
+These are the launcher verbs every lock shares, so that `lox init` drives
+each the same way ([lockkit GUIDE §14](https://github.com/DavidGodefroid/lockkit/blob/main/GUIDE.md#14-launcher-verbs-verbs)):
+`locksql init <agent>`, `locksql profile add`, `locksql doctor`.
+
+On a terminal, it asks for what the flags did not give: the profile's name
+(default `dev`), whether it is a production profile (its name is then typed
+for every approval), engine (`sqlite`,
 `postgres`, `mariadb`, `mysql`), then the SQLite file relative to the
 project, or host, port, user (empty: asked at console start), database
 (empty: chosen per query), for a remote host the `tls` mode (default
@@ -37,13 +44,47 @@ never asks for a password. Inside a container it offers
 `host.docker.internal` as the host of a database on your machine, and never
 the keychain. The profile is appended to `<project>/.locksql/config.toml`
 (created when absent; the commented example of `locksql init` is kept), and
-only once the result loads. The flags skip the questions, and without a
-terminal they are required:
+only once the result loads. Flags the checks refuse make the wizard ask
+everything again.
+
+Without a terminal it refuses rather than wait for an answer: pass
+`--non-interactive`, which never reads the terminal and takes everything from
+the flags (a missing `--engine` or `--path` is a usage error naming the
+flag):
 
 ```sh
-locksql profile add --engine sqlite --path demo.db
-locksql profile add --profile uat --engine postgres --host db.internal --user reporting
+locksql profile add --non-interactive --engine sqlite --path demo.db
+locksql profile add --non-interactive --profile uat --engine postgres --host db.internal --user reporting
+locksql profile add --non-interactive --json --profile prod --production --engine mariadb \
+  --host db.internal --credentials vault --vault-path database/creds/ro
 ```
+
+No form takes, asks for or writes a secret. The non-interactive form takes
+`--credentials ask` (the default: the console asks at start, masked) or
+`vault` with `--vault-path`; `keychain` is refused there, since nothing could
+put the password in the keychain without asking for it (the wizard still
+offers it outside a container). A flag named like a secret (`--password`,
+`--vault-token`, ...), a value that embeds a password (`user:pw@host`,
+`password=...`) and any positional argument are refused, and no error quotes
+a flag's value, only its name. A profile already in the config is never
+rewritten: `profile add` fails and writes nothing.
+
+`--json` prints exactly one line of JSON on stdout, the human text going to
+stderr. On success:
+
+```json
+{"lock":"locksql","profile":"prod","config":"/work/shop/.locksql/config.toml","production":true,"credentials":"vault"}
+```
+
+(`credentials` is left out for a SQLite profile, which has no secret.) On
+failure, with a non-zero exit code:
+
+```json
+{"lock":"locksql","code":"exists","error":"profile prod is already in /work/shop/.locksql/config.toml: nothing written"}
+```
+
+`code` is `usage` (a flag missing, unknown or invalid), `secret` (a secret
+given), `exists` (the profile is already there) or `failed` (anything else).
 
 The project is the directory holding `.locksql/config.toml`, else the git
 root, else the current directory, or `--project`.
@@ -431,7 +472,7 @@ vault_path  = "database/creds/reporting-ro"
 ### `locksql doctor`
 
 ```sh
-locksql doctor [--profile P] [--fix [--yes]]
+locksql doctor [--profile P] [--fix [--yes]] [--json]
 ```
 
 `locksql doctor` runs as `agent` and checks what the agent's side sees.
@@ -450,6 +491,17 @@ under each one that is not ✓, then a count of each; the exit code is 1 when
 any check fails. Some checks are about a host and say little in a container:
 `separate session` warns there, since the container takes the place of the
 console account's login session.
+
+`--json` prints one line of JSON on stdout instead, the human text going to
+stderr: `ok` (no check failed, after the repairs with `--fix`), the repairs
+made (`fixed`) and every check, with its `status` (`ok`, `warn` or `fail`),
+`detail` and, when it is not ok, its `fix`. The exit code is 0 exactly when
+`ok`. A doctor that could not check (a usage error, `--fix` refused) prints
+`{"lock":"locksql","code":"usage","error":"..."}` instead.
+
+```json
+{"lock":"locksql","ok":true,"fixed":["give /work/shop/.locksql to locksql, mode 0755"],"checks":[{"check":"operating system","status":"ok","detail":"linux"}]}
+```
 
 | Check | Fails or warns when |
 |---|---|
@@ -472,8 +524,10 @@ console account's login session.
 
 #### `locksql doctor --fix`
 
-`--fix` runs the checks, then makes the repairs they offer, reports each
-one (`repaired: ...` or `not repaired: ...`) and runs the checks again. The
+`--fix` runs the checks, then makes the repairs they offer, asking before
+each one unless `--yes`, reports each one (`repaired: ...` or `not
+repaired: ...`) and runs the checks again. Without a terminal, `--fix` needs
+`--yes`; `--yes` without `--fix` is a usage error. The
 repairs are small and idempotent; a second run finds nothing to do. The one a
 Docker setup needs is the project's: the console account, which exists only
 in the image, must own `.locksql/` and read the configs. The launcher runs
@@ -956,7 +1010,7 @@ locksql run      --profile P PLAN_ID                          # waits for the hu
 locksql pii      list|add --profile P [DB.TABLE.COLUMN]
 locksql request  --profile P "tier=write" | "limits.max_rows=500" | "allow=app.t.c"
 locksql logout   --profile P
-locksql doctor   [--profile P]
+locksql doctor   [--profile P] [--fix [--yes]] [--json]
 ```
 
 - `--profile` may be left out when exactly one profile is configured. Without
