@@ -42,7 +42,7 @@ never opens a connection. The console runs attached to lockhub only:
 <p align="center"><sub>Claude Code (left, account <code>alice</code>) and the locksql console (right, account <code>locksql</code>, started with <code>--show-results</code>). Recorded before the console ran attached to lockhub only: approvals are now given in lockhub, and placeholders and cell references are refused.</sub></p>
 
 > [!NOTE]
-> **Pre-release** (`v0.12.x`). See [Install](#install).
+> **Pre-release** (`v0.13.x`). See [Install](#install).
 
 ## Why locksql?
 
