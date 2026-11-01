@@ -36,6 +36,13 @@ This file records the changes a user or an agent has to know about.
   `pii/<set>.toml` (readable by the console account) and `PII rule sets`:
   the console reads `lox up`'s reviewed copy, never the project.
 
+- Each release tag bumps the `locksql` formula of the
+  [Homebrew tap](https://github.com/DavidGodefroid/homebrew-tap)
+  (`brew install davidgodefroid/tap/locksql`): the release workflow's last job
+  dispatches the bump once the release is signed
+  (DavidGodefroid/lockfamily#8). It is skipped while the
+  `TAP_DISPATCH_TOKEN` secret is not set.
+
 ## v0.13.0 (2026-11-01)
 
 Supported lockhub: as v0.12.0 (v0.3.0 or later). A minor release: a script
