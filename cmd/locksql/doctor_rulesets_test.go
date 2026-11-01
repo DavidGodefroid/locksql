@@ -105,7 +105,7 @@ func TestProjectChecksSymlinkedRuleSets(t *testing.T) {
 // (#130). Otherwise, and whatever doctor's own environment holds (the
 // console it starts gets a fresh one), the ownership check fails as
 // before; unreadable or writable by others fails either way.
-func TestProjectChecksLockUpWorkspace(t *testing.T) {
+func TestProjectChecksLoxUpWorkspace(t *testing.T) {
 	dir := func(mode fs.FileMode, uid int) ownedInfo {
 		return ownedInfo{fakeInfo{"d", fs.ModeDir | mode}, uid, uid}
 	}

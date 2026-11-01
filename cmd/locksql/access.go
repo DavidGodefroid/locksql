@@ -213,7 +213,7 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 	// they are the seed of the console's sets.
 	dir := filepath.Join(root, ".locksql")
 	sets := filepath.Join(dir, pii.SetsDir)
-	why := lockUpWorkspace(d, root)
+	why := loxUpWorkspace(d, root)
 	ownDir := func(title, path string) bool {
 		if d.lstat != nil {
 			if fi, err := d.lstat(path); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
@@ -290,15 +290,15 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 	return out
 }
 
-// lockUpWorkspace says why doctor takes it that the project's consoles
-// keep their PII rule sets out of the project ("": it does not): a lock
+// loxUpWorkspace says why doctor takes it that the project's consoles
+// keep their PII rule sets out of the project ("": it does not): a lox
 // up workspace, whose consoles lox up runs with LOCKSQL_PII_DIR. Its
 // lockfamily.yaml is found as lox up finds it: in .lockfamily/ as soon
 // as that exists, else (the layout before it) at the project's root.
 // Doctor's own environment says nothing of the console's: the console
 // started from this account is handed off to the console account with
 // a fresh environment.
-func lockUpWorkspace(d doctorEnv, root string) string {
+func loxUpWorkspace(d doctorEnv, root string) string {
 	lf := filepath.Join(root, ".lockfamily")
 	f := filepath.Join(lf, "lockfamily.yaml")
 	lstat := d.lstat

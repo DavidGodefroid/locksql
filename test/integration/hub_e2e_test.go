@@ -31,7 +31,7 @@ import (
 )
 
 // The phase-1 demo of the approval hub, end to end with real binaries:
-// lockhub and lock built from a lockhub checkout (LOCKHUB_SRC), locksql
+// lockhub and lox built from a lockhub checkout (LOCKHUB_SRC), locksql
 // from this tree, a throwaway Postgres. An agent plans and runs, gets
 // pending with a ticket; a human approves with `lox approve` in a
 // terminal; the agent runs the ticket and gets the rows; the hub's audit
