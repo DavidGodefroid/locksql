@@ -4,34 +4,14 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## v0.12.0 (2026-11-01)
+## v0.13.0 (2026-11-01)
 
-Supported lockhub: v0.3.0 or later (the host CLI `lox`, and the
-`.lockfamily/up.json` the agent commands read); the console now needs it
-([docs/usage.md](docs/usage.md#2-start-the-console), lockkit#110). A minor
-release: it breaks standalone use (see Upgrading).
+Supported lockhub: as v0.12.0 (v0.3.0 or later). A minor release: a script
+that runs `profile add` without a terminal needs `--non-interactive` (see
+Upgrading).
 
 ### Upgrading
 
-- **The console runs attached to lockhub only.** `locksql console` without
-  `--hub`, `--hub-key-file` and `--instance` exits with ``launched by `lox
-  up` only`` (exit code 3), before any prompt or file write: start it with
-  `lox add locksql <instance>` and `lox up`, and decide the requests with
-  `lox approve`. A script or service that started a standalone console
-  stops working.
-- Plans a console started with `--hub` left pending are no longer
-  withdrawn by a later start without it: there is no such start.
-- **The agent commands reach the console `lox up` runs** (lockhub#78). The
-  launcher's `mcp`, `status`, `tables`, `describe`, `plan`, `run`,
-  `request`, `logout`, `pii` and `doctor` mount the socket volume of the
-  workspace's locksql lock that `lox up` names in `.lockfamily/up.json`,
-  read-only, once Docker confirms it is lox up's (the checks of lea; no container
-  lox up did not start may mount it read-write), and
-  no longer the fixed `locksql-run`: without `lox up` they exit 2 and say
-  to run it (`doctor` runs without a socket and says why). With several
-  locksql locks in the workspace, `--instance NAME` picks one (in
-  `.mcp.json`: `"args": ["mcp", "--instance", "NAME"]`). `.mcp.json` is
-  unchanged ([docs/launcher.md](docs/launcher.md#the-socket-of-lox-ups-lock)).
 - **`profile add` without a terminal needs `--non-interactive`**
   (lockkit#111, the launcher verbs `lox init` calls). A script that passed
   `--engine` and its flags without a terminal now gets a usage error:
@@ -68,6 +48,38 @@ release: it breaks standalone use (see Upgrading).
 ### Changed
 
 - lockkit v0.10.0 (was v0.9.1): the launcher verbs contract (`verbs`).
+
+## v0.12.0 (2026-11-01)
+
+Supported lockhub: v0.3.0 or later (the host CLI `lox`, and the
+`.lockfamily/up.json` the agent commands read); the console now needs it
+([docs/usage.md](docs/usage.md#2-start-the-console), lockkit#110). A minor
+release: it breaks standalone use (see Upgrading).
+
+### Upgrading
+
+- **The console runs attached to lockhub only.** `locksql console` without
+  `--hub`, `--hub-key-file` and `--instance` exits with ``launched by `lox
+  up` only`` (exit code 3), before any prompt or file write: start it with
+  `lox add locksql <instance>` and `lox up`, and decide the requests with
+  `lox approve`. A script or service that started a standalone console
+  stops working.
+- Plans a console started with `--hub` left pending are no longer
+  withdrawn by a later start without it: there is no such start.
+- **The agent commands reach the console `lox up` runs** (lockhub#78). The
+  launcher's `mcp`, `status`, `tables`, `describe`, `plan`, `run`,
+  `request`, `logout`, `pii` and `doctor` mount the socket volume of the
+  workspace's locksql lock that `lox up` names in `.lockfamily/up.json`,
+  read-only, once Docker confirms it is lox up's (the checks of lea; no container
+  lox up did not start may mount it read-write), and
+  no longer the fixed `locksql-run`: without `lox up` they exit 2 and say
+  to run it (`doctor` runs without a socket and says why). With several
+  locksql locks in the workspace, `--instance NAME` picks one (in
+  `.mcp.json`: `"args": ["mcp", "--instance", "NAME"]`). `.mcp.json` is
+  unchanged ([docs/launcher.md](docs/launcher.md#the-socket-of-lox-ups-lock)).
+
+### Changed
+
 - lockkit v0.9.1 (was v0.9.0). **When no console runs, the hint is `lox
   up`**: the CLI (exit code 2), every `locksql_*` tool and `status` answer
   ``the console is started by `lox up` only: ask the user to run `lox up` ``,
