@@ -98,6 +98,8 @@ func TestInstanceFlagOnEveryClientCommand(t *testing.T) {
 		{"run", "--profile", "uat", "--instance", "orders", "p1"},
 		{"pii", "list", "--profile", "uat", "--instance", "orders"},
 		{"logout", "--profile", "uat", "--instance", "orders"},
+		{"request", "--profile", "uat", "--instance", "orders", "tier=write"},
+		{"plan", "--profile", "uat", "--instance", "orders", "--db", "app", "SELECT 1"},
 	} {
 		cli(t, dir, "", args...)
 		select {
@@ -171,5 +173,22 @@ func TestMCPCommandPassesTheInstance(t *testing.T) {
 	got := listenAt(t, dir, "orders")
 	call, _, _ := mcpSession(t, dir, "--profile", "uat", "--instance", "orders")
 	call("tools/call", map[string]any{"name": "locksql_list_tables", "arguments": map[string]any{"profile": "uat"}})
+	waitConn(t, got)
+}
+
+func TestStatusAllReachesTheInstance(t *testing.T) {
+	dir := project(t, twoProfiles)
+	separatedSockets(t)
+	got := listenAt(t, dir, "orders")
+	cli(t, dir, "", "status", "--instance", "orders")
+	// Both profiles are dialled; the listener serves the uat socket.
+	waitConn(t, got)
+}
+
+func TestDoctorStatusReachesTheInstance(t *testing.T) {
+	dir := project(t, uatConfig)
+	separatedSockets(t)
+	got := listenAt(t, dir, "orders")
+	cli(t, dir, "", "doctor", "--profile", "uat", "--instance", "orders")
 	waitConn(t, got)
 }

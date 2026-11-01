@@ -12,8 +12,9 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/mcpserver"
 )
 
-// runMCP is `locksql mcp [--profile P] [--instance NAME]`: an MCP server on stdin/stdout for
-// the agent session that spawned it. Stdout carries only the protocol.
+// runMCP is `locksql mcp [--profile P] [--instance NAME]`: an MCP server
+// on stdin/stdout for the agent session that spawned it. Stdout carries
+// only the protocol.
 func runMCP(e env, args []string) int {
 	const usage = "locksql mcp [--profile P] [--instance NAME]"
 	var profile, instanceFlag string

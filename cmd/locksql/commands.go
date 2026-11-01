@@ -60,11 +60,11 @@ func usagef(format string, a ...any) error { return usageError{fmt.Sprintf(forma
 type opts struct {
 	profile  string
 	instance string
-	db      string
-	unmask  bool
-	intent  string
-	json    bool
-	args    []string
+	db       string
+	unmask   bool
+	intent   string
+	json     bool
+	args     []string
 }
 
 // clientCmd is one client command: its flags, its arguments and what it
