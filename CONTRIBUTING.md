@@ -152,6 +152,14 @@ goreleaser release --snapshot --clean --skip=sign
 
 The output goes to `dist/`, which is ignored by git.
 
+Once the archives and the images are published and signed, the workflow's last
+job (`tap`) asks the [Homebrew tap](https://github.com/DavidGodefroid/homebrew-tap)
+to bump the `locksql` formula to the tag (a `repository_dispatch` of type
+`bump`); the tap verifies the release with cosign before rewriting the
+formula. It needs the secret `TAP_DISPATCH_TOKEN`, a fine-grained token
+limited to DavidGodefroid/homebrew-tap (Contents: read and write); without
+it the step is skipped.
+
 The release chain is pinned end to end:
 
 - every `uses:` in `.github/workflows/` names a full commit SHA with its
