@@ -70,7 +70,7 @@ func TestRunOverRealSocket(t *testing.T) {
 		}
 	}()
 
-	cs := connect(t, Options{Profile: "uat", Dial: DialClient(cwd, "1.2.3")}, nil)
+	cs := connect(t, Options{Profile: "uat", Dial: DialClient(cwd, "1.2.3", "")}, nil)
 	r := call(t, cs, "locksql_run", map[string]any{"plan_id": "p1"})
 	if r.IsError {
 		t.Fatalf("error: %s", text(r))
@@ -88,7 +88,7 @@ func TestRunOverRealSocket(t *testing.T) {
 
 	// Another profile has no console: the error asks for `lox up`, with no
 	// value in the hint.
-	other := connect(t, Options{Dial: DialClient(cwd, "1.2.3")}, nil)
+	other := connect(t, Options{Dial: DialClient(cwd, "1.2.3", "")}, nil)
 	r = call(t, other, "locksql_plan", map[string]any{"profile": "prod", "sql": "SELECT 1 LIMIT 1"})
 	if !r.IsError || !strings.Contains(text(r), client.StartHint) || strings.Contains(text(r), "--profile") || strings.Contains(text(r), cwd) {
 		t.Fatalf("no console: %s", text(r))

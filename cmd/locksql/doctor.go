@@ -85,7 +85,9 @@ type doctorEnv struct {
 // console now runs in the image, whose launcher sets it up.
 const imageHint = "run locksql through the launcher, which runs it in its image (scripts/install.sh, docs/docker.md)"
 
-func realDoctorEnv() doctorEnv {
+// realDoctorEnv is the machine's doctorEnv; its console status reaches the
+// lock instance ("" for none).
+func realDoctorEnv(instance string) doctorEnv {
 	return doctorEnv{
 		goos:       runtime.GOOS,
 		loadSys:    product.LoadSys,
@@ -133,7 +135,7 @@ func realDoctorEnv() doctorEnv {
 			return prober.ProbeTLS(ctx, p)
 		},
 		status: func(cwd, profile string) (*ipc.StatusResult, error) {
-			c, err := client.Dial(cwd, profile)
+			c, err := client.DialInstance(cwd, profile, instance)
 			if err != nil {
 				return nil, err
 			}
@@ -151,7 +153,7 @@ func realDoctorEnv() doctorEnv {
 
 // doctorUsage is the usage of `locksql doctor` (lockkit GUIDE §14, plus
 // locksql's --profile).
-const doctorUsage = "locksql doctor [--profile P] [--fix [--yes]] [--json]"
+const doctorUsage = "locksql doctor [--profile P] [--instance NAME] [--fix [--yes]] [--json]"
 
 // runDoctor is `locksql doctor`: it checks that this machine is ready to
 // keep the agent away from the credentials and the data. With --fix it
@@ -163,6 +165,7 @@ func runDoctor(e env, args []string) int {
 	asJSON := verbs.WantsJSON(args)
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	profile := fs.String(verbs.FlagProfile, "", "profile whose console to check (default: every profile)")
+	instanceFlag := fs.String(client.FlagInstance, "", "reach one lock among several of this type")
 	fix := fs.Bool(verbs.FlagFix, false, "repair the agents' wiring, the project's .locksql as lox up reads it, and the socket directory")
 	yes := fs.Bool(verbs.FlagYes, false, "with --fix: make the repairs without asking")
 	fs.Bool(verbs.FlagJSON, false, "print one line of JSON on stdout")
@@ -171,6 +174,10 @@ func runDoctor(e env, args []string) int {
 	// the wrong place): only say the flags are wrong.
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		return usageFailure(errors.New("bad flags or an argument (doctor takes flags only)")).report(e, "doctor", doctorUsage, asJSON)
+	}
+	instance, err := client.ResolveInstance(*instanceFlag)
+	if err != nil {
+		return usageFailure(err).report(e, "doctor", doctorUsage, asJSON)
 	}
 	if *yes && !*fix {
 		return usageFailure(errors.New("--yes is for --fix")).report(e, "doctor", doctorUsage, asJSON)
@@ -186,7 +193,7 @@ func runDoctor(e env, args []string) int {
 		e.stdout = e.stderr // the human text
 	}
 	defer updateNotice(e)
-	d := realDoctorEnv()
+	d := realDoctorEnv(instance)
 	if e.doc != nil {
 		d = *e.doc
 	}

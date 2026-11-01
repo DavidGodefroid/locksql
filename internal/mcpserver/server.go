@@ -85,10 +85,11 @@ type Options struct {
 }
 
 // DialClient is the production Dial: a client.Client for the project of
-// cwd, named "locksql-mcp" in the hello handshake.
-func DialClient(cwd, version string) func(profile string) (Conn, error) {
+// cwd and the lock instance ("" for none), named "locksql-mcp" in the hello
+// handshake.
+func DialClient(cwd, version, instance string) func(profile string) (Conn, error) {
 	return func(profile string) (Conn, error) {
-		c, err := client.Dial(cwd, profile)
+		c, err := client.DialInstance(cwd, profile, instance)
 		if err != nil {
 			return nil, err
 		}
