@@ -351,7 +351,7 @@ build writes them to `allowed_uids` in the image's
 (the console prints them at start). Both refuse root (0), the console's own
 uid (10001) and 65534 (nobody, the kernel's overflow uid). Only whoever
 starts the console sets them: you, through the launcher (which passes the
-flag on) or through `lox up` (lockhub v0.2.5 or later: a lock's
+flag on) or through `lox up` (lockhub v0.3.0 or later: a lock's
 `allowed_uids` in the lockfamily.yaml lox up reviews with you); no client
 can. Every process of that uid, in any container that mounts the socket
 volume, may then use the console. It is the uid the kernel reports

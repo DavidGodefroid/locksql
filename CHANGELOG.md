@@ -4,10 +4,12 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## Unreleased
+## v0.12.0 (2026-11-01)
 
-Supported lockhub: as v0.11.5; the console now needs it
-([docs/usage.md](docs/usage.md#2-start-the-console), lockkit#110).
+Supported lockhub: v0.3.0 or later (the host CLI `lox`, and the
+`.lockfamily/up.json` the agent commands read); the console now needs it
+([docs/usage.md](docs/usage.md#2-start-the-console), lockkit#110). A minor
+release: it breaks standalone use (see Upgrading).
 
 ### Upgrading
 
