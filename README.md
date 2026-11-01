@@ -195,7 +195,9 @@ checks every peer on the socket.
 starts the MCP server in the image (Codex, Gemini CLI and Cursor take the
 same command). `profile add` asks for the engine, host, TLS and where the
 password comes from (typed at console start, or Vault), never for the
-password itself. Inside a container `localhost` is the container: a database
+password itself; `--non-interactive` takes them from flags instead, and
+`--json` answers in one line of JSON, as `lox init` calls it
+([docs/usage.md](docs/usage.md#locksql-profile-add)). Inside a container `localhost` is the container: a database
 on your machine is `host.docker.internal`, which the launcher maps to your
 machine. `locksql version` prints the launcher's version and its image's,
 `locksql update` updates both. What runs where, Vault, and an agent that

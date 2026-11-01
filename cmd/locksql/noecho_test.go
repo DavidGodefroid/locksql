@@ -11,11 +11,11 @@ import (
 func TestSetupErrorsDoNotEchoValues(t *testing.T) {
 	for _, v := range []string{"glsa_CanarySecretToken123", "https://user:glsa_Canary@h"} {
 		for key, s := range map[string]profileSpec{
-			"profile name": {engine: "postgres", name: v + "!"},
-			"engine":       {engine: v},
-			"credentials":  {engine: "postgres", credentials: v},
-			"vault path":   {engine: "postgres", credentials: "vault", vaultPath: "/" + v},
-			"tls":          {engine: "postgres", tls: v},
+			"--profile":     {engine: "postgres", name: v + "!"},
+			"--engine":      {engine: v},
+			"--credentials": {engine: "postgres", credentials: v},
+			"--vault-path":  {engine: "postgres", credentials: "vault", vaultPath: "/" + v},
+			"--tls":         {engine: "postgres", tls: v},
 		} {
 			_, err := completeSpec(s)
 			switch {

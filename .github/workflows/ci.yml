@@ -113,11 +113,15 @@ jobs:
           sh "$GITHUB_WORKSPACE/scripts/locksql" init claude
           grep -Eq '"command": ?"locksql"' .mcp.json
           test "$(stat -c %u .mcp.json)" = "$(id -u)"
-          sh "$GITHUB_WORKSPACE/scripts/locksql" profile add --profile local --engine sqlite --path app.db
+          # The launcher verbs as lox init calls them: one line of JSON each.
+          sh "$GITHUB_WORKSPACE/scripts/locksql" profile add --non-interactive --json --profile local --engine sqlite --path app.db >out
+          grep -q '^{"lock":"locksql","profile":"local",' out && test "$(wc -l <out)" = 1
+          code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" profile add --non-interactive --json --profile local --engine sqlite --path app.db >out || code=$?
+          test "$code" = 3 && grep -q '"code":"exists"' out
           # Exit 1: the console's checks fail from this container, which runs
           # none (docs/docker.md); the repair itself is checked below.
-          code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" doctor --fix --yes || code=$?
-          test "$code" = 1
+          code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" doctor --fix --yes --json >out || code=$?
+          test "$code" = 1 && grep -q '"checks":\[' out && test "$(wc -l <out)" = 1
           test "$(stat -c %u .locksql)" = 10001
           # No lox up here: no console's socket to mount (exit 2, as a client
           # that finds no console), never the fixed locksql-run instead.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -8,20 +9,25 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/DavidGodefroid/lockkit/verbs"
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
 	"github.com/DavidGodefroid/locksql/internal/config"
+	"github.com/DavidGodefroid/locksql/internal/product"
 )
 
 // containerHostGateway is the host a container reaches its own machine by
 // (Docker Desktop, or --add-host=host.docker.internal:host-gateway).
 const containerHostGateway = "host.docker.internal"
 
-// profileFlagsUsage is the profile flags of setup and profile add.
-const profileFlagsUsage = "--profile NAME --engine E (--path FILE | --host H [--port N] [--user U] [--database D] [--tls MODE] [--credentials ask|keychain|vault [--vault-path P]])"
+// profileAddUsage is the usage of `locksql profile add` (lockkit GUIDE §14).
+const profileAddUsage = "locksql profile add [--non-interactive] [--json] [--project DIR] [--profile NAME] [--production]\n" +
+	"                           [--credentials ask|vault [--vault-path P]]\n" +
+	"                           --engine postgres|mysql|mariadb|sqlite (--path FILE | --host H [--port N] [--user U] [--database D] [--tls MODE])"
 
 // flags registers the profile flags on fs.
 func (s *profileSpec) flags(fs *flag.FlagSet) {
-	fs.StringVar(&s.name, "profile", "", "name of the profile to add (default dev)")
+	fs.StringVar(&s.name, verbs.FlagProfile, "", "name of the profile to add (default dev)")
+	fs.BoolVar(&s.production, verbs.FlagProduction, false, "a production profile (its name is typed for every approval)")
 	fs.StringVar(&s.engine, "engine", "", "engine of the profile to add: "+strings.Join(setupEngines, ", "))
 	fs.StringVar(&s.host, "host", "", "database host")
 	fs.IntVar(&s.port, "port", 0, "database port")
@@ -29,30 +35,28 @@ func (s *profileSpec) flags(fs *flag.FlagSet) {
 	fs.StringVar(&s.database, "database", "", "the only database served (default: chosen per query)")
 	fs.StringVar(&s.path, "path", "", "SQLite file, relative to the project")
 	fs.StringVar(&s.tls, "tls", "", "disable, prefer, require, verify-ca or verify-full (default verify-full for a remote host)")
-	fs.StringVar(&s.credentials, "credentials", "", "ask, keychain or vault")
-	fs.StringVar(&s.vaultPath, "vault-path", "", "Vault path of the login, with --credentials vault")
+	fs.StringVar(&s.credentials, verbs.FlagCredentials, "", "ask (the console asks at start) or vault")
+	fs.StringVar(&s.vaultPath, verbs.FlagVaultPath, "", "Vault path of the login, with --credentials vault")
 }
 
-// anySet reports a profile flag given.
-func (s profileSpec) anySet() bool {
-	return s != (profileSpec{})
-}
-
-// profileWritten reports the profile added to the project's config.
-func profileWritten(e env, root string, s profileSpec) {
+// profileWritten reports the profile added to the project's config on w.
+func profileWritten(e env, w io.Writer, root string, s profileSpec) {
 	p := e.paint
 	from := "the console asks for the password"
-	if s.credentials == config.CredentialsVault {
+	switch s.credentials {
+	case config.CredentialsVault:
 		from = "the console reads the login from Vault"
+	case config.CredentialsKeychain:
+		from = "the console reads the password from its keychain"
 	}
-	fmt.Fprintf(e.stdout, "Profile %s written to %s (no secret: %s).\n", s.name, configPath(root), from)
+	fmt.Fprintf(w, "Profile %s written to %s (no secret: %s).\n", s.name, configPath(root), from)
 	switch {
 	case s.engine == config.EngineSQLite:
 		if _, err := os.Stat(filepath.Join(root, s.path)); err != nil {
-			fmt.Fprintf(e.stdout, "%s %s does not exist yet: the console never creates it.\n", p.Yellow("note:"), filepath.Join(root, s.path))
+			fmt.Fprintf(w, "%s %s does not exist yet: the console never creates it.\n", p.Yellow("note:"), filepath.Join(root, s.path))
 		}
 	case s.credentials == config.CredentialsVault:
-		fmt.Fprintf(e.stdout, "%s the console reads the login with the vault CLI and asks for the Vault token at start (no vault login needed): set VAULT_ADDR in the console account's environment.\n", p.Yellow("note:"))
+		fmt.Fprintf(w, "%s the console reads the login with the vault CLI and asks for the Vault token at start (no vault login needed): set VAULT_ADDR in the console account's environment.\n", p.Yellow("note:"))
 	}
 }
 
@@ -69,72 +73,148 @@ func (e env) inContainer() bool {
 	return false
 }
 
-// runProfile is `locksql profile add`: the database profile step of setup
-// alone. It suits a console that runs in a container (docs/docker.md),
-// where the account and access steps of setup do not apply.
+// verbFailure is the failure of a launcher verb: its exit code, its
+// verbs.Error code and its message.
+type verbFailure struct {
+	exit int
+	code string
+	msg  string
+}
+
+// report prints f: on stderr, and as one verbs.Error on stdout with --json.
+func (f verbFailure) report(e env, verb, usage string, asJSON bool) int {
+	fmt.Fprintf(e.stderr, "locksql %s: %s\n", verb, f.msg)
+	if f.code == verbs.CodeUsage && usage != "" {
+		fmt.Fprintf(e.stderr, "usage: %s\n", usage)
+	}
+	if asJSON {
+		_ = verbs.WriteJSON(e.stdout, verbs.Error{Lock: product.P.Name, Code: f.code, Error: f.msg})
+	}
+	return f.exit
+}
+
+func usageFailure(err error) *verbFailure {
+	return &verbFailure{exit: exitUsage, code: verbs.ErrorCode(err, verbs.CodeUsage), msg: err.Error()}
+}
+
+// runProfile is `locksql profile add` (lockkit GUIDE §14): it adds one
+// database profile to the project's .locksql/config.toml. On a terminal it
+// asks for what the flags did not give; with --non-interactive it never
+// reads the terminal and takes everything from the flags. No form takes,
+// asks for or writes a secret: the console asks for the password at start,
+// or reads it from Vault (or, from the interactive form, its keychain).
 func runProfile(e env, args []string) int {
-	const usage = "locksql profile add [--project DIR] [" + profileFlagsUsage + "]"
 	if len(args) == 0 || args[0] != "add" {
-		fmt.Fprintln(e.stderr, "usage:", usage)
-		return exitUsage
+		f := verbFailure{exit: exitUsage, code: verbs.CodeUsage, msg: "the only subcommand is add"}
+		return f.report(e, "profile", profileAddUsage, verbs.WantsJSON(args))
 	}
-	fs := flag.NewFlagSet("profile add", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	project := fs.String("project", "", "project directory (default: the project of the current directory)")
+	args = args[1:]
+	asJSON := verbs.WantsJSON(args)
+	s, root, f := profileAdd(e, args, asJSON)
+	if f != nil {
+		return f.report(e, "profile add", profileAddUsage, asJSON)
+	}
+	if !asJSON {
+		profileWritten(e, e.stdout, root, s)
+		return exitOK
+	}
+	profileWritten(e, e.stderr, root, s)
+	out := verbs.Profile{Lock: product.P.Name, Profile: s.name, Config: configPath(root), Production: s.production}
+	if s.engine != config.EngineSQLite {
+		out.Credentials = s.credentials
+	}
+	if err := verbs.WriteJSON(e.stdout, out); err != nil {
+		fmt.Fprintf(e.stderr, "locksql profile add: %v\n", err)
+		return exitFail
+	}
+	return exitOK
+}
+
+// profileAdd parses args, gets the profile (from the flags, or the wizard)
+// and writes it. Human text goes to stderr with --json.
+func profileAdd(e env, args []string, asJSON bool) (profileSpec, string, *verbFailure) {
 	var s profileSpec
+	fs := flag.NewFlagSet("profile add", flag.ContinueOnError)
+	nonInteractive := fs.Bool(verbs.FlagNonInteractive, false, "never read the terminal; a missing value is a usage error")
+	fs.Bool(verbs.FlagJSON, false, "print one line of JSON on stdout")
+	project := fs.String(verbs.FlagProject, "", "project directory (default: the project of the current directory)")
 	s.flags(fs)
-	if err := fs.Parse(args[1:]); err != nil || fs.NArg() > 0 {
-		fmt.Fprintln(e.stderr, "usage:", usage)
-		return exitUsage
+	if err := verbs.Parse(product.P, fs, args); err != nil {
+		return s, "", usageFailure(err)
 	}
-	fail := func(code int, format string, a ...any) int {
-		fmt.Fprintf(e.stderr, "locksql profile add: "+format+"\n", a...)
-		return code
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	out := e.stdout
+	if asJSON {
+		out = e.stderr
 	}
+
 	root := agentinit.ProjectRoot(e.cwd)
 	if *project != "" {
 		abs, err := filepath.Abs(*project)
 		if err != nil {
-			return fail(exitUsage, "%v", err)
+			return s, "", usageFailure(errors.New("--project: not a usable path"))
 		}
 		if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
-			return fail(exitUsage, "--project %s is not a directory", abs)
+			return s, "", usageFailure(errors.New("--project: not a directory"))
 		}
 		root = abs
 	}
-	given := s.engine != ""
-	if !given && s.anySet() {
-		return fail(exitUsage, "the profile flags need --engine")
-	}
-	if !given && !e.tty {
-		return fail(exitUsage, "run it in a terminal, or pass --engine and its flags")
+	if !*nonInteractive && !e.tty {
+		return s, "", usageFailure(errors.New("no terminal to ask on: run it in a terminal, or pass --non-interactive and the flags"))
 	}
 	existing, err := config.LoadFrom(root, "")
 	if err != nil {
-		return fail(exitUsage, "%v", err)
+		return s, "", &verbFailure{exit: exitUsage, code: verbs.CodeFailed, msg: err.Error()}
 	}
 	if existing.ProjectRoot != root {
 		existing.Profiles = nil // a config further up belongs to another project
 	}
-	if given {
+	exists := func(name string) *verbFailure {
+		if _, dup := existing.Profiles[name]; !dup {
+			return nil
+		}
+		return &verbFailure{exit: exitUsage, code: verbs.CodeExists,
+			msg: fmt.Sprintf("profile %s is already in %s: nothing written", name, configPath(root))}
+	}
+	if given[verbs.FlagProfile] && setupNameRe.MatchString(s.name) {
+		if f := exists(s.name); f != nil {
+			return s, "", f
+		}
+	}
+
+	if *nonInteractive {
+		if s.engine == "" {
+			return s, "", usageFailure(fmt.Errorf("--engine is required: %s", strings.Join(setupEngines, ", ")))
+		}
+		if s.engine != config.EngineSQLite {
+			cred, err := verbs.Credentials(s.credentials, s.vaultPath)
+			if err != nil {
+				return s, "", usageFailure(err)
+			}
+			s.credentials = cred
+		}
 		if s, err = completeSpec(s); err != nil {
-			return fail(exitUsage, "%v", err)
+			return s, "", usageFailure(err)
 		}
 	} else {
 		e.stdin = lineReader(e)
 		if names := profileNames(existing); len(names) > 0 {
-			fmt.Fprintf(e.stdout, "Profiles already in %s: %s\n", configPath(root), strings.Join(names, ", "))
+			fmt.Fprintf(out, "Profiles already in %s: %s\n", configPath(root), strings.Join(names, ", "))
 		}
-		if s, err = askProfile(e, root); err != nil {
-			return fail(exitFail, "%v", err)
+		if s, err = askProfile(e, out, root, s, given); err != nil {
+			return s, "", &verbFailure{exit: exitFail, code: verbs.CodeFailed, msg: err.Error()}
 		}
 	}
-	if _, dup := existing.Profiles[s.name]; dup {
-		return fail(exitUsage, "profile %q is already in %s", s.name, configPath(root))
+	if f := exists(s.name); f != nil {
+		return s, "", f
 	}
-	if err := addProfile(root, s); err != nil {
-		return fail(exitFail, "%v", err)
+	data, err := newConfig(root, s)
+	if err != nil {
+		return s, "", usageFailure(err)
 	}
-	profileWritten(e, root, s)
-	return exitOK
+	if err := writeConfig(root, data); err != nil {
+		return s, "", &verbFailure{exit: exitFail, code: verbs.CodeFailed, msg: err.Error()}
+	}
+	return s, root, nil
 }

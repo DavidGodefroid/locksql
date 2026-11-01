@@ -40,11 +40,11 @@ type helpRow struct{ name, args, desc string }
 
 var helpSections = []helpSection{
 	{title: "Human commands", rows: []helpRow{
-		{"profile", "add [--project DIR] [--engine E ...]", "add a database profile to the project"},
+		{"profile", "add [--non-interactive] [--json] [--engine E ...]", "add a database profile to the project\n(never a secret: the console asks at start, or Vault)"},
 		{"console", "--hub URL --hub-key-file PATH --instance NAME ...", "run the console (launched by `lox up` only)"},
 		{"forget", "--profile P", "remove the keychain secret"},
 		{"update", "[vX.Y.Z]", "update the launcher and its image (on the host;\ncosign signature and checksum checked)"},
-		{"doctor", "[--profile P] [--fix [--yes]]", "check the setup\n(--fix: repair permissions, socket dir, wiring)"},
+		{"doctor", "[--profile P] [--fix [--yes]] [--json]", "check the setup\n(--fix: repair permissions, socket dir, wiring)"},
 		{"init", "[claude|codex|cursor|gemini ...]", "write agent integration files into the project\n(default: the agents found on this machine)"},
 		{"stats", "[--log PATH] [--top N] [--export]", "count the refusals of the local audit log\n(--export: anonymised report, SQL shapes only)"},
 		{"config", "export|import [--project] [--profile P] ...", "share profiles and PII rules with your team\n(import: --dry-run, --allow-loosen, --local P.KEY=V)"},

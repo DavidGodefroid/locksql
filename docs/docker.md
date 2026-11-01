@@ -134,9 +134,10 @@ locksql profile add
 
 It asks for the engine, host, port, TLS and where the password comes from,
 never for the password itself, and appends the profile to
-`.locksql/config.toml`. `--engine` and its flags (`locksql profile add
+`.locksql/config.toml`. `--engine` and its flags skip their questions, and
+`--non-interactive` asks none (`locksql profile add --non-interactive
 --engine postgres --host db.internal --credentials vault --vault-path
-database/creds/ro`) skip the questions. Inside a container, `localhost` is
+database/creds/ro`). Inside a container, `localhost` is
 the container itself, and the wizard knows it:
 
 - a database on your machine is `host = "host.docker.internal"`, which the

@@ -21,6 +21,7 @@ import (
 	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/lockkit/sysconf"
 	"github.com/DavidGodefroid/lockkit/ui"
+	"github.com/DavidGodefroid/lockkit/verbs"
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
@@ -156,19 +157,41 @@ func realDoctorEnv() doctorEnv {
 	}
 }
 
+// doctorUsage is the usage of `locksql doctor` (lockkit GUIDE §14, plus
+// locksql's --profile).
+const doctorUsage = "locksql doctor [--profile P] [--fix [--yes]] [--json]"
+
 // runDoctor is `locksql doctor`: it checks that this machine is ready to
 // keep the agent away from the credentials and the data. With --fix it
-// then makes the repairs the checks offer and checks again.
+// then makes the repairs the checks offer, asking before each one unless
+// --yes, and checks again. With --json, stdout carries one verbs.Doctor
+// (or one verbs.Error when it could not check) and the human text goes to
+// stderr.
 func runDoctor(e env, args []string) int {
-	const usage = "locksql doctor [--profile P] [--fix [--yes]]"
+	asJSON := verbs.WantsJSON(args)
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	profile := fs.String(verbs.FlagProfile, "", "profile whose console to check (default: every profile)")
+	fix := fs.Bool(verbs.FlagFix, false, "repair permissions, the socket directory, the project's access and the agents' wiring")
+	yes := fs.Bool(verbs.FlagYes, false, "with --fix: make the repairs without asking")
+	fs.Bool(verbs.FlagJSON, false, "print one line of JSON on stdout")
 	fs.SetOutput(io.Discard)
-	profile := fs.String("profile", "", "profile whose console to check (default: every profile)")
-	fix := fs.Bool("fix", false, "repair permissions, the socket directory, the project's access and the agents' wiring")
-	yes := fs.Bool("yes", false, "with --fix: run the root commands without asking")
-	if err := fs.Parse(args); err != nil || fs.NArg() > 0 || *yes && !*fix {
-		fmt.Fprintln(e.stderr, "usage:", usage)
-		return exitUsage
+	// The flag package's error would quote the argument (a secret pasted in
+	// the wrong place): only say the flags are wrong.
+	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
+		return usageFailure(errors.New("bad flags or an argument (doctor takes flags only)")).report(e, "doctor", doctorUsage, asJSON)
+	}
+	if *yes && !*fix {
+		return usageFailure(errors.New("--yes is for --fix")).report(e, "doctor", doctorUsage, asJSON)
+	}
+	if *fix && !*yes && !e.tty {
+		return usageFailure(errors.New("--fix asks before each repair: run it in a terminal, or pass --yes")).report(e, "doctor", doctorUsage, asJSON)
+	}
+	if e.stdin != nil {
+		e.stdin = lineReader(e) // one reader for every question
+	}
+	jsonOut := e.stdout
+	if asJSON {
+		e.stdout = e.stderr // the human text
 	}
 	defer updateNotice(e)
 	d := realDoctorEnv()
@@ -176,20 +199,60 @@ func runDoctor(e env, args []string) int {
 		d = *e.doc
 	}
 	checks := doctor(d, e.cwd, *profile)
-	code := printChecks(e, checks)
-	if !*fix {
+	var fixed []string
+	code := exitOK
+	if !asJSON {
+		code = printChecks(e, checks)
+	}
+	if *fix {
+		if own, root := repairsOf(checks); len(own)+len(root) == 0 {
+			fmt.Fprintln(e.stdout, "\nNothing doctor --fix can repair; the remaining items need the steps shown.")
+		} else {
+			var rcode int
+			fixed, rcode = applyRepairs(e, "doctor", checks, *yes)
+			if len(fixed) > 0 {
+				checks = doctor(d, e.cwd, *profile)
+				if !asJSON {
+					fmt.Fprintln(e.stdout, "\n"+e.paint.Bold("After the repairs:"))
+					code = printChecks(e, checks)
+				}
+			}
+			if rcode != exitOK {
+				code = rcode
+			}
+		}
+	}
+	if !asJSON {
 		return code
 	}
-	if own, root := repairsOf(checks); len(own)+len(root) == 0 {
-		fmt.Fprintln(e.stdout, "\nNothing doctor --fix can repair; the remaining items need the steps shown.")
-		return code
+	rep := verbs.NewDoctor(product.P, verbChecks(checks), fixed)
+	if err := verbs.WriteJSON(jsonOut, rep); err != nil {
+		fmt.Fprintf(e.stderr, "locksql doctor: %v\n", err)
+		return exitFail
 	}
-	changed, code := applyRepairs(e, "doctor", checks, *yes)
-	if code != exitOK || !changed {
-		return code
+	if !rep.OK && code == exitOK {
+		code = exitFail
 	}
-	fmt.Fprintln(e.stdout, "\n"+e.paint.Bold("After the repairs:"))
-	return printChecks(e, doctor(d, e.cwd, *profile))
+	return code
+}
+
+// verbChecks are the checks as `doctor --json` reports them.
+func verbChecks(checks []check) []verbs.Check {
+	out := make([]verbs.Check, 0, len(checks))
+	for _, c := range checks {
+		v := verbs.Check{Check: c.title, Detail: c.detail, Status: verbs.StatusFail}
+		switch c.state {
+		case checkOK:
+			v.Status = verbs.StatusOK
+		case checkWarn:
+			v.Status = verbs.StatusWarn
+		}
+		if c.state != checkOK {
+			v.Fix = c.fix
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 // printChecks prints the checks and their count; exitFail when one failed.
@@ -240,57 +303,62 @@ func repairsOf(checks []check) (own, root []*repair) {
 	return own, root
 }
 
-// applyRepairs makes the repairs of the checks that are not ok: the
-// changes this account can make first, then one root script, shown and
-// confirmed (or yes) before sudo runs it. It reports each change and
-// whether anything changed.
-func applyRepairs(e env, cmd string, checks []check, yes bool) (changed bool, code int) {
+// applyRepairs makes the repairs of the checks that are not ok, each one
+// asked for first unless yes: the changes this account can make first, then
+// one root script of the root repairs accepted, shown before sudo runs it.
+// It reports each change and returns the repairs made.
+func applyRepairs(e env, cmd string, checks []check, yes bool) (fixed []string, code int) {
 	own, root := repairsOf(checks)
 	if len(own) == 0 && len(root) == 0 {
-		return false, exitOK
+		return nil, exitOK
 	}
 	fmt.Fprintln(e.stdout)
-	if len(root) > 0 && !yes && !e.tty {
-		fmt.Fprintf(e.stderr, "locksql %s: some repairs run as root: confirm in a terminal, or run with --yes\n", cmd)
-		return false, exitUsage
-	}
 	code = exitOK
 	for _, r := range own {
+		if !yes && !confirm(e, "Repair: "+r.what+"? [y/N] ") {
+			fmt.Fprintf(e.stdout, "not repaired: %s (declined)\n", r.what)
+			continue
+		}
 		if err := r.apply(); err != nil {
 			fmt.Fprintf(e.stdout, "%s %s: %v\n", e.paint.Fail("not repaired:"), r.what, err)
 			code = exitFail
 			continue
 		}
 		fmt.Fprintf(e.stdout, "%s %s\n", e.paint.OK("repaired:"), r.what)
-		changed = true
+		fixed = append(fixed, r.what)
 	}
-	if len(root) == 0 {
-		return changed, code
+	var accepted []*repair
+	for _, r := range root {
+		if !yes {
+			q := "Repair as root (sudo): " + r.what + "?\n" + indent(r.root) + "\n[y/N] "
+			if e.geteuid() == 0 {
+				q = "Repair as root: " + r.what + "?\n" + indent(r.root) + "\n[y/N] "
+			}
+			if !confirm(e, q) {
+				fmt.Fprintf(e.stdout, "not repaired: %s (declined)\n", r.what)
+				continue
+			}
+		}
+		accepted = append(accepted, r)
+	}
+	if len(accepted) == 0 {
+		return fixed, code
 	}
 	var cmds []string
-	for _, r := range root {
+	for _, r := range accepted {
 		cmds = append(cmds, r.root)
 	}
 	script := "set -eu\n" + strings.Join(cmds, "\n") + "\n"
 	fmt.Fprintf(e.stdout, "These repairs run as root:\n%s\n", indent(script))
-	if !yes {
-		q := "Run them now with sudo? [y/N] "
-		if e.geteuid() == 0 {
-			q = "Run them now? [y/N] "
-		}
-		if !confirm(e, q) {
-			fmt.Fprintln(e.stdout, "root repairs not made")
-			return changed, code
-		}
-	}
 	if err := e.asRoot(script); err != nil {
 		fmt.Fprintf(e.stderr, "locksql %s: %v\n", cmd, err)
-		return changed, exitFail
+		return fixed, exitFail
 	}
-	for _, r := range root {
+	for _, r := range accepted {
 		fmt.Fprintf(e.stdout, "%s %s\n", e.paint.OK("repaired:"), r.what)
+		fixed = append(fixed, r.what)
 	}
-	return true, code
+	return fixed, code
 }
 
 func doctor(d doctorEnv, cwd, onlyProfile string) []check {
