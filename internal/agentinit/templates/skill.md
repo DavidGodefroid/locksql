@@ -15,8 +15,10 @@ query and wait.
 
 ## The only workflow
 
-Use the MCP tools (`locksql_*`) when they are available, otherwise the `locksql` CLI from any
-directory. Both talk to the same console.
+Use the MCP tools (`locksql_*`) when they are available, otherwise the `locksql` CLI from the
+workspace or a directory below it. Both talk to the same console: the lock that `lox up` runs for
+the workspace, found through its `.lockfamily/up.json`. With several locksql locks there, add
+`--instance NAME` (the error names them); never point locksql at another workspace's lock.
 
 1. **Target.** Prefer a non-production profile unless the question is about real production data.
    Find the database and table from the code first.

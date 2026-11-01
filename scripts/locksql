@@ -12,8 +12,13 @@
 #                    and your user config
 #   profile          as you, so that the files it writes are yours
 #   doctor --fix     as root, which gives .locksql/ to the console account
-#   anything else    as the agent account (agent), with the socket volume:
-#                    mcp, status, tables, plan, run, doctor, help...
+#   mcp, status, tables, describe, plan, run, request, logout, pii, doctor
+#                    as the agent account (agent), with the socket volume of
+#                    the workspace's locksql lock that `lox up` runs (read
+#                    from .lockfamily/up.json and checked with Docker;
+#                    --instance NAME picks one of several): none without
+#                    lox up, but doctor then runs anyway and says why
+#   anything else    as the agent account, with no socket: help...
 #
 # The project (the nearest directory up from here that holds .locksql/, or
 # this directory) is mounted at its own path. `locksql update` updates this
@@ -308,6 +313,330 @@ update() {
 	exec docker pull "$image"
 }
 
+# Locks started by `lox up` (lockhub's docs/lox-up.md): `lox up` runs each
+# lock's console under compose, with its socket in the volume
+# lockfamily-<sha256 of the workspace, 8 hex>_<instance>-run, and names it
+# in <workspace>/.lockfamily/up.json. The agent commands mount that volume
+# read-only on /run/locksql (connecting needs no write), never a fixed one:
+# the consoles run hub-attached only, started by `lox up`. The checks are
+# those of lea, which mounts the same volumes for its agents: up.json is
+# the user's own regular file (no link) that no one else can write, in a
+# .lockfamily of the same kind, of this very workspace; then Docker must
+# confirm the volume: lox up's labels (project, role socket, instance,
+# type, workspace), and every container that mounts it is lox up's (run
+# by compose from lox up's own state directory) or mounts it read-only.
+# These checks catch mistakes and files others can write; an agent that
+# runs as you with Docker access gets past any of them (docs/launcher.md).
+# up.json only names the instance:
+# what is mounted is what Docker's labels prove, read as JSON, compared
+# whole; anything else fails closed.
+
+# json_safe S: S holds nothing JSON escapes (a quote, a backslash, a
+# control character, U+2028, U+2029): "S" is then its JSON encoding.
+json_safe() {
+	case "$1" in *'"'* | *'\'* | *"$(printf '\342\200\250')"* | *"$(printf '\342\200\251')"*) return 1 ;; esac
+	[ "$(printf '%s' "$1" | LC_ALL=C tr -d '\001-\037')" = "$1" ]
+}
+
+# private PATH: PATH is no link, is the user's, and neither its group nor
+# others may write it.
+private() {
+	[ ! -L "$1" ] && [ "$(ls -nd "$1" | awk '{ print $3 }')" = "$(id -u)" ] &&
+		[ -z "$(find "$1" -prune \( -perm -0020 -o -perm -0002 \) -print)" ]
+}
+
+# sha8 S: the first 8 hex digits of the sha256 of S (lox up's project).
+sha8() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		printf '%s' "$1" | sha256sum
+	else
+		printf '%s' "$1" | shasum -a 256
+	fi | awk '{ print substr($1, 1, 8) }'
+}
+
+# lockup_parse < up.json: lox up's state (version 1, written by Go's
+# json.MarshalIndent with a two-space indent): a line Pproject, a line
+# Wworkspace, then a line Lname socket_volume client_gid per lock of type
+# locksql. Fails on anything else, or on a value it would have to unescape.
+lockup_parse() {
+	awk -v want=locksql '
+	function str(v) {
+		if (v !~ /^"[^"\\]*"$/ || v ~ /[\001-\037]/) { bad = 1; return "" }
+		return substr(v, 2, length(v) - 2)
+	}
+	{ line = $0 }
+	NR == 1 { if (line != "{") bad = 1; next }
+	{ last = line; match(line, /^ */); ind = RLENGTH; rest = substr(line, ind + 1) }
+	rest == "}" || rest == "}," {
+		if (inlocks && ind == 4) cur = ""
+		else if (inlocks && ind == 2) inlocks = 0
+		next
+	}
+	rest !~ /^"[^"\\]*": / { next }
+	{
+		k = substr(rest, 2, index(rest, "\":") - 2)
+		v = substr(rest, length(k) + 5)
+		sub(/,$/, "", v)
+	}
+	!inlocks && ind == 2 {
+		if (k == "version") version = v
+		else if (k == "project") project = str(v)
+		else if (k == "workspace") workspace = str(v)
+		else if (k == "locks") { if (v == "{") inlocks = 1; else if (v != "{}") bad = 1; locks = 1 }
+		next
+	}
+	inlocks && ind == 4 {
+		if (v != "{" || (k in seen)) bad = 1
+		seen[k] = 1; cur = k; n++; name[n] = k
+		next
+	}
+	inlocks && ind == 6 && cur != "" {
+		if (k == "type" || k == "socket_volume" || k == "client_gid") f[cur, k] = str(v)
+	}
+	END {
+		if (bad || last != "}" || inlocks || !locks || version != "1") exit 1
+		print "P" project
+		print "W" workspace
+		for (i = 1; i <= n; i++) {
+			c = name[i]
+			if (f[c, "type"] != want) continue
+			if (c !~ /^[a-z0-9][a-z0-9-]*$/ || length(c) > 63 || f[c, "socket_volume"] !~ /^[a-z0-9][a-z0-9_.-]*$/ || f[c, "client_gid"] !~ /^[0-9]*$/) exit 1
+			print "L" c " " f[c, "socket_volume"] " " f[c, "client_gid"]
+		}
+	}'
+}
+
+# lockup_volume [INSTANCE]: the socket volume of the locksql lock (INSTANCE,
+# the only one without it) that `lox up` runs for the workspace of this
+# directory, in $lockup_vol; when there is none the agents can trust, why,
+# with what to do, in $lockup_why.
+lockup_volume() {
+	lockup_vol= lockup_why=
+	lu_inst=${1:-}
+	# The workspace: the nearest directory up from here whose .lockfamily
+	# holds up.json (a sub-project's own .lockfamily may hold none).
+	lu_ws=
+	lu_d=$here
+	while :; do
+		if [ -e "$lu_d/.lockfamily/up.json" ] || [ -L "$lu_d/.lockfamily/up.json" ] || [ -L "$lu_d/.lockfamily" ]; then
+			lu_ws=$lu_d
+			break
+		fi
+		[ "$lu_d" = / ] && break
+		lu_d=$(dirname "$lu_d")
+	done
+	if [ -z "$lu_ws" ]; then
+		lockup_why="no .lockfamily/up.json in $here or above it: start the workspace's locks with \`lox up\` (lockhub), then run locksql from the workspace"
+		return 1
+	fi
+	lu_lf=$lu_ws/.lockfamily
+	lu_f=$lu_lf/up.json
+	if [ -L "$lu_lf" ] || [ ! -d "$lu_lf" ]; then
+		lockup_why="$lu_lf is not a directory (a link?): it is not lox up's; run \`lox up\`"
+		return 1
+	fi
+	if ! private "$lu_lf"; then
+		lockup_why="$lu_lf is not yours, or others than you may write it: locksql trusts none of it (chmod go-w it, then run \`lox up\`)"
+		return 1
+	fi
+	if [ -L "$lu_f" ] || [ ! -f "$lu_f" ]; then
+		lockup_why="$lu_f is not a regular file (a link?): it is not lox up's; run \`lox up\`"
+		return 1
+	fi
+	if ! private "$lu_f"; then
+		lockup_why="$lu_f is not yours, or others than you may write it: locksql trusts none of it; run \`lox up\`"
+		return 1
+	fi
+	if [ "$(wc -c <"$lu_f")" -gt 1048576 ]; then
+		lockup_why="$lu_f is larger than 1 MiB: it is not lox up's; run \`lox up\`"
+		return 1
+	fi
+	lu_ino=$(ls -di "$lu_f")
+	if ! lu_state=$(lockup_parse <"$lu_f") || [ -L "$lu_f" ] || [ "$(ls -di "$lu_f")" != "$lu_ino" ]; then
+		lockup_why="$lu_f is not lox up's state (version 1): run \`lox up\`"
+		return 1
+	fi
+	lu_project= lu_wsf= lu_locks=
+	while IFS= read -r lu_line; do
+		case "$lu_line" in
+		P*) lu_project=${lu_line#P} ;;
+		W*) lu_wsf=${lu_line#W} ;;
+		L*) lu_locks="$lu_locks${lu_line#L}
+" ;;
+		esac
+	done <<EOF_STATE
+$lu_state
+EOF_STATE
+	lu_want="lockfamily-$(sha8 "$lu_ws")"
+	if [ "$lu_project" != "$lu_want" ] || [ "$lu_wsf" != "$lu_ws" ]; then
+		lockup_why="$lu_f: project $lu_project of $lu_wsf, not this workspace's ($lu_want of $lu_ws): run \`lox up\` in $lu_ws"
+		return 1
+	fi
+	if ! json_safe "$lu_ws"; then
+		lockup_why="the workspace's path $lu_ws holds a quote, a backslash or a control character: locksql cannot check lox up's labels; move or rename it"
+		return 1
+	fi
+	lu_names=$(printf '%s' "$lu_locks" | awk '{ print $1 }' | sort | tr '\n' ' ')
+	lu_names=${lu_names% }
+	if [ -n "$lu_inst" ]; then
+		case "$lu_inst" in
+		*[!a-z0-9-]* | -*)
+			lockup_why="--instance: not an instance name (lowercase letters, digits and -)"
+			return 1
+			;;
+		esac
+		lu_sel=$(printf '%s' "$lu_locks" | awk -v n="$lu_inst" '$1 == n')
+		if [ -z "$lu_sel" ]; then
+			lockup_why="lox up runs no locksql lock $lu_inst in $lu_ws (its locksql locks: ${lu_names:-none}): name one with --instance, or add it (lox add locksql $lu_inst) and run \`lox up\`"
+			return 1
+		fi
+	else
+		case "$lu_names" in
+		"")
+			lockup_why="lox up runs no locksql lock in $lu_ws: add one (lox add locksql <name>), then run \`lox up\`"
+			return 1
+			;;
+		*" "*)
+			lockup_why="lox up runs several locksql locks in $lu_ws ($lu_names): name one with --instance NAME"
+			return 1
+			;;
+		esac
+		lu_sel=$lu_locks
+	fi
+	# shellcheck disable=SC2086 # name, volume and group: checked words
+	set -- $lu_sel
+	lu_name=$1 lu_sock=$2 lu_gid=${3:-}
+	lu_vol=${lu_project}_$lu_name-run
+	if [ "$lu_sock" != "$lu_vol" ]; then
+		lockup_why="$lu_f: lock $lu_name: socket volume $lu_sock is not lox up's $lu_vol: run \`lox up\`"
+		return 1
+	fi
+	if [ -n "$lu_gid" ] && [ "$lu_gid" != 10000 ]; then
+		lockup_why="lock $lu_name: clients group $lu_gid, this image's is 10000: update locksql (locksql update) or the lock's image"
+		return 1
+	fi
+	lu_got=$(docker volume inspect --format '{{json (index .Labels "com.docker.compose.project")}}
+{{json (index .Labels "com.docker.compose.volume")}}
+{{json (index .Labels "dev.lockfamily.role")}}
+{{json (index .Labels "dev.lockfamily.instance")}}
+{{json (index .Labels "dev.lockfamily.type")}}
+{{json (index .Labels "dev.lockfamily.workspace")}}' "$lu_vol" 2>/dev/null) || {
+		lockup_why="lock $lu_name: no volume $lu_vol: run \`lox up\`"
+		return 1
+	}
+	if [ "$lu_got" != "\"$lu_project\"
+\"$lu_name-run\"
+\"socket\"
+\"$lu_name\"
+\"locksql\"
+\"$lu_ws\"" ]; then
+		lockup_why="lock $lu_name: volume $lu_vol is not lox up's socket volume of it (its labels): locksql trusts none of it; run \`lox up\`"
+		return 1
+	fi
+	# Every container that mounts the volume, running or not, must be lox
+	# up's own or unable to serve a socket there. lox up's: compose ran it
+	# from lox up's state directory, with the file on stdin or that
+	# directory's compose.yaml (compose's project label alone is anyone's: a
+	# compose file written in the workspace, run by you, would serve the
+	# socket from an image of its own). Any other container, compose's or
+	# not, must mount the volume read-only (an agent's, as this one): with
+	# a read-write mount it could listen on the socket's path.
+	lu_state_dir=$(printf '%s' "${XDG_STATE_HOME:-${HOME:-}/.local/state}/lockfamily/$lu_project" | sed -e 's#//*#/#g')
+	if ! json_safe "$lu_state_dir"; then
+		lockup_why="lox up's state directory $lu_state_dir holds a quote, a backslash or a control character: locksql cannot check lox up's containers"
+		return 1
+	fi
+	lu_ids=$(docker ps -a --no-trunc --filter "volume=$lu_vol" --format '{{.ID}}' 2>/dev/null) || {
+		lockup_why="lock $lu_name: cannot list the containers of $lu_vol (docker ps)"
+		return 1
+	}
+	if [ -n "$lu_ids" ] && printf '%s\n' "$lu_ids" | grep -vqx '[0-9a-f]\{64\}'; then
+		lockup_why="lock $lu_name: cannot read the containers of $lu_vol (docker ps)"
+		return 1
+	fi
+	for lu_id in $lu_ids; do
+		# Compose's project, working directory and files, as JSON; then
+		# rw or ro for each mount of the volume (its name: checked
+		# characters).
+		lu_c=$(docker inspect --type container -f '{{json (index .Config.Labels "com.docker.compose.project")}}
+{{json (index .Config.Labels "com.docker.compose.project.working_dir")}}
+{{json (index .Config.Labels "com.docker.compose.project.config_files")}}
+{{range .Mounts}}{{if eq .Name "'"$lu_vol"'"}}{{if .RW}}rw {{else}}ro {{end}}{{end}}{{end}}' "$lu_id" 2>/dev/null) || {
+			lockup_why="lock $lu_name: cannot read the containers of $lu_vol (docker inspect $lu_id)"
+			return 1
+		}
+		lu_rw=$(printf '%s\n' "$lu_c" | sed -n 4p)
+		lu_c=$(printf '%s\n' "$lu_c" | sed -n 1,3p)
+		if [ "$lu_c" = "\"$lu_project\"
+\"$lu_state_dir\"
+\"-\"" ] || [ "$lu_c" = "\"$lu_project\"
+\"$lu_state_dir\"
+\"$lu_state_dir/compose.yaml\"" ]; then
+			continue # lox up's
+		fi
+		# Read-only mounts only (none listed: not one docker shows by name).
+		case " $lu_rw" in
+		" " | *" rw "*)
+			lockup_why="lock $lu_name: volume $lu_vol is mounted read-write by container $lu_id, which lox up did not start (not compose run from $lu_state_dir): locksql trusts none of its socket; remove that container, then run \`lox up\`"
+			return 1
+			;;
+		esac
+	done
+	lockup_vol=$lu_vol
+}
+lockup_vol= lockup_why=
+
+# --instance NAME (or --instance=NAME): the launcher's own option of the
+# agent commands, which of lox up's locksql locks when the workspace has
+# several. Taken out of the command line ("--" ends the options).
+instance=
+case "${1:-}" in
+mcp | doctor | status | tables | describe | plan | run | request | logout | pii)
+	n=$#
+	take=
+	done_opts=
+	for a in "$@"; do
+		if [ -n "$done_opts" ]; then
+			set -- "$@" "$a"
+			continue
+		fi
+		if [ -n "$take" ]; then
+			instance=$a
+			take=
+			continue
+		fi
+		case "$a" in
+		--) done_opts=1 ;;
+		--instance)
+			take=1
+			continue
+			;;
+		--instance=*)
+			instance=${a#--instance=}
+			continue
+			;;
+		esac
+		set -- "$@" "$a"
+	done
+	shift "$n"
+	[ -z "$take" ] || die "--instance: name the lock (lox up's instance)"
+	;;
+esac
+
+# lockup_mount: lox up's socket volume of this workspace's locksql lock,
+# as the agent commands mount it, or the reason there is none (exit 2, as
+# a client finding no console).
+lockup_mount() {
+	command -v docker >/dev/null 2>&1 || die "docker is required: locksql runs in Docker (docs/docker.md)"
+	mountable "$project"
+	mountable "$here"
+	lockup_volume "$instance" || {
+		say "$lockup_why"
+		exit 2
+	}
+	mount="type=volume,src=$lockup_vol,dst=/run/locksql,readonly"
+}
+
 cmd="${1:-}"
 case "$cmd" in
 update)
@@ -388,13 +717,23 @@ doctor)
 	if has_flag --fix "$@"; then
 		docker_run "$tty" --user 0 "$image" "$@"
 	fi
-	docker_run "$tty" -v locksql-run:/run/locksql "$image" "$@"
+	# The checks run without lox up's socket too: then they say so.
+	if command -v docker >/dev/null 2>&1 && lockup_volume "$instance"; then
+		docker_run "$tty" --mount "type=volume,src=$lockup_vol,dst=/run/locksql,readonly" "$image" "$@"
+	fi
+	[ -z "$lockup_why" ] || say "$lockup_why"
+	docker_run "$tty" "$image" "$@"
 	;;
 mcp)
 	# The agent speaks MCP on stdin and stdout: no terminal.
-	docker_run -i -v locksql-run:/run/locksql "$image" "$@"
+	lockup_mount
+	docker_run -i --mount "$mount" "$image" "$@"
+	;;
+status | tables | describe | plan | run | request | logout | pii)
+	lockup_mount
+	docker_run "$tty" --mount "$mount" "$image" "$@"
 	;;
 *)
-	docker_run "$tty" -v locksql-run:/run/locksql "$image" "$@"
+	docker_run "$tty" "$image" "$@"
 	;;
 esac
