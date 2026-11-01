@@ -297,6 +297,12 @@ sequenceDiagram
 
 </details>
 
+Every client command, `locksql mcp` and `locksql doctor` also take `--instance NAME`, to
+reach one lock among several of this type that lea mounts (without it:
+`$LOCKSQL_INSTANCE`, else the one lock in `$LEA_LOCKSQL_INSTANCES`). `locksql console`
+and `locksql hub-key` take an `--instance` too, but that one is the name `lox up`
+gives the lock.
+
 Full walkthrough: [docs/usage.md](docs/usage.md).
 
 ## Engines

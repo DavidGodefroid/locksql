@@ -8,10 +8,9 @@ This file records the changes a user or an agent has to know about.
 
 ### Added
 
-- **`--instance NAME`**: reach one lock among several of this type (lea
-  mounts each at /run/locksql/<instance>). Every client command, `status`,
-  `mcp` and `doctor` take it; without it, and without
-  `LEA_LOCKSQL_INSTANCES`, nothing changes.
+- **`--instance NAME`**: reach one lock among several of this type (lea mounts each at
+  /run/locksql/NAME). Every client command, `status`, `mcp` and `doctor` take it; it defaults to
+  `LOCKSQL_INSTANCE`, then to the one lock listed in `LEA_LOCKSQL_INSTANCES`.
 
 ## v0.13.1 (2026-11-01)
 

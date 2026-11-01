@@ -62,7 +62,8 @@ var helpSections = []helpSection{
 	}, notes: []string{
 		"Client commands accept --json. --profile may be left out when exactly",
 		"one profile is configured. --instance NAME reaches one lock among",
-		"several of this type (lea mounts each at /run/locksql/NAME).",
+		"several of this type (lea mounts each at /run/locksql/NAME); it is not",
+		"the console's --instance, which `lox up` passes.",
 	}},
 	{title: "Other", rows: []helpRow{
 		{"version", "", "print the version"},

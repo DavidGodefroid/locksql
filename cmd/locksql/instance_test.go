@@ -127,7 +127,6 @@ func TestSeveralInstancesAndNoneChosenIsUsage(t *testing.T) {
 		{"status", "--profile", "uat"},
 		{"tables", "--profile", "uat", "--db", "app"},
 		{"mcp", "--profile", "uat"},
-		{"doctor"},
 	} {
 		o := cli(t, dir, "", args...)
 		o.want(t, exitUsage, "--instance", "audit orders")
@@ -141,7 +140,6 @@ func TestBadInstanceIsRefusedBeforeAnyPath(t *testing.T) {
 		{"status", "--profile", "uat", "--instance", "../x"},
 		{"plan", "--profile", "uat", "--db", "app", "--instance", "../x", "SELECT 1"},
 		{"mcp", "--instance", "../x"},
-		{"doctor", "--instance", "../x"},
 	} {
 		o := cli(t, dir, "", args...)
 		o.want(t, exitUsage, "--instance")
@@ -191,4 +189,25 @@ func TestDoctorStatusReachesTheInstance(t *testing.T) {
 	got := listenAt(t, dir, "orders")
 	cli(t, dir, "", "doctor", "--profile", "uat", "--instance", "orders")
 	waitConn(t, got)
+}
+
+// doctor resolves the instance where it dials a console: a stray or
+// ambiguous value fails the console check only, the other checks and
+// --fix still run, and the name is never echoed.
+func TestDoctorResolvesTheInstanceLazily(t *testing.T) {
+	dir := project(t, uatConfig)
+	sockets := separatedSockets(t)
+	t.Setenv("LEA_LOCKSQL_INSTANCES", "audit orders")
+	o := cli(t, dir, "", "doctor", "--profile", "uat")
+	if o.code == exitUsage || !strings.Contains(o.stdout+o.stderr, "--instance") || !strings.Contains(o.stdout, "console") {
+		t.Fatalf("several locks: exit %d\nstdout: %s\nstderr: %s", o.code, o.stdout, o.stderr)
+	}
+	o = cli(t, dir, "", "doctor", "--profile", "uat", "--instance", "../x")
+	if o.code == exitUsage || !strings.Contains(o.stdout+o.stderr, "--instance") || strings.Contains(o.stdout+o.stderr, "../x") {
+		t.Fatalf("bad name: exit %d\nstdout: %s\nstderr: %s", o.code, o.stdout, o.stderr)
+	}
+	entries, err := os.ReadDir(sockets)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("socket dir touched: %v %v", entries, err)
+	}
 }

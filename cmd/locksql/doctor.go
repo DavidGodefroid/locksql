@@ -86,8 +86,10 @@ type doctorEnv struct {
 const imageHint = "run locksql through the launcher, which runs it in its image (scripts/install.sh, docs/docker.md)"
 
 // realDoctorEnv is the machine's doctorEnv; its console status reaches the
-// lock instance ("" for none).
-func realDoctorEnv(instance string) doctorEnv {
+// lock instance named by instanceFlag (the --instance value, "" for the
+// default). The instance is resolved there, where a console is dialled, so
+// a stray value fails that check only and never the other checks or --fix.
+func realDoctorEnv(instanceFlag string) doctorEnv {
 	return doctorEnv{
 		goos:       runtime.GOOS,
 		loadSys:    product.LoadSys,
@@ -135,6 +137,10 @@ func realDoctorEnv(instance string) doctorEnv {
 			return prober.ProbeTLS(ctx, p)
 		},
 		status: func(cwd, profile string) (*ipc.StatusResult, error) {
+			instance, err := client.ResolveInstance(instanceFlag)
+			if err != nil {
+				return nil, err
+			}
 			c, err := client.DialInstance(cwd, profile, instance)
 			if err != nil {
 				return nil, err
@@ -175,10 +181,6 @@ func runDoctor(e env, args []string) int {
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		return usageFailure(errors.New("bad flags or an argument (doctor takes flags only)")).report(e, "doctor", doctorUsage, asJSON)
 	}
-	instance, err := client.ResolveInstance(*instanceFlag)
-	if err != nil {
-		return usageFailure(err).report(e, "doctor", doctorUsage, asJSON)
-	}
 	if *yes && !*fix {
 		return usageFailure(errors.New("--yes is for --fix")).report(e, "doctor", doctorUsage, asJSON)
 	}
@@ -193,7 +195,7 @@ func runDoctor(e env, args []string) int {
 		e.stdout = e.stderr // the human text
 	}
 	defer updateNotice(e)
-	d := realDoctorEnv(instance)
+	d := realDoctorEnv(*instanceFlag)
 	if e.doc != nil {
 		d = *e.doc
 	}
