@@ -744,7 +744,10 @@ terminal. The hub URL
 is `http(s)://host[:port]` only: a path, query, fragment, user or password
 is refused.
 
-Supported lockhub versions: locksql v0.11.x needs lockhub
+Supported lockhub versions: locksql v0.12.x needs lockhub v0.3.0 or
+later. Its console runs only under `lox up`, lockhub's host CLI (named
+`lock` before v0.3.0), and its agent commands read the
+`.lockfamily/up.json` that `lox up` writes. Earlier: locksql v0.11.x needs lockhub
 v0.2.1 or later, the first whose "Supported locks" (lockhub's CHANGELOG)
 lists locksql v0.11.0, with `devices: true`, reveals and renewals. Under
 `lox up`, use lockhub v0.2.2 or later: it sets `LOCKSQL_PII_DIR` (below)
