@@ -20,7 +20,7 @@ const maxSeed = 1 << 20
 
 // SeedSets copies into the directory to (the console's own rule sets
 // directory, LOCKSQL_PII_DIR) each rule set of from (the profile's
-// directory, read-only under lock up) that to does not hold yet:
+// directory, read-only under lox up) that to does not hold yet:
 // from/pii/<set>.toml, and the legacy from/pii.toml as the default set.
 // A set to holds already is never replaced: from those on, the console's
 // copy is the one it reads and edits. Links, files that are not regular

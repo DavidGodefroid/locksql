@@ -163,7 +163,7 @@ func (s *Server) hubRenewResp(ctx context.Context, id int64, tk string, caller p
 // run (resp, Hub.RenewResp's answer): the new ticket, or why it could not
 // be asked again, with the statement of the stored plan. An approval that
 // aged before its run (dec, the hub's decision) is recorded with who gave
-// it on which facade and the hub's signature, so that `lock audit verify
+// it on which facade and the hub's signature, so that `lox audit verify
 // --lock` finds the decision acted on; a ticket that expired pending has
 // none. A ticket renewed already (prev) answers its renewal again,
 // recorded once.

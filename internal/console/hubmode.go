@@ -456,7 +456,7 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 	s.println(paint.Step("ticket " + safeText(ticketID, false) + " approved in lockhub: running"))
 	rec.Event, rec.Decision, rec.Approval, rec.Ticket = audit.EventApproved, "approved", kconsole.HubApproval, ticketID
 	if dec != nil {
-		// The hub's signature of its decision, so that `lock audit verify
+		// The hub's signature of its decision, so that `lox audit verify
 		// --lock` checks this record against the hub's key; runApproved
 		// keeps it on the approval record only, not on the run's.
 		rec.Approver, rec.Facade, rec.HubSig = &dec.Approver, dec.Facade, dec.Sig

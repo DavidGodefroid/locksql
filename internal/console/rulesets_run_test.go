@@ -75,7 +75,7 @@ func TestRunMigratesLegacyRules(t *testing.T) {
 	}
 }
 
-// With PIIDir (lock up: the profile's directory is a read-only copy), the
+// With PIIDir (lox up: the profile's directory is a read-only copy), the
 // console seeds its own rule sets from the profile once, reads them from
 // PIIDir, and says when the profile's set has drifted from its copy.
 func TestRunPIIDir(t *testing.T) {
@@ -100,7 +100,7 @@ func TestRunPIIDir(t *testing.T) {
 	if err := config.SaveApproved(state, key, approved); err != nil {
 		t.Fatal(err)
 	}
-	// Read-only, as lock up's copy.
+	// Read-only, as lox up's copy.
 	for _, d := range []string{filepath.Dir(theirs), dir} {
 		if err := os.Chmod(d, 0o555); err != nil {
 			t.Fatal(err)
@@ -163,7 +163,7 @@ func TestRunPIIDir(t *testing.T) {
 		}
 	}
 
-	// A mask rule added to the profile's set (a tightening lock up
+	// A mask rule added to the profile's set (a tightening lox up
 	// reviewed) reaches the console's copy; an allow rule does not.
 	for _, d := range []string{filepath.Dir(theirs), dir} {
 		os.Chmod(d, 0o755)

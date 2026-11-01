@@ -233,7 +233,7 @@ func legacyRulesNotice(cwd, projectRoot, rulesPath string) string {
 }
 
 // PIIDirEnv names the directory where the console keeps its PII rule
-// sets (pii/<set>.toml) instead of the profile's directory: lock up sets
+// sets (pii/<set>.toml) instead of the profile's directory: lox up sets
 // it to the console's own volume, its profile copy being read-only.
 const PIIDirEnv = "LOCKSQL_PII_DIR"
 
@@ -255,7 +255,7 @@ func profileSet(dir, set string) string {
 
 // mergeProfileMasks adds to the console's rule set at rulesPath the mask
 // rules of the profile's set (in profileDir) it lacks: a tightening made
-// in the workspace and reviewed by lock up applies. Nothing else of the
+// in the workspace and reviewed by lox up applies. Nothing else of the
 // profile's set is taken (an allow rule, a removed mask or another mode
 // would loosen the console's set). It returns the rules added.
 func mergeProfileMasks(profileDir, set, rulesPath string) (int, error) {
