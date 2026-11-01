@@ -158,8 +158,9 @@ The shortest path is the Lock Family's: install it with Homebrew, then let
 find your database and set up its lock:
 
 ```sh
+brew trust davidgodefroid/tap                # Homebrew asks you to trust a third-party tap once
 brew install davidgodefroid/tap/lockfamily   # or only this tool: brew install davidgodefroid/tap/locksql
-cd ~/projects/shop
+cd ~/projects                                 # with lea: its projects directory; with claude: the project
 lox init                                      # detects PostgreSQL / MySQL / MariaDB, sets up the lock, runs lox up
 lea                                           # or: claude, then lox approve
 ```
@@ -706,9 +707,16 @@ locksql runs in Docker. On the host, `scripts/install.sh` installs only the
 `locksql` launcher, a shell script that runs every command in the release's
 image (`ghcr.io/davidgodefroid/locksql:X.Y.Z`), each with the account it
 needs: the console as `locksql` in one container, the agent's MCP server as
-`agent` in another. With Homebrew: `brew install davidgodefroid/tap/locksql`
-(or `davidgodefroid/tap/lockfamily` for the whole family). Otherwise,
-download the script from the release you install, read it, then run it:
+`agent` in another. With Homebrew, trust the tap once (Homebrew asks you to
+trust a third-party tap before it loads its formulas), then install:
+
+```sh
+brew trust davidgodefroid/tap
+brew install davidgodefroid/tap/locksql   # or davidgodefroid/tap/lockfamily for the whole family
+```
+
+Otherwise, download the script from the release you install, read it, then
+run it:
 
 ```sh
 V=vX.Y.Z
@@ -730,7 +738,8 @@ The image refuses the former host install (`locksql install`, `setup` and
 the binary's own `update`): [migrating from a host
 install](docs/docker.md#migrating-from-a-host-install).
 
-With [lea](https://github.com/DavidGodefroid/lea), `lox init` sets up the
+With [lea](https://github.com/DavidGodefroid/lea), `lox init`, run in lea's
+projects directory (lea reads `.lockfamily/up.json` only there), sets up the
 lock (with your uid in its `allowed_uids`, as lea's agents run as you) and
 `lox up` runs the console; with locksql on in lea (`lea init --locksql` or
 `LEA_LOCKSQL=1`), its agents reach the lock's socket read-only. lea starts
