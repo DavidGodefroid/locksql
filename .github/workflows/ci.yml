@@ -119,8 +119,10 @@ jobs:
           code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" doctor --fix --yes || code=$?
           test "$code" = 1
           test "$(stat -c %u .locksql)" = 10001
-          code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" status --profile local || code=$?
-          test "$code" = 2 # no console is running
+          # No lox up here: no console's socket to mount (exit 2, as a client
+          # that finds no console), never the fixed locksql-run instead.
+          code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" status --profile local 2>err || code=$?
+          test "$code" = 2 && grep -q 'no .lockfamily/up.json' err
           code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" install 2>err || code=$?
           test "$code" = 1 && grep -q 'runs in Docker' err
       - name: docker build with ALLOWED_UIDS
