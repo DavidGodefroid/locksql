@@ -48,8 +48,25 @@ func ShellQuote(s string) string { return kclient.ShellQuote(s) }
 
 // SocketPath is the console socket of profile for the project of cwd.
 func SocketPath(cwd, profile string) (string, error) {
-	return kclient.SocketPath(product.P, cwd, profile)
+	return SocketPathInstance(cwd, profile, "")
 }
+
+// SocketPathInstance is SocketPath of the lock instance (ResolveInstance)
+// when several locks of this type share the machine. With instance "" it
+// is SocketPath.
+func SocketPathInstance(cwd, profile, instance string) (string, error) {
+	return kclient.SocketPathInstance(product.P, cwd, profile, instance)
+}
+
+// ResolveInstance is the lock instance the client reaches: flagValue (the
+// --instance flag) or what the environment names; "" when there is one
+// lock of this type or none.
+func ResolveInstance(flagValue string) (string, error) {
+	return kclient.ResolveInstance(product.P, flagValue)
+}
+
+// FlagInstance is the name of the --instance flag.
+const FlagInstance = kclient.FlagInstance
 
 // Client is one connection to a console. Calls are serialised.
 type Client struct {
@@ -60,7 +77,13 @@ type Client struct {
 // returns a *NoConsoleError (matching ErrNoConsole) when none is running.
 // The hello handshake happens on the first call, under that call's context.
 func Dial(cwd, profile string) (*Client, error) {
-	c, err := kclient.Dial(product.P, cwd, profile)
+	return DialInstance(cwd, profile, "")
+}
+
+// DialInstance is Dial to the lock instance (ResolveInstance). With
+// instance "" it is Dial.
+func DialInstance(cwd, profile, instance string) (*Client, error) {
+	c, err := kclient.DialInstance(product.P, cwd, profile, instance)
 	if err != nil {
 		return nil, err
 	}

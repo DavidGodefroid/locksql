@@ -154,16 +154,20 @@ under [lockhub](https://github.com/DavidGodefroid/lockhub), which starts it
 and where you decide each query.
 
 The shortest path is the Lock Family's: install it with Homebrew, then let
-[`lox init`](https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-init.md)
-find your database and set up its lock:
+[`lox add locksql`](https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-add.md)
+ask where your database is, set up its lock and start its console:
 
 ```sh
 brew trust davidgodefroid/tap                # Homebrew asks you to trust a third-party tap once
 brew install davidgodefroid/tap/lockfamily   # or only this tool: brew install davidgodefroid/tap/locksql
 cd ~/projects                                 # with lea: its projects directory; with claude: the project
-lox init                                      # detects PostgreSQL / MySQL / MariaDB, sets up the lock, runs lox up
+lox add locksql                               # asks about the database, sets up the lock, runs lox up
 lea                                           # or: claude, then lox approve
 ```
+
+If a lea container already runs for the project, `lox add` says `lea gets lock
+NAME at its next start: lea stop, then lea`: lea mounts the locks' sockets
+when its container starts, so `lea stop`, then `lea` brings the new lock in.
 
 By hand, with locksql's own installer, a first approved query from your
 project directory:
@@ -210,7 +214,7 @@ starts the MCP server in the image (Codex, Gemini CLI and Cursor take the
 same command). `profile add` asks for the engine, host, TLS and where the
 password comes from (typed at console start, or Vault), never for the
 password itself; `--non-interactive` takes them from flags instead, and
-`--json` answers in one line of JSON, as `lox init` calls it
+`--json` answers in one line of JSON, as `lox add` calls it
 ([docs/usage.md](docs/usage.md#locksql-profile-add)). Inside a container `localhost` is the container: a database
 on your machine is `host.docker.internal`, which the launcher maps to your
 machine. `locksql version` prints the launcher's version and its image's,
@@ -292,6 +296,12 @@ sequenceDiagram
 ```
 
 </details>
+
+Every client command, `locksql mcp` and `locksql doctor` also take `--instance NAME`, to
+reach one lock among several of this type that lea mounts (without it:
+`$LOCKSQL_INSTANCE`, else the one lock in `$LEA_LOCKSQL_INSTANCES`). `locksql console`
+and `locksql hub-key` take an `--instance` too, but that one is the name `lox up`
+gives the lock.
 
 Full walkthrough: [docs/usage.md](docs/usage.md).
 
@@ -738,7 +748,7 @@ The image refuses the former host install (`locksql install`, `setup` and
 the binary's own `update`): [migrating from a host
 install](docs/docker.md#migrating-from-a-host-install).
 
-With [lea](https://github.com/DavidGodefroid/lea), `lox init`, run in lea's
+With [lea](https://github.com/DavidGodefroid/lea), `lox add locksql`, run in lea's
 projects directory (lea reads `.lockfamily/up.json` only there), sets up the
 lock (with your uid in its `allowed_uids`, as lea's agents run as you) and
 `lox up` runs the console; with locksql on in lea (`lea init --locksql` or

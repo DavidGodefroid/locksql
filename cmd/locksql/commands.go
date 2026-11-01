@@ -58,12 +58,13 @@ func usagef(format string, a ...any) error { return usageError{fmt.Sprintf(forma
 
 // opts are the parsed flags and arguments of a client command.
 type opts struct {
-	profile string
-	db      string
-	unmask  bool
-	intent  string
-	json    bool
-	args    []string
+	profile  string
+	instance string
+	db       string
+	unmask   bool
+	intent   string
+	json     bool
+	args     []string
 }
 
 // clientCmd is one client command: its flags, its arguments and what it
@@ -78,14 +79,14 @@ type clientCmd struct {
 
 var clientCmds = map[string]clientCmd{
 	"tables": {
-		usage: "locksql tables --profile P --db D [--json]", db: true,
+		usage: "locksql tables --profile P [--instance NAME] --db D [--json]", db: true,
 		do: func(ctx context.Context, _ env, c *client.Client, o *opts) (any, func(io.Writer), error) {
 			r, err := c.Tables(ctx, o.db)
 			return r, func(w io.Writer) { client.FormatTables(w, r) }, err
 		},
 	},
 	"describe": {
-		usage: "locksql describe --profile P --db D [--json] TABLE", db: true, min: 1, max: 1,
+		usage: "locksql describe --profile P [--instance NAME] --db D [--json] TABLE", db: true, min: 1, max: 1,
 		do: func(ctx context.Context, _ env, c *client.Client, o *opts) (any, func(io.Writer), error) {
 			info, err := c.Describe(ctx, o.db, o.args[0])
 			if err != nil {
@@ -100,7 +101,7 @@ var clientCmds = map[string]clientCmd{
 		},
 	},
 	"plan": {
-		usage: `locksql plan --profile P --db D [--unmask] [--intent TEXT] [--json] "SQL" | -`, db: true, unmask: true, min: 1, max: 1,
+		usage: `locksql plan --profile P [--instance NAME] --db D [--unmask] [--intent TEXT] [--json] "SQL" | -`, db: true, unmask: true, min: 1, max: 1,
 		do: func(ctx context.Context, e env, c *client.Client, o *opts) (any, func(io.Writer), error) {
 			sql, err := readSQL(e, o.args[0])
 			if err != nil {
@@ -111,7 +112,7 @@ var clientCmds = map[string]clientCmd{
 		},
 	},
 	"run": {
-		usage: "locksql run --profile P [--json] PLAN_ID|TICKET", min: 1, max: 1,
+		usage: "locksql run --profile P [--instance NAME] [--json] PLAN_ID|TICKET", min: 1, max: 1,
 		do: func(ctx context.Context, _ env, c *client.Client, o *opts) (any, func(io.Writer), error) {
 			// No timeout: the human may take up to the console's approval
 			// timeout to answer. A ticket (hub mode) is a ULID, a plan id
@@ -129,21 +130,21 @@ var clientCmds = map[string]clientCmd{
 		},
 	},
 	"pii list": {
-		usage: "locksql pii list --profile P [--json]",
+		usage: "locksql pii list --profile P [--instance NAME] [--json]",
 		do: func(ctx context.Context, _ env, c *client.Client, _ *opts) (any, func(io.Writer), error) {
 			r, err := c.PIIList(ctx)
 			return r, func(w io.Writer) { client.FormatPII(w, r) }, err
 		},
 	},
 	"pii add": {
-		usage: "locksql pii add --profile P [--json] DB.TABLE.COLUMN", min: 1, max: 1,
+		usage: "locksql pii add --profile P [--instance NAME] [--json] DB.TABLE.COLUMN", min: 1, max: 1,
 		do: func(ctx context.Context, _ env, c *client.Client, o *opts) (any, func(io.Writer), error) {
 			r, err := c.PIIAdd(ctx, o.args[0])
 			return r, func(w io.Writer) { fmt.Fprintf(w, "mask rule added: %s\n", o.args[0]) }, err
 		},
 	},
 	"request": {
-		usage: `locksql request --profile P [--json] "tier=write" | "limits.max_rows=500" | "allow=app.t.c"`, min: 1, max: 1,
+		usage: `locksql request --profile P [--instance NAME] [--json] "tier=write" | "limits.max_rows=500" | "allow=app.t.c"`, min: 1, max: 1,
 		do: func(ctx context.Context, _ env, c *client.Client, o *opts) (any, func(io.Writer), error) {
 			change := strings.TrimSpace(o.args[0])
 			if change == "" {
@@ -156,7 +157,7 @@ var clientCmds = map[string]clientCmd{
 		},
 	},
 	"logout": {
-		usage: "locksql logout --profile P [--json]",
+		usage: "locksql logout --profile P [--instance NAME] [--json]",
 		do: func(ctx context.Context, _ env, c *client.Client, _ *opts) (any, func(io.Writer), error) {
 			err := c.Logout(ctx)
 			return map[string]bool{"ok": true}, func(w io.Writer) {
@@ -271,6 +272,7 @@ func runClient(e env, name string, args []string) int {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&o.profile, "profile", "", "profile")
+	fs.StringVar(&o.instance, client.FlagInstance, "", "reach one lock among several of this type")
 	fs.BoolVar(&o.json, "json", false, "JSON output")
 	if spec.db {
 		fs.StringVar(&o.db, "db", "", "database")
@@ -287,6 +289,10 @@ func runClient(e env, name string, args []string) int {
 		return usageFail(e, name, spec.usage, "wrong number of arguments")
 	}
 	o.args = pos
+	instance, err := client.ResolveInstance(o.instance)
+	if err != nil {
+		return usageFail(e, name, spec.usage, err.Error())
+	}
 	profile, err := resolveProfile(e, o.profile)
 	if err != nil {
 		return usageFail(e, name, spec.usage, err.Error())
@@ -295,7 +301,7 @@ func runClient(e env, name string, args []string) int {
 
 	ctx, stop := signalContext()
 	defer stop()
-	c, err := client.Dial(e.cwd, profile)
+	c, err := client.DialInstance(e.cwd, profile, instance)
 	if err != nil {
 		return fail(e, name, o.json, err)
 	}
@@ -340,7 +346,7 @@ func fail(e env, name string, asJSON bool, err error) int {
 // runPII dispatches `locksql pii list|add`.
 func runPII(e env, args []string) int {
 	if len(args) == 0 || (args[0] != "list" && args[0] != "add") {
-		fmt.Fprintln(e.stderr, "usage: locksql pii list|add --profile P [--json] [DB.TABLE.COLUMN]")
+		fmt.Fprintln(e.stderr, "usage: locksql pii list|add --profile P [--instance NAME] [--json] [DB.TABLE.COLUMN]")
 		return exitUsage
 	}
 	return runClient(e, "pii "+args[0], args[1:])
@@ -349,11 +355,12 @@ func runPII(e env, args []string) int {
 // runStatus is `locksql status [--profile P] [--json]`. Without a profile
 // and with several configured, it reports every profile.
 func runStatus(e env, args []string) int {
-	const usage = "locksql status [--profile P] [--json]"
+	const usage = "locksql status [--profile P] [--instance NAME] [--json]"
 	o := &opts{}
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&o.profile, "profile", "", "profile")
+	fs.StringVar(&o.instance, client.FlagInstance, "", "reach one lock among several of this type")
 	fs.BoolVar(&o.json, "json", false, "JSON output")
 	pos, err := parseInterleaved(fs, args)
 	if err != nil {
@@ -362,13 +369,17 @@ func runStatus(e env, args []string) int {
 	if len(pos) > 0 {
 		return usageFail(e, "status", usage, "wrong number of arguments")
 	}
+	instance, err := client.ResolveInstance(o.instance)
+	if err != nil {
+		return usageFail(e, "status", usage, err.Error())
+	}
 	cfg, err := config.Load(e.cwd)
 	if err != nil {
 		return usageFail(e, "status", usage, err.Error())
 	}
 	names := profileNames(cfg)
 	if o.profile == "" && len(names) > 1 {
-		return statusAll(e, names, o.json)
+		return statusAll(e, names, instance, o.json)
 	}
 	profile, err := resolveProfile(e, o.profile)
 	if err != nil {
@@ -376,7 +387,7 @@ func runStatus(e env, args []string) int {
 	}
 	ctx, stop := signalContext()
 	defer stop()
-	c, err := client.Dial(e.cwd, profile)
+	c, err := client.DialInstance(e.cwd, profile, instance)
 	if err != nil {
 		return fail(e, "status", o.json, err)
 	}
@@ -393,13 +404,13 @@ func runStatus(e env, args []string) int {
 	return exitOK
 }
 
-func statusAll(e env, names []string, asJSON bool) int {
+func statusAll(e env, names []string, instance string, asJSON bool) int {
 	ctx, stop := signalContext()
 	defer stop()
 	list := make([]client.ProfileStatus, 0, len(names))
 	for _, n := range names {
 		ps := client.ProfileStatus{Profile: n}
-		c, err := client.Dial(e.cwd, n)
+		c, err := client.DialInstance(e.cwd, n, instance)
 		switch {
 		case errors.Is(err, client.ErrNoConsole):
 			ps.Start = startCommandOf(err, n)

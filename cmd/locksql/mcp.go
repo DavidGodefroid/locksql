@@ -7,24 +7,31 @@ import (
 
 	"github.com/DavidGodefroid/lockkit/mcpkit"
 
+	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/mcpserver"
 )
 
-// runMCP is `locksql mcp [--profile P]`: an MCP server on stdin/stdout for
-// the agent session that spawned it. Stdout carries only the protocol.
+// runMCP is `locksql mcp [--profile P] [--instance NAME]`: an MCP server
+// on stdin/stdout for the agent session that spawned it. Stdout carries
+// only the protocol.
 func runMCP(e env, args []string) int {
-	const usage = "locksql mcp [--profile P]"
-	var profile string
+	const usage = "locksql mcp [--profile P] [--instance NAME]"
+	var profile, instanceFlag string
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&profile, "profile", "", "pin the server to one profile")
+	fs.StringVar(&instanceFlag, client.FlagInstance, "", "reach one lock among several of this type")
 	pos, err := parseInterleaved(fs, args)
 	if err != nil {
 		return usageFail(e, "mcp", usage, err.Error())
 	}
 	if len(pos) > 0 {
 		return usageFail(e, "mcp", usage, "wrong number of arguments")
+	}
+	instance, err := client.ResolveInstance(instanceFlag)
+	if err != nil {
+		return usageFail(e, "mcp", usage, err.Error())
 	}
 	// The config is checked at start-up so that a broken config is a usage
 	// error the human sees, and read again on every call.
@@ -45,7 +52,7 @@ func runMCP(e env, args []string) int {
 			}
 			return profileNames(cfg), nil
 		},
-		Dial:    mcpserver.DialClient(e.cwd, version),
+		Dial:    mcpserver.DialClient(e.cwd, version, instance),
 		Version: version,
 	}
 	ctx, stop := signalContext()

@@ -4,6 +4,14 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## v0.14.0 (2026-11-01)
+
+### Added
+
+- **`--instance NAME`**: reach one lock among several of this type (lea mounts each at
+  /run/locksql/NAME). Every client command, `status`, `mcp` and `doctor` take it; it defaults to
+  `LOCKSQL_INSTANCE`, then to the one lock listed in `LEA_LOCKSQL_INSTANCES`.
+
 ## v0.13.1 (2026-11-01)
 
 Supported lockhub: as v0.13.0 (v0.3.0 or later).

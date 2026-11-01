@@ -27,7 +27,7 @@ locksql profile add [--non-interactive] [--json] [--project DIR] [--profile NAME
                     [--user U] [--database D] [--tls MODE])
 ```
 
-These are the launcher verbs every lock shares, so that `lox init` drives
+These are the launcher verbs every lock shares, so that `lox add` drives
 each the same way ([lockkit GUIDE §14](https://github.com/DavidGodefroid/lockkit/blob/main/GUIDE.md#14-launcher-verbs-verbs)):
 `locksql init <agent>`, `locksql profile add`, `locksql doctor`.
 
@@ -472,7 +472,7 @@ vault_path  = "database/creds/reporting-ro"
 ### `locksql doctor`
 
 ```sh
-locksql doctor [--profile P] [--fix [--yes]] [--json]
+locksql doctor [--profile P] [--instance NAME] [--fix [--yes]] [--json]
 ```
 
 `locksql doctor` runs as `agent` and checks what the agent's side sees.
@@ -1001,19 +1001,26 @@ The agent runs these from inside the project. Each one talks to the console of
 one profile and never handles a secret.
 
 ```sh
-locksql status   [--profile P]
-locksql tables   --profile P [--db D]
-locksql describe --profile P [--db D] TABLE
-locksql plan     --profile P [--db D] [--unmask] [--intent TEXT] "SQL" | -   # "-" reads SQL from stdin
-locksql run      --profile P PLAN_ID                          # waits for the human's approval
-locksql pii      list|add --profile P [DB.TABLE.COLUMN]
-locksql request  --profile P "tier=write" | "limits.max_rows=500" | "allow=app.t.c"
-locksql logout   --profile P
-locksql doctor   [--profile P] [--fix [--yes]] [--json]
+locksql status   [--profile P] [--instance NAME]
+locksql tables   --profile P [--instance NAME] [--db D]
+locksql describe --profile P [--instance NAME] [--db D] TABLE
+locksql plan     --profile P [--instance NAME] [--db D] [--unmask] [--intent TEXT] "SQL" | -   # "-" reads SQL from stdin
+locksql run      --profile P [--instance NAME] PLAN_ID        # waits for the human's approval
+locksql pii      list|add --profile P [--instance NAME] [DB.TABLE.COLUMN]
+locksql request  --profile P [--instance NAME] "tier=write" | "limits.max_rows=500" | "allow=app.t.c"
+locksql logout   --profile P [--instance NAME]
+locksql doctor   [--profile P] [--instance NAME] [--fix [--yes]] [--json]
 ```
 
 - `--profile` may be left out when exactly one profile is configured. Without
   it and with several profiles, `status` reports every profile.
+- `--instance NAME` reaches one lock among several of this type (lea mounts
+  each at `/run/locksql/NAME`; a name is lowercase letters, digits and `-`).
+  `$LOCKSQL_INSTANCE` does the same when no flag is given, and lea lists its
+  locks in `$LEA_LOCKSQL_INSTANCES`: with one lock the client takes it, with
+  several and no `--instance` the error names them (`several locksql locks:
+  NAME NAME; pass --instance NAME (or set LOCKSQL_INSTANCE)`). It is not the
+  console's `--instance`, which `lox up` passes.
 - `--db` defaults to the profile's `database`. A profile that names one
   serves that database only: another `--db` is refused.
 - `--json` gives machine-readable output on every client command. A failure
@@ -1285,7 +1292,7 @@ the approval screen (see [The approval screen](#the-approval-screen)). The code 
 
 ### MCP server
 
-`locksql mcp [--profile P]` serves the same operations to an agent as MCP tools
+`locksql mcp [--profile P] [--instance NAME]` serves the same operations to an agent as MCP tools
 over stdio. Start it from the project directory (agents usually do), so that it
 finds the project's consoles.
 
@@ -1299,7 +1306,9 @@ finds the project's consoles.
 | `locksql_request_change` | queued for the human; never applied by the tool |
 
 - Each tool takes an optional `profile` argument. With `--profile`, the server
-  is pinned to that profile and refuses any other.
+  is pinned to that profile and refuses any other. `--instance NAME` pins it
+  to one lock among several (in `.mcp.json`, `"args": ["mcp", "--instance",
+  "NAME"]`).
 - `locksql_run` blocks until the human decides and sends a progress
   notification every 5 seconds meanwhile, so that clients do not time out.
   Configure the agent's tool timeout above 5 minutes (`init` does this for
