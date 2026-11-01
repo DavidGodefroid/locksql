@@ -157,7 +157,7 @@ func runEnv(e env, args []string) int {
 	case "console":
 		return runConsole(e, args[1:])
 	case "hub-key":
-		// The instance's public key, for lock up to pin at the hub; the
+		// The instance's public key, for lox up to pin at the hub; the
 		// key itself stays in the console account's home.
 		if err := hubclient.HubKeyCommand(stdout, "", args[1:]); err != nil {
 			fmt.Fprintln(stderr, "locksql hub-key:", err)

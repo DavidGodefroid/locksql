@@ -223,7 +223,7 @@ jobs:
         run: go test -tags integration -timeout 30m ./...
 
   # The approval hub's phase-1 demo (test/integration/hub_e2e_test.go)
-  # against lockhub main: plan, pending, lock approve at a terminal, run,
+  # against lockhub main: plan, pending, lox approve at a terminal, run,
   # audit verify, and the refusals. It must run and pass, not skip.
   hub-phase1:
     name: hub phase 1 (lockhub main)

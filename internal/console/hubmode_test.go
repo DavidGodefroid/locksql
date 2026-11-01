@@ -703,7 +703,7 @@ func decideSigned(t *testing.T, hub *hubtest.Hub, tk string, out ticket.Outcome,
 }
 
 // wantHubSigned checks that rec records decision d of the hub: its
-// signature, who answered and on which facade, as lockhub's `lock audit
+// signature, who answered and on which facade, as lockhub's `lox audit
 // verify --lock` matches them.
 func wantHubSigned(t *testing.T, rec map[string]any, d *ticket.Decision) {
 	t.Helper()

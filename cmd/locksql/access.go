@@ -205,7 +205,7 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 
 	// 2. The .locksql directory, and pii in it: the console writes the PII
 	// rule sets there, unless it keeps them in a directory of its own
-	// (LOCKSQL_PII_DIR, as lock up runs it). In a lock up workspace, a
+	// (LOCKSQL_PII_DIR, as lox up runs it). In a lox up workspace, a
 	// .locksql or .locksql/pii the console does not own is a
 	// warning, not a failure: doctor cannot know that every console of the
 	// project runs that way, and a console without the variable writes and
@@ -260,7 +260,7 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 	}
 	setsOK := ownDir("project .locksql/pii", sets)
 	if why != "" {
-		add(checkOK, "PII rule sets", "not checked here: lock up runs the console with "+console.PIIDirEnv+", which keeps them in its own volume, seeded from (and new masks merged from) the reviewed copy of "+sets+" that lock up gives it", "", nil)
+		add(checkOK, "PII rule sets", "not checked here: lox up runs the console with "+console.PIIDirEnv+", which keeps them in its own volume, seeded from (and new masks merged from) the reviewed copy of "+sets+" that lox up gives it", "", nil)
 	}
 
 	// 3. The files both accounts read: the config, a legacy pii.toml, and
@@ -292,8 +292,8 @@ func projectChecks(d doctorEnv, root string, svc svcAccount, me int) []check {
 
 // lockUpWorkspace says why doctor takes it that the project's consoles
 // keep their PII rule sets out of the project ("": it does not): a lock
-// up workspace, whose consoles lock up runs with LOCKSQL_PII_DIR. Its
-// lockfamily.yaml is found as lock up finds it: in .lockfamily/ as soon
+// up workspace, whose consoles lox up runs with LOCKSQL_PII_DIR. Its
+// lockfamily.yaml is found as lox up finds it: in .lockfamily/ as soon
 // as that exists, else (the layout before it) at the project's root.
 // Doctor's own environment says nothing of the console's: the console
 // started from this account is handed off to the console account with
@@ -309,7 +309,7 @@ func lockUpWorkspace(d doctorEnv, root string) string {
 		f = filepath.Join(root, "lockfamily.yaml")
 	}
 	if fi, err := d.stat(f); err == nil && fi.Mode().IsRegular() {
-		return "a lock up workspace (" + f + ")"
+		return "a lox up workspace (" + f + ")"
 	}
 	return ""
 }

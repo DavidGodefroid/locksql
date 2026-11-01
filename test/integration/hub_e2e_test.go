@@ -33,14 +33,14 @@ import (
 // The phase-1 demo of the approval hub, end to end with real binaries:
 // lockhub and lock built from a lockhub checkout (LOCKHUB_SRC), locksql
 // from this tree, a throwaway Postgres. An agent plans and runs, gets
-// pending with a ticket; a human approves with `lock approve` in a
+// pending with a ticket; a human approves with `lox approve` in a
 // terminal; the agent runs the ticket and gets the rows; the hub's audit
 // verifies. Then the refusals: a denial, a schema change between the
 // approval and the run (stale, a new ticket), a decision replayed, the
 // hub stopped (pending, nothing runs). The console reaches the hub through
 // a proxy that forges the decision of one ticket in flight: signed by a key
 // the console did not pin, or one byte of it changed; neither runs. Last,
-// one byte of the hub's audit log changed fails `lock audit verify`.
+// one byte of the hub's audit log changed fails `lox audit verify`.
 //
 //	LOCKHUB_E2E=1 LOCKHUB_SRC=~/Documents/lockhub go test -tags integration -run TestHubPhase1 ./test/integration
 
@@ -58,17 +58,10 @@ func hubE2E(t *testing.T) string {
 	return src
 }
 
-// buildHub builds lockhub and the host CLI (lox, or lock in older
-// checkouts) from src into dir.
-func buildHub(t *testing.T, src, dir string) (hubBin, lockBin string) {
+// buildHub builds lockhub and its host CLI lox from src into dir.
+func buildHub(t *testing.T, src, dir string) (hubBin, loxBin string) {
 	t.Helper()
-	// lockhub renamed its host CLI cmd/lock to cmd/lox (lockhub#79).
-	// TODO: drop the cmd/lock fallback once a lockhub release ships lox.
-	cli := "lox"
-	if _, err := os.Stat(filepath.Join(src, "cmd", cli)); err != nil {
-		cli = "lock"
-	}
-	for _, c := range []string{"lockhub", cli} {
+	for _, c := range []string{"lockhub", "lox"} {
 		cmd := exec.Command("go", "build", "-p", "2", "-o", filepath.Join(dir, c), "./cmd/"+c)
 		cmd.Dir = src
 		cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOMAXPROCS=2")
@@ -76,7 +69,7 @@ func buildHub(t *testing.T, src, dir string) (hubBin, lockBin string) {
 			t.Fatalf("build %s: %v\n%s", c, err, out)
 		}
 	}
-	return filepath.Join(dir, "lockhub"), filepath.Join(dir, cli)
+	return filepath.Join(dir, "lockhub"), filepath.Join(dir, "lox")
 }
 
 func freePort(t *testing.T) int {
@@ -233,11 +226,11 @@ func startHub(t *testing.T, bin, data, addr, facade string) *hubProc {
 	}
 }
 
-// approveOnce runs `lock approve --once` in a terminal and types answer
+// approveOnce runs `lox approve --once` in a terminal and types answer
 // at the ticket's prompt; it returns the facade's output.
-func approveOnce(t *testing.T, lockBin, facade, answer string) string {
+func approveOnce(t *testing.T, loxBin, facade, answer string) string {
 	t.Helper()
-	cmd := exec.Command(lockBin, "approve", "--once", "--socket", facade)
+	cmd := exec.Command(loxBin, "approve", "--once", "--socket", facade)
 	cmd.Env = append(os.Environ(), "TERM=xterm", "USER=e2e-human")
 	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 50, Cols: 200})
 	if err != nil {
@@ -263,7 +256,7 @@ func approveOnce(t *testing.T, lockBin, facade, answer string) string {
 	for !strings.Contains(seen(), "approve? [y]es") {
 		if strings.Contains(seen(), "no ticket waiting") || time.Now().After(deadline) {
 			_ = cmd.Process.Kill()
-			t.Fatalf("lock approve: no prompt:\n%s", seen())
+			t.Fatalf("lox approve: no prompt:\n%s", seen())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -275,11 +268,11 @@ func approveOnce(t *testing.T, lockBin, facade, answer string) string {
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("lock approve: %v\n%s", err, seen())
+			t.Fatalf("lox approve: %v\n%s", err, seen())
 		}
 	case <-time.After(30 * time.Second):
 		_ = cmd.Process.Kill()
-		t.Fatalf("lock approve did not exit:\n%s", seen())
+		t.Fatalf("lox approve did not exit:\n%s", seen())
 	}
 	return seen()
 }
@@ -306,7 +299,7 @@ CREATE VIEW hub_v AS SELECT id, label FROM hub_t;
 GRANT SELECT ON hub_t, hub_v TO ro;`)
 
 	bins := t.TempDir()
-	hubBin, lockBin := buildHub(t, src, bins)
+	hubBin, loxBin := buildHub(t, src, bins)
 	if _, err := buildLocksql(); err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +433,7 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 	decide := func(answer string) string {
 		t.Helper()
 		decided++
-		return approveOnce(t, lockBin, facade, answer)
+		return approveOnce(t, loxBin, facade, answer)
 	}
 	const query = "SELECT id, label FROM hub_v ORDER BY id LIMIT 10"
 	p := submit(query)
@@ -448,7 +441,7 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		t.Fatal("the ticket ran before a decision")
 	}
 
-	// 4. The human approves in `lock approve`.
+	// 4. The human approves in `lox approve`.
 	if fo := decide("y"); !strings.Contains(fo, "approved") || !strings.Contains(fo, p.Ticket) {
 		t.Fatalf("facade:\n%s", fo)
 	}
@@ -544,7 +537,7 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 	})
 
 	// The forgeries run before the stale ticket below, which leaves its new
-	// ticket waiting at the hub for the next `lock approve`.
+	// ticket waiting at the hub for the next `lox approve`.
 	//
 	// forged submits sql, arms the proxy with forge for its ticket and
 	// approves the ticket in lockhub; check looks at what the console got
@@ -706,7 +699,7 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 
 	// 6. The hub's audit: chained, every decision signed and recorded.
 	auditVerify := func() (string, error) {
-		out, err := exec.Command(lockBin, "audit", "verify", "--data", data, "--hub-key-file", hubPub).CombinedOutput()
+		out, err := exec.Command(loxBin, "audit", "verify", "--data", data, "--hub-key-file", hubPub).CombinedOutput()
 		return string(out), err
 	}
 	verified := func(t *testing.T) {
@@ -714,10 +707,10 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		out, err := auditVerify()
 		want := fmt.Sprintf(", %d decisions signed and recorded", decided)
 		if err != nil || !strings.Contains(out, "OK:") || !strings.Contains(out, want) {
-			t.Fatalf("lock audit verify: want %q: %v\n%s", want, err, out)
+			t.Fatalf("lox audit verify: want %q: %v\n%s", want, err, out)
 		}
 	}
-	t.Run("lock audit verify", func(t *testing.T) {
+	t.Run("lox audit verify", func(t *testing.T) {
 		if decided != 7 {
 			t.Fatalf("%d decisions made, want 7", decided)
 		}
@@ -728,7 +721,7 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 	// acted on (the first approval, the denial, alice's approval) carry
 	// the hub's signature; the forged ones and the stale one it never
 	// acted on are the hub's alone.
-	t.Run("lock audit verify --lock: the console's records are signed", func(t *testing.T) {
+	t.Run("lox audit verify --lock: the console's records are signed", func(t *testing.T) {
 		var logs []string
 		_ = filepath.WalkDir(filepath.Join(home, "state"), func(path string, d os.DirEntry, err error) error {
 			if err == nil && !d.IsDir() && d.Name() == "audit.log" {
@@ -739,10 +732,10 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		if len(logs) != 1 {
 			t.Fatalf("console audit logs %q, want one", logs)
 		}
-		out, err := exec.Command(lockBin, "audit", "verify", "--data", data, "--hub-key-file", hubPub, "--lock", hubInst+"="+logs[0]).CombinedOutput()
+		out, err := exec.Command(loxBin, "audit", "verify", "--data", data, "--hub-key-file", hubPub, "--lock", hubInst+"="+logs[0]).CombinedOutput()
 		if err != nil || !strings.Contains(string(out), "OK: "+hubInst+": ") || !strings.Contains(string(out), ", 3 hub decisions match the hub's") ||
 			strings.Contains(string(out), "without the hub's signature") || !strings.Contains(string(out), "4 hub decision(s) on it not in this log") {
-			t.Fatalf("lock audit verify --lock: want 3 signed hub decisions, 4 not acted on: %v\n%s", err, out)
+			t.Fatalf("lox audit verify --lock: want 3 signed hub decisions, 4 not acted on: %v\n%s", err, out)
 		}
 	})
 
@@ -768,7 +761,7 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		}
 	})
 
-	t.Run("audit log tampered: lock audit verify fails", func(t *testing.T) {
+	t.Run("audit log tampered: lox audit verify fails", func(t *testing.T) {
 		hub.stop()
 		log := filepath.Join(data, "tickets.jsonl")
 		orig, err := os.ReadFile(log)
@@ -810,7 +803,7 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		out, err := auditVerify()
 		var ee *exec.ExitError
 		if !errors.As(err, &ee) || ee.ExitCode() == 0 || !strings.Contains(out, "FAIL") {
-			t.Fatalf("lock audit verify of a tampered log: want FAIL and a non-zero exit, got %v\n%s", err, out)
+			t.Fatalf("lox audit verify of a tampered log: want FAIL and a non-zero exit, got %v\n%s", err, out)
 		}
 		// The byte put back, the log verifies again: that byte was it.
 		write(orig)

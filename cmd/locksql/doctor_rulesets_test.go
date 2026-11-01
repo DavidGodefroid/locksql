@@ -99,8 +99,8 @@ func TestProjectChecksSymlinkedRuleSets(t *testing.T) {
 	t.Error("no project .locksql/pii check")
 }
 
-// Under lock up the console keeps its PII rule sets in its own directory
-// (LOCKSQL_PII_DIR): in a lock up workspace, a .locksql and .locksql/pii
+// Under lox up the console keeps its PII rule sets in its own directory
+// (LOCKSQL_PII_DIR): in a lox up workspace, a .locksql and .locksql/pii
 // the console does not own but can read are a warning, not a failure
 // (#130). Otherwise, and whatever doctor's own environment holds (the
 // console it starts gets a fresh one), the ownership check fails as
@@ -151,12 +151,12 @@ func TestProjectChecksLockUpWorkspace(t *testing.T) {
 		return out
 	}
 
-	// A lock up workspace: warnings naming why, no repair; the rule sets
+	// A lox up workspace: warnings naming why, no repair; the rule sets
 	// reported as not checked.
 	files := newFiles()
 	got := run(files)
 	for _, title := range []string{"project .locksql", "project .locksql/pii"} {
-		if c := got[title]; c.state != checkWarn || c.repair != nil || !strings.Contains(c.detail, "lock up workspace") {
+		if c := got[title]; c.state != checkWarn || c.repair != nil || !strings.Contains(c.detail, "lox up workspace") {
 			t.Errorf("%s: %+v", title, c)
 		}
 	}
@@ -172,8 +172,8 @@ func TestProjectChecksLockUpWorkspace(t *testing.T) {
 	if c := run(f)["project .locksql/pii"]; c.state != checkWarn {
 		t.Errorf("root lockfamily.yaml: %+v", c)
 	}
-	// Not a lock up workspace: a bare .lockfamily/; a root lockfamily.yaml
-	// beside a .lockfamily (a directory or anything else), which lock up
+	// Not a lox up workspace: a bare .lockfamily/; a root lockfamily.yaml
+	// beside a .lockfamily (a directory or anything else), which lox up
 	// never reads; nothing at all, LOCKSQL_PII_DIR in doctor's environment
 	// notwithstanding.
 	f[proj+"/.lockfamily"] = file(0o644, 1000)
@@ -194,7 +194,7 @@ func TestProjectChecksLockUpWorkspace(t *testing.T) {
 		t.Errorf("no workspace: %+v", c)
 	}
 	if _, ok := got["PII rule sets"]; ok {
-		t.Error("PII rule sets reported outside a lock up workspace")
+		t.Error("PII rule sets reported outside a lox up workspace")
 	}
 
 	// In the workspace: a seed writable by others fails, with a repair.

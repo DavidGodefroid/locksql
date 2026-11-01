@@ -33,6 +33,9 @@ Supported lockhub: as v0.11.5; the console now needs it
   skill `locksql init` writes, `init`'s next steps, the docs and the site
   point at `lox up`, and at `lox attach <instance>` for the console's
   start-up questions (policy, PII rules, password).
+- `doctor`'s PII rule sets check says `lox up` (``a lox up workspace``),
+  no longer `lock up`; so do the docs and comments (lockhub#79). The hub
+  end-to-end test builds lockhub's `cmd/lox` only.
 
 ### Removed
 
