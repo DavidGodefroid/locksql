@@ -71,7 +71,7 @@ LOCKSQL_VERSION=$V sh install.sh</code></pre>
 
 <section aria-labelledby="project">
   <h2 id="project">Set up a project</h2>
-  <p class="prose">The launcher mounts the project at its own path and runs each command with the account it needs. In the project directory, write Claude Code’s files, add a database profile, then give <code>.locksql/</code> to the console account:</p>
+  <p class="prose">The launcher mounts the project at its own path and runs each command with the account it needs. In the project directory, write Claude Code’s files, add a database profile, then check the setup and repair what can be:</p>
   <pre tabindex="0"><code>locksql init claude
 locksql profile add
 locksql doctor --fix --yes</code></pre>
@@ -84,7 +84,7 @@ locksql doctor --fix --yes</code></pre>
       <li><code>credentials = "keychain"</code> is not available in a container, which has no OS keychain: use <code>ask</code>, or <code>vault</code> with the <code>vault</code> image;</li>
       <li>a SQLite <code>path</code> is relative to the project root, which is mounted.</li>
     </ul>
-    <p><code>doctor --fix</code> runs as root inside the image, where the console account exists. The console writes <code>pii.toml</code> in <code>.locksql/</code>, and a directory your account owns would let the agent replace that file, and with it the masking rules: <code>doctor --fix</code> makes uid 10001 the owner of <code>.locksql/</code> (mode <code>0755</code>) and keeps <code>config.toml</code> readable and yours to edit. Its checks of the console and its profiles fail from this container, which runs no console: read the <code>project</code> lines. Run it again whenever <code>.locksql/</code> is created anew.</p>
+    <p><code>doctor --fix</code> runs as you. It wires your agents and keeps <code>.locksql/</code> as <code>lox up</code> reads it: <code>lox up</code> copies it once for the console, which never reads the project, and takes only files and directories that are yours and that no one else can write. Entries the console account owns (uid 10001, left by <code>doctor --fix</code> up to v0.13.0) are given back to you as root, in a container of its own run only then. Its checks of the console and its profiles warn from this container, which runs no console.</p>
   </div>
 
   <h3 id="profiles">Describe your databases</h3>

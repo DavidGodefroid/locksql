@@ -254,7 +254,7 @@ func TestConsoleRefusesAnotherLocksqlDir(t *testing.T) {
 	setup(t)
 	project := demoProject(t)
 	human(t, 1, project, []string{"init", "claude"})
-	human(t, 2, project, []string{"doctor", "--fix", "--yes"}, 1)
+	human(t, 2, project, []string{"doctor", "--fix", "--yes"})
 	image := imageName()
 	_, hubFlags := fakeHub(t, "locksql-home", project)
 	dir := filepath.Join(project, ".locksql")
@@ -319,7 +319,9 @@ func loxUpConsole(t *testing.T, project string, readOnly bool, hubFlags []string
 		{"type": "volume", "source": "home", "target": "/home/locksql"},
 		{"type": "bind", "source": project, "target": project, "read_only": readOnly},
 	}
-	env := map[string]string{}
+	// lox up's: the console keeps its PII rule sets in its home volume,
+	// never in the project's .locksql, which is yours.
+	env := map[string]string{"LOCKSQL_PII_DIR": "/home/locksql/pii-rules"}
 	if readOnly {
 		// As the launcher's LOCKSQL_READONLY_PROJECT=1: .locksql the only
 		// writable directory, pinned by its device and inode.
@@ -394,12 +396,15 @@ func firstQuery(t *testing.T, readOnly bool) {
 	project := demoProject(t)
 
 	// The human's commands of the quick start: the agent's files, a
-	// profile, then .locksql/ given to the console account (doctor --fix
-	// exits 1: the console's checks fail from its container, which runs
-	// none).
+	// profile, then doctor --fix, which passes (no console runs yet: a
+	// warning) and leaves .locksql/ yours, as lox up reads it.
 	human(t, 1, project, []string{"init", "claude"})
 	human(t, 2, project, []string{"profile", "add", "--non-interactive", "--profile", "dev", "--engine", "sqlite", "--path", "demo.db"})
-	human(t, 3, project, []string{"doctor", "--fix", "--yes"}, 1)
+	human(t, 3, project, []string{"doctor", "--fix", "--yes"})
+	var st syscall.Stat_t
+	if err := syscall.Lstat(filepath.Join(project, ".locksql"), &st); err != nil || int(st.Uid) != os.Getuid() || st.Mode&0o022 != 0 {
+		t.Fatalf(".locksql after doctor --fix: uid %d, mode %04o, %v; lox up wants it yours, writable by you only", st.Uid, st.Mode&0o7777, err)
+	}
 
 	// The console, in a terminal, as lox up starts it: as the console
 	// account, in its own container, attached to the hub, with its socket
@@ -503,7 +508,7 @@ func TestConsoleAllowedUIDs(t *testing.T) {
 	setup(t)
 	project := demoProject(t)
 	human(t, 1, project, []string{"profile", "add", "--non-interactive", "--profile", "dev", "--engine", "sqlite", "--path", "demo.db"})
-	human(t, 2, project, []string{"doctor", "--fix", "--yes"}, 1)
+	human(t, 2, project, []string{"doctor", "--fix", "--yes"})
 	image := imageName()
 	runVol, homeVol := "locksql-e2e-allowed-run", "locksql-e2e-allowed-home"
 	t.Cleanup(func() {
@@ -515,7 +520,7 @@ func TestConsoleAllowedUIDs(t *testing.T) {
 	_, hubFlags := fakeHub(t, homeVol, project)
 	console := func(name string, extra ...string) *exec.Cmd {
 		return exec.Command("docker", append(append([]string{"run", "-it", "--rm", "--network", "host", "--name", name, "--user", "locksql",
-			"-v", project + ":" + project, "-v", runVol + ":/run/locksql", "-v", homeVol + ":/home/locksql",
+			"-e", "LOCKSQL_PII_DIR=/home/locksql/pii-rules", "-v", project + ":" + project, "-v", runVol + ":/run/locksql", "-v", homeVol + ":/home/locksql",
 			image, "console", "--project", project}, hubFlags...), extra...)...)
 	}
 	// listen answers the first start's prompts until the console listens.
