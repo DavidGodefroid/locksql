@@ -4,7 +4,9 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## Unreleased
+## v0.13.1 (2026-11-01)
+
+Supported lockhub: as v0.13.0 (v0.3.0 or later).
 
 ### Fixed
 
@@ -35,6 +37,8 @@ This file records the changes a user or an agent has to know about.
   `project .locksql/pii`, `project config.toml` / `pii.toml` /
   `pii/<set>.toml` (readable by the console account) and `PII rule sets`:
   the console reads `lox up`'s reviewed copy, never the project.
+
+### Added
 
 - Each release tag bumps the `locksql` formula of the
   [Homebrew tap](https://github.com/DavidGodefroid/homebrew-tap)
