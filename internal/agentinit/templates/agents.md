@@ -5,7 +5,9 @@ in lockhub; the `locksql console`, a separate process that `lox up` starts, hold
 the only database connection. Use it for debugging and finding facts, one targeted question at a time, and only on the
 user's explicit request. If a database fact would merely help, propose the query and wait.
 
-Workflow (MCP tools `locksql_*`, or the `locksql` CLI from any directory):
+Workflow (MCP tools `locksql_*`, or the `locksql` CLI from the workspace or a directory below it:
+the CLI and MCP reach the lock that `lox up` runs for the workspace, found through its
+`.lockfamily/up.json`; with several locksql locks there, add `--instance NAME`):
 
 1. Prefer a non-production profile unless the question is about real production data. Find the
    database and table from the code first.
