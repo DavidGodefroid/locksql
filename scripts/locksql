@@ -139,18 +139,35 @@ if [ -t 0 ] && [ -t 1 ]; then tty=-it; fi
 # from this directory, then ARGS (the account, the volumes, the image and
 # its command). LOCKSQL_DOCKER_ARGS go before ARGS.
 docker_run() {
-	command -v docker >/dev/null 2>&1 || die "docker is required: locksql runs in Docker (docs/docker.md)"
-	mountable "$project"
-	mountable "$here"
-	# From here when it is in the project, else from the project.
-	case "$here" in
-	"$project" | "$project"/*) workdir=$here ;;
-	*) workdir=$project ;;
-	esac
+	docker_prep
 	# LOCKSQL_DOCKER_ARGS is split on spaces, never globbed.
 	set -f
 	# shellcheck disable=SC2086 # LOCKSQL_DOCKER_ARGS is split on purpose
 	exec docker run --rm -v "$project:$project${project_mode:-}" -w "$workdir" ${LOCKSQL_DOCKER_ARGS:-} "$@"
+}
+
+# docker_run_then ARGS...: docker_run, back in the launcher afterwards; it
+# returns docker's exit status.
+docker_run_then() {
+	docker_prep
+	set -f
+	# shellcheck disable=SC2086 # LOCKSQL_DOCKER_ARGS is split on purpose
+	docker run --rm -v "$project:$project${project_mode:-}" -w "$workdir" ${LOCKSQL_DOCKER_ARGS:-} "$@"
+	rc=$?
+	set +f
+	return "$rc"
+}
+
+# docker_prep: docker is there, the project and here can be mounted, and
+# $workdir is here when it is in the project, else the project.
+docker_prep() {
+	command -v docker >/dev/null 2>&1 || die "docker is required: locksql runs in Docker (docs/docker.md)"
+	mountable "$project"
+	mountable "$here"
+	case "$here" in
+	"$project" | "$project"/*) workdir=$here ;;
+	*) workdir=$project ;;
+	esac
 }
 
 # mountable PATH: PATH can be a docker -v source and target, which ":"
@@ -714,15 +731,35 @@ profile)
 	docker_run "$tty" --user "$(id -u):$(id -g)" -e HOME=/tmp "$image" "$@"
 	;;
 doctor)
+	# The project's .locksql must be yours, as lox up reads it: doctor
+	# checks it for you, whichever account it runs as.
+	me="$(id -u):$(id -g)"
 	if has_flag --fix "$@"; then
-		docker_run "$tty" --user 0 "$image" "$@"
+		mountable "$HOME"
+		# Entries of .locksql that are not yours (the console account's,
+		# given to it by doctor --fix up to v0.13.0): lox up refuses them,
+		# and only root can give them back. Root makes that repair only,
+		# asking first unless --yes, in a container of its own, and only
+		# when there is one; its text goes to stderr.
+		if [ -e "$project/.locksql" ] && [ -n "$(find "$project/.locksql" ! -user "$(id -u)" -print 2>/dev/null)" ]; then
+			root_tty=
+			[ "$tty" != -it ] || root_tty=-it
+			# shellcheck disable=SC2086 # no argument when empty
+			docker_run_then $root_tty --user 0 -e LOCKSQL_DOCTOR_FOR="$me" "$image" "$@" >&2 || :
+		fi
+		# The checks and the other repairs as you: your agents' wiring in
+		# your home, .locksql's modes. In the clients group only for the
+		# socket directory, where no console's socket is mounted: the
+		# console checks say it is not running.
+		docker_run "$tty" --user "$me" --group-add locksql-clients -e HOME="$HOME" -e USER="$(id -un 2>/dev/null || id -u)" \
+			-e LOCKSQL_DOCTOR_FOR="$me" -v "$HOME:$HOME" "$image" "$@"
 	fi
 	# The checks run without lox up's socket too: then they say so.
 	if command -v docker >/dev/null 2>&1 && lockup_volume "$instance"; then
-		docker_run "$tty" --mount "type=volume,src=$lockup_vol,dst=/run/locksql,readonly" "$image" "$@"
+		docker_run "$tty" --mount "type=volume,src=$lockup_vol,dst=/run/locksql,readonly" -e LOCKSQL_DOCTOR_FOR="$me" "$image" "$@"
 	fi
 	[ -z "$lockup_why" ] || say "$lockup_why"
-	docker_run "$tty" "$image" "$@"
+	docker_run "$tty" -e LOCKSQL_DOCTOR_FOR="$me" "$image" "$@"
 	;;
 mcp)
 	# The agent speaks MCP on stdin and stdout: no terminal.

@@ -31,10 +31,10 @@ terminals, else `-i`.
 | `stats`, `forget` | `locksql` | volume `locksql-home` | they read the console account's state |
 | `init`, `config` | you (`id -u`:`id -g`) | `-e HOME=$HOME -v $HOME:$HOME` | they write your agents' files and your user config, owned by you |
 | `profile` | you | `-e HOME=/tmp` | it writes `.locksql/config.toml`, yours to edit |
-| `doctor --fix` | root (`--user 0`) | | gives `.locksql/` to uid 10001, which exists only in the image |
+| `doctor --fix` | you (`id -u`:`id -g`), in the group `locksql-clients`; root (`--user 0`) first, only when `.locksql/` holds entries that are not yours | `-e HOME=$HOME -e USER -v $HOME:$HOME`, `-e LOCKSQL_DOCTOR_FOR=uid:gid`; no socket volume | it wires your agents and keeps `.locksql/` as `lox up` reads it: yours, writable by you only. The root run gives back to you what the console account owns in `.locksql/` (left by `doctor --fix` up to v0.13.0, which `lox up` refuses), nothing else, its output on stderr |
 | `mcp` | `agent` (uid 10002, image default) | lox up's socket volume of the workspace's locksql lock, read-only (below), `-i` only | the agent speaks MCP on stdin/stdout |
 | `status`, `tables`, `describe`, `plan`, `run`, `request`, `logout`, `pii` | `agent` | lox up's socket volume, read-only (below) | client commands reach the console through the socket only |
-| `doctor` | `agent` | lox up's socket volume when there is one; else none, and the launcher says why | the checks run either way |
+| `doctor` | `agent` | lox up's socket volume when there is one; else none, and the launcher says why; `-e LOCKSQL_DOCTOR_FOR=uid:gid` | the checks run either way; `.locksql/` is checked for you |
 | anything else (`help`, ...) | `agent` | | no console to reach |
 | `version` | | | prints `locksql launcher X (image I)`, then runs `I version` |
 | `update [vX.Y.Z]` | (host) | | below |
@@ -155,8 +155,8 @@ Any failed check stops before the launcher is replaced. cosign is required
 - Linux: Docker Engine; `host.docker.internal` comes from the
   `host-gateway` mapping the launcher adds.
 - macOS: Docker Desktop; same launcher. Untested so far: `doctor --fix`
-  giving `.locksql/` to uid 10001 (a `chown` through Docker Desktop's file
-  sharing).
+  giving back `.locksql/` entries that are not yours (a `chown` as root
+  through Docker Desktop's file sharing).
 - Windows: no native build. Install the launcher in WSL 2 with Docker
   Desktop's WSL integration and run it there; the Windows binary refuses
   every command but `version` and `help`, pointing there.

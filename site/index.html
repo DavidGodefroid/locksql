@@ -155,7 +155,7 @@ curl -fsSLO "https://raw.githubusercontent.com/DavidGodefroid/locksql/$V/scripts
 less install.sh && LOCKSQL_VERSION=$V sh install.sh
 
 # 2. In your project: Claude Code's files (its MCP server is `locksql mcp`),
-#    a database profile, then give .locksql/ to the console account
+#    a database profile, then doctor --fix (your agents, .locksql/ as lox up reads it)
 locksql init claude
 locksql profile add
 locksql doctor --fix --yes

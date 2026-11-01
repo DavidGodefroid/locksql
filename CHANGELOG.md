@@ -4,6 +4,38 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+### Fixed
+
+- **`doctor --fix` no longer breaks `lox up`** (lockhub#92). It gave the
+  project's `.locksql/` to the console account (uid 10001), a leftover of
+  the consoles started by the launcher, which read `.locksql/` themselves;
+  the consoles run under `lox up` only now, which copies `.locksql/` as
+  you and refused it afterwards (`owned by uid 10001, not by you`).
+  `doctor --fix` now keeps `.locksql/` as `lox up` reads it: directories
+  and regular files that are yours and that no one else can write. It
+  removes the write bits of group and others there (`chmod go-w`), and
+  gives back to you, as root, what the console account owns in it: the
+  launcher runs that one repair in a root container of its own, only when
+  `.locksql/` holds an entry that is not yours, its output on stderr. It
+  changes each entry through a handle opened without following a link, and
+  never a hard link. Run `locksql doctor --fix --yes` once on a project an
+  older `doctor --fix` repaired.
+- **`doctor --fix` passes on a fresh setup.** The launcher ran every check
+  as root, so `client access` always failed (root is not in
+  `locksql-clients`) and the run exited 1. It now runs as you (`--user`
+  your uid and gid, your home mounted for the agents' wiring, the group
+  `locksql-clients` for the socket directory), and a uid with no account in
+  the image passes `client access`: the launcher runs the agent's commands
+  as `agent`. Plain `doctor` still runs as `agent`; both check `.locksql/`
+  for you (`LOCKSQL_DOCTOR_FOR`, your uid and gid, set by the launcher).
+- **Removed: the project checks of the console that read the project.**
+  `project access` (with its `setfacl` repair for the console account),
+  `project .locksql/pii`, `project config.toml` / `pii.toml` /
+  `pii/<set>.toml` (readable by the console account) and `PII rule sets`:
+  the console reads `lox up`'s reviewed copy, never the project.
+
 ## v0.13.0 (2026-11-01)
 
 Supported lockhub: as v0.12.0 (v0.3.0 or later). A minor release: a script

@@ -15,8 +15,8 @@ console as the console account ([section 2](#2-start-the-console)),
 
 [docker.md](docker.md) sets up a project: install the launcher, `locksql init`
 for the agent's files, `locksql profile add` for a database profile,
-`locksql doctor --fix` (as root, in the image) for the console account's
-access, then start the console.
+`locksql doctor --fix` for your agents' wiring and the project's `.locksql/`
+as `lox up` reads it, then start the console.
 
 ### `locksql profile add`
 
@@ -500,7 +500,7 @@ made (`fixed`) and every check, with its `status` (`ok`, `warn` or `fail`),
 `{"lock":"locksql","code":"usage","error":"..."}` instead.
 
 ```json
-{"lock":"locksql","ok":true,"fixed":["give /work/shop/.locksql to locksql, mode 0755"],"checks":[{"check":"operating system","status":"ok","detail":"linux"}]}
+{"lock":"locksql","ok":true,"fixed":["make /work/shop/.locksql writable by you only, and readable by you (chmod go-w,u+rX)"],"checks":[{"check":"operating system","status":"ok","detail":"linux"}]}
 ```
 
 | Check | Fails or warns when |
@@ -509,7 +509,7 @@ made (`fixed`) and every check, with its `status` (`ok`, `warn` or `fail`),
 | graphical session | X11 |
 | separation | same-user mode (fails; the console refuses to start); doctor then also warns on `dev.tty.legacy_tiocsti = 1` (terminal injection) and `kernel.yama.ptrace_scope = 0` (ptrace) |
 | system setup, console account | `system.toml` invalid or not root-owned; the console account missing or in the client group |
-| client access, privilege escalation | the agent's account is not in the client group, or can run `sudo` without a password |
+| client access, privilege escalation | the agent's account is not in the client group, or can run `sudo` without a password. A uid with no account in the image (the launcher's `doctor --fix`, run as you) passes: the launcher runs the agent's commands as `agent` |
 | separate session | the console account has no login session (Linux) |
 | socket directory | missing, wrong owner or group, a mode other than 0710/0750, or no setgid on Linux; shows the mode with setgid (`/run/locksql 2710 locksql:locksql-clients`) |
 | binary | the running binary can be changed by a non-root account (fails in separated mode) |
@@ -518,8 +518,7 @@ made (`fixed`) and every check, with its `status` (`ok`, `warn` or `fail`),
 | tls_ca, tls_cert, tls_key (per profile) | a file that is missing or holds no PEM certificate, a certificate expired or expiring within 30 days, a key readable by group or others (files the agent's account cannot read are not checked) |
 | server certificate (per profile without `ssh`) | a TLS handshake that sends no user name and no secret: the server offers no TLS under `require` or stronger, its chain does not verify against `tls_ca` (or the system roots), it does not name `host` (or `tls_server_name`) under `verify-full`, it is expired or expires within 30 days; under `prefer` or `require` it says whether `verify-full` would pass |
 | agent wiring | an installed agent is not wired for this account (warns; not checked as root or as the console account) |
-| project access, project .locksql, project .locksql/pii, project config.toml / pii.toml / pii/<set>.toml | separated mode, from an account other than the console's, inside a project: the console account cannot enter a directory down to the project (mode bits and POSIX ACLs), does not own `.locksql/` or `.locksql/pii/` or one is writable by group or others, or cannot read the config or the rule set of a project profile. In a lox up workspace (`lockfamily.yaml` in `.lockfamily/`, or at the project's root when there is no `.lockfamily`), whose consoles lox up runs with `LOCKSQL_PII_DIR`, `.locksql/` or `.locksql/pii/` not owned by the console account only warns, as long as the console account can list and enter it (a console started without `LOCKSQL_PII_DIR` writes there and needs it owned); unreadable by the console account, or writable by group or others, still fails. Doctor's own `LOCKSQL_PII_DIR` changes nothing: the console it starts is handed off with a fresh environment |
-| PII rule sets | never fails: in a lox up workspace, says the console keeps them in its own volume (not checked from here) |
+| project .locksql, project .locksql owner, project .locksql mode | inside a project, from any account but the console's: `.locksql/` is not what `lox up` copies, which reads it as you, following no link, and takes only directories and regular files that are yours (`LOCKSQL_DOCTOR_FOR`, which the launcher sets to your uid and gid; else the account doctor runs as) and that no one else can write: `.locksql/` or an entry in it is a link or another kind of file, owned by another account (the console account's, left by `doctor --fix` up to v0.13.0, is said apart), writable by group or others, or not readable by you. Not checked as root without `LOCKSQL_DOCTOR_FOR` |
 | console (per profile) | not running; then, from its `health`: not separated, an X11 display, database privileges beyond the tier, EXPLAIN failing |
 
 #### `locksql doctor --fix`
@@ -528,24 +527,24 @@ made (`fixed`) and every check, with its `status` (`ok`, `warn` or `fail`),
 each one unless `--yes`, reports each one (`repaired: ...` or `not
 repaired: ...`) and runs the checks again. Without a terminal, `--fix` needs
 `--yes`; `--yes` without `--fix` is a usage error. The
-repairs are small and idempotent; a second run finds nothing to do. The one a
-Docker setup needs is the project's: the console account, which exists only
-in the image, must own `.locksql/` and read the configs. The launcher runs
-`doctor --fix` there, as root, from the project directory:
+repairs are small and idempotent; a second run finds nothing to do. The
+launcher runs `doctor --fix` as you, with your home mounted, from the
+project directory:
 
 ```sh
 locksql doctor --fix --yes
 ```
 
-| Check | Repair |
-|---|---|
-| project .locksql | `chown locksql .locksql && chmod 0755 .locksql` |
-| project .locksql/pii | `chown locksql .locksql/pii && chmod 0755 .locksql/pii` |
-| project config.toml, pii.toml, pii/<set>.toml | `chmod 0644` |
+| Check | Repair | As |
+|---|---|---|
+| agent wiring | wires each installed agent that is not wired | you |
+| project .locksql mode | `chmod go-w,u+rX` on each entry that needs it | you |
+| project .locksql owner | gives back to you (`chown` through a handle opened without following links, never a hard link) what the console account owns in `.locksql/`, left by `doctor --fix` up to v0.13.0 | root, in a container of its own that the launcher runs first, only when `.locksql/` holds an entry that is not yours; its output goes to stderr |
+| client access, console account isolated, socket directory | `usermod`, `gpasswd`, the socket directory and its tmpfiles.d entry | root (`sudo`); in the image they always pass |
 
-Run it again whenever `.locksql/` is created anew, by `locksql init` for
-example. The checks of the console and its profiles fail from that
-container, which runs no console: read the `project` lines.
+Entries of another owner than you or the console account get the steps
+only (`sudo chown -R ...`). The checks of the console and its profiles warn
+from the launcher's container, which runs no console.
 
 ## 2. Start the console
 

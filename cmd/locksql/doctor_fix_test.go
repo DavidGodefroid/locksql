@@ -3,134 +3,13 @@
 package main
 
 import (
-	"encoding/hex"
 	"errors"
 	"io/fs"
 	"os"
-	"os/exec"
 	"os/user"
 	"strings"
 	"testing"
 )
-
-// ownedInfo is a fake file with an owner and group, for the access checks.
-type ownedInfo struct {
-	fakeInfo
-	uid, gid int
-}
-
-func TestParseACLAndPerms(t *testing.T) {
-	// getfacl: user::rwx user:nobody:--x group::r-x mask::r-x other::---
-	raw, _ := hex.DecodeString("0200000001000700ffffffff02000100feff000004000500ffffffff10000500ffffffff20000000ffffffff")
-	acl := parseACL(raw)
-	if len(acl) != 5 || acl[1].tag != aclUser || acl[1].id != 65534 || acl[1].perm != 1 {
-		t.Fatalf("parseACL = %+v", acl)
-	}
-	nobody := svcAccount{name: "nobody", uid: 65534, gids: []int{65534}}
-	if got := permsFor(0o750, 1000, 1000, acl, nobody); got != 1 {
-		t.Errorf("ACL user entry: %o, want 1", got)
-	}
-	if got := permsFor(0o750, 1000, 1000, nil, nobody); got != 0 {
-		t.Errorf("no ACL, other: %o, want 0", got)
-	}
-	member := svcAccount{uid: 900, gids: []int{1000}}
-	if got := permsFor(0o750, 1000, 1000, nil, member); got != 5 {
-		t.Errorf("group member: %o, want 5", got)
-	}
-	if got := permsFor(0o700, 900, 1000, acl, member); got != 7 {
-		t.Errorf("owner: %o, want 7", got)
-	}
-	// The mask limits a named user entry.
-	masked := []aclEntry{{aclUserObj, 7, 0}, {aclUser, 7, 900}, {aclGroupObj, 0, 0}, {aclMask, 1, 0}, {aclOther, 0, 0}}
-	if got := permsFor(0o710, 1000, 1000, masked, svcAccount{uid: 900}); got != 1 {
-		t.Errorf("masked entry: %o, want 1", got)
-	}
-	if parseACL([]byte{1, 0, 0, 0}) != nil || parseACL(nil) != nil {
-		t.Error("bad ACL parsed")
-	}
-}
-
-// accessDoctor fakes a project at /home/alice/proj whose home directory
-// the console account (uid 900) cannot enter.
-func accessDoctor(files map[string]ownedInfo, ran *[][]string) doctorEnv {
-	d := fakeDoctor(separatedSys())
-	d.stat = func(p string) (os.FileInfo, error) {
-		if fi, ok := files[p]; ok {
-			return fi, nil
-		}
-		return nil, fs.ErrNotExist
-	}
-	d.ownerOf = func(fi os.FileInfo) (int, int, bool) {
-		o := fi.(ownedInfo)
-		return o.uid, o.gid, true
-	}
-	d.lookPath = func(n string) (string, error) { return "/usr/bin/" + n, nil }
-	d.run = func(name string, args ...string) ([]byte, error) {
-		*ran = append(*ran, append([]string{name}, args...))
-		return nil, nil
-	}
-	return d
-}
-
-func TestProjectChecks(t *testing.T) {
-	dir := func(mode fs.FileMode, uid int) ownedInfo {
-		return ownedInfo{fakeInfo{"d", fs.ModeDir | mode}, uid, uid}
-	}
-	files := map[string]ownedInfo{
-		"/":                                     dir(0o755, 0),
-		"/home":                                 dir(0o755, 0),
-		"/home/alice":                           dir(0o750, 1000),
-		"/home/alice/proj":                      dir(0o755, 1000),
-		"/home/alice/proj/.locksql":             dir(0o755, 1000),
-		"/home/alice/proj/.locksql/config.toml": {fakeInfo{"config.toml", 0o600}, 1000, 1000},
-	}
-	var ran [][]string
-	d := accessDoctor(files, &ran)
-	svc := svcAccount{name: "locksql", uid: 900, gids: []int{900}}
-	checks := projectChecks(d, "/home/alice/proj", svc, 1000)
-	byTitle := map[string]check{}
-	for _, c := range checks {
-		byTitle[c.title] = c
-	}
-	acc := byTitle["project access"]
-	if acc.state != checkFail || !strings.Contains(acc.detail, "/home/alice") || acc.repair == nil || acc.repair.apply == nil || acc.repair.root != "" {
-		t.Fatalf("project access: %+v", acc)
-	}
-	if err := acc.repair.apply(); err != nil {
-		t.Fatal(err)
-	}
-	if len(ran) != 1 || strings.Join(ran[0], " ") != "setfacl -m u:locksql:x /home/alice" {
-		t.Errorf("setfacl runs %q", ran)
-	}
-	dot := byTitle["project .locksql"]
-	if dot.state != checkFail || dot.repair == nil || dot.repair.root != giveDirScript("/home/alice/proj/.locksql", 900) ||
-		!strings.Contains(dot.fix, "sudo chown 900 '/home/alice/proj/.locksql'") {
-		t.Errorf("project .locksql: %+v", dot)
-	}
-	cfg := byTitle["project config.toml"]
-	if cfg.state != checkFail || cfg.repair == nil || cfg.repair.apply == nil {
-		t.Errorf("project config.toml: %+v", cfg)
-	}
-
-	// Once repaired, every check passes.
-	files["/home/alice"] = dir(0o755, 1000)
-	files["/home/alice/proj/.locksql"] = dir(0o755, 900)
-	files["/home/alice/proj/.locksql/config.toml"] = ownedInfo{fakeInfo{"config.toml", 0o644}, 1000, 1000}
-	for _, c := range projectChecks(d, "/home/alice/proj", svc, 1000) {
-		if c.state != checkOK {
-			t.Errorf("after repair: %+v", c)
-		}
-	}
-
-	// Without setfacl there is nothing to run, only the steps.
-	d.lookPath = func(string) (string, error) { return "", exec.ErrNotFound }
-	files["/home/alice"] = dir(0o750, 1000)
-	for _, c := range projectChecks(d, "/home/alice/proj", svc, 1000) {
-		if c.title == "project access" && (c.repair != nil || !strings.Contains(c.fix, "setfacl -m u:locksql:x '/home/alice'")) {
-			t.Errorf("without setfacl: %+v", c)
-		}
-	}
-}
 
 func TestSocketDirRepair(t *testing.T) {
 	d := fakeDoctor(separatedSys())
@@ -209,137 +88,32 @@ func TestDoctorFix(t *testing.T) {
 	if code := runEnv(e, []string{"doctor", "--yes"}); code != exitUsage {
 		t.Errorf("--yes without --fix: code %d", code)
 	}
-
 }
 
-// A .locksql that is a symbolic link gets no repair: a chown by root would
-// change whatever it names.
-func TestProjectChecksSymlinkedDotDir(t *testing.T) {
-	dir := func(mode fs.FileMode, uid int) ownedInfo {
-		return ownedInfo{fakeInfo{"d", fs.ModeDir | mode}, uid, uid}
+// The launcher's doctor --fix runs as your uid, which has no account in
+// the image: client access is not a failure there (no group to add it to),
+// where it used to fail the run as root on every fresh setup.
+func TestDoctorClientAccessUnknownUID(t *testing.T) {
+	d := fakeDoctor(separatedSys())
+	d.inGroup = func(int, string) bool { return false }
+	d.knownUID = func(string) bool { return false }
+	c := findCheck(separationChecks(d, separatedSys(), &user.User{Uid: "1000", Username: "david"}, 1000), "client access")
+	if c == nil || c.state != checkOK || c.repair != nil || !strings.Contains(c.detail, "no account here") || !strings.Contains(c.detail, "allowed_uids") {
+		t.Errorf("unknown uid: %+v", c)
 	}
-	files := map[string]ownedInfo{
-		"/":                         dir(0o755, 0),
-		"/home":                     dir(0o755, 0),
-		"/home/alice":               dir(0o755, 1000),
-		"/home/alice/proj":          dir(0o755, 1000),
-		"/home/alice/proj/.locksql": dir(0o755, 1000),
+	// A known account outside the group still fails, with its repair.
+	d.knownUID = func(string) bool { return true }
+	c = findCheck(separationChecks(d, separatedSys(), &user.User{Uid: "1000", Username: "david"}, 1000), "client access")
+	if c == nil || c.state != checkFail || c.repair == nil {
+		t.Errorf("known uid outside the group: %+v", c)
 	}
-	var ran [][]string
-	d := accessDoctor(files, &ran)
-	d.lstat = func(p string) (os.FileInfo, error) {
-		if p == "/home/alice/proj/.locksql" {
-			return ownedInfo{fakeInfo{".locksql", fs.ModeSymlink | 0o777}, 1000, 1000}, nil
-		}
-		return d.stat(p)
-	}
-	svc := svcAccount{name: "locksql", uid: 900, gids: []int{900}}
-	for _, c := range projectChecks(d, "/home/alice/proj", svc, 1000) {
-		if c.title != "project .locksql" {
-			continue
-		}
-		if c.state != checkFail || c.repair != nil || !strings.Contains(c.detail, "symbolic link") {
-			t.Errorf("symlinked .locksql: %+v", c)
-		}
-		return
-	}
-	t.Error("no project .locksql check")
 }
 
-// The root scripts change the directory they entered, never what a
-// symbolic link swapped in at its path names.
-func TestInDirScript(t *testing.T) {
-	sh := func(script string) error {
-		return exec.Command("sh", "-c", "set -eu\n"+script).Run()
+func TestPasswdHas(t *testing.T) {
+	if _, err := os.Stat("/etc/passwd"); err != nil {
+		t.Skip("no /etc/passwd")
 	}
-	mode := func(p string) fs.FileMode {
-		fi, err := os.Lstat(p)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return fi.Mode().Perm()
-	}
-	root := t.TempDir()
-	dot := root + "/.locksql"
-	if err := os.Mkdir(dot, 0o775); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(dot, 0o775); err != nil {
-		t.Fatal(err)
-	}
-	if err := sh(giveDirScript(dot, os.Getuid())); err != nil {
-		t.Fatal(err)
-	}
-	if got := mode(dot); got != 0o755 {
-		t.Errorf("mode %04o, want 0755", got)
-	}
-	cfg := dot + "/config.toml"
-	if err := os.WriteFile(cfg, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := sh(inDirScript(dot, readableScript("config.toml"))); err != nil {
-		t.Fatal(err)
-	}
-	if got := mode(cfg); got != 0o644 {
-		t.Errorf("config.toml %04o, want 0644", got)
-	}
-
-	// .locksql swapped for a link to another directory.
-	other := t.TempDir()
-	if err := os.Chmod(other, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.RemoveAll(dot); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(other, dot); err != nil {
-		t.Fatal(err)
-	}
-	if err := sh(giveDirScript(dot, os.Getuid())); err == nil {
-		t.Error("script ran through a symbolic link")
-	}
-	if got := mode(other); got != 0o700 {
-		t.Errorf("link target changed to %04o", got)
-	}
-
-	// A file swapped for a link.
-	if err := os.Remove(dot); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(dot, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	secret := other + "/secret"
-	if err := os.WriteFile(secret, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(secret, dot+"/pii.toml"); err != nil {
-		t.Fatal(err)
-	}
-	if err := sh(inDirScript(dot, readableScript("pii.toml"))); err == nil {
-		t.Error("chmod ran through a symbolic link")
-	}
-	if got := mode(secret); got != 0o600 {
-		t.Errorf("link target changed to %04o", got)
-	}
-
-	// A file that is a hard link to another name.
-	if err := os.Remove(dot + "/pii.toml"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Link(secret, dot+"/pii.toml"); err != nil {
-		t.Fatal(err)
-	}
-	var stderr strings.Builder
-	cmd := exec.Command("sh", "-c", "set -eu\n"+inDirScript(dot, readableScript("pii.toml")))
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err == nil {
-		t.Error("chmod ran on a hard link")
-	}
-	if !strings.Contains(stderr.String(), "pii.toml is a symbolic or hard link") {
-		t.Errorf("stderr %q", stderr.String())
-	}
-	if got := mode(secret); got != 0o600 {
-		t.Errorf("hard link target changed to %04o", got)
+	if !passwdHas("0") || passwdHas("987654321") {
+		t.Errorf("passwdHas: root %v, 987654321 %v", passwdHas("0"), passwdHas("987654321"))
 	}
 }

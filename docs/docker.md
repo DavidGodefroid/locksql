@@ -62,7 +62,7 @@ runs each command with the account it needs:
 | `stats`, `forget` | `locksql` | `locksql-home` |
 | `init`, `config` | you (your uid and gid), with your home mounted: they write the agents' files and your user config; a `config` file must be under the project or your home | |
 | `profile` | you, with `HOME=/tmp` | |
-| `doctor --fix` | root | |
+| `doctor --fix` | you, with your home mounted (your agents' wiring); first as root, only to give back `.locksql/` entries that are not yours | |
 | the agent commands: `mcp`, `status`, `tables`, `plan`, `run`, `doctor`... | `agent` | the socket volume of the workspace's locksql lock that `lox up` runs, read-only ([launcher.md](launcher.md#the-socket-of-lox-ups-lock)) |
 | everything else: `help`... | `agent` | none |
 
@@ -84,7 +84,8 @@ The launcher reads:
 - `VAULT_ADDR`, `VAULT_NAMESPACE`, `VAULT_CACERT`: passed to the console.
 
 A path holding `:` (the project, your home) cannot be mounted: the launcher
-refuses it. On macOS, `doctor --fix` (a `chown` through Docker Desktop's
+refuses it. On macOS, `doctor --fix` giving back `.locksql/` entries that
+are not yours (a `chown` as root through Docker Desktop's
 file sharing) is untested.
 
 ### Your own build
@@ -150,20 +151,22 @@ the container itself, and the wizard knows it:
   not have: use `credentials = "ask"`, or `"vault"` with the image below;
 - a SQLite `path` is relative to the project root, which is mounted.
 
-Then give `.locksql/` to the console account. The console writes
-the PII rule sets there (`pii/<set>.toml`), and a directory your account owns would let the agent
-replace that file, and with it the masking rules. The account exists only in
-the image, where the launcher runs the repair as root:
+Then check the setup, and repair what can be:
 
 ```sh
 locksql doctor --fix --yes
 ```
 
-It makes uid 10001 the owner of `.locksql/` (mode 0755) and makes
-`config.toml` readable; `config.toml` stays yours to edit. The checks of the
-console and its profiles fail from this container, which runs no console:
-read the `project` lines. Run it again whenever `.locksql/` is created anew,
-by `locksql init` for example.
+It wires your agents and keeps `.locksql/` as `lox up` reads it: `lox up`
+copies it, once, for the console, which never reads the project itself, and
+takes only directories and regular files that are yours and that no one
+else can write. `doctor --fix` runs as you and removes the write bits of
+group and others there (`chmod go-w`); entries owned by the console account
+(uid 10001), which `doctor --fix` up to v0.13.0 gave it and `lox up`
+refuses, it gives back to you as root, in a container of its own run only
+then. The checks of the console and its profiles warn from this container,
+which runs no console. Run it again whenever `.locksql/` changes hands, by a
+copy from another account for example.
 
 ## Run the console
 
@@ -382,9 +385,9 @@ docker run … -v locksql-run:/run/locksql -v "$PWD:$PWD" -w "$PWD" agent-image
 
 `locksql init claude` then needs no change: the `locksql mcp` it writes in
 `.mcp.json` runs inside the agent's container. Check from there with
-`locksql status`. `locksql doctor` run there also checks the project: a
-`.locksql/` the console account does not own is repaired by the root
-command of [Set up a project](#set-up-a-project).
+`locksql status`. `locksql doctor` run there also checks the project's
+`.locksql/` as `lox up` reads it: yours, writable by you only
+([Set up a project](#set-up-a-project)).
 
 ## What Docker does and does not separate
 

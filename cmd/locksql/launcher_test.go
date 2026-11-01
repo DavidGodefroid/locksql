@@ -73,7 +73,7 @@ case "$1 ${2:-}" in
 "ps "*) for a in "$@"; do case "$a" in volume=*) cat '`+f.fake+`'/"ps-${a#volume=}" 2>/dev/null ;; esac; done ;;
 "inspect --type") eval "c=\${$#}"; cat '`+f.fake+`'/"container-$c" 2>/dev/null || exit 1 ;;
 "inspect "*) printf '%s\n' "${DOCKER_INSPECT:-}" ;;
-"run "*) for a in "$@"; do [ "$a" = version ] && echo "locksql 9.9.9"; done ;;
+"run "*) for a in "$@"; do [ "$a" = version ] && echo "locksql 9.9.9"; done; [ -z "${FAKE_DOCKER_SAY:-}" ] || echo "$FAKE_DOCKER_SAY" ;;
 esac
 exit 0
 `)
@@ -366,8 +366,10 @@ func TestLauncherAccountsPerCommand(t *testing.T) {
 		{[]string{"mcp"}, [][]string{{"-i"}, sock}, [][]string{{"-it"}, {"--user"}, {"-v", "locksql-home:/home/locksql"}, fixed}},
 		{[]string{"status", "--json"}, [][]string{sock}, [][]string{{"--user"}, {"-v", "locksql-home:/home/locksql"}, fixed}},
 		{[]string{"plan", "--profile", "p", "SELECT 1"}, [][]string{sock}, [][]string{{"--user"}, fixed}},
-		{[]string{"doctor"}, [][]string{sock}, [][]string{{"--user"}, fixed}},
-		{[]string{"doctor", "--fix", "--yes"}, [][]string{{"--user", "0"}}, [][]string{sock, fixed}},
+		{[]string{"doctor"}, [][]string{sock, {"-e", "LOCKSQL_DOCTOR_FOR=" + me}}, [][]string{{"--user"}, fixed}},
+		// .locksql is yours: no root run, the run as you only.
+		{[]string{"doctor", "--fix", "--yes"}, [][]string{{"--user", me}, {"--group-add", "locksql-clients"}, {"-e", "HOME=" + home}, {"-v", home + ":" + home}, {"-e", "LOCKSQL_DOCTOR_FOR=" + me}},
+			[][]string{{"--user", "0"}, sock, fixed}},
 		{[]string{"init", "claude"}, [][]string{{"--user", me}, {"-e", "HOME=" + home}, {"-v", home + ":" + home}}, [][]string{sock, fixed}},
 		{[]string{"config", "export", "--output", "team.json"}, [][]string{{"--user", me}, {"-e", "HOME=" + home}, {"-v", home + ":" + home}}, [][]string{sock, fixed}},
 		{[]string{"profile", "add"}, [][]string{{"--user", me}, {"-e", "HOME=/tmp"}}, [][]string{sock, fixed}},
@@ -684,5 +686,68 @@ func TestLauncherUpdateRefusesABadTag(t *testing.T) {
 		if err == nil || !strings.Contains(out, "invalid version") || len(calls) != 0 {
 			t.Errorf("%q: %v, calls %q\n%s", tag, err, calls, out)
 		}
+	}
+}
+
+// doctor --fix runs as you; root only for the one repair that needs it,
+// giving back .locksql entries that are not yours (doctor --fix up to
+// v0.13.0 gave .locksql to the console account, which lox up refuses), in
+// a container of its own before the run as you, its output on stderr so
+// that stdout carries the one JSON line of the run as you.
+func TestLauncherDoctorFixIdentities(t *testing.T) {
+	f := newLauncherFixture(t)
+	me := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
+	run := func() (stdout, stderr string, calls [][]string) {
+		t.Helper()
+		_ = os.Remove(f.calls)
+		cmd := exec.Command(filepath.Join(f.bin, "sh"), f.script, "doctor", "--fix", "--yes", "--json")
+		cmd.Dir = f.project
+		cmd.Env = append(append([]string{}, f.env...), "FAKE_DOCKER_SAY=one line")
+		var out, errOut strings.Builder
+		cmd.Stdout, cmd.Stderr = &out, &errOut
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("%v\n%s", err, errOut.String())
+		}
+		b, _ := os.ReadFile(f.calls)
+		for _, c := range strings.Split(strings.TrimSuffix(string(b), "-- -launcher-test-end-\n"), "-- -launcher-test-end-\n") {
+			calls = append(calls, strings.Split(strings.TrimSuffix(c, "\n"), "\n"))
+		}
+		return out.String(), errOut.String(), calls
+	}
+
+	// .locksql is yours: one run, as you.
+	stdout, _, calls := run()
+	if len(calls) != 1 || !hasSeq(calls[0], "--user", me) || hasSeq(calls[0], "--user", "0") {
+		t.Fatalf("yours: %q", calls)
+	}
+	if stdout != "one line\n" {
+		t.Errorf("stdout %q", stdout)
+	}
+
+	// Not yours (here: you are uid 4242): root gives it back first.
+	if err := os.Remove(filepath.Join(f.bin, "id")); err != nil {
+		t.Fatal(err)
+	}
+	writeExec(t, filepath.Join(f.bin, "id"), `#!/bin/sh
+case "$*" in
+-u | -g) echo 4242 ;;
+-un) echo someone ;;
+*) exit 1 ;;
+esac
+`)
+	stdout, stderr, calls := run()
+	if len(calls) != 2 {
+		t.Fatalf("not yours: %q", calls)
+	}
+	root, you := calls[0], calls[1]
+	if !hasSeq(root, "--user", "0") || !hasSeq(root, "-e", "LOCKSQL_DOCTOR_FOR=4242:4242") || hasSeq(root, "-v", filepath.Join(f.root, "home")+":"+filepath.Join(f.root, "home")) ||
+		strings.Join(imageArgs(root, "locksql"), " ") != "locksql doctor --fix --yes --json" {
+		t.Errorf("root run: %q", root)
+	}
+	if !hasSeq(you, "--user", "4242:4242") || !hasSeq(you, "-e", "USER=someone") || !hasSeq(you, "-e", "LOCKSQL_DOCTOR_FOR=4242:4242") {
+		t.Errorf("run as you: %q", you)
+	}
+	if stdout != "one line\n" || !strings.Contains(stderr, "one line") {
+		t.Errorf("stdout %q, stderr %q", stdout, stderr)
 	}
 }

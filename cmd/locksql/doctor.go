@@ -60,13 +60,14 @@ type doctorEnv struct {
 	ptrace     func() (int, bool)
 	keychain   func(profile, host string, port int) error
 	status     func(cwd, profile string) (*ipc.StatusResult, error)
-	// groupIDs lists the groups of an account.
-	groupIDs func(u *user.User) []int
-	// acl reads the POSIX ACL of a path (nil: none, or not read).
-	acl func(path string) []byte
-	// lstat does not follow a final symbolic link; nil skips the checks
-	// that need it.
-	lstat func(string) (os.FileInfo, error)
+	// knownUID reports whether a uid has an account in the passwd file
+	// (os/user takes the current uid as known from $USER and $HOME
+	// alone); nil takes every uid as known.
+	knownUID func(uid string) bool
+	// lstat does not follow a final symbolic link; with readDir, nil skips
+	// the checks that need it.
+	lstat   func(string) (os.FileInfo, error)
+	readDir func(string) ([]os.DirEntry, error)
 	// agents is the account the agents are wired for; nil skips the
 	// wiring check.
 	agents   func() (agentinit.Env, error)
@@ -102,17 +103,8 @@ func realDoctorEnv() doctorEnv {
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 			return cmd.Run() == nil
 		},
-		groupIDs: func(u *user.User) []int {
-			ids, _ := u.GroupIds()
-			var out []int
-			for _, id := range ids {
-				if n, err := strconv.Atoi(id); err == nil {
-					out = append(out, n)
-				}
-			}
-			return out
-		},
-		acl:      readACL,
+		knownUID: passwdHas,
+		readDir:  os.ReadDir,
 		agents:   agentinit.SystemEnv,
 		lookPath: exec.LookPath,
 		getenv:   os.Getenv,
@@ -171,7 +163,7 @@ func runDoctor(e env, args []string) int {
 	asJSON := verbs.WantsJSON(args)
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	profile := fs.String(verbs.FlagProfile, "", "profile whose console to check (default: every profile)")
-	fix := fs.Bool(verbs.FlagFix, false, "repair permissions, the socket directory, the project's access and the agents' wiring")
+	fix := fs.Bool(verbs.FlagFix, false, "repair the agents' wiring, the project's .locksql as lox up reads it, and the socket directory")
 	yes := fs.Bool(verbs.FlagYes, false, "with --fix: make the repairs without asking")
 	fs.Bool(verbs.FlagJSON, false, "print one line of JSON on stdout")
 	fs.SetOutput(io.Discard)
@@ -197,6 +189,9 @@ func runDoctor(e env, args []string) int {
 	d := realDoctorEnv()
 	if e.doc != nil {
 		d = *e.doc
+	}
+	if *fix && e.geteuid() == 0 && d.getenv != nil && d.getenv(doctorForEnv) != "" {
+		return doctorAsRoot(e, d, *yes)
 	}
 	checks := doctor(d, e.cwd, *profile)
 	var fixed []string
@@ -233,6 +228,38 @@ func runDoctor(e env, args []string) int {
 	if !rep.OK && code == exitOK {
 		code = exitFail
 	}
+	return code
+}
+
+// doctorAsRoot is the root part of the launcher's doctor --fix, run
+// before the rest runs as you, and only when .locksql holds something
+// that is not yours: the repairs of the project's .locksql that need root
+// (giving back to you, doctorForEnv, what the console account owns there),
+// asked for unless yes, and nothing else. Its text goes to stderr: stdout
+// is the JSON of the run as you.
+func doctorAsRoot(e env, d doctorEnv, yes bool) int {
+	e.stdout = e.stderr
+	o, err := ownerFor(d, &user.User{})
+	if err != nil || o.uid <= 0 {
+		if err == nil {
+			err = errors.New(doctorForEnv + " names root")
+		}
+		fmt.Fprintf(e.stderr, "locksql doctor: %v\n", err)
+		return exitUsage
+	}
+	root, ok := config.FindProjectRoot(e.cwd)
+	if !ok {
+		return exitOK
+	}
+	sys, err := d.loadSys()
+	if err != nil || sys == nil {
+		return exitOK
+	}
+	svc, _ := consoleAccount(d, sys, 0)
+	if svc.uid <= 0 {
+		return exitOK
+	}
+	_, code := applyRepairs(e, "doctor", projectChecks(d, root, o, 0, svc.uid), yes)
 	return code
 }
 
@@ -412,13 +439,16 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 	}
 	svc, isService := consoleAccount(d, sys, myUID)
 
-	// The agents of this account, and the project the console serves.
+	// The agents of this account, and the project's .locksql as lox up
+	// reads it: yours (the launcher names you, doctorForEnv).
 	if !isService && myUID != 0 {
 		out = append(out, wiringChecks(d)...)
 	}
-	if sys != nil && !isService && svc.uid >= 0 {
-		if root, ok := config.FindProjectRoot(cwd); ok {
-			out = append(out, projectChecks(d, root, svc, myUID)...)
+	if !isService {
+		if o, err := ownerFor(d, me); err != nil {
+			add(checkFail, "project .locksql", err.Error(), "run locksql doctor through the launcher")
+		} else if root, ok := config.FindProjectRoot(cwd); ok && o.uid > 0 {
+			out = append(out, projectChecks(d, root, o, myUID, svc.uid)...)
 		}
 	}
 
@@ -481,11 +511,7 @@ func consoleAccount(d doctorEnv, sys *sysconf.Config, me int) (svcAccount, bool)
 	if err != nil {
 		return svcAccount{name: sys.ServiceUser, uid: -1}, false
 	}
-	a := svcAccount{name: sys.ServiceUser, uid: uid}
-	if d.groupIDs != nil {
-		a.gids = d.groupIDs(u)
-	}
-	return a, uid == me
+	return svcAccount{name: sys.ServiceUser, uid: uid}, uid == me
 }
 
 // wiringChecks reports the installed agents that are not wired for this
@@ -554,9 +580,15 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 
 	if myUID != svcUID {
 		// The agent's side.
-		if d.inGroup(myUID, sys.ClientGroup) || containsInt(sys.AllowedUIDs, myUID) {
+		unknown := d.knownUID != nil && !d.knownUID(me.Uid)
+		switch {
+		case d.inGroup(myUID, sys.ClientGroup) || containsInt(sys.AllowedUIDs, myUID):
 			add(checkOK, "client access", me.Username+" may reach the console", "")
-		} else {
+		case unknown:
+			// The launcher's doctor --fix runs as your uid, which has no
+			// account in the image: no group to add it to.
+			add(checkOK, "client access", fmt.Sprintf("uid %d has no account here: the launcher runs the agent's commands as the image's agent account, a member of %s; an agent of uid %d in a container of its own needs a console that allows it (lox up's allowed_uids)", myUID, sys.ClientGroup, myUID), "")
+		default:
 			cmd := fmt.Sprintf("usermod -aG %s %s", shellQuote(sys.ClientGroup), shellQuote(me.Username))
 			if d.goos == "darwin" {
 				cmd = fmt.Sprintf("dseditgroup -o edit -a %s -t user %s", shellQuote(me.Username), shellQuote(sys.ClientGroup))
@@ -769,6 +801,21 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 		add(checkFail, "EXPLAIN", "fails on the server: every statement will be refused", "check the account's rights to EXPLAIN")
 	}
 	return out
+}
+
+// passwdHas reports whether /etc/passwd has an account of uid; true when
+// it cannot tell (no such file: macOS keeps its accounts elsewhere).
+func passwdHas(uid string) bool {
+	b, err := os.ReadFile("/etc/passwd")
+	if err != nil {
+		return true
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if f := strings.Split(l, ":"); len(f) > 2 && f[2] == uid {
+			return true
+		}
+	}
+	return false
 }
 
 func containsInt(s []int, v int) bool {
