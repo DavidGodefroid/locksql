@@ -9,7 +9,8 @@ weaknesses as described in [SECURITY.md](../SECURITY.md).
 - **Assets:** database credentials; the data (in particular personal data);
   the availability of the database server; the integrity of the data and of
   the policy that governs access.
-- **The human** runs `locksql console` in a terminal and is trusted.
+- **The human** starts `locksql console` with `lox up`, answers it in a
+  terminal (`lox attach`) and is trusted.
 - **The agent** (and anything that can steer it, such as text stored in the
   database or in files it reads) is *not* trusted. It runs the client
   commands and the MCP server.

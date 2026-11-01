@@ -31,6 +31,20 @@ Supported lockhub: as v0.11.5; the console now needs it
   `.mcp.json`: `"args": ["mcp", "--instance", "NAME"]`). `.mcp.json` is
   unchanged ([docs/launcher.md](docs/launcher.md#the-socket-of-lox-ups-lock)).
 
+### Changed
+
+- lockkit v0.9.1 (was v0.9.0). **When no console runs, the hint is `lox
+  up`**: the CLI (exit code 2), every `locksql_*` tool and `status` answer
+  ``the console is started by `lox up` only: ask the user to run `lox up` ``,
+  and that `locksql doctor` checks the setup, and `start` (`--json`, the
+  `locksql_status` structured content) is `lox up`, no longer `locksql
+  console --profile P --project DIR`, which refuses to start without its hub
+  flags. The hint names no profile or project (lockkit#114). `doctor`'s
+  console check, the MCP server instructions and error hints, the agent
+  skill `locksql init` writes, `init`'s next steps, the docs and the site
+  point at `lox up`, and at `lox attach <instance>` for the console's
+  start-up questions (policy, PII rules, password).
+
 ### Removed
 
 - **Standalone mode**: the per-request approval prompt on the console's

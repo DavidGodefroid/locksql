@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 )
@@ -85,10 +86,11 @@ func TestRunOverRealSocket(t *testing.T) {
 		t.Fatalf("text = %q", text(r))
 	}
 
-	// Another profile has no console: the error names the start command.
+	// Another profile has no console: the error asks for `lox up`, with no
+	// value in the hint.
 	other := connect(t, Options{Dial: DialClient(cwd, "1.2.3")}, nil)
 	r = call(t, other, "locksql_plan", map[string]any{"profile": "prod", "sql": "SELECT 1 LIMIT 1"})
-	if !r.IsError || !strings.Contains(text(r), "locksql console --profile prod") {
+	if !r.IsError || !strings.Contains(text(r), client.StartHint) || strings.Contains(text(r), "--profile") || strings.Contains(text(r), cwd) {
 		t.Fatalf("no console: %s", text(r))
 	}
 }

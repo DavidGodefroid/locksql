@@ -166,10 +166,11 @@ locksql init claude
 locksql profile add
 locksql doctor --fix --yes
 
-# 3. Declare the lock in lockhub and start it: lox up opens the console
-#    (the policy, the PII rules and the password are asked there)
+# 3. Declare the lock in lockhub and start it: lox up starts the console,
+#    lox attach answers its questions (the policy, the PII rules, the password)
 lox add locksql sql-dev
 lox up
+lox attach sql-dev
 ```
 
 Then ask your agent, in the project: "how many orders were placed
