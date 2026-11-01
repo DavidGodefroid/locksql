@@ -113,12 +113,12 @@ jobs:
           sh "$GITHUB_WORKSPACE/scripts/locksql" init claude
           grep -Eq '"command": ?"locksql"' .mcp.json
           test "$(stat -c %u .mcp.json)" = "$(id -u)"
-          # The launcher verbs as lox init calls them: one line of JSON each.
+          # The launcher verbs as lox add calls them: one line of JSON each.
           sh "$GITHUB_WORKSPACE/scripts/locksql" profile add --non-interactive --json --profile local --engine sqlite --path app.db >out
           grep -q '^{"lock":"locksql","profile":"local",' out && test "$(wc -l <out)" = 1
           code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" profile add --non-interactive --json --profile local --engine sqlite --path app.db >out || code=$?
           test "$code" = 3 && grep -q '"code":"exists"' out
-          # doctor --fix as lox init calls it: one line of JSON, ok (warnings
+          # doctor --fix as lox add calls it: one line of JSON, ok (warnings
           # only: no console runs here), and .locksql left as lox up copies
           # it: yours, writable by you only, only directories and files.
           fix_ok() {

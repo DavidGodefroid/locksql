@@ -34,7 +34,7 @@ func fixScenario(t *testing.T) (env, *bytes.Buffer, *bytes.Buffer, *[]string) {
 	return e, &stdout, &stderr, scripts
 }
 
-// `doctor --fix --yes --json`, as lox init calls it: one verbs.Doctor on
+// `doctor --fix --yes --json`, as lox add calls it: one verbs.Doctor on
 // stdout with the repairs made, the human text on stderr.
 func TestDoctorJSONFix(t *testing.T) {
 	e, stdout, stderr, scripts := fixScenario(t)
