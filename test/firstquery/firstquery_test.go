@@ -135,6 +135,9 @@ type screen struct {
 	buf  strings.Builder
 	done chan struct{} // closed when the console exits
 	err  error         // the console's exit, once done is closed
+	// drained is closed when the terminal's last output is in buf; nil
+	// when nothing reads a terminal.
+	drained chan struct{}
 }
 
 func (s *screen) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.buf.String() }
@@ -145,24 +148,43 @@ func (s *screen) waitFor(t *testing.T, from int, d time.Duration, prompts ...str
 	t.Helper()
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
-		out := s.String()
-		best, at := "", -1
-		for _, p := range prompts {
-			if i := strings.Index(out[from:], p); i >= 0 && (at < 0 || i < at) {
-				best, at = p, i
-			}
-		}
-		if at >= 0 {
-			return best, from + at + len(best)
+		if best, at := find(s.String(), from, prompts); at >= 0 {
+			return best, at
 		}
 		select {
 		case <-s.done:
+			// The console may have printed the prompt just before it
+			// exited: look once more, after its last output is read.
+			if s.drained != nil {
+				select {
+				case <-s.drained:
+				case <-time.After(5 * time.Second):
+				}
+			}
+			if best, at := find(s.String(), from, prompts); at >= 0 {
+				return best, at
+			}
 			t.Fatalf("console: exited (%v) before %q; screen:\n%s", s.err, prompts, s.String())
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
 	t.Fatalf("console: none of %q within %s; screen:\n%s", prompts, d, s.String())
 	return "", 0
+}
+
+// find returns the prompt that comes first in out from from, and the
+// offset just past it; at is -1 when none is there.
+func find(out string, from int, prompts []string) (string, int) {
+	best, at := "", -1
+	for _, p := range prompts {
+		if i := strings.Index(out[from:], p); i >= 0 && (at < 0 || i < at) {
+			best, at = p, i
+		}
+	}
+	if at < 0 {
+		return "", -1
+	}
+	return best, from + at + len(best)
 }
 
 // setup skips the test unless LOCKSQL_FIRSTQUERY=1, and finds the launcher.
@@ -188,7 +210,7 @@ func startConsole(t *testing.T, cmd *exec.Cmd) (*screen, *os.File, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scr := &screen{done: make(chan struct{})}
+	scr := &screen{done: make(chan struct{}), drained: make(chan struct{})}
 	go func() { scr.err = cmd.Wait(); close(scr.done) }()
 	go func() {
 		r := bufio.NewReader(tty)
@@ -199,6 +221,7 @@ func startConsole(t *testing.T, cmd *exec.Cmd) (*screen, *os.File, func()) {
 			scr.buf.Write(buf[:n])
 			scr.mu.Unlock()
 			if err != nil {
+				close(scr.drained)
 				return
 			}
 		}
