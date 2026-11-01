@@ -151,8 +151,21 @@ itself, checks the bastion's host key and listens on no local port.
 locksql runs in Docker: nothing on your machine but Docker and the
 `locksql` launcher, which runs every command in the image. The console runs
 under [lockhub](https://github.com/DavidGodefroid/lockhub), which starts it
-and where you decide each query. A first approved query, from your project
-directory:
+and where you decide each query.
+
+The shortest path is the Lock Family's: install it with Homebrew, then let
+[`lox init`](https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-init.md)
+find your database and set up its lock:
+
+```sh
+brew install davidgodefroid/tap/lockfamily   # or only this tool: brew install davidgodefroid/tap/locksql
+cd ~/projects/shop
+lox init                                      # detects PostgreSQL / MySQL / MariaDB, sets up the lock, runs lox up
+lea                                           # or: claude, then lox approve
+```
+
+By hand, with locksql's own installer, a first approved query from your
+project directory:
 
 ```sh
 # 1. Install the launcher (it runs every locksql command in Docker)
@@ -693,8 +706,9 @@ locksql runs in Docker. On the host, `scripts/install.sh` installs only the
 `locksql` launcher, a shell script that runs every command in the release's
 image (`ghcr.io/davidgodefroid/locksql:X.Y.Z`), each with the account it
 needs: the console as `locksql` in one container, the agent's MCP server as
-`agent` in another. Download the script from the release you install, read
-it, then run it:
+`agent` in another. With Homebrew: `brew install davidgodefroid/tap/locksql`
+(or `davidgodefroid/tap/lockfamily` for the whole family). Otherwise,
+download the script from the release you install, read it, then run it:
 
 ```sh
 V=vX.Y.Z
@@ -716,8 +730,11 @@ The image refuses the former host install (`locksql install`, `setup` and
 the binary's own `update`): [migrating from a host
 install](docs/docker.md#migrating-from-a-host-install).
 
-[lea](https://github.com/DavidGodefroid/lea) does all of it in `lea init`
-and links a `locksql` command that opens the console.
+With [lea](https://github.com/DavidGodefroid/lea), `lox init` sets up the
+lock (with your uid in its `allowed_uids`, as lea's agents run as you) and
+`lox up` runs the console; with locksql on in lea (`lea init --locksql` or
+`LEA_LOCKSQL=1`), its agents reach the lock's socket read-only. lea starts
+no console and puts no `locksql` command on the host.
 
 ## Build
 

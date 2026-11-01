@@ -148,7 +148,12 @@
 
 <section aria-labelledby="quick-start">
   <h2 id="quick-start">Quick start</h2>
-  <p class="prose">locksql runs in Docker: nothing on your machine but Docker and the <code>locksql</code> launcher. A first approved query, from your project directory:</p>
+  <p class="prose">The shortest path is the Lock Family’s: install it with Homebrew, then let <a href="https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-init.md"><code>lox init</code></a> find your database and set up its lock:</p>
+  <pre tabindex="0" class="term"><code>brew install davidgodefroid/tap/lockfamily   # or only this tool: brew install davidgodefroid/tap/locksql
+cd ~/projects/shop
+lox init                                      # detects PostgreSQL / MySQL / MariaDB, sets up the lock, runs lox up
+lea                                           # or: claude, then lox approve</code></pre>
+  <p class="prose">By hand: locksql runs in Docker, with nothing on your machine but Docker and the <code>locksql</code> launcher. A first approved query, from your project directory:</p>
   <pre tabindex="0" class="term"><code># 1. Install the launcher (it runs every locksql command in Docker)
 V=vX.Y.Z
 curl -fsSLO "https://raw.githubusercontent.com/DavidGodefroid/locksql/$V/scripts/install.sh"
