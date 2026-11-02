@@ -1,9 +1,6 @@
 package config
 
-import (
-	"strings"
-	"time"
-)
+import "time"
 
 // Supported engines.
 const (
@@ -81,10 +78,7 @@ func applyDefaults(p *Profile, detectorsSet bool) {
 		p.Credentials = CredentialsAsk
 	}
 	if p.TLS == "" && p.Engine != EngineSQLite {
-		p.TLS = TLSVerifyFull
-		if strings.HasPrefix(p.Host, "/") || IsLoopback(p.Host) {
-			p.TLS = TLSPrefer
-		}
+		p.TLS = TLSPrefer // the drivers' own default, whatever the host
 	}
 	if p.Port == 0 {
 		p.Port = defaultPorts[p.Engine]

@@ -369,26 +369,30 @@ func TestTLSDefaultsAndValidation(t *testing.T) {
 	cases := []struct {
 		name, body, wantTLS, wantErr string
 	}{
-		{"remote default", `engine="postgres"` + "\nhost=\"db.example\"", TLSVerifyFull, ""},
+		// No enforced default: prefer, the drivers' own, whatever the host.
+		{"remote default", `engine="postgres"` + "\nhost=\"db.example\"", TLSPrefer, ""},
 		{"loopback default", `engine="postgres"` + "\nhost=\"127.0.0.1\"", TLSPrefer, ""},
 		{"socket default", `engine="mysql"` + "\nhost=\"/run/mysqld.sock\"", TLSPrefer, ""},
 		{"explicit require", `engine="mysql"` + "\nhost=\"db\"\ntls=\"require\"", TLSRequire, ""},
+		{"explicit verify-full", `engine="mysql"` + "\nhost=\"db\"\ntls=\"verify-full\"", TLSVerifyFull, ""},
 		{"unknown mode", `engine="mysql"` + "\nhost=\"db\"\ntls=\"strict\"", "", "unknown tls mode"},
-		{"ca with prefer", `engine="mysql"` + "\nhost=\"db\"\ntls=\"prefer\"\ntls_ca=\"/ca.pem\"", "", "tls_ca needs tls = \"require\""},
-		{"ca with disable", `engine="mysql"` + "\nhost=\"db\"\ntls=\"disable\"\ntls_ca=\"/ca.pem\"", "", "tls_ca needs tls = \"require\""},
-		{"ca with remote default", `engine="mysql"` + "\nhost=\"db\"\ntls_ca=\"/ca.pem\"", TLSVerifyFull, ""},
-		{"ca with loopback default", `engine="mysql"` + "\nhost=\"127.0.0.1\"\ntls_ca=\"/ca.pem\"", "", "tls_ca needs tls = \"require\""},
-		{"socket verify", `engine="mysql"` + "\nhost=\"/run/m.sock\"\ntls=\"verify-full\"", "", "Unix socket"},
+		// Settings are passed to the driver: no cross-field refusal.
+		{"ca with prefer", `engine="mysql"` + "\nhost=\"db\"\ntls=\"prefer\"\ntls_ca=\"/ca.pem\"", TLSPrefer, ""},
+		{"ca with disable", `engine="mysql"` + "\nhost=\"db\"\ntls=\"disable\"\ntls_ca=\"/ca.pem\"", TLSDisable, ""},
+		{"ca with default", `engine="mysql"` + "\nhost=\"db\"\ntls_ca=\"/ca.pem\"", TLSPrefer, ""},
+		{"socket verify", `engine="mysql"` + "\nhost=\"/run/m.sock\"\ntls=\"verify-full\"", TLSVerifyFull, ""},
 		{"sqlite tls", `engine="sqlite"` + "\npath=\"x.db\"\ntls=\"require\"", "", "not used by sqlite"},
-		{"production prefer remote", `engine="postgres"` + "\nhost=\"db\"\nproduction=true\ntls=\"prefer\"", "", "production profile"},
+		// A production profile loads whatever its tls (#169, #170).
+		{"production prefer remote", `engine="postgres"` + "\nhost=\"db\"\nproduction=true\ntls=\"prefer\"", TLSPrefer, ""},
+		{"production disable remote", `engine="mysql"` + "\nhost=\"db.internal\"\nproduction=true\ntls=\"disable\"", TLSDisable, ""},
+		{"production default remote", `engine="mysql"` + "\nhost=\"db.internal\"\nproduction=true", TLSPrefer, ""},
 		{"production prefer loopback", `engine="postgres"` + "\nhost=\"localhost\"\nproduction=true\ntls=\"prefer\"", TLSPrefer, ""},
-		{"client cert", `engine="postgres"` + "\nhost=\"db\"\ntls_cert=\"/c.pem\"\ntls_key=\"/k.pem\"", TLSVerifyFull, ""},
+		{"client cert", `engine="postgres"` + "\nhost=\"db\"\ntls_cert=\"/c.pem\"\ntls_key=\"/k.pem\"", TLSPrefer, ""},
 		{"cert without key", `engine="postgres"` + "\nhost=\"db\"\ntls_cert=\"/c.pem\"", "", "tls_cert and tls_key go together"},
 		{"key without cert", `engine="postgres"` + "\nhost=\"db\"\ntls_key=\"/k.pem\"", "", "tls_cert and tls_key go together"},
-		{"cert with prefer", `engine="mysql"` + "\nhost=\"db\"\ntls=\"prefer\"\ntls_cert=\"/c.pem\"\ntls_key=\"/k.pem\"", "", "tls_cert needs tls = \"require\""},
-		{"cert on loopback default", `engine="mysql"` + "\nhost=\"127.0.0.1\"\ntls_cert=\"/c.pem\"\ntls_key=\"/k.pem\"", "", "tls_cert needs tls = \"require\""},
-		{"server name", `engine="mysql"` + "\nhost=\"10.0.0.5\"\ntls_server_name=\"db.example\"", TLSVerifyFull, ""},
-		{"server name with verify-ca", `engine="mysql"` + "\nhost=\"db\"\ntls=\"verify-ca\"\ntls_server_name=\"db.example\"", "", "tls_server_name needs tls = \"verify-full\""},
+		{"cert with prefer", `engine="mysql"` + "\nhost=\"db\"\ntls=\"prefer\"\ntls_cert=\"/c.pem\"\ntls_key=\"/k.pem\"", TLSPrefer, ""},
+		{"server name", `engine="mysql"` + "\nhost=\"10.0.0.5\"\ntls_server_name=\"db.example\"", TLSPrefer, ""},
+		{"server name with verify-ca", `engine="mysql"` + "\nhost=\"db\"\ntls=\"verify-ca\"\ntls_server_name=\"db.example\"", TLSVerifyCA, ""},
 		{"server name bad", `engine="mysql"` + "\nhost=\"db\"\ntls_server_name=\"db example\"", "", "tls_server_name"},
 		{"sqlite cert", `engine="sqlite"` + "\npath=\"x.db\"\ntls_cert=\"/c.pem\"\ntls_key=\"/k.pem\"", "", "not used by sqlite"},
 		{"sqlite server name", `engine="sqlite"` + "\npath=\"x.db\"\ntls_server_name=\"x\"", "", "not used by sqlite"},
@@ -460,20 +464,6 @@ func TestSSHCredentialsDefaultToProfile(t *testing.T) {
 	}
 	if ps["p"].SSH.Credentials != CredentialsKeychain {
 		t.Errorf("ssh.credentials = %q", ps["p"].SSH.Credentials)
-	}
-}
-
-func TestTLSVerifiesChain(t *testing.T) {
-	for _, c := range []struct {
-		mode, ca string
-		want     bool
-	}{
-		{"", "", false}, {TLSPrefer, "", false}, {TLSRequire, "", false},
-		{TLSRequire, "/ca.pem", true}, {TLSVerifyCA, "", true}, {TLSVerifyFull, "", true},
-	} {
-		if got := TLSVerifiesChain(c.mode, c.ca); got != c.want {
-			t.Errorf("TLSVerifiesChain(%q, %q) = %v, want %v", c.mode, c.ca, got, c.want)
-		}
 	}
 }
 
@@ -636,9 +626,9 @@ func TestProxyCommand(t *testing.T) {
 			t.Errorf("%s: %v", argv, err)
 		}
 	}
-	// A remote host is reached as over TCP: production still needs tls.
+	// A production profile through proxy_command loads whatever its tls.
 	_, err = ParseProfiles([]byte("[profiles.prod]\nengine=\"postgres\"\nhost=\"db.internal\"\ntls=\"prefer\"\nproduction=true\nproxy_command=[\"nc\", \"db\", \"5432\"]\n"), "t.toml", t.TempDir())
-	if err == nil || !strings.Contains(err.Error(), "needs tls") {
+	if err != nil {
 		t.Errorf("production remote host: err = %v", err)
 	}
 }

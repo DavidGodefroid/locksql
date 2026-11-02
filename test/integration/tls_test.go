@@ -157,27 +157,7 @@ func tlsConnect(t *testing.T, p config.Profile, secret string, dial engine.DialF
 func noNotices(t *testing.T, s engine.Session) {
 	t.Helper()
 	if n, ok := s.(engine.Noticer); ok && len(n.Notices()) > 0 {
-		t.Errorf("notices on a verified connection: %q", n.Notices())
-	}
-}
-
-// probeLeaf checks that the doctor's probe, which sends no secret, gets the
-// server certificate.
-func probeLeaf(t *testing.T, p config.Profile) {
-	t.Helper()
-	e, err := engine.Get(p.Engine)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prober, ok := e.(engine.TLSProber)
-	if !ok {
-		t.Fatalf("engine %s is not a TLSProber", p.Engine)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	certs, err := prober.ProbeTLS(ctx, p)
-	if err != nil || len(certs) == 0 || certs[0].Subject.CommonName != tlsServerName {
-		t.Errorf("probe: %d certificates, err = %v, want the server certificate", len(certs), err)
+		t.Errorf("notices on a TLS connection: %q", n.Notices())
 	}
 }
 
@@ -227,23 +207,22 @@ func testMySQLTLS(t *testing.T, m mysqlTarget, pki testPKI) {
 	}
 	base := config.Profile{Engine: string(m.flavor), Host: srv.Host, Port: srv.Port, User: "tlsu"}
 	with := func(f func(p *config.Profile)) config.Profile { p := base; f(&p); return p }
-	mysql8 := m.flavor == engine.FlavorMySQL
-	probeLeaf(t, base)
 
-	// An unverified TLS connection to a remote host never answers a request
-	// for the password in clear. A MySQL 8 account (caching_sha2_password)
-	// whose password the server has not cached needs a full authentication,
-	// which is refused; a MariaDB account (mysql_native_password) logs in.
+	// A remote host with no tls setting, behind a private CA, connects in
+	// TLS with no extra setting and no notice. With a cold authentication
+	// cache, a MySQL 8 account (caching_sha2_password) needs a full
+	// authentication, which the driver makes inside TLS.
 	if err := Exec(srv, "FLUSH PRIVILEGES;", cli, "-uroot", "-p"+RootPassword); err != nil {
 		t.Fatal(err)
 	}
-	remote := with(func(p *config.Profile) { p.Host, p.Port, p.TLS = tlsServerName, 3306, config.TLSRequire })
-	_, err := tlsConnect(t, remote, TLSPassword, remoteDial(srv))
-	switch {
-	case mysql8 && (err == nil || !strings.Contains(err.Error(), "not verified") || !strings.Contains(err.Error(), `tls = "verify-full"`)):
-		t.Errorf("require, cold cache: err = %v, want the refusal naming verify-full", err)
-	case !mysql8 && err != nil:
-		t.Errorf("require on MariaDB: %v", err)
+	for _, mode := range []string{"", config.TLSPrefer, config.TLSRequire} {
+		remote := with(func(p *config.Profile) { p.Host, p.Port, p.TLS = tlsServerName, 3306, mode })
+		s, err := tlsConnect(t, remote, TLSPassword, remoteDial(srv))
+		if err != nil {
+			t.Errorf("tls = %q on a remote host: %v", mode, err)
+			continue
+		}
+		noNotices(t, s)
 	}
 
 	// verify-full: the certificate names db.test, not 127.0.0.1.
@@ -271,15 +250,6 @@ func testMySQLTLS(t *testing.T, m mysqlTarget, pki testPKI) {
 	noNotices(t, s)
 	if _, err := tlsConnect(t, with(func(p *config.Profile) { p.TLS, p.TLSCA = config.TLSVerifyCA, pki.ca }), TLSPassword, nil); err != nil {
 		t.Errorf("verify-ca: %v", err)
-	}
-
-	// The verified login filled MySQL's authentication cache: the unverified
-	// connection now logs in by the fast path, through the TLS upgrade made
-	// below the driver.
-	if mysql8 {
-		if _, err := tlsConnect(t, remote, TLSPassword, remoteDial(srv)); err != nil {
-			t.Errorf("require, warm cache: %v", err)
-		}
 	}
 
 	// REQUIRE X509: the client certificate is the way in.
@@ -331,7 +301,18 @@ func testPostgresTLS(t *testing.T, version string, pki testPKI) {
 	srv := startPostgresTLS(t, version, pki)
 	base := config.Profile{Engine: config.EnginePostgres, Host: srv.Host, Port: srv.Port, User: "tlsu", Database: "app"}
 	with := func(f func(p *config.Profile)) config.Profile { p := base; f(&p); return p }
-	probeLeaf(t, base)
+
+	// A remote host with no tls setting, behind a private CA, connects in
+	// TLS with no extra setting and no notice.
+	for _, mode := range []string{"", config.TLSPrefer, config.TLSRequire} {
+		remote := with(func(p *config.Profile) { p.Host, p.Port, p.TLS = tlsServerName, 5432, mode })
+		s, err := tlsConnect(t, remote, TLSPassword, remoteDial(srv))
+		if err != nil {
+			t.Errorf("tls = %q on a remote host: %v", mode, err)
+			continue
+		}
+		noNotices(t, s)
+	}
 
 	if _, err := tlsConnect(t, with(func(p *config.Profile) { p.TLS, p.TLSCA = config.TLSVerifyFull, pki.ca }), TLSPassword, nil); err == nil ||
 		!strings.Contains(err.Error(), "certificate") {

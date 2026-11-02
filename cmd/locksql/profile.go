@@ -34,7 +34,7 @@ func (s *profileSpec) flags(fs *flag.FlagSet) {
 	fs.StringVar(&s.user, "user", "", "database user (default: asked at console start)")
 	fs.StringVar(&s.database, "database", "", "the only database served (default: chosen per query)")
 	fs.StringVar(&s.path, "path", "", "SQLite file, relative to the project")
-	fs.StringVar(&s.tls, "tls", "", "disable, prefer, require, verify-ca or verify-full (default verify-full for a remote host)")
+	fs.StringVar(&s.tls, "tls", "", "disable, prefer, require, verify-ca or verify-full (default prefer, passed to the driver)")
 	fs.StringVar(&s.credentials, verbs.FlagCredentials, "", "ask (the console asks at start) or vault")
 	fs.StringVar(&s.vaultPath, verbs.FlagVaultPath, "", "Vault path of the login, with --credentials vault")
 }

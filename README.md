@@ -137,8 +137,9 @@ way an agent can ask for raw PII.
 <tr>
 <td colspan="2" valign="top">
 
-**🔐 Remote, verified**<br>
-TLS verifies the server certificate by default (`tls = "verify-full"`), and an
+**🔐 Remote**<br>
+The `tls` settings go to the database driver as they are (`tls = "verify-full"`
+verifies the server certificate), a plaintext connection is reported, and an
 `ssh` table reaches a database behind a bastion: the console opens the tunnel
 itself, checks the bastion's host key and listens on no local port.
 
@@ -407,11 +408,13 @@ A project profile wins over a user profile of the same name. No file ever
 holds a secret: keys named like `password`, `passwd`, `pwd`, `secret` or
 `token`, and DSNs with an embedded password, are refused.
 
-> **Breaking change.** A remote profile with no `tls` setting now verifies
-> the server certificate (`tls = "verify-full"`). A server with a private CA
-> needs `tls_ca`; to keep encryption without verification, set
-> `tls = "require"`. Until then its connection fails with an error that
-> names both settings.
+> **Breaking change (v0.15).** locksql no longer enforces transport
+> security: the `tls*` settings are passed to the driver, a profile with no
+> `tls` setting gets the drivers' default `prefer` whatever the host (it
+> was `verify-full` for a remote host since v0.4), `production = true` no
+> longer requires TLS, and no authentication method is refused because of
+> the TLS mode. A plaintext connection gets one warning at session start.
+> To keep verifying the server certificate, set `tls = "verify-full"`.
 
 ```toml
 [profiles.uat]
@@ -421,7 +424,7 @@ port        = 3306                  # default 3306, or 5432 for postgres
 user        = ""                    # empty: asked at console start
 database    = ""                    # empty: chosen per query (--db)
 credentials = "ask"                 # ask | keychain | vault
-tls         = "verify-full"         # disable | prefer | require | verify-ca | verify-full
+tls         = "verify-full"         # disable | prefer (default) | require | verify-ca | verify-full, as libpq's sslmode
 tls_ca      = ""                    # optional PEM bundle replacing the system roots
 credentials_ttl = "20m"             # optional: ask for the secret again
 tier        = "read"                # read | write | ddl | admin
@@ -461,8 +464,8 @@ A database reachable only from a bastion gets an `ssh` table: the console
 opens the SSH connection itself, with no local listening port, and verifies
 the bastion against the console account's `~/.ssh/known_hosts` (asking on
 first use, refusing a changed key). `host` is then the database as seen from
-the bastion; keep `tls = "verify-full"` unless the database runs on the
-bastion itself. See
+the bastion; the bastion-to-database leg is protected by `tls` only, unless
+the database runs on the bastion itself. See
 [Reaching a remote server through SSH](docs/usage.md#reaching-a-remote-server-through-ssh).
 A database that publishes no port (an internal Docker network, a server
 bound to its container's loopback) is reached with `proxy_command`, an argv
@@ -611,7 +614,7 @@ locksql config import team.json --local uat.ssh.key=~/.ssh/id_ed25519
   merged (a mode conflict keeps `redact`); `--replace` replaces the
   profiles and the imported sets instead. A backup (`*.bak`) is kept.
 - **Loosening:** any change that loosens the policy (new profile or host,
-  higher tier, weaker tls, higher limits, a removed mask rule, a new allow
+  higher tier, higher limits, a removed mask rule, a new allow
   rule, another rule set, ...) is refused unless you pass `--allow-loosen`,
   and the console still asks you to approve it at its next start.
 
@@ -679,22 +682,18 @@ masked.
   (Ctrl-O, `--show-results`) and for an unmasked run, the clear rows stay in the scrollback of the console's
   terminal, visible to anyone who sees that screen (screen sharing, recording,
   a terminal that logs its output). locksql does not clear it.
-- **Transport security depends on `tls`.** A remote profile defaults to
-  `tls = "verify-full"`; `prefer` is the default only for a Unix socket or a
-  loopback host. `production = true` refuses `disable` and `prefer` on a
-  remote host. Below `verify-ca` an active attacker on the path can intercept
-  or downgrade the connection and read the traffic, but is not handed the
-  password: a remote MariaDB/MySQL connection whose certificate is not
-  verified (or plain TCP) refuses `mysql_clear_password`, `sha256_password`
-  and a `caching_sha2_password` full authentication, so a MySQL 8 account
-  logs in that way only while the server's authentication cache holds it;
-  PostgreSQL refuses a clear-text or MD5 password request
-  (`require_auth=!password,!md5`). Each refusal names the remedy,
-  `tls = "verify-full"` (with `tls_ca` for a private CA). `verify-ca` and
-  `verify-full` prevent the impersonation; `tls_cert`/`tls_key` add a client
-  certificate. Through an `ssh` bastion the SSH leg is encrypted and
-  verified, but the bastion-to-database leg is protected only by `tls`,
-  unless the database runs on the bastion. See
+- **Transport security is the driver's and the infrastructure's.** locksql
+  passes the `tls*` settings to the driver (default `prefer`, libpq's
+  semantics) and enforces nothing about them: no refusal at load time, none
+  of an authentication method. Its only TLS behaviour is one warning, at
+  session start, when the established connection is plaintext. Below
+  `verify-ca` an active attacker on the path can intercept or downgrade the
+  connection, and obtain the password if the server's authentication
+  method sends it (MySQL `mysql_clear_password`, PostgreSQL `password` or
+  `md5`); `tls = "verify-full"` (with `tls_ca` for a private CA), an SSH
+  tunnel, a mesh or a sidecar prevent it. Through an `ssh` bastion the SSH
+  leg is encrypted and verified, but the bastion-to-database leg is
+  protected only by `tls`, unless the database runs on the bastion. See
   [Transport security](docs/security-model.md#out-of-scope-and-limitations).
 - One console per profile and project, one request at a time. No remote or
   shared consoles, no data export.

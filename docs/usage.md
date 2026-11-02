@@ -37,7 +37,7 @@ for every approval), engine (`sqlite`,
 `postgres`, `mariadb`, `mysql`), then the SQLite file relative to the
 project, or host, port, user (empty: asked at console start), database
 (empty: chosen per query), for a remote host the `tls` mode (default
-`verify-full`), and where the password comes from: `ask` (typed at console
+`prefer`), and where the password comes from: `ask` (typed at console
 start) or `vault` with its path
 ([Credentials from HashiCorp Vault](#credentials-from-hashicorp-vault)). It
 never asks for a password. Inside a container it offers
@@ -265,13 +265,10 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   or a database that publishes no port, see
   [Databases that publish no port](#databases-that-publish-no-port).
 - The SSH leg is encrypted and the bastion verified; the leg from the bastion
-  to the database is protected only by `tls` ([TLS to the database](#tls-to-the-database)), whose default is
-  decided on `host` as seen from the bastion (`127.0.0.1` gives `prefer`, a
-  remote name `verify-full`). When that leg is not verified the console
-  says `encrypted by SSH to <bastion>; NOT encrypted (or not verified) from
-  the bastion to <db host>: ...`, except for a loopback `host` (the database
-  runs on the bastion). `production = true` accepts `tls = "prefer"` only for
-  such a loopback `host`.
+  to the database is protected only by `tls` ([TLS to the database](#tls-to-the-database)).
+  When that leg is plaintext the console warns `encrypted by SSH to
+  <bastion>; NOT encrypted from the bastion to <db host>: ...`, except for a
+  loopback `host` (the database runs on the bastion).
 - Any change of the `ssh` table, adding or removing it, loosens the policy
   and waits for your approval ([Policy changes](#policy-changes)), except `ssh.credentials` set back
   to `ask`.
@@ -361,15 +358,13 @@ proxy_command = ["kubectl", "exec", "-i", "-n", "shop", "shop-db-0", "--",
 - When the connection fails, what the command wrote to its stderr ends the
   error (`proxy_command stderr: Error: No such container: shop-db`), on one
   line, without control characters, at most 512 bytes.
-- `host` and `port` say where the command connects; `tls` follows them as
-  for a direct connection (`127.0.0.1` gives `prefer`, a remote name
-  `verify-full`, and `production = true` needs `require` or stronger unless
-  `host` is loopback). The command carries the stream from the console to
+- `host` and `port` say where the command connects; `tls` applies as for a
+  direct connection. The command carries the stream from the console to
   where it runs (encrypted by `ssh`, local for `docker exec` on this host,
-  TLS to the Kubernetes API); beyond, only `tls` protects it, and the
-  console warns `reached through proxy_command <program>; NOT encrypted (or
-  not verified) from where it runs to <host>: ...` unless `host` is
-  loopback.
+  TLS to the Kubernetes API); beyond, only `tls` protects it, and when that
+  leg is plaintext the console warns `reached through proxy_command
+  <program>; NOT encrypted from where it runs to <host>: ...` unless `host`
+  is loopback.
 - `proxy_command` excludes an `ssh` table (run `ssh` inside it instead), a
   Unix socket `host` and sqlite. The argv is part of the approved policy:
   adding, removing or changing it loosens the policy and waits for your
@@ -514,9 +509,7 @@ made (`fixed`) and every check, with its `status` (`ok`, `warn` or `fail`),
 | socket directory | missing, wrong owner or group, a mode other than 0710/0750, or no setgid on Linux; shows the mode with setgid (`/run/locksql 2710 locksql:locksql-clients`) |
 | binary | the running binary can be changed by a non-root account (fails in separated mode) |
 | secret store | separated mode with a secret for the profile left in the agent's keychain; keychain unavailable |
-| tls, ssh, ssh key (per profile) | a remote database that verifies nothing (through a bastion: the bastion-to-database leg); an `ssh.key` that is missing or readable by group or others (not checked from the agent's account in a separated setup) |
-| tls_ca, tls_cert, tls_key (per profile) | a file that is missing or holds no PEM certificate, a certificate expired or expiring within 30 days, a key readable by group or others (files the agent's account cannot read are not checked) |
-| server certificate (per profile without `ssh`) | a TLS handshake that sends no user name and no secret: the server offers no TLS under `require` or stronger, its chain does not verify against `tls_ca` (or the system roots), it does not name `host` (or `tls_server_name`) under `verify-full`, it is expired or expires within 30 days; under `prefer` or `require` it says whether `verify-full` would pass |
+| ssh, ssh key (per profile) | an `ssh.key` that is missing or readable by group or others (not checked from the agent's account in a separated setup); the `tls` mode is shown as information, never a warning |
 | agent wiring | an installed agent is not wired for this account (warns; not checked as root or as the console account) |
 | project .locksql, project .locksql owner, project .locksql mode | inside a project, from any account but the console's: `.locksql/` is not what `lox up` copies, which reads it as you, following no link, and takes only directories and regular files that are yours (`LOCKSQL_DOCTOR_FOR`, which the launcher sets to your uid and gid; else the account doctor runs as) and that no one else can write: `.locksql/` or an entry in it is a link or another kind of file, owned by another account (the console account's, left by `doctor --fix` up to v0.13.0, is said apart), writable by group or others, or not readable by you. Not checked as root without `LOCKSQL_DOCTOR_FOR` |
 | console (per profile) | not running; then, from its `health`: not separated, an X11 display, database privileges beyond the tier, EXPLAIN failing |
@@ -693,8 +686,9 @@ the socket and is audited.
 
 ### TLS to the database
 
-`tls` and `tls_ca` set the transport security of a network profile;
-`tls_cert`, `tls_key` and `tls_server_name` are optional:
+locksql does not own transport security: `tls`, `tls_ca`, `tls_cert`,
+`tls_key` and `tls_server_name` are optional settings passed to the
+driver, with libpq's `sslmode` semantics:
 
 ```toml
 [profiles.prod]
@@ -707,33 +701,28 @@ tls_key  = "/home/locksql/.config/locksql/app.key"  # its private key (PEM, unen
 tls_server_name = "db.internal"  # optional: the name verify-full checks instead of host
 ```
 
-- Default: `verify-full` for a remote host, `prefer` for a Unix socket or a
-  loopback host. A remote profile that must keep an unverified connection
-  needs an explicit `tls = "require"`.
-- `tls_ca` is refused with `disable` and `prefer`. With `require`, as in libpq,
-  it verifies the chain against `tls_ca` (as `verify-ca`), not the host name.
-- `production = true` refuses `disable` and `prefer` on a remote host.
-- `tls_cert` and `tls_key` go together and need `require` or stronger. The
-  certificate is presented when the server asks for one (PostgreSQL
-  `clientcert`/`cert` in `pg_hba.conf`, MySQL `REQUIRE X509`). The key file
-  is read by the console account and refused when group or others can read
-  it; keep both files in that account's home.
-- `tls_server_name` needs `verify-full`: use it when `host` is an IP address
-  or an alias that the certificate does not name.
-- On MariaDB and MySQL, a remote host under `prefer` or `require` (without
-  `tls_ca`) answers no request for the password in clear
-  (`mysql_clear_password`, `sha256_password`, a `caching_sha2_password` full
-  authentication): connect with `verify-ca` or `verify-full`, or use an
-  account with `mysql_native_password` or `ed25519`. PostgreSQL refuses
-  `password` and `md5` the same way.
+- Default: `prefer`, whatever the host: TLS when the server offers it,
+  plain TCP otherwise. Set `tls = "verify-full"` (with `tls_ca` for a
+  private CA) to verify the server certificate.
+- With `require` and `tls_ca`, as in libpq, the chain is verified against
+  `tls_ca` (as `verify-ca`), not the host name.
+- locksql checks only that the values are well formed (a known mode, a
+  valid `tls_server_name`, `tls_cert` and `tls_key` together). It refuses no
+  profile because of its `tls`, `production = true` included, and no
+  authentication method the driver and the server agree on.
+- `tls_cert` and `tls_key` are presented when the server asks for a client
+  certificate (PostgreSQL `clientcert`/`cert` in `pg_hba.conf`, MySQL
+  `REQUIRE X509`). The key file is read by the console account and refused
+  when group or others can read it; keep both files in that account's home.
+- When the established connection is plaintext, the console warns `the
+  connection to the database is NOT encrypted (tls = ...)` at session start
+  and audits it as a notice; the session proceeds. A TLS connection gets no
+  warning, whatever its mode.
 - Through an `ssh` bastion, `tls` protects the leg from the bastion to the
-  database, and its default follows `host` as seen from the bastion (see
+  database (see
   [Reaching a remote server through SSH](#reaching-a-remote-server-through-ssh)).
-- `locksql doctor` warns when a remote profile verifies nothing, checks
-  that `tls_ca`, `tls_cert` and `tls_key` are readable PEM files (from the
-  console account), reports certificates that expire within 30 days, and
-  verifies the server's certificate chain with a TLS handshake that sends
-  no secret (a profile without `ssh`). See
+- A change of a `tls*` setting is listed at the next start but is not a
+  loosening. `locksql doctor` shows the mode as information. See
   [Transport security](security-model.md#out-of-scope-and-limitations) for the modes.
 
 ### The approval screen
@@ -894,8 +883,7 @@ The console watches the config and PII files while it runs.
   compatibility, without effect since cell references are not supported), a longer
   `idle_timeout` or `max_session`, a higher or removed
   `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
-  host, port, engine, user or database, a weaker `tls` or any change of `tls_ca`,
-  `tls_cert`, `tls_key` or `tls_server_name`,
+  host, port, engine, user or database,
   any change of the `ssh` table (except `ssh.credentials` set to `ask`),
   `ask → keychain` or `vault`, any change of `vault_path`,
   `write_functions = "allowlist" → "denylist"`, a removed mask rule or detector, a mask mode

@@ -122,9 +122,9 @@ func rootPool(path string) (*x509.CertPool, error) {
 	return pool, nil
 }
 
-// TLSVerifyHint is the way out of a connection refused because the server's
-// certificate did not verify, as a private or self-signed one does since
-// verify-full became the default of a remote host; "" for any other error.
+// TLSVerifyHint is the way out of a connection the driver refused because
+// the server's certificate did not verify under an explicit verify-ca or
+// verify-full, as a private or self-signed one does; "" for any other error.
 func TLSVerifyHint(err error, mode string) string {
 	var (
 		verr *tls.CertificateVerificationError

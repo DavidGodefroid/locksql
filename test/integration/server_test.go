@@ -273,10 +273,11 @@ SELECT pg_reload_conf();
 	})
 }
 
-// TestPostgresPasswordAuth records the guard on a server that asks for the
-// password in clear text or MD5-hashed: answered on a loopback host,
-// refused on a remote host without a verified certificate (the server
-// has no TLS: tls disable, prefer or unset); a SCRAM account logs in on both.
+// TestPostgresPasswordAuth: locksql leaves the authentication method to
+// the driver and the server. On a server without TLS, an account whose
+// pg_hba method is password, md5 or scram-sha-256 logs in on a loopback
+// host and on a remote one (tls disable, prefer or unset), and the remote
+// plaintext session gets the one notice.
 func TestPostgresPasswordAuth(t *testing.T) {
 	for _, v := range pgVersions() {
 		t.Run("postgres:"+v, func(t *testing.T) {
@@ -289,14 +290,13 @@ func TestPostgresPasswordAuth(t *testing.T) {
 				for _, mode := range []string{"", config.TLSDisable, config.TLSPrefer} {
 					remote := local
 					remote.Host, remote.Port, remote.TLS = tlsServerName, 5432, mode
-					_, err := tlsConnect(t, remote, ROPassword, remoteDial(srv))
-					switch {
-					case user == "scramu" && err != nil:
+					s, err := tlsConnect(t, remote, ROPassword, remoteDial(srv))
+					if err != nil {
 						t.Errorf("%s remote, tls %q: %v", user, mode, err)
-					case user != "scramu" && (err == nil || !strings.Contains(err.Error(), "clear text or MD5-hashed")):
-						t.Errorf("%s remote, tls %q: err = %v, want the password guard", user, mode, err)
-					case err != nil && strings.Contains(err.Error(), ROPassword):
-						t.Errorf("%s remote, tls %q: the error echoes the password", user, mode)
+						continue
+					}
+					if n := s.(engine.Noticer).Notices(); len(n) != 1 || !strings.Contains(n[0], "NOT encrypted") {
+						t.Errorf("%s remote, tls %q: notices = %q, want the plaintext one", user, mode, n)
 					}
 				}
 			}

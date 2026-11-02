@@ -16,7 +16,6 @@
 package mysql
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -100,25 +99,15 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte, dial
 	if err != nil {
 		return nil, fmt.Errorf("mysql: %w", err)
 	}
-	socket := strings.HasPrefix(p.Host, "/")
-	// Below verify-ca, a remote server is not authenticated: the password
-	// must not be answered in clear, even inside TLS.
-	unverified := ""
-	if tlsCfg != nil && !config.TLSVerifiesChain(p.TLS, p.TLSCA) && !config.IsLoopback(p.Host) {
-		unverified = p.TLS
-		if unverified == "" {
-			unverified = config.TLSPrefer
-		}
-	}
-	conn, err := dial(ctx, addr, p.User, pw, p.Database, 0, tlsCfg, unverified, dialFn)
+	conn, err := dial(ctx, addr, p.User, pw, p.Database, 0, tlsCfg, dialFn)
 	if err != nil && tlsCfg != nil && config.TLSRank(p.TLS) <= config.TLSRank(config.TLSPrefer) && noServerTLS(err) {
-		tlsCfg, unverified = nil, "" // prefer: the server offers no TLS, fall back to plain
-		conn, err = dial(ctx, addr, p.User, pw, p.Database, 0, nil, "", dialFn)
+		tlsCfg = nil // prefer: the server offers no TLS, fall back to plain
+		conn, err = dial(ctx, addr, p.User, pw, p.Database, 0, nil, dialFn)
 	}
 	if err != nil {
 		return nil, connectError(err, pw, p.TLS)
 	}
-	ctl, err := dial(ctx, addr, p.User, pw, "", killTimeout, tlsCfg, unverified, dialFn)
+	ctl, err := dial(ctx, addr, p.User, pw, "", killTimeout, tlsCfg, dialFn)
 	if err != nil {
 		conn.Close()
 		return nil, connectError(err, pw, p.TLS)
@@ -126,7 +115,9 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte, dial
 	s := &session{
 		conn: conn, connID: conn.GetConnectionID(), ctl: ctl, engine: p.Engine,
 		tier: p.Tier, timeout: p.Limits.StatementTimeout, defDB: p.Database,
-		transport: engine.Transport{Mode: p.TLS, CA: p.TLSCA, Host: p.Host, Plain: tlsCfg == nil && !socket, Tunneled: dialFn != nil},
+		// go-mysql either upgrades to TLS or fails the handshake: a
+		// connection dialled with a TLS configuration is encrypted.
+		transport: engine.Transport{Mode: p.TLS, Plain: tlsCfg == nil && !strings.HasPrefix(p.Host, "/")},
 	}
 	if err := s.setup(); err != nil {
 		s.Close()
@@ -135,25 +126,19 @@ func (Engine) Connect(ctx context.Context, p config.Profile, secret []byte, dial
 	return s, nil
 }
 
-// Notices reports a connection an attacker on the path could read or stand
-// in for: plain TCP, or TLS whose certificate is not verified.
+// Notices reports a plaintext TCP connection.
 func (s *session) Notices() []string { return s.transport.Notices() }
 
 // dial connects with a deadline covering the TCP connect and the handshake
-// (the driver has none for the handshake). readTimeout > 0 bounds every
+// (the driver has none for the handshake). ioTimeout > 0 bounds every
 // later read and write too. dialFn, when not nil, opens the network
-// connection instead of a direct dial. A nil tlsCfg dials plain, and a plain TCP
-// connection is guarded against a server asking for the password.
-// unverified, when not "", is the tls mode of a connection whose server is
-// not authenticated: the TLS upgrade is then made below the driver
-// (startTLS), which sees a plain connection, and the guard reads the
-// handshake in clear, as on plain TCP.
-func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duration, tlsCfg *tls.Config, unverified string, dialFn engine.DialFunc) (*client.Conn, error) {
+// connection instead of a direct dial. A nil tlsCfg dials plain; otherwise
+// the driver makes the TLS upgrade.
+func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duration, tlsCfg *tls.Config, dialFn engine.DialFunc) (*client.Conn, error) {
 	deadline := time.Now().Add(connectTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
-	var guard *clearTextGuard
 	dialer := func(ctx context.Context, network, address string) (net.Conn, error) {
 		var nc net.Conn
 		var err error
@@ -169,16 +154,6 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 			nc.Close()
 			return nil, err
 		}
-		if tlsCfg != nil && unverified != "" {
-			guard = &clearTextGuard{Conn: newStartTLS(nc, tlsCfg.Clone()), mode: unverified}
-			guard.armed.Store(true)
-			return guard, nil
-		}
-		if tlsCfg == nil && network != "unix" {
-			guard = &clearTextGuard{Conn: nc}
-			guard.armed.Store(true)
-			return guard, nil
-		}
 		return nc, nil
 	}
 	opts := DriverOptions()
@@ -188,22 +163,13 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 			return nil
 		})
 	}
-	if tlsCfg != nil && unverified == "" {
+	if tlsCfg != nil {
 		opts = append(opts, func(c *client.Conn) error {
 			c.SetTLSConfig(tlsCfg.Clone())
 			return nil
 		})
 	}
 	c, err := client.ConnectWithDialer(ctx, "", addr, user, pw, db, dialer, opts...)
-	if guard != nil {
-		guard.armed.Store(false) // authenticated: later reads are row data
-		if guard.refused.Load() {
-			if c != nil {
-				c.Close()
-			}
-			return nil, guardError(guard.why, guard.mode, dialFn != nil)
-		}
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -212,144 +178,6 @@ func dial(ctx context.Context, addr, user, pw, db string, ioTimeout time.Duratio
 		return nil, err
 	}
 	return c, nil
-}
-
-// errClearText refuses a server that asks for the password in clear text.
-// guardError says on which connection, and the remedy.
-var errClearText = errors.New("the server asks for the password in clear text (mysql_clear_password)")
-
-// errPublicKey refuses a server that asks for the password encrypted with
-// an RSA key it sends itself, or, inside TLS, in clear. guardError says on
-// which connection, and the remedy.
-var errPublicKey = errors.New("the server asks for the password through a full authentication (caching_sha2_password full authentication or sha256_password)")
-
-// guardError adds the connection and the remedy to a refusal of the
-// clear-text guard. mode is "" on plain TCP, else the tls mode of a
-// connection whose certificate is not verified. A session dialled through
-// an SSH tunnel is not advised to use one.
-func guardError(why error, mode string, tunneled bool) error {
-	if !errors.Is(why, errClearText) && !errors.Is(why, errPublicKey) {
-		return why
-	}
-	if mode != "" {
-		return fmt.Errorf("%w on a connection whose certificate is not verified (tls = %q); refused, since an attacker on the path could ask the same: "+
-			"set tls = \"verify-full\" (with tls_ca for a private CA), or use an account with mysql_native_password or ed25519", why, mode)
-	}
-	why = fmt.Errorf("%w on an unencrypted connection; refused, since an attacker who removed TLS could ask the same", why)
-	if tunneled {
-		return fmt.Errorf("%w: use a server with TLS, or run the ssh tunnel to the database's own host", why)
-	}
-	return fmt.Errorf("%w: use a server with TLS, an SSH tunnel or a Unix socket", why)
-}
-
-// errHugePacket refuses a handshake packet of the maximum size, which the
-// guard cannot frame the way the driver does.
-var errHugePacket = errors.New("the server sent an oversized handshake packet on an unencrypted connection; refused")
-
-// maxPacket is the payload size that makes a packet continue in the next.
-const maxPacket = 0xffffff
-
-// clearTextMarker is the name of the plugin that sends the password as is.
-var clearTextMarker = []byte(gomysql.AUTH_CLEAR_PASSWORD)
-
-// clearTextGuard wraps an unencrypted TCP connection during the handshake,
-// or the clear side of a TLS connection whose certificate is not verified
-// (startTLS). An active attacker who strips TLS, or terminates it with a
-// certificate of its own, can ask go-mysql for the password in
-// three ways: an auth switch to mysql_clear_password (the raw password), and
-// an auth switch to sha256_password or a caching_sha2_password full
-// authentication (the password encrypted with an RSA key the "server"
-// sends, which the attacker holds). The guard reads the handshake packets
-// and fails the read that brings such a request, before the driver can
-// answer: an auth switch to either plugin, and any auth-more-data packet
-// other than the caching_sha2_password fast-auth success. It stops looking
-// at the first OK or ERR packet, which ends the authentication. A packet of
-// the maximum size (0xffffff bytes), which the driver would join with the
-// next one, is refused outright.
-type clearTextGuard struct {
-	net.Conn
-	mode    string // the tls mode under an unverified TLS, "" on plain TCP
-	armed   atomic.Bool
-	refused atomic.Bool
-	tail    []byte
-	pkt     []byte // bytes of the packets not yet complete
-	npkt    int    // packets seen
-	authed  bool   // an OK or ERR packet ended the authentication
-	why     error
-}
-
-func (g *clearTextGuard) Read(b []byte) (int, error) {
-	n, err := g.Conn.Read(b)
-	if n > 0 && g.armed.Load() {
-		buf := append(g.tail, b[:n]...)
-		if !g.authed && bytes.Contains(buf, clearTextMarker) {
-			return g.refuse(errClearText)
-		}
-		if keep := len(clearTextMarker) - 1; len(buf) > keep {
-			buf = buf[len(buf)-keep:]
-		}
-		g.tail = append(g.tail[:0], buf...)
-		if why := g.inspect(b[:n]); why != nil {
-			return g.refuse(why)
-		}
-	}
-	return n, err
-}
-
-func (g *clearTextGuard) refuse(why error) (int, error) {
-	g.why = why
-	g.refused.Store(true)
-	g.Conn.Close()
-	return 0, why
-}
-
-// inspect feeds the handshake packets read so far and returns the reason to
-// refuse, if any.
-func (g *clearTextGuard) inspect(b []byte) error {
-	if g.authed {
-		return nil
-	}
-	g.pkt = append(g.pkt, b...)
-	for len(g.pkt) >= 4 {
-		size := int(g.pkt[0]) | int(g.pkt[1])<<8 | int(g.pkt[2])<<16
-		if size == maxPacket {
-			// go-mysql joins such a packet with the next ones into one
-			// logical packet, which per-packet framing would misread (a
-			// continuation starting with 0x00 looks like an OK). No
-			// legitimate handshake packet comes near this size.
-			return errHugePacket
-		}
-		if len(g.pkt) < 4+size {
-			return nil
-		}
-		payload := g.pkt[4 : 4+size]
-		g.npkt++
-		if g.npkt > 1 && size > 0 { // the first packet is the server greeting
-			switch payload[0] {
-			case 0x00, 0xff: // OK, ERR: authentication is over
-				g.authed = true
-				g.pkt = nil
-				return nil
-			case 0xfe: // auth switch
-				name := payload[1:]
-				if i := bytes.IndexByte(name, 0); i >= 0 {
-					name = name[:i]
-				}
-				switch string(name) {
-				case gomysql.AUTH_CLEAR_PASSWORD:
-					return errClearText
-				case gomysql.AUTH_SHA256_PASSWORD:
-					return errPublicKey
-				}
-			case 0x01: // auth more data: only the fast-auth success is safe
-				if !(size == 2 && payload[1] == gomysql.CACHE_SHA2_FAST_AUTH) {
-					return errPublicKey
-				}
-			}
-		}
-		g.pkt = g.pkt[4+size:]
-	}
-	return nil
 }
 
 // noServerTLS reports whether a handshake failed because the server does

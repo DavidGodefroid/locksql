@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,7 +24,6 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/agentinit"
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/config"
-	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 	"github.com/DavidGodefroid/locksql/internal/product"
 )
@@ -76,9 +74,6 @@ type doctorEnv struct {
 	getenv   func(string) string
 	run      func(name string, args ...string) ([]byte, error)
 	readFile func(string) ([]byte, error)
-	// tlsProbe returns the certificates the profile's server presents,
-	// without authenticating (engine.TLSProber); nil skips the check.
-	tlsProbe func(config.Profile) ([]*x509.Certificate, error)
 }
 
 // imageHint is the fix of a check that a former host install met: the
@@ -123,19 +118,6 @@ func realDoctorEnv(instanceFlag string) doctorEnv {
 		ptrace:     sysconf.PtraceScope,
 		keychain:   product.Keychain.Has,
 		readFile:   os.ReadFile,
-		tlsProbe: func(p config.Profile) ([]*x509.Certificate, error) {
-			e, err := engine.Get(p.Engine)
-			if err != nil {
-				return nil, err
-			}
-			prober, ok := e.(engine.TLSProber)
-			if !ok {
-				return nil, errors.New("engine " + p.Engine + " cannot be probed")
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			return prober.ProbeTLS(ctx, p)
-		},
 		status: func(cwd, profile string) (*ipc.StatusResult, error) {
 			instance, err := client.ResolveInstance(instanceFlag)
 			if err != nil {
@@ -712,28 +694,10 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 	}
 
 	if p.Engine != config.EngineSQLite && !strings.HasPrefix(p.Host, "/") {
-		switch {
-		case config.TLSVerifiesChain(p.TLS, p.TLSCA):
-			add(checkOK, "tls", "tls = \""+p.TLS+"\": the server certificate is verified", "")
-		case p.SSH != nil && config.IsLoopback(p.Host):
-			add(checkOK, "tls", "the database is on the bastion: the ssh tunnel encrypts the whole path (tls = \""+p.TLS+"\")", "")
-		case len(p.ProxyCommand) > 0 && config.IsLoopback(p.Host):
-			add(checkOK, "tls", "the database listens on loopback where proxy_command runs: the command carries the whole path (tls = \""+p.TLS+"\")", "")
-		case config.IsLoopback(p.Host):
-			add(checkOK, "tls", "loopback host: tls = \""+p.TLS+"\"", "")
-		case len(p.ProxyCommand) > 0:
-			add(checkWarn, "tls", "tls = \""+p.TLS+"\": proxy_command carries the stream to where it runs, but an attacker on the network between there and "+p.Host+" can read the traffic or obtain the password",
-				"set tls = \"verify-full\" (and tls_ca if the server's CA is private), or proxy to the database's own loopback")
-		case p.SSH != nil:
-			add(checkWarn, "tls", "tls = \""+p.TLS+"\": encrypted by ssh to "+p.SSH.Host+", but an attacker on the bastion's network can read the traffic or obtain the password",
-				"set tls = \"verify-full\" (and tls_ca if the server's CA is private)")
-		default:
-			add(checkWarn, "tls", "tls = \""+p.TLS+"\": an attacker on the path can read the traffic or obtain the password",
-				"set tls = \"verify-full\" (and tls_ca if the server's CA is private), or reach the server through an ssh tunnel")
-		}
+		// Information only: the driver applies tls, and the console warns
+		// at session start when the connection is plaintext.
+		add(checkOK, "tls", "tls = \""+p.TLS+"\", applied by the driver; a plaintext connection is reported when the session starts", "")
 	}
-
-	out = append(out, tlsChecks(d, p, sys, name)...)
 
 	if s := p.SSH; s != nil {
 		add(checkOK, "ssh", "reached through "+s.User+"@"+s.Host+":"+strconv.Itoa(s.Port)+" ("+s.Auth+")", "")

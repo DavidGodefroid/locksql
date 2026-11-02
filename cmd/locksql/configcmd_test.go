@@ -299,7 +299,6 @@ func TestConfigImportLooseningRefused(t *testing.T) {
 	}
 	cases := map[string][2]string{
 		"tier":        {`"tier": "read"`, `"tier": "admin"`},
-		"tls":         {`"tls": "verify-full"`, `"tls": "disable"`},
 		"host":        {`"host": "db.internal"`, `"host": "db.evil.example.com"`},
 		"max_rows":    {`"max_rows": 200`, `"max_rows": 100000`},
 		"k":           {`"k_anonymity": 5`, `"k_anonymity": 1`},
