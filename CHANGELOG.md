@@ -4,6 +4,43 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+### Breaking change
+
+- **locksql no longer enforces transport security; the driver does** (#169).
+  The `tls`, `tls_ca`, `tls_cert`, `tls_key` and `tls_server_name` settings
+  are passed to the PostgreSQL and MariaDB/MySQL drivers with libpq's
+  `sslmode` semantics, and locksql checks only that they are well formed.
+  - A profile with no `tls` setting gets `prefer`, the drivers' default,
+    whatever the host (it was `verify-full` for a remote host since v0.4):
+    a server with a private or self-signed certificate connects with no
+    extra setting. Set `tls = "verify-full"` to keep verifying it.
+  - `production = true` loads whatever its `tls`: a production server that
+    offers no TLS needs no workaround (#170).
+  - No authentication method is refused because of the TLS mode any more
+    (PostgreSQL `password`/`md5`, MySQL `mysql_clear_password`,
+    `sha256_password`, a `caching_sha2_password` full authentication); only
+    the driver or the server can refuse a connection. The MySQL engine uses
+    the driver's own TLS instead of its STARTTLS layer.
+  - `tls_ca`, `tls_cert` and `tls_server_name` are no longer refused under
+    a mode that does not use them, nor `require` and stronger on a Unix
+    socket.
+
+### Changed
+
+- **One plaintext warning, nothing else.** When the established connection
+  is plaintext, the console prints `warning: the connection to the database
+  is NOT encrypted (tls = ...)` at session start and audits it as a notice;
+  the session proceeds. A TLS connection gets no warning, whatever its mode:
+  the "certificate is not verified" notice is gone.
+- A change of a `tls*` setting is no longer a loosening. On the first start
+  after the upgrade, a remote profile without `tls` lists `tls: verify-full
+  → prefer` once and applies it without asking.
+- `locksql doctor` shows the `tls` mode as information and never warns or
+  fails on it; it no longer checks the TLS files nor probes the server's
+  certificate. `profile add` proposes `prefer`.
+
 ## v0.14.0 (2026-11-01)
 
 ### Added

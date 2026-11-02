@@ -79,7 +79,7 @@ locksql doctor --fix --yes</code></pre>
     <p><code>init</code> and <code>profile</code> run as you, so the files are yours. <code>init</code> writes <code>.locksql/config.toml</code> with a commented example profile, and <code>.mcp.json</code> with <code>locksql mcp</code> as the MCP command: the launcher (<a href="#wire">wire the agent</a>).</p>
     <p><code>profile add</code> asks for the engine, host, port, TLS and where the password comes from (typed at console start, or Vault), never for the password itself, and appends the profile to <code>.locksql/config.toml</code>. <code>--engine</code> and its flags skip their questions, and <code>--non-interactive</code> asks none (<code>locksql profile add --non-interactive --engine postgres --host db.internal --credentials vault --vault-path database/creds/ro</code>). Inside a container <code>localhost</code> is the container itself, and the wizard knows it:</p>
     <ul>
-      <li>a database on your machine is <code>host = "host.docker.internal"</code>, which the launcher maps to your machine. That is not a loopback host, so <code>tls</code> defaults to <code>verify-full</code>: set <code>tls = "disable"</code> or <code>"prefer"</code> for a local server without TLS;</li>
+      <li>a database on your machine is <code>host = "host.docker.internal"</code>, which the launcher maps to your machine. <code>tls</code> defaults to <code>prefer</code>, as for any host: a local server without TLS connects in plain TCP, with a warning;</li>
       <li>a database in another container is reached by its name on a shared network (<code>LOCKSQL_DOCKER_ARGS="--network NAME" locksql console</code>);</li>
       <li><code>credentials = "keychain"</code> is not available in a container, which has no OS keychain: use <code>ask</code>, or <code>vault</code> with the <code>vault</code> image;</li>
       <li>a SQLite <code>path</code> is relative to the project root, which is mounted.</li>
@@ -99,9 +99,9 @@ user        = ""                    # empty: asked at console start
 database    = ""                    # empty: chosen per query (--db)
 credentials = "ask"                 # ask | vault (no keychain in a container)
 vault_path  = ""                    # with vault: "database/creds/&lt;role&gt;" or a KV secret
-tls         = "verify-full"         # disable | prefer | require | verify-ca | verify-full
+tls         = "verify-full"         # disable | prefer (default) | require | verify-ca | verify-full, passed to the driver
 tls_ca      = ""                    # optional PEM bundle replacing the system roots
-tls_cert    = ""                    # optional client certificate (PEM)
+tls_cert    = ""                  # optional client certificate (PEM)
 tls_key     = ""                    # its private key (PEM, unencrypted, mode 0600)
 tls_server_name = ""                # optional: the name verify-full checks instead of host
 credentials_ttl = "20m"             # optional: ask for the secret again

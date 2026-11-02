@@ -142,9 +142,8 @@ database/creds/ro`). Inside a container, `localhost` is
 the container itself, and the wizard knows it:
 
 - a database on your machine is `host = "host.docker.internal"`, which the
-  launcher maps to your machine. That is not a loopback host, so `tls`
-  defaults to `verify-full`: set `tls = "disable"` or `"prefer"` for a local
-  server without TLS;
+  launcher maps to your machine. `tls` defaults to `prefer`, as for any
+  host: a local server without TLS connects in plain TCP, with a warning;
 - a database in another container is reached by its name on a shared
   network (`LOCKSQL_DOCKER_ARGS="--network NAME" locksql console`);
 - `credentials = "keychain"` needs an OS keychain, which the container does

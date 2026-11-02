@@ -33,7 +33,7 @@ var sessionOptional = []reflect.Type{
 }
 
 // notSessionOptional are the other interfaces of package engine.
-var notSessionOptional = []string{"Session", "Engine", "TLSProber"}
+var notSessionOptional = []string{"Session", "Engine"}
 
 // wrapperGaps parses the Go files of src (file name -> source) and lists,
 // for each struct type that embeds engine.Session, the methods of the

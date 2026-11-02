@@ -46,10 +46,6 @@ type Change = kconfig.Change
 // TLSRank orders TLS modes by strength ("" is prefer, unknown is -1).
 func TLSRank(mode string) int { return kconfig.TLSRank(mode) }
 
-// TLSVerifiesChain reports a tls mode that verifies the server's
-// certificate chain: verify-ca and verify-full, and require with tls_ca.
-func TLSVerifiesChain(mode, ca string) bool { return kconfig.TLSVerifiesChain(mode, ca) }
-
 // IsLoopback reports "localhost" or a loopback IP literal.
 func IsLoopback(host string) bool { return kconfig.IsLoopback(host) }
 

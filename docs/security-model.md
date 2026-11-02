@@ -196,58 +196,43 @@ it append-only for the console account too.
 - **The console account.** Malware running as `locksql` or as root, and an
   agent account that can become either, are out of scope. So is an X11
   session on a non-production profile with `x11 = "warn"`.
-- **Transport security.** The profile's `tls` setting picks the mode:
+- **Transport security.** Securing the connection to the database is the
+  job of the driver and of the infrastructure (network, SSH tunnel, sidecar,
+  mesh), not of the console. The profile's `tls` setting is passed to the
+  driver, with libpq's `sslmode` semantics:
 
   | Mode | Encrypts | Verifies chain | Verifies host name |
   |---|---|---|---|
   | `disable` | no | no | no |
   | `prefer` | if offered | no | no |
-  | `require` | yes, else refuse | only with `tls_ca` | no |
-  | `verify-ca` | yes, else refuse | yes | no |
-  | `verify-full` | yes, else refuse | yes | yes (`host`, or `tls_server_name`) |
+  | `require` | yes, else the driver refuses | only with `tls_ca` | no |
+  | `verify-ca` | yes, else the driver refuses | yes | no |
+  | `verify-full` | yes, else the driver refuses | yes | yes (`host`, or `tls_server_name`) |
 
-  The default is `verify-full`, except `prefer` when `host` is a Unix socket
-  path or a loopback host (`localhost` or a loopback IP literal).
-  `production = true` refuses `disable` and `prefer` unless the host is
-  loopback or a socket path. `tls_ca` is a PEM bundle that replaces the
-  system roots; it is refused with `disable` and `prefer`, and with
-  `require` it verifies the chain, as libpq does. `tls_server_name`
-  replaces `host` as the name `verify-full` checks. `tls_cert` and
-  `tls_key` present a client certificate (the key must be mode 0600, in the
-  console account's files). A weaker `tls` or any change of `tls_ca`,
-  `tls_cert`, `tls_key` or `tls_server_name` loosens the approved policy and
-  needs the human's confirmation. `locksql doctor` checks these files and
-  their expiry, and, for a profile without `ssh`, fetches the server's
-  certificate with a TLS handshake that sends no secret, and reports a chain
-  or a name that would not verify and a certificate close to its end.
+  The default is `prefer`, whatever the host. `tls_ca` is a PEM bundle that
+  replaces the system roots (with `require` it verifies the chain, as libpq
+  does), `tls_server_name` replaces `host` as the name `verify-full`
+  checks, and `tls_cert` and `tls_key` present a client certificate (the
+  key must be mode 0600, in the console account's files). locksql checks
+  only that the values are well formed: it refuses no profile because of
+  its `tls` (`production = true` included), refuses no authentication
+  method the driver and the server agree on, and a change of a `tls*`
+  setting does not loosen the approved policy. `locksql doctor` reports the
+  mode as information and never fails on it.
 
-  Below `verify-ca` an active attacker on the path can intercept or downgrade
-  the connection, read and change the traffic, and relay a login, but is
-  not handed the password. On MariaDB/MySQL, a connection whose server is
-  not authenticated (plain TCP, and TLS to a remote host under `prefer` or
-  `require` without `tls_ca`) answers no request for the password in clear:
-  an auth switch to `mysql_clear_password` or `sha256_password`, or a
-  `caching_sha2_password` full authentication (the MySQL 8 default), is
-  refused before the driver can answer. Under unverified TLS, locksql makes
-  the TLS upgrade below the driver and reads the authentication in clear to
-  do so. A MySQL 8 account therefore logs in over such a connection only
-  while the server's authentication cache holds it, and the refusal names
-  the remedy (`tls = "verify-full"`, with `tls_ca` for a private CA, or an
-  account with `mysql_native_password` or `ed25519`). Under `verify-ca` and
-  `verify-full` a full authentication sends the password inside the
-  verified TLS connection, as the MySQL clients do. A loopback host or a
-  socket path under TLS is not guarded.
-  On PostgreSQL, a connection to a remote host under `disable`, `prefer` or
-  `require` without `tls_ca` answers no clear-text or MD5 password request
-  (libpq's `require_auth=!password,!md5`): a server, or an attacker on the
-  path, that asks for one gets a refusal, and the console names the remedy
-  (`tls = "verify-full"`, with `tls_ca` for a private CA, or a SCRAM-SHA-256
-  password for the account). A loopback host or a socket path is not
-  guarded. `verify-ca` and
-  `verify-full` prevent the impersonation. A plain connection is reported on
-  the console and in the audit log (`"decision":"notice"`) as `the connection
-  is NOT encrypted (tls = ...)`; unverified TLS on a non-loopback host as
-  `the server certificate is not verified (tls = ...)`.
+  locksql's one TLS behaviour is a warning: when the established TCP
+  connection is plaintext (`disable`, or `prefer` against a server that
+  offers no TLS), the console shows `warning: the connection to the
+  database is NOT encrypted (tls = ...)` at session start and records it in
+  the audit log (`"decision":"notice"`); the session proceeds. A TLS
+  connection gets no warning, whatever its verification mode, and neither
+  does a Unix socket. Below `verify-ca` an active attacker on the path can
+  intercept or downgrade the connection, read and change the traffic, relay
+  a login, and obtain the password when the server's authentication method
+  sends it (MySQL `mysql_clear_password` or a `caching_sha2_password` full
+  authentication, PostgreSQL `password` or `md5`); `verify-full` (with
+  `tls_ca` for a private CA), or a tunnel to the database's own host,
+  prevents it.
 
   A profile with an `ssh` table reaches its database through a bastion. The
   console opens the SSH connection in its own process
@@ -264,10 +249,9 @@ it append-only for the console account too.
   (`ask` or the keychain item `ssh:<host>:<port>`, never in argv, environment, files
   or logs). The SSH leg is encrypted and the bastion authenticated; the leg
   from the bastion to the database is protected only by `tls`, unless the
-  database runs on the bastion (`host` loopback). The `tls` default is
-  decided on `host` as seen from the bastion, and when that leg is not
-  verified the notice reads `encrypted by SSH to <bastion>; NOT encrypted
-  (or not verified) from the bastion to <db host>: ...`. Each tunnel is
+  database runs on the bastion (`host` loopback). When that leg is
+  plaintext the warning reads `encrypted by SSH to <bastion>; NOT encrypted
+  from the bastion to <db host>: ...`. Each tunnel is
   audited (`"decision":"tunnel"` with `ssh_host` and `ssh_host_key`), as is
   a key trusted on first use (`"decision":"hostkey-added"`). Adding,
   removing or changing the `ssh` table loosens the approved policy (except

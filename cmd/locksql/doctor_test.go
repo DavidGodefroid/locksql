@@ -105,21 +105,21 @@ func hasCheck(checks []check, state, titlePart string) bool {
 	return false
 }
 
+// TestDoctorTLSMode: tls is information only, never a warning or a
+// failure, whatever the mode and the host.
 func TestDoctorTLSMode(t *testing.T) {
 	d := fakeDoctor(nil)
-	weak := config.Profile{Name: "p", Engine: config.EnginePostgres, Host: "db.example", TLS: config.TLSRequire, Credentials: config.CredentialsAsk}
-	if !hasCheck(profileChecks(d, weak, nil, t.TempDir()), checkWarn, "tls") {
-		t.Error("require on a remote host is not reported")
+	base := config.Profile{Name: "p", Engine: config.EnginePostgres, Host: "db.example", Credentials: config.CredentialsAsk, Production: true}
+	for _, mode := range []string{config.TLSDisable, config.TLSPrefer, config.TLSRequire, config.TLSVerifyFull} {
+		p := base
+		p.TLS = mode
+		c := findCheck(profileChecks(d, p, nil, t.TempDir()), ": tls")
+		if c == nil || c.state != checkOK || !strings.Contains(c.detail, `tls = "`+mode+`"`) {
+			t.Errorf("tls = %q: check = %+v, want ok naming the mode", mode, c)
+		}
 	}
-	strong := weak
-	strong.TLS = config.TLSVerifyFull
-	if !hasCheck(profileChecks(d, strong, nil, t.TempDir()), checkOK, "tls") {
-		t.Error("verify-full not reported ok")
-	}
-	withCA := weak
-	withCA.TLSCA = "/ca.pem"
-	if !hasCheck(profileChecks(d, withCA, nil, t.TempDir()), checkOK, "tls") {
-		t.Error("require with tls_ca, which verifies the chain, not reported ok")
+	if c := findCheck(profileChecks(d, config.Profile{Name: "p", Engine: config.EngineMySQL, Host: "/run/m.sock", Credentials: config.CredentialsAsk}, nil, t.TempDir()), ": tls"); c != nil {
+		t.Errorf("socket: tls check = %+v, want none", c)
 	}
 }
 
@@ -140,8 +140,8 @@ func TestDoctorSSHKeyFile(t *testing.T) {
 	if !hasCheck(checks, checkOK, "ssh") {
 		t.Error("the bastion is not reported")
 	}
-	if c := findCheck(checks, ": tls"); c == nil || c.state != checkOK || !strings.Contains(c.detail, "bastion") {
-		t.Errorf("tls check of a database on the bastion = %+v, want ok naming the bastion", c)
+	if c := findCheck(checks, ": tls"); c == nil || c.state != checkOK {
+		t.Errorf("tls check of a database on the bastion = %+v, want ok", c)
 	}
 	if err := os.Chmod(key, 0o600); err != nil {
 		t.Fatal(err)
@@ -406,7 +406,7 @@ func TestDoctorProxyCommand(t *testing.T) {
 
 	remote := p
 	remote.Host, remote.ProxyCommand = "db.internal", []string{"kubectl", "exec", "-i", "pod", "--", "nc", "db.internal", "3306"}
-	if c := findCheck(profileChecks(d, remote, nil, t.TempDir()), ": tls"); c == nil || c.state != checkWarn || !strings.Contains(c.detail, "proxy_command") {
+	if c := findCheck(profileChecks(d, remote, nil, t.TempDir()), ": tls"); c == nil || c.state != checkOK {
 		t.Errorf("tls check of a remote database behind a proxy = %+v", c)
 	}
 }

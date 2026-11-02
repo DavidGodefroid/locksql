@@ -183,13 +183,8 @@ func askProfile(e env, out io.Writer, root string, preset profileSpec, given map
 				return s, err
 			}
 			if !config.IsLoopback(s.host) {
-				// A remote server's certificate is verified by default; a
-				// server on this machine seldom has one.
-				def := config.TLSVerifyFull
-				if s.host == containerHostGateway {
-					def = config.TLSPrefer
-				}
-				if err := askTo(&s.tls, "tls", "TLS (disable, prefer, require, verify-ca, verify-full)", def); err != nil {
+				// prefer is the drivers' default: TLS when the server offers it.
+				if err := askTo(&s.tls, "tls", "TLS (disable, prefer, require, verify-ca, verify-full)", config.TLSPrefer); err != nil {
 					return s, err
 				}
 			}

@@ -110,8 +110,9 @@ type Profile struct {
 	User        string `json:"user"`
 	Database    string `json:"database"`
 	Credentials string `json:"credentials"`
-	// TLS is the transport mode (TLSDisable ... TLSVerifyFull) and TLSCA an
-	// optional PEM bundle that replaces the system roots.
+	// TLS is the transport mode (TLSDisable ... TLSVerifyFull), passed to
+	// the driver with libpq's sslmode semantics, and TLSCA an optional PEM
+	// bundle that replaces the system roots. locksql enforces none of them.
 	TLS   string `json:"tls,omitempty"`
 	TLSCA string `json:"tls_ca,omitempty"`
 	// TLSCert and TLSKey are the PEM files of a client certificate and its
@@ -385,10 +386,6 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	if p.TLS != "" && TLSRank(p.TLS) < 0 {
 		return Profile{}, errf("unknown tls mode (want disable, prefer, require, verify-ca or verify-full)")
 	}
-	socket := strings.HasPrefix(p.Host, "/")
-	if socket && TLSRank(p.TLS) > TLSRank(TLSPrefer) {
-		return Profile{}, errf("tls = \"require\", \"verify-ca\" or \"verify-full\" needs a TCP host; a Unix socket is not encrypted")
-	}
 
 	if r.Tier != "" {
 		t, err := ParseTier(r.Tier)
@@ -492,19 +489,6 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 	}
 
 	applyDefaults(&p, detectorsSet)
-	// After the defaults: a remote host without tls is verify-full.
-	if p.TLSCA != "" && TLSRank(p.TLS) < TLSRank(TLSRequire) {
-		return Profile{}, errf("tls_ca needs tls = \"require\", \"verify-ca\" or \"verify-full\"")
-	}
-	if p.TLSCert != "" && TLSRank(p.TLS) < TLSRank(TLSRequire) {
-		return Profile{}, errf("tls_cert needs tls = \"require\", \"verify-ca\" or \"verify-full\"")
-	}
-	if p.TLSServerName != "" && p.TLS != TLSVerifyFull {
-		return Profile{}, errf("tls_server_name needs tls = \"verify-full\", the only mode that checks the name")
-	}
-	if p.Production && TLSRank(p.TLS) < TLSRank(TLSRequire) && !strings.HasPrefix(p.Host, "/") && !IsLoopback(p.Host) {
-		return Profile{}, errf("a production profile on a remote host needs tls = \"require\" or stronger, or an ssh tunnel to the database's own host")
-	}
 	if p.Limits.ExplainRowsWarn > p.Limits.ExplainRowsRefuse {
 		return Profile{}, errf("limits.explain_rows_warn (%d) is above limits.explain_rows_refuse (%d)", p.Limits.ExplainRowsWarn, p.Limits.ExplainRowsRefuse)
 	}

@@ -157,7 +157,9 @@ takes effect after you confirm it in the console.</p>
 
     <h3 id="transport">Transport security</h3>
     
-<p>The profile’s <code>tls</code> setting picks the mode, with libpq’s
+<p>Securing the connection to the database is the job of the driver and of the
+infrastructure (network, SSH tunnel, sidecar, mesh), not of the console. The
+profile’s <code>tls</code> setting is passed to the driver, with libpq’s
 <code>sslmode</code> semantics:</p>
 <div class="table-wrap" role="region" aria-label="TLS modes" tabindex="0">
 <table>
@@ -166,50 +168,34 @@ takes effect after you confirm it in the console.</p>
 <tbody>
 <tr><td><code>disable</code></td><td>no</td><td>no</td><td>no</td></tr>
 <tr><td><code>prefer</code></td><td>if offered</td><td>no</td><td>no</td></tr>
-<tr><td><code>require</code></td><td>yes, else refuse</td><td>only with <code>tls_ca</code></td><td>no</td></tr>
-<tr><td><code>verify-ca</code></td><td>yes, else refuse</td><td>yes</td><td>no</td></tr>
-<tr><td><code>verify-full</code></td><td>yes, else refuse</td><td>yes</td><td>yes (<code>host</code>, or <code>tls_server_name</code>)</td></tr>
+<tr><td><code>require</code></td><td>yes, else the driver refuses</td><td>only with <code>tls_ca</code></td><td>no</td></tr>
+<tr><td><code>verify-ca</code></td><td>yes, else the driver refuses</td><td>yes</td><td>no</td></tr>
+<tr><td><code>verify-full</code></td><td>yes, else the driver refuses</td><td>yes</td><td>yes (<code>host</code>, or <code>tls_server_name</code>)</td></tr>
 </tbody>
 </table>
 </div>
-<p>The default is <code>verify-full</code>, except <code>prefer</code> when
-<code>host</code> is a Unix socket path or a loopback host (<code>localhost</code>
-or a loopback IP literal). <code>production = true</code> refuses
-<code>disable</code> and <code>prefer</code> unless the host is loopback or a
-socket path. <code>tls_ca</code> is a PEM bundle that replaces the system roots;
-it is refused with <code>disable</code> and <code>prefer</code>, and with
-<code>require</code> it verifies the chain, as libpq does. <code>tls_server_name</code>
-replaces <code>host</code> as the name <code>verify-full</code> checks.
+<p>The default is <code>prefer</code>, whatever the host. <code>tls_ca</code> is a
+PEM bundle that replaces the system roots (with <code>require</code> it verifies
+the chain, as libpq does), <code>tls_server_name</code> replaces
+<code>host</code> as the name <code>verify-full</code> checks, and
 <code>tls_cert</code> and <code>tls_key</code> present a client certificate (the
-key must be mode 0600, in the console account’s files). A weaker
-<code>tls</code> or any change of <code>tls_ca</code>, <code>tls_cert</code>,
-<code>tls_key</code> or <code>tls_server_name</code> loosens the approved policy
-and needs the human’s confirmation. <code>locksql doctor</code> checks these
-files and their expiry, and, for a profile without <code>ssh</code>, fetches the
-server’s certificate with a TLS handshake that sends no secret, and reports a
-chain or a name that would not verify and a certificate close to its end.</p>
-<p>Below <code>verify-ca</code> an active attacker on the path can intercept or
-downgrade the connection, read and change the traffic, and relay a login, but
-is not handed the password. On MariaDB/MySQL, a connection whose server is not
-authenticated (plain TCP, and TLS to a remote host under <code>prefer</code> or
-<code>require</code> without <code>tls_ca</code>) answers no request for the
-password in clear: an auth switch to <code>mysql_clear_password</code> or
-<code>sha256_password</code>, or a <code>caching_sha2_password</code> full
-authentication (the MySQL 8 default), is refused before the driver can answer.
-A MySQL 8 account therefore logs in over such a connection only while the
-server’s authentication cache holds it, and the refusal names the remedy
-(<code>tls = "verify-full"</code>, with <code>tls_ca</code> for a private CA, or
-an account with <code>mysql_native_password</code> or <code>ed25519</code>). Under
-<code>verify-ca</code> and <code>verify-full</code> a full authentication sends
-the password inside the verified TLS connection, as the MySQL clients do. On
-PostgreSQL, a connection to a remote host under <code>disable</code>,
-<code>prefer</code> or <code>require</code> without <code>tls_ca</code> answers no
-clear-text or MD5 password request (libpq’s
-<code>require_auth=!password,!md5</code>), and the console names the remedy
-(<code>tls = "verify-full"</code>, or a SCRAM-SHA-256 password for the account).
-A loopback host or a socket path is not guarded. <code>verify-ca</code> and
-<code>verify-full</code> prevent the impersonation. A plain or unverified
-connection is reported on the console and in the audit log.</p>
+key must be mode 0600, in the console account’s files). locksql checks only
+that the values are well formed: it refuses no profile because of its
+<code>tls</code> (<code>production = true</code> included), refuses no
+authentication method the driver and the server agree on, and a change of a
+<code>tls*</code> setting does not loosen the approved policy. <code>locksql
+doctor</code> shows the mode as information.</p>
+<p>locksql’s one TLS behaviour is a warning: when the established TCP
+connection is plaintext, the console says so at session start and records it in
+the audit log as a notice; the session proceeds. A TLS connection gets no
+warning, whatever its verification mode. Below <code>verify-ca</code> an active
+attacker on the path can intercept or downgrade the connection, read and change
+the traffic, relay a login, and obtain the password when the server’s
+authentication method sends it (MySQL <code>mysql_clear_password</code> or a
+<code>caching_sha2_password</code> full authentication, PostgreSQL
+<code>password</code> or <code>md5</code>); <code>verify-full</code> (with
+<code>tls_ca</code> for a private CA), or a tunnel to the database’s own host,
+prevents it.</p>
 <p>A profile with an <code>ssh</code> table reaches its database through a
 bastion. The console opens the SSH connection in its own process: no
 <code>ssh</code> binary, no secret in argv, and no local listening port, so

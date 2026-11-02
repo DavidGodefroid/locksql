@@ -98,8 +98,7 @@ func Fingerprint(p Policy) string { return kconfig.Fingerprint(canonical(p)) }
 // (spec section 4): a higher tier, production true→false, a larger limit
 // (0 means unlimited), a longer idle_timeout or max_session, a removed PII
 // rule or detector, an added allow rule, any change of engine, host, port,
-// path, database or user, and a credentials mode other than ask, a weaker
-// tls mode, any change of tls_ca, tls_cert, tls_key or tls_server_name, any
+// path, database or user, and a credentials mode other than ask, any
 // change of the ssh table or of proxy_command, any change of the PII rule
 // set, and write_functions from allowlist to denylist.
 func Diff(approved, current Policy) []Change {
@@ -130,16 +129,16 @@ func Diff(approved, current Policy) []Change {
 	}
 	// Another Vault path is another login, possibly with more grants.
 	same("vault_path", ap.VaultPath, cp.VaultPath)
-	if ap.TLS != cp.TLS {
-		out = append(out, Change{Field: "tls", Old: ap.TLS, New: cp.TLS, Loosens: TLSRank(cp.TLS) < TLSRank(ap.TLS)})
+	// Transport security is the driver's and the infrastructure's: a tls
+	// setting is listed, never a loosening.
+	for _, f := range []struct{ field, o, n string }{
+		{"tls", ap.TLS, cp.TLS}, {"tls_ca", ap.TLSCA, cp.TLSCA}, {"tls_cert", ap.TLSCert, cp.TLSCert},
+		{"tls_key", ap.TLSKey, cp.TLSKey}, {"tls_server_name", ap.TLSServerName, cp.TLSServerName},
+	} {
+		if f.o != f.n {
+			out = append(out, Change{Field: f.field, Old: f.o, New: f.n})
+		}
 	}
-	// A new CA can vouch for any certificate: every change loosens.
-	same("tls_ca", ap.TLSCA, cp.TLSCA)
-	// Another client certificate is another identity on the server, and
-	// another server name accepts another certificate: every change loosens.
-	same("tls_cert", ap.TLSCert, cp.TLSCert)
-	same("tls_key", ap.TLSKey, cp.TLSKey)
-	same("tls_server_name", ap.TLSServerName, cp.TLSServerName)
 
 	switch as, cs := ap.SSH, cp.SSH; {
 	case as == nil && cs == nil:

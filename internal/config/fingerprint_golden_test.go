@@ -53,7 +53,10 @@ func goldenPolicies(t *testing.T) map[string]Policy {
 }
 
 // Approved-policy fingerprints of locksql 0.8 (captured before lockkit): a
-// user upgrading is never asked to approve an unchanged policy again.
+// user upgrading is never asked to approve an unchanged policy again. The
+// remote profiles without tls changed when their default went from
+// verify-full to prefer (#169): a change that never loosens, applied
+// without asking.
 func TestFingerprintUnchanged(t *testing.T) {
 	got := map[string]string{}
 	for name, p := range goldenPolicies(t) {

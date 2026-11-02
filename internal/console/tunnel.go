@@ -169,16 +169,15 @@ func (s *tunneledSession) Close() error {
 	return err
 }
 
-// Notices restates the session's transport notices for the two legs: the
-// SSH leg is encrypted and verified; the bastion-to-database leg is only
-// as safe as the database's own tls mode, unless the database runs on the
-// bastion itself.
+// Notices restates the session's plaintext notice for the two legs: the
+// SSH leg is encrypted; the bastion-to-database leg is plaintext, unless
+// the database runs on the bastion itself.
 func (s *tunneledSession) Notices() []string {
 	n, ok := s.Session.(engine.Noticer)
 	if !ok || len(n.Notices()) == 0 || config.IsLoopback(s.dbHost) {
 		return nil
 	}
-	return []string{fmt.Sprintf("encrypted by SSH to %s; NOT encrypted (or not verified) from the bastion to %s: %s",
+	return []string{fmt.Sprintf("encrypted by SSH to %s; NOT encrypted from the bastion to %s: %s",
 		s.bastion, s.dbHost, strings.Join(n.Notices(), "; "))}
 }
 
@@ -189,17 +188,17 @@ type proxiedSession struct {
 	program, dbHost string
 }
 
-// Notices restates the session's transport notices: what carries the
+// Notices restates the session's plaintext notice: what carries the
 // stream from the console to where the command runs is the command's
 // business (ssh, the docker socket, the Kubernetes API); from there to the
-// database, the database's own tls mode applies, unless the database
-// listens on loopback where the command runs.
+// database the connection is plaintext, unless the database listens on
+// loopback where the command runs.
 func (s *proxiedSession) Notices() []string {
 	n, ok := s.Session.(engine.Noticer)
 	if !ok || len(n.Notices()) == 0 || config.IsLoopback(s.dbHost) {
 		return nil
 	}
-	return []string{fmt.Sprintf("reached through proxy_command %s; NOT encrypted (or not verified) from where it runs to %s: %s",
+	return []string{fmt.Sprintf("reached through proxy_command %s; NOT encrypted from where it runs to %s: %s",
 		s.program, s.dbHost, strings.Join(n.Notices(), "; "))}
 }
 
