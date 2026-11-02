@@ -4,7 +4,19 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## Unreleased
+## v0.15.0 (2026-11-02)
+
+Supported lockhub: as v0.14.0 (v0.3.0 or later). A minor release: a remote
+profile with no `tls` setting now connects with `prefer` instead of
+`verify-full` (see Upgrading).
+
+### Upgrading
+
+- **Remote profiles without `tls` move from `verify-full` to `prefer`**
+  (#169). On the first start after the upgrade, a remote profile approved
+  under `verify-full` lists `tls: verify-full → prefer` once and applies it
+  without asking. To keep verifying the server's certificate, set
+  `tls = "verify-full"` in the profile.
 
 ### Breaking change
 
