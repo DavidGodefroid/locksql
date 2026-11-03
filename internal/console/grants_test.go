@@ -490,25 +490,36 @@ func TestGrantsDoNotSurviveRestart(t *testing.T) {
 	}
 }
 
-// A policy that turns grants off ends them at once; a lower limit cuts
-// what is left.
-func TestGrantPolicyTightening(t *testing.T) {
+// Finding 3: any change of the approved policy's fingerprint ends every
+// grant, a tightening too (a lower limit, production); the same policy
+// applied again ends none.
+func TestGrantPolicyChangeEndsGrants(t *testing.T) {
 	h := newHarness(t, uatProfile())
-	newGrant(t, h, ipc.GrantParams{Tables: []string{"users"}})
+	g := newGrant(t, h, ipc.GrantParams{Tables: []string{"users"}})
 	p := h.s.approved
+	if err := h.s.ApplyPolicy(kpolicy{p}); err != nil {
+		t.Fatal(err)
+	}
+	if st := grantStatus(t, h); len(st) != 1 {
+		t.Fatalf("the same policy ended the grant: %+v", st)
+	}
 	p.Profile.Limits.GrantMaxRows = 5
 	if err := h.s.ApplyPolicy(kpolicy{p}); err != nil {
 		t.Fatal(err)
 	}
-	if st := grantStatus(t, h); len(st) != 1 || st[0].Remaining.Rows != 5 {
+	if st := grantStatus(t, h); len(st) != 0 {
 		t.Fatalf("after a lower limit: %+v", st)
 	}
-	p.Profile.Limits.GrantsOff = true
+	if ends := auditRecords(t, h, "grant_end", g.ID); len(ends) != 1 || ends[0]["decision"] != "policy_changed" || ends[0]["hub_sig"] == "" {
+		t.Fatalf("end records %v", ends)
+	}
+	g2 := newGrant(t, h, ipc.GrantParams{Tables: []string{"users"}})
+	p.Profile.Production = true
 	if err := h.s.ApplyPolicy(kpolicy{p}); err != nil {
 		t.Fatal(err)
 	}
-	if st := grantStatus(t, h); len(st) != 0 {
-		t.Fatalf("after grants off: %+v", st)
+	if ends := auditRecords(t, h, "grant_end", g2.ID); len(ends) != 1 || ends[0]["decision"] != "policy_changed" {
+		t.Fatalf("production: end records %v", ends)
 	}
 }
 

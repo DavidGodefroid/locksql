@@ -946,15 +946,16 @@ locksql grant --profile P TICKET      # once the grant's ticket is decided
    A cut result is marked truncated, as always. The run's answer names the
    grant and what is left.
 5. **End.** `:revoke` ends every grant, `:revoke ID` one. A grant also ends
-   when its time is up, when the session ends, or when a policy change turns
-   grants off; a lower limit applied while it runs shortens it and cuts what
-   is left. Grants live in the console's memory: they do not survive a
+   when its time is up, when the session ends, or when the approved policy
+   changes at all (its fingerprint), a tightening too: a lower limit, a new
+   mask rule, `production = true`. A grant was decided under the policy it
+   was asked for. Grants live in the console's memory: they do not survive a
    restart, and an activated ticket never activates again.
 
 `:status` and `locksql status` list the active grants with their tables,
 time left and budget left. The audit log has a `grant` record for each
 activation, a `grant_end` record for each end (`revoked`, `expired`,
-`session end: …`, `grants turned off by the policy`), and an `approved`
+`session end: …`, `policy_changed`), and an `approved`
 (decision `grant`) and a `run` record for each covered run; all carry the
 grant id (`grant`, also in `ticket`) and the hub's signature of its decision
 (`hub_sig`).

@@ -581,24 +581,14 @@ func (s *Server) revoke(arg string) {
 	s.println("no active grant " + safeText(arg, false) + " (:status lists them)")
 }
 
-// applyGrantPolicy applies the grant limits of a new policy to the active
-// grants at once: grants off ends them; a lower limit shortens them and
-// cuts what is left.
-func (s *Server) applyGrantPolicy() {
-	lim, on := s.profile.Limits.Grants()
-	if !on {
-		s.endGrants("grants turned off by the policy")
-		return
+// grantPolicyChanged ends every grant when the approved policy's
+// fingerprint changes from old to fp, a tightening too: a grant was
+// decided under the policy it was asked for. The first policy (old "")
+// ends none.
+func (s *Server) grantPolicyChanged(old, fp string) {
+	if old != "" && old != fp {
+		s.endGrants("policy_changed")
 	}
-	for _, g := range s.grants {
-		if end := g.expires.Add(-g.duration).Add(lim.Duration); end.Before(g.expires) {
-			g.expires = end
-		}
-		g.left.Statements = min(g.left.Statements, lim.Statements)
-		g.left.Rows = min(g.left.Rows, lim.Rows)
-		g.left.Bytes = min(g.left.Bytes, lim.Bytes)
-	}
-	s.expireGrants()
 }
 
 // grantInfo is g as status and scope.request show it.

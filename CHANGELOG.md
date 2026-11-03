@@ -36,7 +36,8 @@ older hub refuses the grant's ticket; everything else works as before.
   loosening. An unchanged policy keeps its fingerprint: no `:review` on
   upgrade.
 - `:revoke` ends every grant, `:revoke ID` one. Grants also end with their
-  time, the session, or a policy that turns them off, and never survive a
+  time, the session, or any change of the approved policy (a tightening
+  too, audited `policy_changed`), and never survive a
   restart. `:status` and `locksql status` list them with the time and
   budget left.
 - Audit: `grant` and `grant_end` records, and the records of every covered
