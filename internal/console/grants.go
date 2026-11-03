@@ -21,6 +21,7 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/config"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
+	"github.com/DavidGodefroid/locksql/internal/sqlast"
 	audit "github.com/DavidGodefroid/locksql/internal/sqlaudit"
 	"github.com/DavidGodefroid/locksql/internal/sqlclass"
 	refusal "github.com/DavidGodefroid/locksql/internal/sqlrefusal"
@@ -384,7 +385,7 @@ func (s *Server) auditGrant(ctx context.Context, rec audit.Record, body hubPlan,
 // reads is considered: it covers the run when its budget does.
 func (s *Server) grantFor(ctx context.Context, pl *plan) *grant {
 	s.expireGrants()
-	if len(s.grants) == 0 || !grantable(pl) {
+	if len(s.grants) == 0 || !grantable(pl) || s.steersOnText(pl) {
 		return nil
 	}
 	if _, on := s.profile.Limits.Grants(); !on {
@@ -415,9 +416,61 @@ func (s *Server) grantFor(ctx context.Context, pl *plan) *grant {
 // 1: whether it ran at once or asked would tell the agent what the count
 // says), and not refused by the weight check.
 func grantable(pl *plan) bool {
-	return pl.st.Class == sqlclass.Read && !pl.unmask && pl.an != nil && pl.explain != nil &&
+	return pl.st.Class == sqlclass.Read && !pl.unmask && pl.an != nil && pl.explain != nil && len(pl.warnings) == 0 &&
 		!pl.an.PIIFilter && len(pl.an.KChecks) == 0 && !estimatesHidden(pl) &&
 		len(pl.an.Relations) > 0 && pl.level != weight.Refuse.String()
+}
+
+// steersOnText reports a plan whose result some column steers (filters,
+// joins, groupings, orderings, expressions: sqlast.Analysis.Steering)
+// while only the detectors protect it: a column whose type can carry free
+// text (string, JSON, binary, or a type the catalog does not give) that no
+// allow rule declares not personal. Under a grant, such a read would be a
+// ticket-free oracle on the values the detectors mask (finding 1 of the
+// review of #171): it asks instead. Numbers, dates and times, booleans
+// and uuids carry no such text.
+func (s *Server) steersOnText(pl *plan) bool {
+	for _, src := range pl.an.Steering {
+		if !src.View && s.rules.Allowed(src.DB, src.Table, src.Column) {
+			continue
+		}
+		if !opaqueType(s.columnType(src)) {
+			return true
+		}
+	}
+	return false
+}
+
+// columnType is the catalog type of src ("" when unknown).
+func (s *Server) columnType(src sqlast.Source) string {
+	for _, cols := range s.catalogCache {
+		for _, c := range cols {
+			if c.DB == src.DB && c.Table == src.Table && c.Column == src.Column {
+				return c.Type
+			}
+		}
+	}
+	return ""
+}
+
+// opaqueType reports a column type that holds no free text: numbers,
+// dates and times, booleans and uuids. Anything else, an unknown or empty
+// type included, may hold text.
+func opaqueType(t string) bool {
+	t = strings.ToLower(strings.TrimSpace(t))
+	if i := strings.IndexAny(t, "( "); i >= 0 {
+		t = t[:i]
+	}
+	switch t {
+	case "tinyint", "smallint", "mediumint", "int", "integer", "bigint", "int2", "int4", "int8",
+		"serial", "smallserial", "bigserial", "serial2", "serial4", "serial8",
+		"decimal", "numeric", "dec", "real", "double", "float", "float4", "float8",
+		"bool", "boolean",
+		"date", "time", "timetz", "timestamp", "timestamptz", "datetime", "year", "interval",
+		"uuid":
+		return true
+	}
+	return false
 }
 
 // budgetCovers reports whether g has the budget for pl: a statement, some

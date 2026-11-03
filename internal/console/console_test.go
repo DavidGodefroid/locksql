@@ -178,7 +178,11 @@ func (f *fakeSession) Columns(_ context.Context, db string) ([]engine.ColumnInfo
 		{"users", "id"}, {"users", "email"}, {"users", "note"}, {"users", "status"},
 		{"orders", "id"}, {"orders", "user_id"}, {"orders", "total"},
 	} {
-		out = append(out, engine.ColumnInfo{DB: db, Table: c.t, Column: c.c, Type: "text"})
+		typ := "text"
+		if c.c == "id" || c.c == "user_id" || c.c == "total" {
+			typ = "int(11)"
+		}
+		out = append(out, engine.ColumnInfo{DB: db, Table: c.t, Column: c.c, Type: typ})
 	}
 	out = append(out, f.cols...)
 	return out, nil

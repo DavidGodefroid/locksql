@@ -123,6 +123,13 @@ type Analysis struct {
 	PIIFilter bool
 	// Funcs are the functions the statement calls, folded, each once.
 	Funcs []string
+	// Steering are the source columns whose values steer the result
+	// without being returned as they are: every use but a plain column
+	// of a select list (a bare reference or a *), so filters, joins,
+	// groupings, orderings, DISTINCT and any expression or function over
+	// a column. Sorted, each once. A grant covers no read that steers on
+	// a column the detectors alone protect.
+	Steering []Source
 }
 
 // Masked reports whether some output is masked.
@@ -194,6 +201,10 @@ type analyzer struct {
 	inRecCTE  int
 	relations map[string]bool
 	uses      map[Use]bool
+	// steering collects Analysis.Steering; plain marks the select item
+	// being analysed as a bare column reference.
+	steering map[Source]bool
+	plain    bool
 	// writes is set once a data-modifying statement is analysed.
 	writes bool
 }
@@ -208,7 +219,7 @@ func Analyze(st *Statement, env Env) (*Analysis, error) {
 	if HasPlaceholder(st.Dialect, st.SQL) {
 		return nil, refuse(refusal.Placeholder, PlaceholderRefusal)
 	}
-	an := &analyzer{env: env, st: st, d: st.Dialect, a: &Analysis{}, relations: map[string]bool{}, uses: map[Use]bool{}}
+	an := &analyzer{env: env, st: st, d: st.Dialect, a: &Analysis{}, relations: map[string]bool{}, uses: map[Use]bool{}, steering: map[Source]bool{}}
 	var cols []column
 	var err error
 	if st.Write != nil {
@@ -240,6 +251,10 @@ func Analyze(st *Statement, env Env) (*Analysis, error) {
 	for r := range an.relations {
 		an.a.Relations = append(an.a.Relations, r)
 	}
+	for src := range an.steering {
+		an.a.Steering = append(an.a.Steering, src)
+	}
+	sort.Slice(an.a.Steering, func(i, j int) bool { return an.a.Steering[i].String() < an.a.Steering[j].String() })
 	sort.Strings(an.a.Relations)
 	for u := range an.uses {
 		an.a.Uses = append(an.a.Uses, u)
@@ -350,6 +365,11 @@ func (an *analyzer) body(b Body, parent *scope) ([]column, *scope, error) {
 // another's. UNION ALL compares nothing. The arms of a nested set operation
 // arrive merged, so every level is checked.
 func (an *analyzer) setOpCompare(b *SetOp, i int, l, r Prov) error {
+	if !(b.All && strings.EqualFold(b.Op, "UNION")) {
+		// INTERSECT, EXCEPT and duplicate removal compare the rows.
+		an.steer(l)
+		an.steer(r)
+	}
 	if !an.env.Masking || b.All && strings.EqualFold(b.Op, "UNION") {
 		return nil
 	}
@@ -619,7 +639,9 @@ func (an *analyzer) selectCore(s *Select, parent *scope) ([]column, *scope, erro
 			cols = append(cols, exp...)
 			continue
 		}
+		_, an.plain = it.Expr.(*ColumnRef)
 		p, err := an.value(it.Expr, sc, "select")
+		an.plain = false
 		if err != nil {
 			return nil, nil, err
 		}
@@ -633,6 +655,7 @@ func (an *analyzer) selectCore(s *Select, parent *scope) ([]column, *scope, erro
 	sc.aliases = cols
 	if s.Distinct {
 		for _, c := range cols {
+			an.steer(c.prov) // duplicates are compared
 			if err := an.dedupe(c.prov, "DISTINCT"); err != nil {
 				return nil, nil, err
 			}
@@ -793,6 +816,8 @@ func (an *analyzer) tableExpr(te TableExpr, sc, parent *scope) ([]*relation, []c
 			if lp == nil || rp == nil {
 				return nil, nil, refusef(refusal.InvalidSQL, "USING column %s is not on both sides", strings.ToLower(u))
 			}
+			an.steer(lp.prov)
+			an.steer(rp.prov)
 			if err := an.joinEquality(*lp, *rp); err != nil {
 				return nil, nil, err
 			}
@@ -1042,6 +1067,14 @@ func (an *analyzer) markOuter(sc *scope, level int) {
 	}
 }
 
+// steer records the sources of p as steering the result (see
+// Analysis.Steering). Dry passes record too: more is safer.
+func (an *analyzer) steer(p Prov) {
+	for _, s := range p.Sources {
+		an.steering[s] = true
+	}
+}
+
 // touch records the PII sources of a value used in a clause.
 func (an *analyzer) touch(p Prov, clause string) {
 	if !p.Sensitive {
@@ -1081,6 +1114,9 @@ func (an *analyzer) valueOf(e Expr, sc *scope, clause string) (Prov, error) {
 		if err != nil {
 			return Prov{}, err
 		}
+		if !(clause == "select" && an.plain) {
+			an.steer(p)
+		}
 		an.touch(p, clause)
 		return p, nil
 	case *Literal:
@@ -1095,6 +1131,7 @@ func (an *analyzer) valueOf(e Expr, sc *scope, clause string) (Prov, error) {
 		if len(cols) != 1 {
 			return Prov{}, refuse(refusal.InvalidSQL, "a scalar subquery must return one column")
 		}
+		an.steer(cols[0].prov) // its value is compared or computed with
 		return cols[0].prov, nil
 	case *FuncCall:
 		return an.call(e, sc, clause)
@@ -1116,6 +1153,7 @@ func (an *analyzer) valueOf(e Expr, sc *scope, clause string) (Prov, error) {
 				return Prov{}, err
 			}
 			for _, c := range cols {
+				an.steer(c.prov) // compared with X
 				p = an.mix(p, c.prov)
 			}
 			if err := an.noPII(p, "IN"); err != nil {
@@ -1426,6 +1464,7 @@ func (an *analyzer) groupKey(g Expr, sc *scope, cols []column) (_ Prov, err erro
 		if n < 1 || n > len(cols) {
 			return Prov{}, refusef(refusal.InvalidSQL, "GROUP BY position %s is out of range", l.Text)
 		}
+		an.steer(cols[n-1].prov)
 		an.touch(cols[n-1].prov, "group by")
 		return cols[n-1].prov, nil
 	}
@@ -1455,6 +1494,7 @@ func (an *analyzer) orderItem(e Expr, cols []column, body *Select, sc *scope) (e
 			return refuse(refusal.InvalidSQL, "ORDER BY position is out of range")
 		}
 		p = cols[n-1].prov
+		an.steer(p)
 	case sc == nil:
 		// A set operation: only output names.
 		ref, ok := e.(*ColumnRef)
@@ -1466,6 +1506,7 @@ func (an *analyzer) orderItem(e Expr, cols []column, body *Select, sc *scope) (e
 			return refusef(refusal.UnknownName, "unknown column %s", strings.ToLower(ref.Parts[0]))
 		}
 		p = c.prov
+		an.steer(p)
 	default:
 		v, err := an.value(e, sc, "order by")
 		if err != nil {
@@ -1839,6 +1880,9 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 		cols, err := an.query(e.Query, sc)
 		if err != nil {
 			return err
+		}
+		for _, c := range cols {
+			an.steer(c.prov) // compared with X
 		}
 		if len(cols) != 1 {
 			if !(x.Kind == KindExpr && len(cols) > 1) {

@@ -921,7 +921,18 @@ locksql grant --profile P TICKET      # once the grant's ticket is decided
    k-anonymity check): such a read always gets a ticket, whatever its counts
    say, since running it at once or asking would otherwise tell the agent
    whether a count fell under k. Writes, DDL and `unmask` always get a
-   ticket.
+   ticket. So does a read whose approval screen would carry a warning (a
+   clear value in the statement), and a read in which a column that only
+   the detectors protect steers the result: a column of a text, JSON,
+   binary or unknown type that no allow rule names (`pii.allow`), used
+   anywhere but as a plain column of the select list: in `WHERE`, `JOIN
+   ... ON`/`USING`, `HAVING`, `GROUP BY`, `ORDER BY`, `DISTINCT`, a set
+   operation that compares rows, a subquery compared with a value, or any
+   function or expression. Such a predicate would probe the masked values
+   one character at a time (`note LIKE 'b%'`, `SUBSTRING(note, 10, 1) =
+   'b'`) without a ticket, and the EXPLAIN estimate would answer it too.
+   Numeric, date and time, boolean and uuid columns may be predicates;
+   declare a text column not personal with an allow rule to let it be one.
 4. **Budget.** Each covered run costs one statement, charged before it
    runs. Before the run the rows left must cover the plan's EXPLAIN row
    estimate (not checked for an `EXPLAIN SELECT`, which returns the plan);

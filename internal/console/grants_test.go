@@ -548,3 +548,49 @@ func TestGrantNeedsAgentToken(t *testing.T) {
 	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: readUsers}, &pr)
 	wantTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "a run without a token")
 }
+
+// Finding 1: a grant is no oracle on columns the detectors mask. A text
+// column no rule names (users.note) may be returned plainly under a grant,
+// never compared, matched, cut, ordered or grouped: that would probe its
+// values one character at a time without a ticket. A read whose approval
+// screen would carry a warning gets a ticket too.
+func TestGrantNeverCoversDetectorProbes(t *testing.T) {
+	var h *harness
+	for i, q := range []string{
+		"SELECT id FROM users WHERE note = 'x@y' LIMIT 10",
+		"SELECT id FROM users WHERE note LIKE 'b%' LIMIT 10",
+		"SELECT id FROM users WHERE SUBSTRING(note, 10, 1) = 'b' LIMIT 10",
+		"SELECT id FROM users ORDER BY note LIMIT 10",
+		"SELECT status, COUNT(*) FROM users GROUP BY status LIMIT 10",
+		"SELECT id FROM users u JOIN orders o ON o.user_id = u.id AND u.note = 'b' LIMIT 10",
+		"SELECT CASE WHEN note LIKE 'b%' THEN 1 ELSE 0 END FROM users WHERE id = 1 LIMIT 10",
+		"SELECT id FROM (SELECT id, note AS n FROM users) d WHERE n = 'b' LIMIT 10",
+		"SELECT id, 'alice@example.com' FROM users WHERE id = 1 LIMIT 10",
+		"SELECT id FROM users WHERE id IN (SELECT note FROM users) LIMIT 10",
+	} {
+		if i%4 == 0 {
+			// A fresh console now and then: the hub caps the tickets
+			// pending at once.
+			h = newHarness(t, uatProfile())
+			newGrant(t, h, ipc.GrantParams{Tables: []string{"users", "orders"}})
+		}
+		wantTicket(t, runOf(t, h, q, ipc.Requester{}), q)
+	}
+	// Returned plainly, a text column is masked by the detectors: covered.
+	if _, ok := covered(t, runOf(t, h, readUsers, ipc.Requester{})); !ok {
+		t.Fatal("a plain read of note was not covered")
+	}
+}
+
+// A column an allow rule declares not personal may be a predicate under a
+// grant.
+func TestGrantCoversAllowedTextPredicate(t *testing.T) {
+	allowNote := func(c *ServerConfig) {
+		c.Policy = config.NewPolicy(c.Policy.Profile, []string{"app.users.email"}, []string{"app.users.note"})
+	}
+	h := newHarness(t, uatProfile(), allowNote)
+	newGrant(t, h, ipc.GrantParams{Tables: []string{"users"}})
+	if _, ok := covered(t, runOf(t, h, "SELECT id, email, note FROM users WHERE note LIKE 'b%' LIMIT 10", ipc.Requester{})); !ok {
+		t.Fatal("a predicate on an allowed column was not covered")
+	}
+}
