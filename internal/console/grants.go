@@ -111,6 +111,12 @@ func (s *Server) grantRequest(ctx context.Context, req ipc.Request) ipc.Response
 	if r := decode(req, &p); r != nil {
 		return *r
 	}
+	if p.Requester.Token == "" {
+		// Outside lea every process of the account would share the
+		// grant: it needs the agent's token.
+		return s.refuse(ctx, req.ID, "", p.DB, "", "read", "", "", refusal.New(refusal.GrantNeedsAgent,
+			"a grant needs the agent's lea token (LEA_AGENT_TOKEN), so that only that agent uses it: plan and run each query"))
+	}
 	if p.Ticket != "" {
 		return s.grantActivate(ctx, req.ID, p.Ticket, p.Requester)
 	}
@@ -385,6 +391,9 @@ func (s *Server) grantFor(ctx context.Context, pl *plan) *grant {
 		return nil
 	}
 	caller := hubCaller(ctx, pl.requester)
+	if caller.Token == "" {
+		return nil // no agent token: no grant (scope.request refuses one)
+	}
 	hash := plans.HashToken(caller.Token)
 	for _, g := range s.grants {
 		if g.uid != caller.UID || !sameTokenHash(g.tokenHash, hash) || g.scope.Database != pl.db {

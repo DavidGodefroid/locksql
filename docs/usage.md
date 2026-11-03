@@ -906,7 +906,10 @@ locksql grant --profile P TICKET      # once the grant's ticket is decided
    for its decision and its activation; it is never renewed (ask for a new
    grant). The duration counts from the activation. Only the agent that
    asked for the grant (same lea token and account) activates it and runs
-   under it.
+   under it. A grant needs that token: asking for one or activating it
+   without lea's `LEA_AGENT_TOKEN` is refused (`E_GRANT_NEEDS_AGENT`), since
+   every process of the account would otherwise share it, and a run without
+   a token is never covered.
 3. **Run.** `locksql_plan` and `locksql_run` work as always. `query.run`
    runs a plan at once, without a ticket, when the **first** active grant of
    the same agent that covers the plan's database and **every** table it
@@ -1353,6 +1356,7 @@ The retry rules:
 | `E_MASK_UNCERTAIN` | a result whose masking cannot be proven: an alias, a whole-row reference or a label the engine cannot trace, a result whose columns differ from the analysis | rewrite | PII columns by their plain name |
 | `E_MASKED_WRITE` | a write that copies a PII column or stores a value the agent chose into one | stop | none (a masked column may only be set to `NULL` or `DEFAULT`: it holds no value the agent chose) |
 | `E_STALE` | the definitions the statement resolves to (functions, views, rules, triggers, row-level policies, grants, search path) changed between the plan and the run, or during the run | rewrite | plan the statement again; the human approves the new plan |
+| `E_GRANT_NEEDS_AGENT` | a grant asked for, or activated, without the agent's lea token (`LEA_AGENT_TOKEN`): outside lea every process of the account would share it | ask_user | plan and run each query, or run the agent under lea |
 | `E_GRANTS_OFF` | a grant asked for, or activated, while grants are off in the profile (`limits.grant_max_duration = 0`) | ask_user | plan and run each query; only the human turns grants on |
 | `E_POLICY` | a refusal no check named (fail-closed; should not happen) | stop | none: report it as a bug |
 

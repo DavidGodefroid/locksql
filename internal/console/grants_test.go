@@ -17,9 +17,22 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 )
 
+// agentA is the agent of the grant tests that name none: grants need an
+// agent token.
+var agentA = ipc.Requester{Agent: "a", Token: "token-a"}
+
+// orAgentA is who, or agentA when it is empty.
+func orAgentA(who ipc.Requester) ipc.Requester {
+	if who == (ipc.Requester{}) {
+		return agentA
+	}
+	return who
+}
+
 // askGrant asks for a grant and returns its pending ticket.
 func askGrant(t *testing.T, h *harness, p ipc.GrantParams) string {
 	t.Helper()
+	p.Requester = orAgentA(p.Requester)
 	if p.DB == "" {
 		p.DB = "app"
 	}
@@ -30,6 +43,7 @@ func askGrant(t *testing.T, h *harness, p ipc.GrantParams) string {
 // console.
 func activateGrant(t *testing.T, h *harness, tk string, who ipc.Requester) ipc.Response {
 	t.Helper()
+	who = orAgentA(who)
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		r := h.call(t, ipc.MethodGrant, ipc.GrantParams{Ticket: tk, Requester: who})
@@ -45,7 +59,7 @@ func newGrant(t *testing.T, h *harness, p ipc.GrantParams) ipc.GrantInfo {
 	t.Helper()
 	tk := askGrant(t, h, p)
 	h.hub.Decide(tk, ticket.Approved, "")
-	r := activateGrant(t, h, tk, p.Requester)
+	r := activateGrant(t, h, tk, orAgentA(p.Requester))
 	if r.Error != nil {
 		t.Fatalf("activate: %d %q", r.Error.Code, r.Error.Message)
 	}
@@ -59,6 +73,7 @@ func newGrant(t *testing.T, h *harness, p ipc.GrantParams) ipc.GrantInfo {
 // runOf plans and runs sql for who: the run answer, without a hub decision.
 func runOf(t *testing.T, h *harness, sql string, who ipc.Requester) ipc.Response {
 	t.Helper()
+	who = orAgentA(who)
 	var pr ipc.PlanResult
 	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: sql, Requester: who}, &pr)
 	return h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID, Requester: who})
@@ -308,7 +323,7 @@ func TestGrantTicket(t *testing.T) {
 	h.hub.Decide(tk, ticket.Approved, "")
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: tk})
+		r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: tk, Requester: agentA})
 		if r.Error != nil && strings.Contains(r.Error.Message, "no decision") && time.Now().Before(deadline) {
 			time.Sleep(20 * time.Millisecond)
 			continue
@@ -324,8 +339,8 @@ func TestGrantTicket(t *testing.T) {
 	// A statement's ticket is not a grant's.
 	h.s.Command(context.Background(), ":revoke")
 	var pr ipc.PlanResult
-	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: readUsers}, &pr)
-	qt := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: readUsers, Requester: agentA}, &pr)
+	qt := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID, Requester: agentA}), "pending")
 	h.hub.Decide(qt, ticket.Approved, "")
 	wantCode(t, activateGrant(t, h, qt, ipc.Requester{}), ipc.CodeInvalidParams)
 }
@@ -362,25 +377,25 @@ func TestGrantsOff(t *testing.T) {
 	p := uatProfile()
 	p.Limits.GrantsOff = true
 	h := newHarness(t, p)
-	r := h.call(t, ipc.MethodGrant, ipc.GrantParams{DB: "app", Tables: []string{"users"}})
+	r := h.call(t, ipc.MethodGrant, ipc.GrantParams{Requester: agentA, DB: "app", Tables: []string{"users"}})
 	wantCode(t, r, ipc.CodeRefused)
 	if r.Error.Data == nil || r.Error.Data.Code != "E_GRANTS_OFF" {
 		t.Fatalf("refusal %+v", r.Error)
 	}
-	wantCode(t, h.call(t, ipc.MethodGrant, ipc.GrantParams{DB: "app", Tables: []string{"nosuch"}}), ipc.CodeRefused)
+	wantCode(t, h.call(t, ipc.MethodGrant, ipc.GrantParams{Requester: agentA, DB: "app", Tables: []string{"nosuch"}}), ipc.CodeRefused)
 }
 
 func TestGrantUnknownTableRefused(t *testing.T) {
 	h := newHarness(t, uatProfile())
-	r := h.call(t, ipc.MethodGrant, ipc.GrantParams{DB: "app", Tables: []string{"nosuch"}})
+	r := h.call(t, ipc.MethodGrant, ipc.GrantParams{Requester: agentA, DB: "app", Tables: []string{"nosuch"}})
 	wantCode(t, r, ipc.CodeRefused)
 	if r.Error.Data == nil || r.Error.Data.Code != "E_UNKNOWN_NAME" {
 		t.Fatalf("refusal %+v", r.Error)
 	}
-	wantCode(t, h.call(t, ipc.MethodGrant, ipc.GrantParams{DB: "app"}), ipc.CodeInvalidParams)
-	wantCode(t, h.call(t, ipc.MethodGrant, ipc.GrantParams{DB: "app", Tables: []string{"users"}, Duration: "soon"}), ipc.CodeInvalidParams)
-	wantCode(t, h.call(t, ipc.MethodGrant, ipc.GrantParams{DB: "app", Tables: []string{"users"}, Rows: -1}), ipc.CodeInvalidParams)
-	wantCode(t, h.call(t, ipc.MethodGrant, ipc.GrantParams{DB: "nosuch", Tables: []string{"users"}}), ipc.CodeRefused)
+	wantCode(t, h.call(t, ipc.MethodGrant, ipc.GrantParams{Requester: agentA, DB: "app"}), ipc.CodeInvalidParams)
+	wantCode(t, h.call(t, ipc.MethodGrant, ipc.GrantParams{Requester: agentA, DB: "app", Tables: []string{"users"}, Duration: "soon"}), ipc.CodeInvalidParams)
+	wantCode(t, h.call(t, ipc.MethodGrant, ipc.GrantParams{Requester: agentA, DB: "app", Tables: []string{"users"}, Rows: -1}), ipc.CodeInvalidParams)
+	wantCode(t, h.call(t, ipc.MethodGrant, ipc.GrantParams{Requester: agentA, DB: "nosuch", Tables: []string{"users"}}), ipc.CodeRefused)
 }
 
 // A grant never covers an unmask or a write: they get a ticket.
@@ -390,8 +405,8 @@ func TestGrantNeverCoversUnmaskOrWrites(t *testing.T) {
 	h := newHarness(t, p, allowUnmask)
 	newGrant(t, h, ipc.GrantParams{Tables: []string{"users"}})
 	var pr ipc.PlanResult
-	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: readUsers, Unmask: true}, &pr)
-	wantTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "unmask")
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: readUsers, Unmask: true, Requester: agentA}, &pr)
+	wantTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID, Requester: agentA}), "unmask")
 	wantTicket(t, runOf(t, h, "UPDATE users SET status = 'x' WHERE id = 1", ipc.Requester{}), "write")
 }
 
@@ -507,4 +522,29 @@ func TestGrantNotRenewed(t *testing.T) {
 	if _, _, _, err := h.s.hubRecompute(&plans.Plan{Body: body}); err == nil {
 		t.Fatal("a grant's plan was recomputed for a renewal")
 	}
+}
+
+// Finding 4: a grant needs the agent's lea token, to ask for it, to
+// activate it and to run under it: without one, every process of the
+// account would share it.
+func TestGrantNeedsAgentToken(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	r := h.call(t, ipc.MethodGrant, ipc.GrantParams{DB: "app", Tables: []string{"users"}})
+	wantCode(t, r, ipc.CodeRefused)
+	if r.Error.Data == nil || r.Error.Data.Code != "E_GRANT_NEEDS_AGENT" {
+		t.Fatalf("ask without a token: %+v", r.Error)
+	}
+	tk := askGrant(t, h, ipc.GrantParams{Tables: []string{"users"}})
+	h.hub.Decide(tk, ticket.Approved, "")
+	r = h.call(t, ipc.MethodGrant, ipc.GrantParams{Ticket: tk})
+	wantCode(t, r, ipc.CodeRefused)
+	if r.Error.Data == nil || r.Error.Data.Code != "E_GRANT_NEEDS_AGENT" {
+		t.Fatalf("activation without a token: %+v", r.Error)
+	}
+	if r := activateGrant(t, h, tk, agentA); r.Error != nil {
+		t.Fatalf("activation with the token: %q", r.Error.Message)
+	}
+	var pr ipc.PlanResult
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: readUsers}, &pr)
+	wantTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "a run without a token")
 }

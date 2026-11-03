@@ -613,6 +613,9 @@ func TestClientUsageErrors(t *testing.T) {
 // locksql grant asks for a grant, then activates its decided ticket; the
 // reads it covers run at once, and status lists it.
 func TestGrantCommand(t *testing.T) {
+	// A grant is an agent's: the client sends lea's agent token.
+	t.Setenv("LEA_AGENT", "a")
+	t.Setenv("LEA_AGENT_TOKEN", "token-a")
 	dir := project(t, uatConfig)
 	sio := startConsole(t, dir, "uat")
 
