@@ -30,13 +30,15 @@ older hub refuses the grant's ticket; everything else works as before.
   so usage never passes the budget, and the read runs only if the rows left
   cover the EXPLAIN estimate. Writes, DDL, `unmask`, any read that filters,
   groups or aggregates on a PII column, any read whose approval screen
-  would carry a warning, and any read in which a text, JSON, binary or
-  untyped column, or a number column when a detector that matches digits
-  is on (except a value the database generates: auto_increment, serial,
-  identity, the SQLite rowid), that no allow rule names is used other than as a plain
-  select-list column (a filter, join, grouping, ordering, `DISTINCT`, a
-  compared subquery or any expression) always get a ticket: such a
-  predicate would probe the values the detectors mask. A grant needs the
+  would carry a warning, and any read that uses a column no allow rule
+  names other than as a plain select-list column (a filter, join,
+  grouping, ordering, `DISTINCT`, a compared subquery or any expression)
+  always get a ticket when that column is of a text, JSON, binary or
+  unknown type, or a number while a detector that matches digits is on
+  (every detector but `email`; a value the database generates, such as an
+  auto_increment, serial or identity id or the SQLite rowid, excepted):
+  such a predicate would probe the values the detectors mask. A text or
+  number column in a filter needs `pii.allow` to stay covered. A grant needs the
   agent's lea token (`LEA_AGENT_TOKEN`), to ask, activate and run; only that
   agent uses it, and the first covering grant is the one charged.
 - New limits `grant_max_duration` (default `"1h"`, `"0"` turns grants off),
