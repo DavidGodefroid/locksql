@@ -613,6 +613,31 @@ func testMySQLServer(t *testing.T, m mysqlTarget, srv Server) {
 		}
 	})
 
+	t.Run("generated keys", func(t *testing.T) {
+		admin := connectMySQL(t, m, srv, "rw", config.TierDDL, 5*time.Second)
+		ddl := func(q string) {
+			t.Helper()
+			if _, err := admin.Run(ctx, "app", sqlclass.Statement{Class: sqlclass.DDL, Kind: "ddl", SQL: q, Limit: -1}, 0); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+		}
+		ddl("CREATE TABLE gk_ai (id INT AUTO_INCREMENT PRIMARY KEY, n BIGINT)")
+		ddl("CREATE TABLE gk_comp (a INT AUTO_INCREMENT, b INT, PRIMARY KEY (a, b))")
+		ddl("CREATE TABLE gk_uk (id INT PRIMARY KEY, n INT AUTO_INCREMENT UNIQUE)")
+		t.Cleanup(func() { ddl("DROP TABLE IF EXISTS gk_ai, gk_comp, gk_uk") })
+		s := connectMySQL(t, m, srv, "ro", config.TierRead, 5*time.Second)
+		cols, err := s.Columns(ctx, "app")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Only a single-column primary key with auto_increment is generated.
+		for _, c := range cols {
+			if strings.HasPrefix(c.Table, "gk_") && c.Generated != (c.Table == "gk_ai" && c.Column == "id") {
+				t.Errorf("generated %+v", c)
+			}
+		}
+	})
+
 	t.Run("explain", func(t *testing.T) {
 		s := connectMySQL(t, m, srv, "ro", config.TierRead, 5*time.Second)
 		p, err := s.Explain(ctx, "app", "SELECT * FROM big WHERE status = 'x' LIMIT 10")

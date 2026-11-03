@@ -181,7 +181,12 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.query(ctx, `SELECT c.TABLE_NAME, c.COLUMN_NAME, c.COLUMN_TYPE, t.TABLE_TYPE, c.EXTRA
+	rows, err := s.query(ctx, `SELECT c.TABLE_NAME, c.COLUMN_NAME, c.COLUMN_TYPE, t.TABLE_TYPE, c.EXTRA,
+			(SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE k
+			  WHERE k.TABLE_SCHEMA = c.TABLE_SCHEMA AND k.TABLE_NAME = c.TABLE_NAME AND k.CONSTRAINT_NAME = 'PRIMARY'),
+			(SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE k
+			  WHERE k.TABLE_SCHEMA = c.TABLE_SCHEMA AND k.TABLE_NAME = c.TABLE_NAME AND k.CONSTRAINT_NAME = 'PRIMARY'
+			    AND k.COLUMN_NAME = c.COLUMN_NAME)
 		FROM information_schema.COLUMNS c
 		JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
 		WHERE c.TABLE_SCHEMA = ? ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION`, db)
@@ -192,7 +197,8 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 	for _, r := range rows {
 		view := str(r[3]) == "VIEW"
 		out = append(out, engine.ColumnInfo{DB: db, Table: str(r[0]), Column: str(r[1]), Type: str(r[2]), View: view,
-			Generated: !view && strings.Contains(strings.ToLower(str(r[4])), "auto_increment")})
+			// auto_increment on the table's single-column primary key.
+			Generated: !view && strings.Contains(strings.ToLower(str(r[4])), "auto_increment") && num(r[5]) == 1 && num(r[6]) == 1})
 	}
 	return out, nil
 }

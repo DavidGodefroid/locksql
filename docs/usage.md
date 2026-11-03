@@ -937,11 +937,15 @@ locksql grant --profile P TICKET      # once the grant's ticket is decided
    the detectors mask a national number or a card stored as an integer or
    a whole float too, and a range, a modulo, a sign, an ordering or a
    division by zero would recover it in a few dozen statements. The one
-   exception is a column whose values the database generates itself:
-   `AUTO_INCREMENT` (MySQL, MariaDB), `serial`, identity or a `nextval`
-   default (PostgreSQL), the `INTEGER PRIMARY KEY` rowid (SQLite), so
-   `WHERE id = …` on such an id stays covered. A plain primary or foreign
-   key is no exception: a national number can be one. Date and time,
+   exception is a single-column primary key whose values the database
+   generates itself: `AUTO_INCREMENT` (MySQL, MariaDB), identity or
+   `serial` (a `nextval` default, PostgreSQL), the `INTEGER PRIMARY KEY`
+   rowid (SQLite), so `WHERE id = …` on such an id stays covered. A
+   `nextval` default or `AUTO_INCREMENT` on any other column, or in a
+   composite key, is no exception, and neither is a plain primary or
+   foreign key: a national number can be one. Values inserted explicitly
+   into such a key (or with `OVERRIDING SYSTEM VALUE`) remain the
+   operator's responsibility. Date and time,
    boolean and uuid columns may always be predicates. **A text or number
    column in a filter needs an allow rule (`pii.allow`) to stay covered**:
    it declares the column not personal.
