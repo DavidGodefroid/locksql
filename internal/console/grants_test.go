@@ -675,3 +675,64 @@ func TestGrantEndRecordsUsage(t *testing.T) {
 		t.Fatalf("end of the idle grant: %v", end)
 	}
 }
+
+// digitsProfile is uatProfile with the default detectors, which match
+// digits (phone, card, iban): a number column can hold what they mask.
+func digitsProfile() config.Profile {
+	p := uatProfile()
+	p.Detectors = config.DefaultDetectors()
+	return p
+}
+
+// withNISS adds users.niss, a bigint no rule names, to the fake catalog.
+func withNISS(h *harness) {
+	h.sess.cols = append(h.sess.cols, engine.ColumnInfo{DB: "app", Table: "users", Column: "niss", Type: "bigint(20)"})
+}
+
+// Review finding A: with a detector that matches digits, a number column no
+// rule names is no grant predicate either: a range, a modulo, a sign, an
+// ordering or a division by zero would probe its value without a ticket.
+// The id the database generates (auto_increment) stays a predicate.
+func TestGrantNeverCoversNumberProbes(t *testing.T) {
+	var h *harness
+	for i, q := range []string{
+		"SELECT id FROM users WHERE niss BETWEEN 85000000000 AND 86000000000 LIMIT 10",
+		"SELECT id FROM users WHERE id = 1 AND niss % 10 = 3 LIMIT 10",
+		"SELECT id FROM users WHERE id = 1 AND niss > 0 LIMIT 10",
+		"SELECT id FROM users ORDER BY niss LIMIT 10",
+		"SELECT id FROM users WHERE id = 1 AND 1 / (niss - 85010112345) = 1 LIMIT 10",
+	} {
+		if i%4 == 0 {
+			h = newHarness(t, digitsProfile())
+			withNISS(h)
+			newGrant(t, h, ipc.GrantParams{Tables: []string{"users"}})
+		}
+		wantTicket(t, runOf(t, h, q, ipc.Requester{}), q)
+	}
+	h.sess.result = idResult()
+	if _, ok := covered(t, runOf(t, h, "SELECT id FROM users WHERE id = 1 LIMIT 10", ipc.Requester{})); !ok {
+		t.Fatal("a predicate on the generated id was not covered")
+	}
+	// Without a digit detector, numbers hold nothing the detectors mask.
+	h = newHarness(t, uatProfile())
+	withNISS(h)
+	newGrant(t, h, ipc.GrantParams{Tables: []string{"users"}})
+	h.sess.result = idResult()
+	if _, ok := covered(t, runOf(t, h, "SELECT id FROM users WHERE niss > 0 LIMIT 10", ipc.Requester{})); !ok {
+		t.Fatal("a number predicate was not covered without a digit detector")
+	}
+}
+
+// A number column an allow rule names stays a predicate.
+func TestGrantCoversAllowedNumberPredicate(t *testing.T) {
+	allow := func(c *ServerConfig) {
+		c.Policy = config.NewPolicy(c.Policy.Profile, []string{"app.users.email"}, []string{"app.users.niss"})
+	}
+	h := newHarness(t, digitsProfile(), allow)
+	withNISS(h)
+	newGrant(t, h, ipc.GrantParams{Tables: []string{"users"}})
+	h.sess.result = idResult()
+	if _, ok := covered(t, runOf(t, h, "SELECT id FROM users WHERE niss > 0 LIMIT 10", ipc.Requester{})); !ok {
+		t.Fatal("a predicate on an allowed number column was not covered")
+	}
+}

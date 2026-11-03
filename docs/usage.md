@@ -931,8 +931,20 @@ locksql grant --profile P TICKET      # once the grant's ticket is decided
    function or expression. Such a predicate would probe the masked values
    one character at a time (`note LIKE 'b%'`, `SUBSTRING(note, 10, 1) =
    'b'`) without a ticket, and the EXPLAIN estimate would answer it too.
-   Numeric, date and time, boolean and uuid columns may be predicates;
-   declare a text column not personal with an allow rule to let it be one.
+   **Number columns** count as such a column whenever a detector that
+   matches digits is on (`phone`, `phone_loose`, `card`, `iban` and the
+   national ids; every detector but `email`, so the defaults included):
+   the detectors mask a national number or a card stored as an integer or
+   a whole float too, and a range, a modulo, a sign, an ordering or a
+   division by zero would recover it in a few dozen statements. The one
+   exception is a column whose values the database generates itself:
+   `AUTO_INCREMENT` (MySQL, MariaDB), `serial`, identity or a `nextval`
+   default (PostgreSQL), the `INTEGER PRIMARY KEY` rowid (SQLite), so
+   `WHERE id = …` on such an id stays covered. A plain primary or foreign
+   key is no exception: a national number can be one. Date and time,
+   boolean and uuid columns may always be predicates. **A text or number
+   column in a filter needs an allow rule (`pii.allow`) to stay covered**:
+   it declares the column not personal.
 4. **Budget.** Each covered run costs one statement, charged before it
    runs. Before the run the rows left must cover the plan's EXPLAIN row
    estimate (not checked for an `EXPLAIN SELECT`, which returns the plan);

@@ -56,7 +56,7 @@ func (fakeSession) Describe(_ context.Context, db, table string) (engine.TableIn
 }
 func (fakeSession) Columns(_ context.Context, db string) ([]engine.ColumnInfo, error) {
 	return []engine.ColumnInfo{
-		{DB: db, Table: "users", Column: "id", Type: "int"},
+		{DB: db, Table: "users", Column: "id", Type: "int", Generated: true}, // auto_increment
 		{DB: db, Table: "users", Column: "email", Type: "varchar(100)"},
 	}, nil
 }

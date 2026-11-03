@@ -148,22 +148,36 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 	}
 	db = orMain(db)
 	rows, err := s.conn.QueryContext(ctx,
-		`SELECT m.name, p.name, p.type, m.type = 'view' FROM `+quoteIdent(db)+`.sqlite_schema AS m, pragma_table_info(m.name, ?) AS p
+		`SELECT m.name, p.name, p.type, m.type = 'view', p.pk, COALESCE(m.sql, '') FROM `+quoteIdent(db)+`.sqlite_schema AS m, pragma_table_info(m.name, ?) AS p
 		 WHERE `+userObjects("m.")+` ORDER BY m.name, p.cid`, db)
 	if err != nil {
 		return nil, wrap(ctx, err)
 	}
 	var out []engine.ColumnInfo
+	pks := map[string]int{}   // primary key columns per table
+	rowid := map[string]int{} // the index in out of a rowid candidate
 	for rows.Next() {
 		c := engine.ColumnInfo{DB: db}
-		if err := rows.Scan(&c.Table, &c.Column, &c.Type, &c.View); err != nil {
+		var pk int
+		var sql string
+		if err := rows.Scan(&c.Table, &c.Column, &c.Type, &c.View, &pk, &sql); err != nil {
 			rows.Close()
 			return nil, wrap(ctx, err)
+		}
+		if pk > 0 {
+			pks[c.Table]++
+			if !c.View && rowidAlias(c.Type, sql) {
+				rowid[c.Table] = len(out)
+			}
 		}
 		out = append(out, c)
 	}
 	if err := closeRows(rows); err != nil {
 		return nil, wrap(ctx, err)
+	}
+	for t, i := range rowid {
+		// INTEGER PRIMARY KEY alone is the rowid: SQLite generates it.
+		out[i].Generated = pks[t] == 1
 	}
 	return out, nil
 }
@@ -379,4 +393,15 @@ func triggerHeader(def string) string {
 
 func wordByte(b byte) bool {
 	return b == '_' || b == '$' || b >= '0' && b <= '9' || b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' || b >= 0x80
+}
+
+// rowidAlias reports a primary key column of type INTEGER in a table whose
+// definition sql makes it an alias of the rowid: not WITHOUT ROWID, and
+// no PRIMARY KEY DESC (which keeps it an ordinary column).
+func rowidAlias(typ, sql string) bool {
+	if !strings.EqualFold(strings.TrimSpace(typ), "INTEGER") {
+		return false
+	}
+	norm := strings.Join(strings.Fields(strings.ToUpper(sql)), " ")
+	return !strings.Contains(norm, "WITHOUT ROWID") && !strings.Contains(norm, "PRIMARY KEY DESC")
 }

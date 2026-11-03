@@ -202,6 +202,30 @@ func TestCatalog(t *testing.T) {
 	if !found {
 		t.Fatalf("Columns misses big.email: %v", cols)
 	}
+	// The INTEGER PRIMARY KEY is the rowid, which SQLite generates.
+	for _, c := range cols {
+		if c.Table == "big" && c.Generated != (c.Column == "id") {
+			t.Errorf("generated %+v", c)
+		}
+	}
+}
+
+func TestRowidAlias(t *testing.T) {
+	for _, c := range []struct {
+		typ, sql string
+		want     bool
+	}{
+		{"INTEGER", "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)", true},
+		{"integer", "CREATE TABLE t (id integer primary key)", true},
+		{"INT", "CREATE TABLE t (id INT PRIMARY KEY)", false},
+		{"BIGINT", "CREATE TABLE t (niss BIGINT PRIMARY KEY)", false},
+		{"INTEGER", "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT) WITHOUT ROWID", false},
+		{"INTEGER", "CREATE TABLE t (id INTEGER PRIMARY  KEY   DESC)", false},
+	} {
+		if got := rowidAlias(c.typ, c.sql); got != c.want {
+			t.Errorf("%s %q: %v", c.typ, c.sql, got)
+		}
+	}
 }
 
 func firstTable(n engine.PlanNode) *engine.PlanNode {

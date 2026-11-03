@@ -386,7 +386,7 @@ func (s *Server) auditGrant(ctx context.Context, rec audit.Record, body hubPlan,
 // reads is considered: it covers the run when its budget does.
 func (s *Server) grantFor(ctx context.Context, pl *plan) *grant {
 	s.expireGrants()
-	if len(s.grants) == 0 || !grantable(pl) || s.steersOnText(pl) {
+	if len(s.grants) == 0 || !grantable(pl) || s.steersOnDetected(pl) {
 		return nil
 	}
 	if _, on := s.profile.Limits.Grants(); !on {
@@ -422,42 +422,70 @@ func grantable(pl *plan) bool {
 		len(pl.an.Relations) > 0 && pl.level != weight.Refuse.String()
 }
 
-// steersOnText reports a plan whose result some column steers (filters,
-// joins, groupings, orderings, expressions: sqlast.Analysis.Steering)
-// while only the detectors protect it: a column whose type can carry free
-// text (string, JSON, binary, or a type the catalog does not give) that no
-// allow rule declares not personal. Under a grant, such a read would be a
-// ticket-free oracle on the values the detectors mask (finding 1 of the
-// review of #171): it asks instead. Numbers, dates and times, booleans
-// and uuids carry no such text.
-func (s *Server) steersOnText(pl *plan) bool {
+// steersOnDetected reports a plan whose result some column steers
+// (filters, joins, groupings, orderings, expressions:
+// sqlast.Analysis.Steering) while only the detectors protect it: a column
+// no allow rule declares not personal whose type can hold what they mask.
+// That is free text (string, JSON, binary, or a type the catalog does not
+// give) and, when a detector that matches digits is on (lockkit's
+// detectors scan integers and whole floats too: a national number or a
+// card stored as a number), numbers too, but for the values the database
+// generates itself (auto_increment, serial, identity, the SQLite rowid).
+// Under a grant, such a read would be a ticket-free oracle on the masked
+// values (the review of #171): it asks instead. Dates and times, booleans
+// and uuids hold none of them.
+func (s *Server) steersOnDetected(pl *plan) bool {
+	digits := s.digitDetectors()
 	for _, src := range pl.an.Steering {
 		if !src.View && s.rules.Allowed(src.DB, src.Table, src.Column) {
 			continue
 		}
-		if !opaqueType(s.columnType(src)) {
+		ci, ok := s.columnInfo(src)
+		if !ok {
+			return true
+		}
+		switch typeClass(ci.Type) {
+		case typeOpaque:
+		case typeNumber:
+			if digits && !ci.Generated {
+				return true
+			}
+		default:
 			return true
 		}
 	}
 	return false
 }
 
-// columnType is the catalog type of src ("" when unknown).
-func (s *Server) columnType(src sqlast.Source) string {
+// digitDetectors reports a detector on that can match digits. lockkit does
+// not say which can: every detector but email (all of whose matches carry
+// an '@') is taken to, a new one included.
+func (s *Server) digitDetectors() bool {
+	return slices.ContainsFunc(s.profile.Detectors, func(d string) bool { return d != "email" })
+}
+
+// columnInfo is the catalog entry of src.
+func (s *Server) columnInfo(src sqlast.Source) (engine.ColumnInfo, bool) {
 	for _, cols := range s.catalogCache {
 		for _, c := range cols {
 			if c.DB == src.DB && c.Table == src.Table && c.Column == src.Column {
-				return c.Type
+				return c, true
 			}
 		}
 	}
-	return ""
+	return engine.ColumnInfo{}, false
 }
 
-// opaqueType reports a column type that holds no free text: numbers,
-// dates and times, booleans and uuids. Anything else, an unknown or empty
-// type included, may hold text.
-func opaqueType(t string) bool {
+// The classes of a column type for a grant's predicates.
+const (
+	typeText   = iota // may hold free text: string, JSON, binary, unknown
+	typeNumber        // integers, decimals, floats
+	typeOpaque        // dates and times, booleans, uuids
+)
+
+// typeClass is the class of a catalog type; an unknown or empty type is
+// text.
+func typeClass(t string) int {
 	t = strings.ToLower(strings.TrimSpace(t))
 	if i := strings.IndexAny(t, "( "); i >= 0 {
 		t = t[:i]
@@ -465,13 +493,14 @@ func opaqueType(t string) bool {
 	switch t {
 	case "tinyint", "smallint", "mediumint", "int", "integer", "bigint", "int2", "int4", "int8",
 		"serial", "smallserial", "bigserial", "serial2", "serial4", "serial8",
-		"decimal", "numeric", "dec", "real", "double", "float", "float4", "float8",
-		"bool", "boolean",
+		"decimal", "numeric", "dec", "real", "double", "float", "float4", "float8":
+		return typeNumber
+	case "bool", "boolean",
 		"date", "time", "timetz", "timestamp", "timestamptz", "datetime", "year", "interval",
 		"uuid":
-		return true
+		return typeOpaque
 	}
-	return false
+	return typeText
 }
 
 // budgetCovers reports whether g has the budget for pl: a statement, some

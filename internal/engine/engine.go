@@ -41,6 +41,11 @@ type ColumnInfo struct {
 	// View is set for a column of a view (or a materialized view or a
 	// foreign table): its base columns are unknown.
 	View bool `json:"view,omitempty"`
+	// Generated is set for a column whose values the database generates
+	// itself: auto_increment (MySQL, MariaDB), serial, identity or a
+	// nextval default (PostgreSQL), the INTEGER PRIMARY KEY rowid
+	// (SQLite). It holds no value anyone chose.
+	Generated bool `json:"generated,omitempty"`
 }
 
 // ColumnDesc describes one column for catalog.describe.
