@@ -355,7 +355,8 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 		}
 		shadow = sn
 	}
-	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String(), src: p.SQL, base: base, shadow: shadow}
+	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String(), src: p.SQL, base: base, shadow: shadow,
+		policyFP: s.policyFP()}
 	if !p.Unmask && st.Class != sqlclass.Read {
 		// Before the run: a write's RETURNING list or a data-modifying
 		// CTE must not move PII under another label, since refusing its
@@ -525,6 +526,13 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: class, Verdict: pl.level, Unmasked: pl.unmask, Warnings: pl.warnings, Intent: pl.intent})
 
 	s.screen(ctx, pl)
+	if hiddenRefusal == nil {
+		// A read inside a grant of this agent, with the budget for it,
+		// runs without a ticket (grants.go); anything else asks.
+		if g := s.grantFor(ctx, pl); g != nil {
+			return s.runGranted(ctx, req.ID, sess, pl, g, rec)
+		}
+	}
 	return s.hubSubmit(ctx, req.ID, sess, pl, rec, hiddenRefusal)
 }
 
@@ -581,8 +589,13 @@ func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session,
 		return errResp(id, ipc.CodeInternal, "the console could not record the approval in its audit log, so the query was not run; ask the user to check the console")
 	}
 	// The hub's signature is the decision's: the records that follow are
-	// the run's, not another decision of the hub.
+	// the run's, not another decision of the hub. A run under a grant
+	// keeps the grant's: its decision is what allowed the run.
 	rec.Event, rec.Decision, rec.HubSig = audit.EventRun, "ok", ""
+	limits, granted := s.grantCaps(pl)
+	if granted {
+		rec.HubSig = pl.grant.sig
+	}
 	// The prompts may have waited: check the TTL again, so that an
 	// approval or a value landing after it runs nothing.
 	if s.now().Sub(pl.created) > PlanTTL {
@@ -625,11 +638,11 @@ func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session,
 		}
 		switch {
 		case pl.guarded:
-			res, err = engine.RunGuarded(rctx, sess, pl.db, st, s.profile.Limits.MaxRows, pl.refs, s.staleCheck(pl))
+			res, err = engine.RunGuarded(rctx, sess, pl.db, st, limits.MaxRows, pl.refs, s.staleCheck(pl))
 		case pl.maxAffected > 0:
-			res, err = engine.RunCounted(rctx, sess, pl.db, st, s.profile.Limits.MaxRows, pl.rowCheck)
+			res, err = engine.RunCounted(rctx, sess, pl.db, st, limits.MaxRows, pl.rowCheck)
 		default:
-			res, err = sess.Run(rctx, pl.db, st, s.profile.Limits.MaxRows)
+			res, err = sess.Run(rctx, pl.db, st, limits.MaxRows)
 		}
 	}
 	if stale := (errStale{}); errors.As(err, &stale) {
@@ -683,10 +696,19 @@ func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session,
 		}
 		pii.MaskResult(&res, s.rules, s.detectors, origin)
 	}
-	out, err := s.result(res)
+	var budget int64
+	if granted {
+		budget = pl.grant.left.Bytes
+	}
+	out, size, err := s.resultWith(res, limits, budget)
 	if err != nil {
 		s.auditRunFailed(rec, secrets.Sanitize(err))
 		return errResp(id, ipc.CodeInternal, "render: "+rec.Error)
+	}
+	if granted {
+		// What the agent got is charged to the grant: never more than
+		// was left, since the run was capped at it.
+		pl.grantRows, pl.grantBytes = int64(len(out.Rows)), int64(size)
 	}
 	rec.Rows, rec.Affected, rec.Truncated = int64(len(out.Rows)), res.Affected, out.Truncated
 	s.audit(rec)
@@ -726,15 +748,17 @@ func cloneResult(res engine.Result) engine.Result {
 	return c
 }
 
-// result renders the masked result as capped JSON rows and TSV text.
-func (s *Server) result(res engine.Result) (ipc.RunResult, error) {
+// resultWith renders the masked result as capped JSON rows and TSV text,
+// under the caps of l. size is what the agent gets: the bytes of both
+// renderings. With budget > 0 (a run under a grant) the text carries
+// exactly the rows the JSON kept, and the two together never pass budget
+// bytes.
+func (s *Server) resultWith(res engine.Result, l config.Limits, budget int64) (ipc.RunResult, int, error) {
 	var jb, tb bytes.Buffer
-	if err := render.Render(&jb, res, s.profile.Limits, render.FormatJSON); err != nil {
-		return ipc.RunResult{}, err
+	if err := render.Render(&jb, res, l, render.FormatJSON); err != nil {
+		return ipc.RunResult{}, 0, err
 	}
-	if err := render.Render(&tb, res, s.profile.Limits, render.FormatTSV); err != nil {
-		return ipc.RunResult{}, err
-	}
+	jsonLen := jb.Len()
 	var j struct {
 		Columns   []string `json:"columns"`
 		Rows      [][]any  `json:"rows"`
@@ -744,10 +768,35 @@ func (s *Server) result(res engine.Result) (ipc.RunResult, error) {
 	dec := json.NewDecoder(&jb)
 	dec.UseNumber() // keep 64-bit integers exact
 	if err := dec.Decode(&j); err != nil {
-		return ipc.RunResult{}, err
+		return ipc.RunResult{}, 0, err
 	}
 	if j.Rows == nil {
 		j.Rows = [][]any{}
 	}
-	return ipc.RunResult{Columns: j.Columns, Rows: j.Rows, Truncated: j.Truncated, CutCells: j.CutCells, Affected: res.Affected, Text: tb.String()}, nil
+	text := res
+	if budget > 0 && len(j.Rows) < len(res.Rows) {
+		// The text shows no row the JSON dropped: both are charged as
+		// the rows the agent got.
+		text.Rows, text.Truncated = res.Rows[:len(j.Rows)], true
+	}
+	if err := render.Render(&tb, text, l, render.FormatTSV); err != nil {
+		return ipc.RunResult{}, 0, err
+	}
+	txt := tb.String()
+	if budget > 0 && int64(jsonLen+len(txt)) > budget {
+		// The text's footer passed the budget: cut it there.
+		txt = cutText(txt, int(max(0, budget-int64(jsonLen))))
+	}
+	return ipc.RunResult{Columns: j.Columns, Rows: j.Rows, Truncated: j.Truncated, CutCells: j.CutCells, Affected: res.Affected, Text: txt}, jsonLen + len(txt), nil
+}
+
+// cutText cuts s to at most n bytes, on a character boundary.
+func cutText(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }

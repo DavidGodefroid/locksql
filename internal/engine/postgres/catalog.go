@@ -267,10 +267,17 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 				-- Classic inheritance: a parent returns its children's rows and a
 				-- child shares its parent's columns, so rules match by name.
 				OR (c.relkind = 'r' AND (c.relhassubclass
-					OR EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid)))
+					OR EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid))),
+				-- Values the database generates: identity or serial (a nextval
+				-- default), on the table's single-column primary key only.
+				c.relkind IN ('r', 'p') AND (a.attidentity IN ('a', 'd')
+					OR COALESCE(pg_catalog.pg_get_expr(d.adbin, d.adrelid) LIKE 'nextval(%', false))
+				AND EXISTS (SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid = c.oid AND i.indisprimary
+					AND i.indnkeyatts = 1 AND i.indkey[0] = a.attnum)
 			FROM pg_catalog.pg_attribute a
 			JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
 			JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
 			WHERE `+relKinds+` AND NOT c.relispartition AND `+userSchemas+`
 			  AND a.attnum > 0 AND NOT a.attisdropped
 			ORDER BY n.nspname, c.relname, a.attnum`)
@@ -279,7 +286,7 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 		}
 		out, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (engine.ColumnInfo, error) {
 			var ci engine.ColumnInfo
-			err := r.Scan(&ci.DB, &ci.Table, &ci.Column, &ci.Type, &ci.View)
+			err := r.Scan(&ci.DB, &ci.Table, &ci.Column, &ci.Type, &ci.View, &ci.Generated)
 			return ci, err
 		})
 		return err

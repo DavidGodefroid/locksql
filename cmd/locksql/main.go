@@ -55,6 +55,7 @@ var helpSections = []helpSection{
 		{"describe", "--profile P --db D TABLE", ""},
 		{"plan", `--profile P --db D [--unmask] "SQL" | -`, ""},
 		{"run", "--profile P PLAN_ID|TICKET", ""},
+		{"grant", "--profile P --db D TABLE... | TICKET", "ask for a grant (one decision for bounded reads;\n--duration, --statements, --rows, --bytes, --intent),\nthen activate its decided TICKET"},
 		{"pii", "list|add --profile P [COLUMN]", ""},
 		{"request", `--profile P "tier=write" | "limits.max_rows=500" | "allow=app.t.c"`, ""},
 		{"logout", "--profile P", ""},
@@ -187,7 +188,7 @@ func runEnv(e env, args []string) int {
 		return runPII(e, args[1:])
 	case "config":
 		return runConfig(e, args[1:])
-	case "tables", "describe", "plan", "run", "request", "logout":
+	case "tables", "describe", "plan", "run", "grant", "request", "logout":
 		return runClient(e, cmd, args[1:])
 	default:
 		// Not quoted back: it may be a token or a URL pasted in the

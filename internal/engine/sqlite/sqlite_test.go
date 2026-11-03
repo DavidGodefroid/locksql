@@ -195,12 +195,36 @@ func TestCatalog(t *testing.T) {
 	}
 	found := false
 	for _, c := range cols {
-		if c == (engine.ColumnInfo{DB: "main", Table: "big", Column: "email", Type: "TEXT"}) {
+		if c == (engine.ColumnInfo{DB: "main", Table: "big", Column: "email", Type: "TEXT", TypeLoose: true}) {
 			found = true
 		}
 	}
 	if !found {
 		t.Fatalf("Columns misses big.email: %v", cols)
+	}
+	// The INTEGER PRIMARY KEY is the rowid, which SQLite generates.
+	for _, c := range cols {
+		if c.Table == "big" && c.Generated != (c.Column == "id") {
+			t.Errorf("generated %+v", c)
+		}
+	}
+}
+
+func TestRowidAlias(t *testing.T) {
+	for _, c := range []struct {
+		typ, sql string
+		want     bool
+	}{
+		{"INTEGER", "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)", true},
+		{"integer", "CREATE TABLE t (id integer primary key)", true},
+		{"INT", "CREATE TABLE t (id INT PRIMARY KEY)", false},
+		{"BIGINT", "CREATE TABLE t (niss BIGINT PRIMARY KEY)", false},
+		{"INTEGER", "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT) WITHOUT ROWID", false},
+		{"INTEGER", "CREATE TABLE t (id INTEGER PRIMARY  KEY   DESC)", false},
+	} {
+		if got := rowidAlias(c.typ, c.sql); got != c.want {
+			t.Errorf("%s %q: %v", c.typ, c.sql, got)
+		}
 	}
 }
 
@@ -511,5 +535,43 @@ func TestRunCountedRollsBack(t *testing.T) {
 	assertCount(t, path, "SELECT count(*) FROM items WHERE label = 'z'", 30)
 	if _, err := engine.RunCounted(ctx, connect(t, path, config.TierDDL), "main", classify(t, "VACUUM"), 0, func(int64) error { return nil }); err == nil {
 		t.Fatal("VACUUM ran outside a transaction in a counted run")
+	}
+}
+
+// A non-STRICT table does not enforce its declared types: its columns are
+// TypeLoose, but for the rowid alias. A STRICT table's are not.
+func TestColumnsTypeLoose(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "loose.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{
+		`CREATE TABLE loose (id INTEGER PRIMARY KEY, born DATE, ok BOOLEAN, n INT)`,
+		`CREATE TABLE tight (id INTEGER PRIMARY KEY, n INT) STRICT`,
+		`CREATE TABLE tight2 (k TEXT PRIMARY KEY, n INT) WITHOUT ROWID, STRICT`,
+	} {
+		if _, err := db.Exec(s); err != nil {
+			t.Fatalf("%s: %v", s, err)
+		}
+	}
+	db.Close()
+	s := connect(t, path, config.TierRead)
+	cols, err := s.Columns(context.Background(), "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]engine.ColumnInfo{}
+	for _, c := range cols {
+		got[c.Table+"."+c.Column] = c
+	}
+	for name, want := range map[string]struct{ loose, generated bool }{
+		"loose.id": {false, true}, "loose.born": {true, false}, "loose.ok": {true, false}, "loose.n": {true, false},
+		"tight.id": {false, true}, "tight.n": {false, false}, "tight2.k": {false, false}, "tight2.n": {false, false},
+	} {
+		c, ok := got[name]
+		if !ok || c.TypeLoose != want.loose || c.Generated != want.generated {
+			t.Errorf("%s: %+v, want loose %v generated %v", name, c, want.loose, want.generated)
+		}
 	}
 }

@@ -340,9 +340,21 @@ only guide the agent; the console's checks are the guarantee.
   run `docker` commands can still reach the console's container: see
   [what Docker does and does not separate](docs/docker.md#what-docker-does-and-does-not-separate).
 - **Human approval.** Every statement goes to lockhub as a ticket and runs
-  only once lockhub's signed decision approves it; no socket method can
-  approve. You can deny with a reason the agent reads. The console's own
+  only once lockhub's signed decision approves it, or is a read inside a
+  grant such a decision approved (below); no socket method can approve. You can deny with a reason the agent reads. The console's own
   decisions (a loosened policy, `:unmask`) stay at its terminal.
+- **Grants, against approval fatigue.** An agent that needs several reads
+  of the same few tables asks once for a grant (`locksql_grant`, `locksql
+  grant`): a database, tables, a duration and a budget of statements, rows
+  and bytes returned, clamped to the profile's `grant_max_*` limits. You
+  approve that scope once in lockhub (its ticket is never auto-approved);
+  then the agent's masked reads of those tables run without a ticket each,
+  capped at what is left of the budget. Writes, `unmask`, any filter,
+  grouping or aggregate on a PII column, and any predicate or expression
+  on a text column no allow rule names still get a ticket. A grant needs
+  the agent's lea token. `:revoke` ends
+  grants; they end with the session and never survive a restart. See
+  [Grants](docs/usage.md#grants).
 - **Fail closed.** A dialect-aware classifier refuses anything it cannot
   classify with certainty: several statements, comments, variables, bind
   parameters, file and OS access, sleeps and locks, session tampering. Reads
@@ -442,6 +454,10 @@ k_anonymity         = 5
 explain_cost_refuse = 0             # engine cost units; 0 = off
 idle_timeout        = "20m"         # the session ends after this long idle
 max_session         = "4h"          # ... and after this long in all
+grant_max_duration  = "1h"          # the longest grant; "0" turns grants off
+grant_max_statements = 200          # a grant's budget at most: statements,
+grant_max_rows      = 10000         # rows returned
+grant_max_bytes     = 1048576       # and bytes returned
 ```
 
 With `credentials = "vault"` the console runs `vault read -format=json
@@ -647,6 +663,7 @@ environment variable can set them) and each change is audited.
 |---|---|---|
 | Ctrl-O | `:results` | results masked ⇄ shown here in clear |
 | | `:unmask` | unmasked output off ⇄ allowed (allowing asks for `y`) |
+| | `:revoke` | end every active grant (`:revoke ID`: one) |
 
 ## Clear results (Ctrl-O)
 

@@ -38,3 +38,5 @@
 "  \x1b[2msession      \x1b[0m  ends in 120 min (max_session 2h0m0s) · idle_timeout 10m0s"
 "  \x1b[2mplans open   \x1b[0m  0"
 "  \x1b[2mpolicy change\x1b[0m  none"
+"  \x1b[2mgrant limits \x1b[0m  1h0m0s · 200 statements · 10000 rows · 1048576 bytes"
+"  \x1b[2mgrants       \x1b[0m  none"

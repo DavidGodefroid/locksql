@@ -278,6 +278,12 @@ func (r Rules) MatchesName(column string) bool {
 	return true
 }
 
+// Allowed reports whether an allow pattern names the column: the human
+// declared it not personal.
+func (r Rules) Allowed(db, table, column string) bool {
+	return anyMatch(r.Allow, [3]string{db, table, column})
+}
+
 // Covered reports whether a mask or an allow pattern names the column: the
 // human already decided about it.
 func (r Rules) Covered(db, table, column string) bool {

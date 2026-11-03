@@ -56,6 +56,10 @@ type hubPlan struct {
 	// plan stored by an older console).
 	Class   string `json:"class,omitempty"`
 	Verdict string `json:"verdict,omitempty"`
+	// Kind is "grant" for a grant's plan (grants.go), whose scope is
+	// Grant; "" for a statement's.
+	Kind  string      `json:"kind,omitempty"`
+	Grant *grantScope `json:"grant,omitempty"`
 }
 
 // hubCaller is the client behind ctx and the agent it reports, the only
@@ -372,6 +376,10 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 		if err := json.Unmarshal(p.Body, &body); err != nil {
 			return "", "", err
 		}
+		if body.Kind != "" {
+			// A grant's ticket: activated by scope.request, never run.
+			return "", "", errGrantTicket
+		}
 		pl, planResp = s.buildPlan(ctx, id, ipc.PlanParams{DB: body.DB, SQL: body.SQL, Unmask: body.Unmask, Intent: body.Intent})
 		if planResp != nil {
 			return "", "", errReplan
@@ -386,7 +394,12 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 	switch {
 	case errors.Is(err, plans.ErrWrongRequester):
 		return errResp(id, ipc.CodeWrongRequester, "ticket "+ticketID+": "+wrongRequester)
+	case errors.Is(err, errGrantTicket):
+		return errResp(id, ipc.CodeInvalidParams, "ticket "+ticketID+" is a grant's: activate it with locksql_grant (ticket "+ticketID+")")
 	case errors.Is(err, ticket.ErrExpired):
+		if s.isGrantTicket(ticketID, caller) {
+			return errResp(id, ipc.CodeTimeout, "ticket "+ticketID+" is a grant's, and expired: ask for a new grant")
+		}
 		return s.hubRenew(ctx, id, ticketID, caller, who, dec)
 	case errors.Is(err, errReplan):
 		s.withdraw(ctx, ticketID, caller)

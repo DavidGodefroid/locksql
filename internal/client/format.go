@@ -83,6 +83,43 @@ func FormatStatus(w io.Writer, s ipc.StatusResult) {
 	kv("limits", FormatLimits(s.Limits))
 	kv("session", fmt.Sprintf("idle timeout %s · ends in %s",
 		time.Duration(s.IdleTimeoutInS)*time.Second, time.Duration(s.SessionEndsInS)*time.Second))
+	if g, on := s.Limits.Grants(); on {
+		kv("grant limits", fmt.Sprintf("%s · %s statements · %s rows · %s bytes", g.Duration, Group(g.Statements), Group(g.Rows), Group(g.Bytes)))
+	} else {
+		kv("grant limits", "grants off")
+	}
+	if len(s.Grants) == 0 {
+		kv("grants", "none")
+	}
+	for _, g := range s.Grants {
+		kv("grant", FormatGrantInfo(g))
+	}
+}
+
+// FormatGrantInfo renders an active grant on one line: its id, scope,
+// time left and what is left of its budget.
+func FormatGrantInfo(g ipc.GrantInfo) string {
+	db := g.DB
+	if db == "" {
+		db = "(default)"
+	}
+	return fmt.Sprintf("%s · %s: %s · %s left · %s/%s statements · %s/%s rows · %s/%s bytes left",
+		g.ID, db, strings.Join(g.Tables, ", "), time.Duration(g.ExpiresInS)*time.Second,
+		Group(g.Remaining.Statements), Group(g.Budget.Statements), Group(g.Remaining.Rows), Group(g.Budget.Rows),
+		Group(g.Remaining.Bytes), Group(g.Budget.Bytes))
+}
+
+// FormatGrant writes the answer of a grant request: pending with its
+// ticket, or the active grant.
+func FormatGrant(w io.Writer, r ipc.GrantResult) {
+	switch {
+	case r.Status == "pending":
+		fmt.Fprintf(w, "Pending human approval: grant ticket %s on %s. Do not retry. End your turn; once told it is decided, activate it: locksql grant %s\n", r.Ticket, r.Lock, r.Ticket)
+	case r.Grant != nil:
+		fmt.Fprintf(w, "Grant active: %s\nReads of these tables now run without a ticket while the grant lasts and its budget covers them; PII filters, unmask and writes still ask.\n", clean(FormatGrantInfo(*r.Grant)))
+	default:
+		fmt.Fprintf(w, "grant: %s\n", clean(r.Status))
+	}
 }
 
 // FormatLimits renders limits on one line; 0 means unlimited.
@@ -224,6 +261,13 @@ func FormatRun(w io.Writer, r ipc.RunResult) {
 		return
 	}
 	text := r.Text
+	if r.Grant != "" {
+		left := ""
+		if l := r.GrantLeft; l != nil {
+			left = fmt.Sprintf("; left: %s statements, %s rows, %s bytes", Group(l.Statements), Group(l.Rows), Group(l.Bytes))
+		}
+		defer fmt.Fprintf(w, "(ran under grant %s%s)\n", r.Grant, left)
+	}
 	if text == "" && len(r.Columns) == 0 {
 		text = fmt.Sprintf("(%d rows affected)\n", r.Affected)
 	}

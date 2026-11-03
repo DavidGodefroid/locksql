@@ -4,6 +4,62 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+Needs lockkit v0.12.0 (risk class `grant`). Grants need a lockhub that
+knows the `grant` risk (lockhub #99/#100, merged, not yet released): an
+older hub refuses the grant's ticket; everything else works as before.
+
+### New
+
+- **Grants: one approval for a bounded read scope, against approval
+  fatigue** (#171). `locksql_grant` (CLI `locksql grant TABLE...`) asks for
+  a database, tables, a duration and a budget (statements run, rows and
+  bytes returned); the console resolves the tables, clamps the request to
+  the profile's limits and submits a ticket of risk `grant`, always
+  `never_auto`, whose plan hash is the hash of the scope's canonical JSON.
+  The approval screen reads `grant on <instance>` with one line each for
+  the tables, the duration and the budget as clamped; production asks for
+  the instance name. Once decided, the agent activates it (`locksql_grant`
+  with `ticket`, `locksql grant TICKET`) within the ticket's 4 h; the
+  duration counts from then. While it lasts, `locksql_run` runs the agent's
+  masked reads whose every table (CTEs and subqueries included) is in the
+  grant without a ticket: one statement each, capped at the rows left and,
+  for each of its JSON rows and TSV text (which carries exactly the JSON's
+  rows), at half the bytes left; both renderings are charged after the run,
+  so usage never passes the budget, and the read runs only if the rows left
+  cover the EXPLAIN estimate. Writes, DDL, `unmask`, any read that filters,
+  groups or aggregates on a PII column, any read whose approval screen
+  would carry a warning, and any read that uses a column no allow rule
+  names other than as a plain select-list column (a filter, join,
+  grouping, ordering, `DISTINCT`, a compared subquery or any expression)
+  always get a ticket when that column is of a text, JSON, binary or
+  unknown type (on SQLite, any column of a table that is not `STRICT`), or
+  a number while a detector that matches digits is on (every detector but
+  `email`; a single-column primary key the database generates, such as an
+  auto_increment, serial or identity id or the SQLite rowid, excepted):
+  such a predicate would probe the values the detectors mask. A text or
+  number column in a filter needs `pii.allow` to stay covered. A grant needs the
+  agent's lea token (`LEA_AGENT_TOKEN`), to ask, activate and run; only that
+  agent uses it, and the first covering grant is the one charged.
+- New limits `grant_max_duration` (default `"1h"`, `"0"` turns grants off),
+  `grant_max_statements` (200), `grant_max_rows` (10000) and
+  `grant_max_bytes` (1 MiB). Raising one, or turning grants on, is a
+  loosening. An unchanged policy keeps its fingerprint: no `:review` on
+  upgrade.
+- `:revoke` ends every grant, `:revoke ID` one. Grants also end with their
+  time, the session, or any change of the approved policy (a tightening
+  too, audited `policy_changed`; added mask rules alone end none, and a
+  plan made before a policy change is never covered), and never survive a
+  restart. `:status` and `locksql status` list them with the time and
+  budget left.
+- Audit: `grant` and `grant_end` records, and the records of every covered
+  run, carry the grant id (`grant`, `ticket`) and the hub's signature of its
+  decision (`hub_sig`); `grant_scope` describes the scope, and `grant_end`
+  records what the grant used (`statements_used`, `rows`, `bytes_used`).
+- New refusal codes `E_GRANTS_OFF` and `E_GRANT_NEEDS_AGENT` (both
+  `ask_user`).
+
 ## v0.15.0 (2026-11-02)
 
 Supported lockhub: as v0.14.0 (v0.3.0 or later). A minor release: a remote

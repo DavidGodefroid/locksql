@@ -41,6 +41,16 @@ type ColumnInfo struct {
 	// View is set for a column of a view (or a materialized view or a
 	// foreign table): its base columns are unknown.
 	View bool `json:"view,omitempty"`
+	// Generated is set for a single-column primary key whose values the
+	// database generates itself: auto_increment (MySQL, MariaDB), identity
+	// or serial (a nextval default, PostgreSQL), the INTEGER PRIMARY KEY
+	// rowid (SQLite). Such a column on any other column, or in a
+	// composite key, is not.
+	Generated bool `json:"generated,omitempty"`
+	// TypeLoose is set when the database does not enforce Type: a column
+	// of a SQLite table that is not STRICT (the rowid alias excepted) may
+	// hold any value, text included.
+	TypeLoose bool `json:"type_loose,omitempty"`
 }
 
 // ColumnDesc describes one column for catalog.describe.

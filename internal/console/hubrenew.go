@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 
@@ -221,6 +222,10 @@ func (s *Server) hubRecompute(p *plans.Plan) (string, string, map[string]string,
 	var body hubPlan
 	if err := json.Unmarshal(p.Body, &body); err != nil {
 		return "", "", nil, err
+	}
+	if body.Kind != "" {
+		// A grant is never asked again: the agent asks for a new one.
+		return "", "", nil, errors.New("a grant is not renewed: the agent asks for a new grant")
 	}
 	now, err := ticket.InputDigests(planInputs{V: planHashVersion, Profile: v.profile, Engine: v.engine, Host: v.host,
 		DB: body.DB, Unmask: body.Unmask, PolicyFP: v.fp})

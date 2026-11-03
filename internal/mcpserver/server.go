@@ -57,6 +57,8 @@ type Conn interface {
 	Plan(ctx context.Context, p ipc.PlanParams) (ipc.PlanResult, error)
 	Run(ctx context.Context, planID string) (ipc.RunResult, error)
 	RunTicket(ctx context.Context, ticket string) (ipc.RunResult, error)
+	Grant(ctx context.Context, p ipc.GrantParams) (ipc.GrantResult, error)
+	ActivateGrant(ctx context.Context, ticket string) (ipc.GrantResult, error)
 	PIIList(ctx context.Context) (ipc.PIIListResult, error)
 	PIIAdd(ctx context.Context, pattern string) (ipc.PIIListResult, error)
 	Request(ctx context.Context, change string) (ipc.ChangeResult, error)
@@ -140,6 +142,17 @@ type (
 		PlanID  string `json:"plan_id,omitempty" jsonschema:"The plan_id returned by locksql_plan. One-shot, valid 10 minutes."`
 		Ticket  string `json:"ticket,omitempty" jsonschema:"Hub mode: the ticket a pending locksql_run returned, once you are told it is decided. Instead of plan_id."`
 	}
+	GrantIn struct {
+		Profile    string   `json:"profile,omitempty" jsonschema:"Profile name from the locksql config. Optional when the server was started with --profile or exactly one profile is configured."`
+		DB         string   `json:"db,omitempty" jsonschema:"Database. Defaults to the profile's database."`
+		Tables     []string `json:"tables,omitempty" jsonschema:"The tables the reads will use (schema.table for a non-public PostgreSQL schema). Every table a covered statement reads, CTEs and subqueries included, must be one of them."`
+		Duration   string   `json:"duration,omitempty" jsonschema:"How long the grant lasts once active, e.g. 30m. Default and most: the profile's limits.grant_max_duration."`
+		Statements int64    `json:"statements,omitempty" jsonschema:"Statements the grant may run. Default and most: limits.grant_max_statements."`
+		Rows       int64    `json:"rows,omitempty" jsonschema:"Rows returned in all. Default and most: limits.grant_max_rows."`
+		Bytes      int64    `json:"bytes,omitempty" jsonschema:"Bytes returned in all. Default and most: limits.grant_max_bytes."`
+		Intent     string   `json:"intent,omitempty" jsonschema:"One line (max 200 bytes) telling the human why you need this grant; shown on the approval screen. Treated as untrusted text."`
+		Ticket     string   `json:"ticket,omitempty" jsonschema:"The ticket a pending locksql_grant returned, once you are told it is decided: activates the grant. Instead of the other fields."`
+	}
 	PIIListIn struct {
 		Profile string `json:"profile,omitempty" jsonschema:"Profile name from the locksql config. Optional when the server was started with --profile or exactly one profile is configured."`
 	}
@@ -177,6 +190,12 @@ type (
 		Lock        string `json:"lock,omitempty"`
 		Instance    string `json:"instance,omitempty"`
 		StaleTicket string `json:"stale_ticket,omitempty"`
+	}
+	// GrantOut is the grant asked for (pending, with its ticket) or the
+	// active grant; on an error result the refusal.
+	GrantOut struct {
+		ipc.GrantResult
+		Refusal *refusal.Info `json:"refusal,omitempty"`
 	}
 	// PlanOut is the plan, or on an error result the refusal.
 	PlanOut struct {
@@ -220,6 +239,14 @@ func New(o Options) *mcp.Server {
 			"A decided ticket returns the rows (capped and PII-masked) as structured columns and rows plus a text rendering." + guidance,
 		Annotations: &mcp.ToolAnnotations{OpenWorldHint: &no},
 	}, t.run)
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "locksql_grant",
+		Description: "Ask the human once for a grant: a bounded read scope (database, tables, duration, a budget of statements, rows and bytes returned) inside which locksql_run runs reads without a ticket each. " +
+			"Use it when you expect several reads of the same few tables; ask for the tables and budget you need, no more. It answers pending with a ticket the human decides in lockhub: do not retry; once decided, call locksql_grant with that ticket to activate it. " +
+			"Covered: SELECT, WITH ... SELECT and EXPLAIN SELECT of this agent on the grant's database whose every table is in the grant, while its time and budget last. " +
+			"Never covered (they get a normal ticket): writes, unmask, filters, groups or aggregates on PII columns, and reads whose estimate exceeds the rows left. The human can revoke a grant at any time." + guidance,
+		Annotations: &mcp.ToolAnnotations{OpenWorldHint: &no},
+	}, t.grant)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "locksql_pii_list",
 		Description: "List the PII column rules in force (mask and allow patterns db.table.column)." + guidance,
@@ -472,6 +499,38 @@ func (t *tools) run(ctx context.Context, req *mcp.CallToolRequest, in RunIn) (*m
 // human decides.
 func (t *tools) progress(ctx context.Context, req *mcp.CallToolRequest) (stop func()) {
 	return mcpkit.Progress(ctx, req, t.o.ProgressEvery, mcpkit.WaitingMessage(product.P))
+}
+
+func (t *tools) grant(ctx context.Context, req *mcp.CallToolRequest, in GrantIn) (*mcp.CallToolResult, GrantOut, error) {
+	tk := strings.TrimSpace(in.Ticket)
+	if tk == "" && len(in.Tables) == 0 {
+		return nil, GrantOut{}, errors.New("no tables given: name the tables the grant covers, or pass the decided ticket")
+	}
+	var r ipc.GrantResult
+	err := t.with(in.Profile, func(c Conn) (err error) {
+		if tk != "" {
+			r, err = c.ActivateGrant(ctx, tk)
+		} else {
+			r, err = c.Grant(ctx, ipc.GrantParams{DB: in.DB, Tables: in.Tables, Duration: in.Duration, Statements: in.Statements,
+				Rows: in.Rows, Bytes: in.Bytes, Intent: in.Intent})
+		}
+		return err
+	})
+	if res, info, ok := refused(err); ok {
+		return res, GrantOut{Refusal: info}, nil
+	}
+	if err != nil {
+		return nil, GrantOut{}, err
+	}
+	out := GrantOut{GrantResult: r}
+	if r.Status == mcpkit.StatusPending {
+		// The lock's standard pending answer, for the agent's harness to
+		// suspend it until the ticket is decided.
+		res, _ := mcpkit.PendingOn(r.Lock, r.Instance, r.Ticket)
+		res.StructuredContent = out
+		return res, out, nil
+	}
+	return render(func(w *bytes.Buffer) { client.FormatGrant(w, r) }), out, nil
 }
 
 func (t *tools) piiList(ctx context.Context, _ *mcp.CallToolRequest, in PIIListIn) (*mcp.CallToolResult, ipc.PIIListResult, error) {
