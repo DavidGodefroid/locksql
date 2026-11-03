@@ -349,8 +349,10 @@ only guide the agent; the console's checks are the guarantee.
   and bytes returned, clamped to the profile's `grant_max_*` limits. You
   approve that scope once in lockhub (its ticket is never auto-approved);
   then the agent's masked reads of those tables run without a ticket each,
-  capped at what is left of the budget. Writes, `unmask` and any filter,
-  grouping or aggregate on a PII column still get a ticket. `:revoke` ends
+  capped at what is left of the budget. Writes, `unmask`, any filter,
+  grouping or aggregate on a PII column, and any predicate or expression
+  on a text column no allow rule names still get a ticket. A grant needs
+  the agent's lea token. `:revoke` ends
   grants; they end with the session and never survive a restart. See
   [Grants](docs/usage.md#grants).
 - **Fail closed.** A dialect-aware classifier refuses anything it cannot

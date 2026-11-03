@@ -24,12 +24,19 @@ older hub refuses the grant's ticket; everything else works as before.
   with `ticket`, `locksql grant TICKET`) within the ticket's 4 h; the
   duration counts from then. While it lasts, `locksql_run` runs the agent's
   masked reads whose every table (CTEs and subqueries included) is in the
-  grant without a ticket: one statement each, capped at the rows and bytes
-  left and charged after the run, so usage never passes the budget, and
-  only if the rows left cover the EXPLAIN estimate. Writes, DDL, `unmask`
-  and any read that filters, groups or aggregates on a PII column always get
-  a ticket. Only the agent that asked uses a grant; the first covering grant
-  is the one charged.
+  grant without a ticket: one statement each, capped at the rows left and,
+  for each of its JSON rows and TSV text (which carries exactly the JSON's
+  rows), at half the bytes left; both renderings are charged after the run,
+  so usage never passes the budget, and the read runs only if the rows left
+  cover the EXPLAIN estimate. Writes, DDL, `unmask`, any read that filters,
+  groups or aggregates on a PII column, any read whose approval screen
+  would carry a warning, and any read in which a text, JSON, binary or
+  untyped column no allow rule names is used other than as a plain
+  select-list column (a filter, join, grouping, ordering, `DISTINCT`, a
+  compared subquery or any expression) always get a ticket: such a
+  predicate would probe the values the detectors mask. A grant needs the
+  agent's lea token (`LEA_AGENT_TOKEN`), to ask, activate and run; only that
+  agent uses it, and the first covering grant is the one charged.
 - New limits `grant_max_duration` (default `"1h"`, `"0"` turns grants off),
   `grant_max_statements` (200), `grant_max_rows` (10000) and
   `grant_max_bytes` (1 MiB). Raising one, or turning grants on, is a
@@ -44,7 +51,8 @@ older hub refuses the grant's ticket; everything else works as before.
   run, carry the grant id (`grant`, `ticket`) and the hub's signature of its
   decision (`hub_sig`); `grant_scope` describes the scope, and `grant_end`
   records what the grant used (`statements_used`, `rows`, `bytes_used`).
-- New refusal code `E_GRANTS_OFF` (`ask_user`).
+- New refusal codes `E_GRANTS_OFF` and `E_GRANT_NEEDS_AGENT` (both
+  `ask_user`).
 
 ## v0.15.0 (2026-11-02)
 
