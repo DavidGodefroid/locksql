@@ -937,9 +937,12 @@ locksql grant --profile P TICKET      # once the grant's ticket is decided
    runs. Before the run the rows left must cover the plan's EXPLAIN row
    estimate (not checked for an `EXPLAIN SELECT`, which returns the plan);
    otherwise the read gets a ticket. Bytes are not estimated: the run is
-   capped at the rows and bytes left (within `max_rows` and
-   `max_output_bytes`), and what the agent got (rows, and the bytes of the
-   result's JSON) is charged after it, so usage never goes past the budget.
+   capped at the rows left (within `max_rows`), and each of its two
+   renderings, the JSON rows and the TSV text, at half the bytes left
+   (within `max_output_bytes`); the text carries exactly the rows the JSON
+   kept. What the agent got (those rows, and the bytes of both renderings)
+   is charged after the run, so usage never goes past the budget. A run
+   needs at least 512 bytes left.
    A cut result is marked truncated, as always. The run's answer names the
    grant and what is left.
 5. **End.** `:revoke` ends every grant, `:revoke ID` one. A grant also ends

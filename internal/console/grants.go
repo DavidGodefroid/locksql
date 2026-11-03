@@ -58,8 +58,9 @@ const (
 	// (lockhub refuses a line of 4096 bytes or more).
 	maxScreenLine = 4000
 	// minGrantBytes is the least byte budget a run under a grant needs:
-	// the result's envelope alone takes about that much.
-	minGrantBytes = 256
+	// each of its two renderings gets half, and a result's envelope alone
+	// takes about a hundred bytes.
+	minGrantBytes = 512
 )
 
 // grantScope is what a grant's decision binds: the plan hash of its ticket
@@ -524,7 +525,9 @@ func (s *Server) grantCaps(pl *plan) (config.Limits, bool) {
 		return l, false
 	}
 	l.MaxRows = int(min(int64(l.MaxRows), pl.grant.left.Rows))
-	l.MaxOutputBytes = int(min(int64(l.MaxOutputBytes), pl.grant.left.Bytes))
+	// The JSON rows and the TSV text each get half of what is left, so
+	// that the two together stay within it.
+	l.MaxOutputBytes = int(min(int64(l.MaxOutputBytes), pl.grant.left.Bytes/2))
 	return l, true
 }
 

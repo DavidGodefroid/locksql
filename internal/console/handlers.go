@@ -695,7 +695,11 @@ func (s *Server) runApproved(ctx context.Context, id int64, sess engine.Session,
 		}
 		pii.MaskResult(&res, s.rules, s.detectors, origin)
 	}
-	out, size, err := s.resultWith(res, limits)
+	var budget int64
+	if granted {
+		budget = pl.grant.left.Bytes
+	}
+	out, size, err := s.resultWith(res, limits, budget)
 	if err != nil {
 		s.auditRunFailed(rec, secrets.Sanitize(err))
 		return errResp(id, ipc.CodeInternal, "render: "+rec.Error)
@@ -744,18 +748,16 @@ func cloneResult(res engine.Result) engine.Result {
 }
 
 // resultWith renders the masked result as capped JSON rows and TSV text,
-// under the caps of l. size is the length of the JSON
-// rendering, capped at l.MaxOutputBytes: the bytes a grant is charged (the
-// TSV text is the same rows in another layout).
-func (s *Server) resultWith(res engine.Result, l config.Limits) (ipc.RunResult, int, error) {
+// under the caps of l. size is what the agent gets: the bytes of both
+// renderings. With budget > 0 (a run under a grant) the text carries
+// exactly the rows the JSON kept, and the two together never pass budget
+// bytes.
+func (s *Server) resultWith(res engine.Result, l config.Limits, budget int64) (ipc.RunResult, int, error) {
 	var jb, tb bytes.Buffer
 	if err := render.Render(&jb, res, l, render.FormatJSON); err != nil {
 		return ipc.RunResult{}, 0, err
 	}
-	size := jb.Len()
-	if err := render.Render(&tb, res, l, render.FormatTSV); err != nil {
-		return ipc.RunResult{}, 0, err
-	}
+	jsonLen := jb.Len()
 	var j struct {
 		Columns   []string `json:"columns"`
 		Rows      [][]any  `json:"rows"`
@@ -770,5 +772,30 @@ func (s *Server) resultWith(res engine.Result, l config.Limits) (ipc.RunResult, 
 	if j.Rows == nil {
 		j.Rows = [][]any{}
 	}
-	return ipc.RunResult{Columns: j.Columns, Rows: j.Rows, Truncated: j.Truncated, CutCells: j.CutCells, Affected: res.Affected, Text: tb.String()}, size, nil
+	text := res
+	if budget > 0 && len(j.Rows) < len(res.Rows) {
+		// The text shows no row the JSON dropped: both are charged as
+		// the rows the agent got.
+		text.Rows, text.Truncated = res.Rows[:len(j.Rows)], true
+	}
+	if err := render.Render(&tb, text, l, render.FormatTSV); err != nil {
+		return ipc.RunResult{}, 0, err
+	}
+	txt := tb.String()
+	if budget > 0 && int64(jsonLen+len(txt)) > budget {
+		// The text's footer passed the budget: cut it there.
+		txt = cutText(txt, int(max(0, budget-int64(jsonLen))))
+	}
+	return ipc.RunResult{Columns: j.Columns, Rows: j.Rows, Truncated: j.Truncated, CutCells: j.CutCells, Affected: res.Affected, Text: txt}, jsonLen + len(txt), nil
+}
+
+// cutText cuts s to at most n bytes, on a character boundary.
+func cutText(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }

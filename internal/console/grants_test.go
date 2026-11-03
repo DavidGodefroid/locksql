@@ -594,3 +594,51 @@ func TestGrantCoversAllowedTextPredicate(t *testing.T) {
 		t.Fatal("a predicate on an allowed column was not covered")
 	}
 }
+
+// textRows counts the rows of a TSV rendering: the lines between the
+// header and the footer.
+func textRows(text string) int {
+	n := 0
+	for i, l := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		if i > 0 && !strings.HasPrefix(l, "(") && !strings.HasPrefix(l, "[") {
+			n++
+		}
+	}
+	return n
+}
+
+// Finding 2: the TSV text carries exactly the rows of the JSON result, and
+// both renderings are charged, so that what the agent gets never exceeds
+// the budget.
+func TestGrantBudgetCoversBothRenderings(t *testing.T) {
+	p := uatProfile()
+	p.Limits.MaxOutputBytes = 2000
+	h := newHarness(t, p)
+	h.sess.result = engine.Result{Columns: []engine.ResultColumn{{Label: "note", OriginDB: "app", OriginTable: "users", OriginColumn: "note"}}}
+	for range 80 {
+		h.sess.result.Rows = append(h.sess.result.Rows, []any{strings.Repeat("y", 30)})
+	}
+	const budget = 6000
+	newGrant(t, h, ipc.GrantParams{Tables: []string{"users"}, Rows: 100, Bytes: budget})
+	const q = "SELECT note FROM users WHERE id > 0 LIMIT 100"
+	rows, text := 0, 0
+	var left ipc.GrantBudget
+	for i := range 2 {
+		rr, ok := covered(t, runOf(t, h, q, ipc.Requester{}))
+		if !ok {
+			t.Fatalf("run %d not covered", i)
+		}
+		if tr := textRows(rr.Text); tr != len(rr.Rows) {
+			t.Fatalf("run %d: the text carries %d rows, the JSON %d", i, tr, len(rr.Rows))
+		}
+		rows += len(rr.Rows)
+		text += len(rr.Text)
+		left = *rr.GrantLeft
+	}
+	if rows > 100 || 100-left.Rows != int64(rows) {
+		t.Fatalf("%d rows delivered, %d charged", rows, 100-left.Rows)
+	}
+	if left.Bytes < 0 || budget-left.Bytes < int64(text) {
+		t.Fatalf("%d bytes charged for %d bytes of text alone (left %d)", budget-left.Bytes, text, left.Bytes)
+	}
+}
