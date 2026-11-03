@@ -755,3 +755,38 @@ func TestGrantSurvivesAddedMask(t *testing.T) {
 		t.Fatalf("the new rule did not mask the covered run: %+v", rr)
 	}
 }
+
+// On SQLite a table that is not STRICT stores any value in any column,
+// whatever its declared type: a DATE, BOOLEAN or INT column may hold free
+// text, so it is no grant predicate (the rowid alias excepted). A STRICT
+// table's declared types hold.
+func TestGrantLooseTypesAreText(t *testing.T) {
+	for _, c := range []struct {
+		col, typ string
+		loose    bool
+		want     bool // covered
+	}{
+		{"born", "DATE", true, false},
+		{"ok", "BOOLEAN", true, false},
+		{"n", "INT", true, false},
+		{"n", "INT", false, true},
+		{"born", "DATE", false, true},
+	} {
+		h := newHarness(t, uatProfile())
+		h.sess.cols = append(h.sess.cols, engine.ColumnInfo{DB: "app", Table: "users", Column: c.col, Type: c.typ, TypeLoose: c.loose})
+		newGrant(t, h, ipc.GrantParams{Tables: []string{"users"}})
+		h.sess.result = idResult()
+		q := "SELECT id FROM users WHERE " + c.col + " IS NULL LIMIT 10"
+		r := runOf(t, h, q, ipc.Requester{})
+		if _, ok := covered(t, r); ok != c.want {
+			t.Errorf("%s %s loose %v: covered %v, want %v", c.col, c.typ, c.loose, ok, c.want)
+		}
+	}
+	// The rowid alias is the database's integer: still a predicate.
+	h := newHarness(t, digitsProfile())
+	h.sess.result = idResult()
+	newGrant(t, h, ipc.GrantParams{Tables: []string{"users"}})
+	if _, ok := covered(t, runOf(t, h, "SELECT id FROM users WHERE id = 1 LIMIT 10", ipc.Requester{})); !ok {
+		t.Fatal("the generated id was not covered")
+	}
+}

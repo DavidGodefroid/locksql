@@ -946,7 +946,10 @@ locksql grant --profile P TICKET      # once the grant's ticket is decided
    foreign key: a national number can be one. Values inserted explicitly
    into such a key (or with `OVERRIDING SYSTEM VALUE`) remain the
    operator's responsibility. Date and time,
-   boolean and uuid columns may always be predicates. **A text or number
+   boolean and uuid columns may always be predicates, but on SQLite only in
+   a `STRICT` table: a table that is not `STRICT` stores any value in any
+   column whatever its declared type, so each of its columns counts as
+   text there (the `INTEGER PRIMARY KEY` rowid excepted). **A text or number
    column in a filter needs an allow rule (`pii.allow`) to stay covered**:
    it declares the column not personal.
 4. **Budget.** Each covered run costs one statement, charged before it

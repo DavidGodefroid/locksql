@@ -164,6 +164,8 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 			rows.Close()
 			return nil, wrap(ctx, err)
 		}
+		// Only a STRICT table enforces the declared types.
+		c.TypeLoose = c.View || !strictTable(sql)
 		if pk > 0 {
 			pks[c.Table]++
 			if !c.View && rowidAlias(c.Type, sql) {
@@ -176,8 +178,11 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 		return nil, wrap(ctx, err)
 	}
 	for t, i := range rowid {
-		// INTEGER PRIMARY KEY alone is the rowid: SQLite generates it.
-		out[i].Generated = pks[t] == 1
+		// INTEGER PRIMARY KEY alone is the rowid: SQLite generates it, and
+		// it is always an integer.
+		if pks[t] == 1 {
+			out[i].Generated, out[i].TypeLoose = true, false
+		}
 	}
 	return out, nil
 }
@@ -404,4 +409,19 @@ func rowidAlias(typ, sql string) bool {
 	}
 	norm := strings.Join(strings.Fields(strings.ToUpper(sql)), " ")
 	return !strings.Contains(norm, "WITHOUT ROWID") && !strings.Contains(norm, "PRIMARY KEY DESC")
+}
+
+// strictTable reports a table definition with the STRICT option (after its
+// closing parenthesis, among WITHOUT ROWID and the like).
+func strictTable(sql string) bool {
+	i := strings.LastIndexByte(sql, ')')
+	if i < 0 {
+		return false
+	}
+	for _, opt := range strings.Split(sql[i+1:], ",") {
+		if strings.EqualFold(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(opt), ";")), "STRICT") {
+			return true
+		}
+	}
+	return false
 }

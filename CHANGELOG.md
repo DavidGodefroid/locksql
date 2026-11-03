@@ -34,8 +34,9 @@ older hub refuses the grant's ticket; everything else works as before.
   names other than as a plain select-list column (a filter, join,
   grouping, ordering, `DISTINCT`, a compared subquery or any expression)
   always get a ticket when that column is of a text, JSON, binary or
-  unknown type, or a number while a detector that matches digits is on
-  (every detector but `email`; a value the database generates, such as an
+  unknown type (on SQLite, any column of a table that is not `STRICT`), or
+  a number while a detector that matches digits is on (every detector but
+  `email`; a single-column primary key the database generates, such as an
   auto_increment, serial or identity id or the SQLite rowid, excepted):
   such a predicate would probe the values the detectors mask. A text or
   number column in a filter needs `pii.allow` to stay covered. A grant needs the

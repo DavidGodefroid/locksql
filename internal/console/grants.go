@@ -444,7 +444,12 @@ func (s *Server) steersOnDetected(pl *plan) bool {
 		if !ok {
 			return true
 		}
-		switch typeClass(ci.Type) {
+		class := typeClass(ci.Type)
+		if ci.TypeLoose && !ci.Generated {
+			// SQLite outside STRICT: any value in any column.
+			class = typeText
+		}
+		switch class {
 		case typeOpaque:
 		case typeNumber:
 			if digits && !ci.Generated {
