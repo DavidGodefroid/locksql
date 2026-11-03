@@ -213,6 +213,9 @@ type plan struct {
 	grant      *grant
 	grantRows  int64
 	grantBytes int64
+	// policyFP is the fingerprint of the policy the plan was made under:
+	// a grant covers only a plan made under the policy in force.
+	policyFP string
 }
 
 // Server serves client requests one at a time against one session. It is

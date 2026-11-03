@@ -140,17 +140,14 @@ func (s *Server) ApplyPolicy(kp kconsole.Policy) error {
 	if err != nil {
 		return err
 	}
-	old := ""
-	if v := s.live.Load(); v != nil {
-		old = v.fp
-	}
+	old, oldFP := s.approved, s.policyFP()
 	s.approved = p
 	s.profile = p.Profile
 	s.rules = pii.Rules{Mask: append([]string(nil), p.PIIMask...), Allow: append([]string(nil), p.PIIAllow...), Modes: p.PIIModes}
 	s.detectors = ds
 	s.dialect = d
 	s.setLive(fp) // what the hub's goroutine checks tickets against
-	s.grantPolicyChanged(old, fp)
+	s.grantPolicyChanged(old, oldFP, p, fp)
 	return nil
 }
 

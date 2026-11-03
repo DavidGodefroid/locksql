@@ -31,7 +31,9 @@ older hub refuses the grant's ticket; everything else works as before.
   cover the EXPLAIN estimate. Writes, DDL, `unmask`, any read that filters,
   groups or aggregates on a PII column, any read whose approval screen
   would carry a warning, and any read in which a text, JSON, binary or
-  untyped column no allow rule names is used other than as a plain
+  untyped column, or a number column when a detector that matches digits
+  is on (except a value the database generates: auto_increment, serial,
+  identity, the SQLite rowid), that no allow rule names is used other than as a plain
   select-list column (a filter, join, grouping, ordering, `DISTINCT`, a
   compared subquery or any expression) always get a ticket: such a
   predicate would probe the values the detectors mask. A grant needs the
@@ -44,7 +46,8 @@ older hub refuses the grant's ticket; everything else works as before.
   upgrade.
 - `:revoke` ends every grant, `:revoke ID` one. Grants also end with their
   time, the session, or any change of the approved policy (a tightening
-  too, audited `policy_changed`), and never survive a
+  too, audited `policy_changed`; added mask rules alone end none, and a
+  plan made before a policy change is never covered), and never survive a
   restart. `:status` and `locksql status` list them with the time and
   budget left.
 - Audit: `grant` and `grant_end` records, and the records of every covered

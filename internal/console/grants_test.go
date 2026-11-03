@@ -736,3 +736,22 @@ func TestGrantCoversAllowedNumberPredicate(t *testing.T) {
 		t.Fatal("a predicate on an allowed number column was not covered")
 	}
 }
+
+// Review finding B: an added mask rule (pii.add, any agent may send it)
+// ends no grant; the next covered run masks the new column, and a plan made
+// before the rule is no longer covered.
+func TestGrantSurvivesAddedMask(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	g := newGrant(t, h, ipc.GrantParams{Tables: []string{"users"}})
+	var before ipc.PlanResult
+	h.ok(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: readUsers, Requester: agentA}, &before)
+	h.ok(t, ipc.MethodPIIAdd, ipc.PIIAddParams{Pattern: "app.users.note"}, nil)
+	if st := grantStatus(t, h); len(st) != 1 || st[0].ID != g.ID {
+		t.Fatalf("pii.add ended the grant: %+v", st)
+	}
+	wantTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: before.PlanID, Requester: agentA}), "a plan made before the rule")
+	rr, ok := covered(t, runOf(t, h, readUsers, ipc.Requester{}))
+	if !ok || strings.Contains(rr.Text, "write to") || rr.Rows[0][2] == "write to b***(15)" {
+		t.Fatalf("the new rule did not mask the covered run: %+v", rr)
+	}
+}

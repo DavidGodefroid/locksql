@@ -959,9 +959,12 @@ locksql grant --profile P TICKET      # once the grant's ticket is decided
    grant and what is left.
 5. **End.** `:revoke` ends every grant, `:revoke ID` one. A grant also ends
    when its time is up, when the session ends, or when the approved policy
-   changes at all (its fingerprint), a tightening too: a lower limit, a new
-   mask rule, `production = true`. A grant was decided under the policy it
-   was asked for. Grants live in the console's memory: they do not survive a
+   changes (its fingerprint), a tightening too: a lower limit,
+   `production = true`. A grant was decided under the policy it was asked
+   for. The one exception is a change made only of added mask rules
+   (`pii add`, which any agent may send): it ends no grant, since a covered
+   run is always one planned under the rules in force, which masks the new
+   columns; a plan made before any policy change is never covered. Grants live in the console's memory: they do not survive a
    restart, and an activated ticket never activates again.
 
 `:status` and `locksql status` list the active grants with their tables,

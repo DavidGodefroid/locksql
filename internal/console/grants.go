@@ -386,7 +386,7 @@ func (s *Server) auditGrant(ctx context.Context, rec audit.Record, body hubPlan,
 // reads is considered: it covers the run when its budget does.
 func (s *Server) grantFor(ctx context.Context, pl *plan) *grant {
 	s.expireGrants()
-	if len(s.grants) == 0 || !grantable(pl) || s.steersOnDetected(pl) {
+	if len(s.grants) == 0 || !grantable(pl) || s.steersOnDetected(pl) || pl.policyFP != s.policyFP() {
 		return nil
 	}
 	if _, on := s.profile.Limits.Grants(); !on {
@@ -611,14 +611,45 @@ func (s *Server) revoke(arg string) {
 	s.println("no active grant " + safeText(arg, false) + " (:status lists them)")
 }
 
-// grantPolicyChanged ends every grant when the approved policy's
-// fingerprint changes from old to fp, a tightening too: a grant was
-// decided under the policy it was asked for. The first policy (old "")
-// ends none.
-func (s *Server) grantPolicyChanged(old, fp string) {
-	if old != "" && old != fp {
-		s.endGrants("policy_changed")
+// policyFP is the fingerprint of the policy in force.
+func (s *Server) policyFP() string {
+	if v := s.live.Load(); v != nil {
+		return v.fp
 	}
+	return ""
+}
+
+// grantPolicyChanged ends every grant when the approved policy's
+// fingerprint changes from oldFP to fp, a tightening too: a grant was
+// decided under the policy it was asked for. The first policy (oldFP "")
+// ends none, and neither does a change made only of added mask rules
+// (pii.add, which any agent may send): every covered run is planned under
+// the rules in force (grantFor refuses a plan made under another policy),
+// so it masks the new columns.
+func (s *Server) grantPolicyChanged(old config.Policy, oldFP string, cur config.Policy, fp string) {
+	if oldFP == "" || oldFP == fp || masksAddedOnly(old, cur) {
+		return
+	}
+	s.endGrants("policy_changed")
+}
+
+// masksAddedOnly reports a change from old to cur made only of added mask
+// rules: every rule of old is kept with its mode, and nothing else moved.
+func masksAddedOnly(old, cur config.Policy) bool {
+	modes := func(p config.Policy, pat string) string {
+		if m, ok := p.PIIModes[pat]; ok {
+			return m
+		}
+		return config.DefaultMaskMode
+	}
+	for _, pat := range old.PIIMask {
+		if !slices.Contains(cur.PIIMask, pat) || modes(old, pat) != modes(cur, pat) {
+			return false
+		}
+	}
+	rest := cur
+	rest.PIIMask, rest.PIIModes = old.PIIMask, old.PIIModes
+	return config.Fingerprint(rest) == config.Fingerprint(old)
 }
 
 // grantInfo is g as status and scope.request show it.

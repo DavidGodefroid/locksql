@@ -355,7 +355,8 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 		}
 		shadow = sn
 	}
-	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String(), src: p.SQL, base: base, shadow: shadow}
+	pl := &plan{db: db, st: st, unmask: p.Unmask, intent: p.Intent, created: s.now(), level: weight.OK.String(), src: p.SQL, base: base, shadow: shadow,
+		policyFP: s.policyFP()}
 	if !p.Unmask && st.Class != sqlclass.Read {
 		// Before the run: a write's RETURNING list or a data-modifying
 		// CTE must not move PII under another label, since refusing its
