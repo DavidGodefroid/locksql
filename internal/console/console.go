@@ -10,6 +10,8 @@ import (
 	"errors"
 	"net"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -206,6 +208,11 @@ type plan struct {
 	// so beside its rowcount: triggers, rules, foreign-key cascades (from
 	// the definitions read on PostgreSQL).
 	sideEffects []string
+	// grant is the grant the plan runs under (nil: a ticket); grantRows
+	// and grantBytes are what its run returned, charged to it.
+	grant      *grant
+	grantRows  int64
+	grantBytes int64
 }
 
 // Server serves client requests one at a time against one session. It is
@@ -231,6 +238,9 @@ type Server struct {
 	now  func() time.Time
 
 	plans map[string]*plan
+	// grants are the active grants, oldest first (grants.go): in memory
+	// only, so that a restart ends them.
+	grants []*grant
 	// planErr is the redacted detail of the last engine failure of
 	// buildPlan ("" for none); requests are served one at a time.
 	planErr string
@@ -386,6 +396,7 @@ func (s *Server) Ended() (string, bool) { return s.k.Ended() }
 // policy in force: a policy change applies from the next tick.
 func (s *Server) Tick() {
 	s.k.Tick()
+	s.expireGrants()
 	if s.auditFails.Load() >= maxAuditFails {
 		// Failures of the hub's own records end the session here, on the
 		// request goroutine.
@@ -400,7 +411,18 @@ func (s *Server) Handle(ctx context.Context, req ipc.Request) ipc.Response {
 }
 
 // Command runs a console command typed by the human between requests.
-func (s *Server) Command(ctx context.Context, line string) { s.k.Command(ctx, line) }
+func (s *Server) Command(ctx context.Context, line string) {
+	f := strings.Fields(line)
+	if len(f) > 0 && f[0] == ":revoke" && len(f) <= 2 {
+		s.revoke(strings.Join(f[1:], ""))
+		return
+	}
+	if len(f) > 0 && !slices.Contains([]string{":review", ":status", ":results", ":unmask", ":quit"}, strings.TrimSpace(line)) {
+		// lockkit lists its own commands next.
+		s.println("grants: :revoke (end every grant) · :revoke ID (end one)")
+	}
+	s.k.Command(ctx, line)
+}
 
 // Key handles a control key pressed in the console.
 func (s *Server) Key(k Key) { s.k.Key(k) }
@@ -421,7 +443,14 @@ func (s *Server) allowUnmask() bool   { return s.k.UnmaskAllowed() }
 func (s *Server) pendingPolicy() bool { return s.k.PolicyPending() }
 
 // Close closes the session.
-func (s *Server) Close() { s.k.Close() }
+func (s *Server) Close() {
+	reason, _ := s.Ended()
+	if reason == "" {
+		reason = "closed"
+	}
+	s.endGrants("session end: " + reason)
+	s.k.Close()
+}
 
 // Serve accepts clients on ln and serves their requests one at a time until
 // ctx ends or the session ends (logout, timeouts, :quit). lines are the
@@ -436,7 +465,8 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener, lines <-chan string
 func (s *Server) loop() *kconsole.Loop {
 	l := s.k.Loop()
 	l.Poll = s.CheckPolicy
-	l.Tick = s.Tick // the hub goroutine's audit failures too
+	l.Tick = s.Tick       // the hub goroutine's audit failures too
+	l.Command = s.Command // :revoke
 	return l
 }
 

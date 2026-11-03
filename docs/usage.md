@@ -671,9 +671,10 @@ answered. Between requests you can also type:
 
 | Command | Effect |
 |---|---|
-| `:status` | profile, databases, the lockhub instance that decides, results, unmask, limits, session time left, open plans, pending policy change |
+| `:status` | profile, databases, the lockhub instance that decides, results, unmask, limits, session time left, open plans, pending policy change, grant limits and active grants |
 | `:review` | show the pending policy change and the agent's change requests |
 | `:unmask` | allow (after `y`) or stop unmasked output; see above |
+| `:revoke` | end every active grant; `:revoke ID` ends one (see [Grants](#grants)) |
 | `:quit` | end the session |
 
 The session ends on Ctrl-C, `:quit`, `locksql logout`, after
@@ -871,6 +872,87 @@ Then:
   still has comes back at the next start: remove it there too), or remove
   the console's copy from its volume to take the profile's set again.
 
+### Grants
+
+Approving every small read of a debugging session leads to approval
+fatigue: the human stops reading. A **grant** is one human decision that
+covers a bounded read scope, so that the reads inside it run without a
+ticket each:
+
+```sh
+locksql grant --profile P --db D [--duration 30m] [--statements N] [--rows N] [--bytes N] [--intent TEXT] TABLE...
+locksql grant --profile P TICKET      # once the grant's ticket is decided
+```
+
+(MCP: `locksql_grant` with `tables`, then with `ticket`.)
+
+1. **Ask.** The agent names a database and its tables, and optionally a
+   duration and a budget: statements run, rows returned and bytes returned.
+   The console resolves each table as a statement would (an unknown or
+   ambiguous one is refused) and **clamps** the duration and the budget to
+   the profile's limits: a value left out, or above the limit, becomes the
+   limit; it is never refused for being too high. It answers pending with a
+   ticket of risk `grant`, always `never_auto`. Its plan hash is the hash of
+   the scope's canonical JSON (`{database, tables, duration, budget}`), so
+   that the hub's signed decision binds exactly that scope. The approval
+   screen reads `grant on <instance>`, one line for the tables, one for the
+   duration and one for the budget, as clamped (`(asked …)` marks a clamped
+   value), and the agent's intent as its note. On a production profile the
+   approval asks for the instance name, as for any production request.
+2. **Activate.** Once the human decided, the agent activates the grant with
+   its ticket. The console verifies the hub's decision as for a run (signed
+   by the pinned hub key, matching the ticket it signed, still usable) and
+   the policy the grant was asked under. A grant ticket waits at most 4 h
+   for its decision and its activation; it is never renewed (ask for a new
+   grant). The duration counts from the activation. Only the agent that
+   asked for the grant (same lea token and account) activates it and runs
+   under it.
+3. **Run.** `locksql_plan` and `locksql_run` work as always. `query.run`
+   runs a plan at once, without a ticket, when the **first** active grant of
+   the same agent that covers the plan's database and **every** table it
+   reads (CTEs and subqueries included) also has the budget for it; only
+   that grant is charged. A read is covered only if it is a masked
+   `SELECT`, `WITH ... SELECT` or `EXPLAIN SELECT` that reads at least one
+   table, its verdict is not REFUSE (WARN is allowed), and it neither
+   filters, groups nor aggregates on a PII column (anything under the
+   k-anonymity check): such a read always gets a ticket, whatever its counts
+   say, since running it at once or asking would otherwise tell the agent
+   whether a count fell under k. Writes, DDL and `unmask` always get a
+   ticket.
+4. **Budget.** Each covered run costs one statement, charged before it
+   runs. Before the run the rows left must cover the plan's EXPLAIN row
+   estimate (not checked for an `EXPLAIN SELECT`, which returns the plan);
+   otherwise the read gets a ticket. Bytes are not estimated: the run is
+   capped at the rows and bytes left (within `max_rows` and
+   `max_output_bytes`), and what the agent got (rows, and the bytes of the
+   result's JSON) is charged after it, so usage never goes past the budget.
+   A cut result is marked truncated, as always. The run's answer names the
+   grant and what is left.
+5. **End.** `:revoke` ends every grant, `:revoke ID` one. A grant also ends
+   when its time is up, when the session ends, or when a policy change turns
+   grants off; a lower limit applied while it runs shortens it and cuts what
+   is left. Grants live in the console's memory: they do not survive a
+   restart, and an activated ticket never activates again.
+
+`:status` and `locksql status` list the active grants with their tables,
+time left and budget left. The audit log has a `grant` record for each
+activation, a `grant_end` record for each end (`revoked`, `expired`,
+`session end: …`, `grants turned off by the policy`), and an `approved`
+(decision `grant`) and a `run` record for each covered run; all carry the
+grant id (`grant`, also in `ticket`) and the hub's signature of its decision
+(`hub_sig`).
+
+The limits are in the profile's `limits` table:
+
+| Key | Default | |
+|---|---|---|
+| `grant_max_duration` | `"1h"` | the longest grant, at most `"24h"`; `"0"` (or `0`) turns grants off for the profile |
+| `grant_max_statements` | `200` | statements a grant runs at most |
+| `grant_max_rows` | `10000` | rows a grant returns at most |
+| `grant_max_bytes` | `1048576` | bytes a grant returns at most (1 MiB) |
+
+Raising any of them, or turning grants on, is a loosening (`:review`).
+
 ### Policy changes
 
 The console watches the config and PII files while it runs.
@@ -881,7 +963,8 @@ The console watches the config and PII files while it runs.
 - A change that loosens it (higher tier, `production = true → false`, larger
   limits, a smaller `k_anonymity`, a larger `reference_probe` (kept for
   compatibility, without effect since cell references are not supported), a longer
-  `idle_timeout` or `max_session`, a higher or removed
+  `idle_timeout` or `max_session`, a larger grant limit or grants turned
+  on (`grant_max_*`), a higher or removed
   `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
   host, port, engine, user or database,
   any change of the `ssh` table (except `ssh.credentials` set to `ask`),
@@ -994,6 +1077,7 @@ locksql tables   --profile P [--instance NAME] [--db D]
 locksql describe --profile P [--instance NAME] [--db D] TABLE
 locksql plan     --profile P [--instance NAME] [--db D] [--unmask] [--intent TEXT] "SQL" | -   # "-" reads SQL from stdin
 locksql run      --profile P [--instance NAME] PLAN_ID        # waits for the human's approval
+locksql grant    --profile P [--instance NAME] [--db D] [--duration 30m] [--statements N] [--rows N] [--bytes N] [--intent TEXT] TABLE... | TICKET
 locksql pii      list|add --profile P [--instance NAME] [DB.TABLE.COLUMN]
 locksql request  --profile P [--instance NAME] "tier=write" | "limits.max_rows=500" | "allow=app.t.c"
 locksql logout   --profile P [--instance NAME]
@@ -1269,6 +1353,7 @@ The retry rules:
 | `E_MASK_UNCERTAIN` | a result whose masking cannot be proven: an alias, a whole-row reference or a label the engine cannot trace, a result whose columns differ from the analysis | rewrite | PII columns by their plain name |
 | `E_MASKED_WRITE` | a write that copies a PII column or stores a value the agent chose into one | stop | none (a masked column may only be set to `NULL` or `DEFAULT`: it holds no value the agent chose) |
 | `E_STALE` | the definitions the statement resolves to (functions, views, rules, triggers, row-level policies, grants, search path) changed between the plan and the run, or during the run | rewrite | plan the statement again; the human approves the new plan |
+| `E_GRANTS_OFF` | a grant asked for, or activated, while grants are off in the profile (`limits.grant_max_duration = 0`) | ask_user | plan and run each query; only the human turns grants on |
 | `E_POLICY` | a refusal no check named (fail-closed; should not happen) | stop | none: report it as a bug |
 
 `E_STALE` comes from the plan hash: on PostgreSQL it covers the effective `search_path` and the definitions of what the statement resolves to (functions and operators, including the operators views, rules, policies, defaults and `CHECK`s use and their commutators and negators, views, rules, triggers, row-level policies, grants, column defaults and generated columns, constraints, partitions, the domains, enum labels and composite types of the columns; for a write, the tables its foreign keys cascade into; for DDL, the event triggers and, for a `DROP` or `ALTER` with `CASCADE`, every relation pg_depend says it would drop or change along with its relations: views over them, policies, constraints, defaults and triggers that use them, inheritance children, owned sequences and their users, columns of their row type, recursively; the functions and domains it would drop are not hashed, and `DROP FUNCTION/DOMAIN/SCHEMA ... CASCADE` or `DROP TYPE` of an enum name no relation and are not walked), followed up to 8 levels deep; a deeper statement is refused. The functions a PL/pgSQL body calls and the objects dynamic SQL reaches are not followed: only the calling function's own source is hashed.
@@ -1289,7 +1374,8 @@ finds the project's consoles.
 | `locksql_status` | none |
 | `locksql_list_tables`, `locksql_describe` | none (catalog reads, audited) |
 | `locksql_plan` | none (validate and EXPLAIN only; an optional `intent` line is shown on the approval screen) |
-| `locksql_run` | the human, in the console |
+| `locksql_run` | the human, in the console (none for a read inside an active grant) |
+| `locksql_grant` | the human, in lockhub, once for the grant's scope (see [Grants](#grants)) |
 | `locksql_pii_list`, `locksql_pii_add` | none (adding a mask rule only tightens) |
 | `locksql_request_change` | queued for the human; never applied by the tool |
 

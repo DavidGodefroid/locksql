@@ -71,6 +71,7 @@ func canonical(p Policy) Policy {
 			l.IdleTimeout = min(d.IdleTimeout, l.MaxSession)
 		}
 	}
+	canonicalGrants(&p.Profile.Limits)
 	if p.Profile.WriteFunctions == WriteFunctionsDenylist {
 		p.Profile.WriteFunctions = "" // the default
 	}
@@ -205,6 +206,7 @@ func Diff(approved, current Policy) []Change {
 			out = append(out, Change{Field: "limits." + f.field, Old: f.o.String(), New: f.n.String(), Loosens: f.n > f.o})
 		}
 	}
+	out = append(out, grantDiff(al, cl)...)
 	if ap.WriteFunctions != cp.WriteFunctions {
 		name := func(v string) string {
 			if v == "" {

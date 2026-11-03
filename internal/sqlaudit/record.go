@@ -41,6 +41,12 @@ const (
 	EventRenew = audit.EventRenew
 	// EventConfigImport is a `locksql config import`, applied or refused.
 	EventConfigImport = "config_import"
+	// EventGrant is a grant activated from its decided ticket (or the
+	// activation refused); EventGrantEnd is its end: revoked, expired,
+	// the session's end or a policy that no longer allows it. Both carry
+	// the grant id and the hub's signature of its decision.
+	EventGrant    = "grant"
+	EventGrantEnd = "grant_end"
 )
 
 // Open opens locksql's audit log: <stateDir>/locksql/audit.log.
@@ -101,6 +107,11 @@ type Record struct {
 	Approver *ticket.Approver `json:"approver,omitempty"`
 	Facade   string           `json:"facade,omitempty"`
 	HubSig   string           `json:"hub_sig,omitempty"`
+	// Grant is the grant behind a record: its activation, its end and
+	// every run it covered (with the decision's HubSig); GrantScope is
+	// its scope in words (database, tables, duration, budget).
+	Grant      string `json:"grant,omitempty"`
+	GrantScope string `json:"grant_scope,omitempty"`
 }
 
 // AuditEvent implements lockkit's audit.Record.

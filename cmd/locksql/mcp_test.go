@@ -83,7 +83,7 @@ func TestMCPOverStdio(t *testing.T) {
 
 	list := call("tools/list", map[string]any{})
 	tools := list["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 8 {
+	if len(tools) != 9 {
 		t.Fatalf("%d tools", len(tools))
 	}
 

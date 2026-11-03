@@ -65,6 +65,9 @@ type opts struct {
 	intent   string
 	json     bool
 	args     []string
+	// The grant flags.
+	duration                string
+	statements, rows, bytes int64
 }
 
 // clientCmd is one client command: its flags, its arguments and what it
@@ -73,6 +76,7 @@ type clientCmd struct {
 	usage    string
 	db       bool // accepts --db
 	unmask   bool // accepts --unmask and --intent
+	grant    bool // accepts --intent and the grant flags
 	min, max int  // positional arguments
 	do       func(ctx context.Context, e env, c *client.Client, o *opts) (any, func(io.Writer), error)
 }
@@ -127,6 +131,22 @@ var clientCmds = map[string]clientCmd{
 			asJSON := r
 			asJSON.Text = "" // the rows are already there
 			return asJSON, func(w io.Writer) { client.FormatRun(w, r) }, err
+		},
+	},
+	"grant": {
+		usage: `locksql grant --profile P [--instance NAME] --db D [--duration 30m] [--statements N] [--rows N] [--bytes N] [--intent TEXT] [--json] TABLE... | TICKET`,
+		db:    true, grant: true, min: 1, max: 64,
+		do: func(ctx context.Context, _ env, c *client.Client, o *opts) (any, func(io.Writer), error) {
+			var r ipc.GrantResult
+			var err error
+			if len(o.args) == 1 && isTicket(o.args[0]) {
+				// The decided ticket of a grant: activate it.
+				r, err = c.ActivateGrant(ctx, o.args[0])
+			} else {
+				r, err = c.Grant(ctx, ipc.GrantParams{DB: o.db, Tables: o.args, Duration: o.duration,
+					Statements: o.statements, Rows: o.rows, Bytes: o.bytes, Intent: o.intent})
+			}
+			return r, func(w io.Writer) { client.FormatGrant(w, r) }, err
 		},
 	},
 	"pii list": {
@@ -280,6 +300,13 @@ func runClient(e env, name string, args []string) int {
 	if spec.unmask {
 		fs.BoolVar(&o.unmask, "unmask", false, "ask the human for unmasked output")
 		fs.StringVar(&o.intent, "intent", "", "one line telling the human why the query is needed")
+	}
+	if spec.grant {
+		fs.StringVar(&o.intent, "intent", "", "one line telling the human why the grant is needed")
+		fs.StringVar(&o.duration, "duration", "", "how long the grant lasts once active (default and most: limits.grant_max_duration)")
+		fs.Int64Var(&o.statements, "statements", 0, "statements the grant runs at most (default and most: limits.grant_max_statements)")
+		fs.Int64Var(&o.rows, "rows", 0, "rows returned at most (default and most: limits.grant_max_rows)")
+		fs.Int64Var(&o.bytes, "bytes", 0, "bytes returned at most (default and most: limits.grant_max_bytes)")
 	}
 	pos, err := parseInterleaved(fs, args)
 	if err != nil {

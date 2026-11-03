@@ -4,6 +4,46 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+Needs lockkit v0.12.0 (risk class `grant`). Grants need a lockhub that
+knows the `grant` risk (lockhub #99/#100, merged, not yet released): an
+older hub refuses the grant's ticket; everything else works as before.
+
+### New
+
+- **Grants: one approval for a bounded read scope, against approval
+  fatigue** (#171). `locksql_grant` (CLI `locksql grant TABLE...`) asks for
+  a database, tables, a duration and a budget (statements run, rows and
+  bytes returned); the console resolves the tables, clamps the request to
+  the profile's limits and submits a ticket of risk `grant`, always
+  `never_auto`, whose plan hash is the hash of the scope's canonical JSON.
+  The approval screen reads `grant on <instance>` with one line each for
+  the tables, the duration and the budget as clamped; production asks for
+  the instance name. Once decided, the agent activates it (`locksql_grant`
+  with `ticket`, `locksql grant TICKET`) within the ticket's 4 h; the
+  duration counts from then. While it lasts, `locksql_run` runs the agent's
+  masked reads whose every table (CTEs and subqueries included) is in the
+  grant without a ticket: one statement each, capped at the rows and bytes
+  left and charged after the run, so usage never passes the budget, and
+  only if the rows left cover the EXPLAIN estimate. Writes, DDL, `unmask`
+  and any read that filters, groups or aggregates on a PII column always get
+  a ticket. Only the agent that asked uses a grant; the first covering grant
+  is the one charged.
+- New limits `grant_max_duration` (default `"1h"`, `"0"` turns grants off),
+  `grant_max_statements` (200), `grant_max_rows` (10000) and
+  `grant_max_bytes` (1 MiB). Raising one, or turning grants on, is a
+  loosening. An unchanged policy keeps its fingerprint: no `:review` on
+  upgrade.
+- `:revoke` ends every grant, `:revoke ID` one. Grants also end with their
+  time, the session, or a policy that turns them off, and never survive a
+  restart. `:status` and `locksql status` list them with the time and
+  budget left.
+- Audit: `grant` and `grant_end` records, and the records of every covered
+  run, carry the grant id (`grant`, `ticket`) and the hub's signature of its
+  decision (`hub_sig`); `grant_scope` describes the scope.
+- New refusal code `E_GRANTS_OFF` (`ask_user`).
+
 ## v0.15.0 (2026-11-02)
 
 Supported lockhub: as v0.14.0 (v0.3.0 or later). A minor release: a remote

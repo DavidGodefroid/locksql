@@ -82,6 +82,7 @@ func (s *Server) Methods() map[string]kconsole.Handler {
 		ipc.MethodCatalogDescribe: h(s.catalog),
 		ipc.MethodQueryPlan:       h(s.queryPlan),
 		ipc.MethodQueryRun:        h(s.queryRun),
+		ipc.MethodGrant:           h(s.grantRequest),
 	}
 }
 
@@ -145,6 +146,7 @@ func (s *Server) ApplyPolicy(kp kconsole.Policy) error {
 	s.detectors = ds
 	s.dialect = d
 	s.setLive(fp) // what the hub's goroutine checks tickets against
+	s.applyGrantPolicy()
 	return nil
 }
 
@@ -170,6 +172,7 @@ func (s *Server) statusOf(c kconsole.StatusResult) ipc.StatusResult {
 		IdleTimeoutInS: c.IdleTimeoutInS,
 		SessionEndsInS: c.SessionEndsInS,
 		Health:         s.cfg.Health,
+		Grants:         s.grantInfos(),
 	}
 }
 
@@ -190,6 +193,7 @@ func (s *Server) StatusRows(v kconsole.StatusView) [][2]string {
 		{"plans open", fmt.Sprint(len(s.plans))},
 		{"policy change", kconsole.StatusPendingRow(v)},
 	}
+	rows = append(rows, s.grantRows()...)
 	if b := kconsole.StatusBoundaryRow(v); b != "" {
 		rows = append(rows, [2]string{"boundary", b})
 	}
@@ -202,6 +206,9 @@ func (s *Server) StatusLineParts(kconsole.StatusView) (string, []string) {
 	var parts []string
 	if n := len(s.plans); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d plan%s open", n, plural(n)))
+	}
+	if n := len(s.grants); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d grant%s", n, plural(n)))
 	}
 	return paint.Dim("tier " + s.profile.Tier.String()), parts
 }

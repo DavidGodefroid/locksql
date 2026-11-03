@@ -62,17 +62,21 @@ const (
 	MethodCatalogDescribe = "catalog.describe"
 	MethodQueryPlan       = "query.plan"
 	MethodQueryRun        = "query.run"
-	MethodPIIList         = kipc.MethodPIIList
-	MethodPIIAdd          = kipc.MethodPIIAdd
-	MethodChangeRequest   = kipc.MethodChangeRequest
-	MethodLogout          = kipc.MethodLogout
+	// MethodGrant asks for a grant (one human decision for a bounded read
+	// scope), or activates the decided one (GrantParams.Ticket). Its name
+	// does not read as an approval: nothing a client sends approves.
+	MethodGrant         = "scope.request"
+	MethodPIIList       = kipc.MethodPIIList
+	MethodPIIAdd        = kipc.MethodPIIAdd
+	MethodChangeRequest = kipc.MethodChangeRequest
+	MethodLogout        = kipc.MethodLogout
 )
 
 // Methods lists every method name.
 func Methods() []string {
 	return []string{
 		MethodHello, MethodStatus, MethodCatalogList, MethodCatalogDescribe, MethodQueryPlan,
-		MethodQueryRun, MethodPIIList, MethodPIIAdd, MethodChangeRequest, MethodLogout,
+		MethodQueryRun, MethodGrant, MethodPIIList, MethodPIIAdd, MethodChangeRequest, MethodLogout,
 	}
 }
 
@@ -178,6 +182,10 @@ type RunResult struct {
 	Lock        string `json:"lock,omitempty"`
 	Instance    string `json:"instance,omitempty"`
 	StaleTicket string `json:"stale_ticket,omitempty"`
+	// Grant is the grant the run ran under, without a ticket, and
+	// GrantLeft what is left of its budget.
+	Grant     string       `json:"grant,omitempty"`
+	GrantLeft *GrantBudget `json:"grant_left,omitempty"`
 }
 
 // StatusResult describes the console session.
@@ -199,6 +207,59 @@ type StatusResult struct {
 	SessionEndsInS int           `json:"session_ends_in_s"`
 	// Health is what the console found at start-up, for locksql doctor.
 	Health *Health `json:"health,omitempty"`
+	// Grants are the active grants, oldest first.
+	Grants []GrantInfo `json:"grants,omitempty"`
+}
+
+// GrantParams asks for a grant: one human decision covering reads of
+// Tables of DB for Duration, within a budget of statements, rows and
+// bytes returned. A value of 0 (or "") asks for the profile's limit; a
+// value above it is clamped to it. With Ticket, the decided grant of that
+// ticket is activated instead, and the other fields are ignored.
+type GrantParams struct {
+	DB         string   `json:"db,omitempty"`
+	Tables     []string `json:"tables,omitempty"`
+	Duration   string   `json:"duration,omitempty"`
+	Statements int64    `json:"statements,omitempty"`
+	Rows       int64    `json:"rows,omitempty"`
+	Bytes      int64    `json:"bytes,omitempty"`
+	// Intent is one line from the agent saying why, shown to the human
+	// and audited (untrusted text of at most MaxIntent bytes).
+	Intent string `json:"intent,omitempty"`
+	Ticket string `json:"ticket,omitempty"`
+	// Requester is the agent asking: only its token may activate the
+	// grant and run under it.
+	Requester Requester `json:"requester,omitzero"`
+}
+
+// GrantBudget is a read budget: statements run, rows and bytes returned.
+type GrantBudget struct {
+	Statements int64 `json:"statements"`
+	Rows       int64 `json:"rows"`
+	Bytes      int64 `json:"bytes"`
+}
+
+// GrantInfo is an active grant: its scope, its budget and what is left.
+type GrantInfo struct {
+	ID         string      `json:"id"`
+	DB         string      `json:"db"`
+	Tables     []string    `json:"tables"`
+	Duration   string      `json:"duration"`
+	ExpiresInS int         `json:"expires_in_s"`
+	Budget     GrantBudget `json:"budget"`
+	Remaining  GrantBudget `json:"remaining"`
+	// Agent is the agent that asked for it, as the console names it.
+	Agent string `json:"agent,omitempty"`
+}
+
+// GrantResult answers scope.request: pending with the ticket the human
+// decides in lockhub, or active with the grant.
+type GrantResult struct {
+	Status   string     `json:"status"`
+	Ticket   string     `json:"ticket,omitempty"`
+	Lock     string     `json:"lock,omitempty"`
+	Instance string     `json:"instance,omitempty"`
+	Grant    *GrantInfo `json:"grant,omitempty"`
 }
 
 // Health is the console's own diagnosis of its setup.

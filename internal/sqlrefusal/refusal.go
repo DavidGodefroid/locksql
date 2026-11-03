@@ -75,6 +75,9 @@ const (
 	// views, rules, triggers, policies, grants, search path) changed since
 	// the plan: the plan hash no longer matches.
 	Stale Code = "E_STALE"
+	// GrantsOff: grants are off in this profile (limits.grant_max_duration
+	// = 0), or the grant asked for is not a read scope it can give.
+	GrantsOff Code = "E_GRANTS_OFF"
 	// Policy is the fail-closed code of a refusal no check named: it
 	// should never be seen, and is a bug to report. lockkit defines it.
 	Policy Code = refusal.Policy
@@ -139,6 +142,8 @@ var table = map[Code]struct {
 		"a masked column may only be set to NULL or DEFAULT (it holds no value the agent chose); tell the user"},
 	Stale: {RetryRewrite, "the database objects the statement uses changed since the plan",
 		"plan the statement again (locksql_plan): the human approves the new plan"},
+	GrantsOff: {RetryAskUser, "grants are off in this profile",
+		"plan and run each query (locksql_plan, locksql_run); only the human can turn grants on (limits.grant_max_duration)"},
 }
 
 func init() {

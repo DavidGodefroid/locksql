@@ -141,6 +141,28 @@ func (c *Client) RunTicket(ctx context.Context, ticket string) (ipc.RunResult, e
 	return r, err
 }
 
+// Grant asks for a grant: one human decision for reads of the tables of
+// p within a duration and a budget. It answers pending with the ticket the
+// human decides in lockhub; activate it with ActivateGrant once decided.
+func (c *Client) Grant(ctx context.Context, p ipc.GrantParams) (ipc.GrantResult, error) {
+	var r ipc.GrantResult
+	p.Ticket = ""
+	if p.Requester == (ipc.Requester{}) {
+		p.Requester = Requester()
+	}
+	err := c.Call(ctx, ipc.MethodGrant, p, &r)
+	return r, err
+}
+
+// ActivateGrant activates the grant of a decided ticket: from then on,
+// the reads it covers run without a ticket, for its duration and within
+// its budget.
+func (c *Client) ActivateGrant(ctx context.Context, ticket string) (ipc.GrantResult, error) {
+	var r ipc.GrantResult
+	err := c.Call(ctx, ipc.MethodGrant, ipc.GrantParams{Ticket: ticket, Requester: Requester()}, &r)
+	return r, err
+}
+
 // PIIList returns the column rules in force.
 func (c *Client) PIIList(ctx context.Context) (ipc.PIIListResult, error) {
 	var r ipc.PIIListResult

@@ -24,6 +24,11 @@ the CLI and MCP reach the lock that `lox up` runs for the workspace, found throu
    console at run time and may still be refused there.
 6. `locksql_run` with the plan id, or `locksql run --profile P PLAN_ID`: it answers pending with a
    ticket. Do not retry; once the human decided, run the ticket (`locksql run --profile P TICKET`).
+   For several reads of the same few tables, ask once for a grant instead (`locksql_grant` with the
+   tables and an `intent`, CLI `locksql grant --profile P --db D TABLE...`): it answers pending with
+   a ticket; once decided, activate it (`locksql_grant` with `ticket`, CLI `locksql grant --profile
+   P TICKET`). While it lasts, `locksql_run` runs your reads of those tables at once, within its
+   budget; writes, unmask and filters, groups or aggregates on PII columns still get a ticket.
 7. Report the answer, quoting rows as returned; masked values stay masked.
 
 What a statement may do (the console parses it and resolves every column to its source):
@@ -55,7 +60,7 @@ it points at). Follow the retry rule of the code:
   by a non-PII column), `E_MASKED_SET_OP` (`UNION ALL` between PII columns), `E_MASK_UNCERTAIN`
   (PII columns by their plain name), `E_STALE` (the objects changed since the plan: plan it
   again).
-- `retry: ask_user`: `E_TIER`, `E_UNMASK_OFF`, `E_DATABASE_NOT_SERVED`. Tell the user; only the
+- `retry: ask_user`: `E_TIER`, `E_UNMASK_OFF`, `E_DATABASE_NOT_SERVED`, `E_GRANTS_OFF`. Tell the user; only the
   human can change it (`locksql_request_change` only queues a proposal).
 - `retry: stop`: `E_FORBIDDEN`, `E_MASKED_WRITE`, `E_ENGINE`, `E_POLICY`. Final for this
   question: report and wait.

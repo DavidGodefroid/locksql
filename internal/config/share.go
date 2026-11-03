@@ -84,6 +84,11 @@ type SharedLimits struct {
 	ReferenceProbe    int     `json:"reference_probe,omitempty"`
 	IdleTimeout       string  `json:"idle_timeout,omitempty"`
 	MaxSession        string  `json:"max_session,omitempty"`
+	// GrantMaxDuration is "0s" when grants are off.
+	GrantMaxDuration   string `json:"grant_max_duration,omitempty"`
+	GrantMaxStatements int64  `json:"grant_max_statements,omitempty"`
+	GrantMaxRows       int64  `json:"grant_max_rows,omitempty"`
+	GrantMaxBytes      int64  `json:"grant_max_bytes,omitempty"`
 }
 
 // SharedSSH is the bastion of a SharedProfile, without its key file.
@@ -139,6 +144,7 @@ func ExportProfile(p Profile, set string, includeUser bool) (SharedProfile, erro
 			StatementTimeout: durString(l.StatementTimeout), ExplainRowsWarn: l.ExplainRowsWarn, ExplainRowsRefuse: l.ExplainRowsRefuse,
 			MaxRows: l.MaxRows, MaxCellChars: l.MaxCellChars, MaxOutputBytes: l.MaxOutputBytes, ExplainCostRefuse: l.ExplainCostRefuse,
 			KAnonymity: l.KAnonymity, ReferenceProbe: l.ReferenceProbe, IdleTimeout: durString(l.IdleTimeout), MaxSession: durString(l.MaxSession),
+			GrantMaxDuration: grantDurationString(l), GrantMaxStatements: l.GrantMaxStatements, GrantMaxRows: l.GrantMaxRows, GrantMaxBytes: l.GrantMaxBytes,
 		},
 	}
 	if includeUser {
@@ -457,7 +463,8 @@ func (s SharedProfile) raw() rawProfile {
 	if l := s.Limits; l != nil {
 		r.Limits = rawLimits{StatementTimeout: l.StatementTimeout, ExplainRowsWarn: l.ExplainRowsWarn, ExplainRowsRefuse: l.ExplainRowsRefuse,
 			MaxRows: l.MaxRows, MaxCellChars: l.MaxCellChars, MaxOutputBytes: l.MaxOutputBytes, ExplainCostRefuse: l.ExplainCostRefuse,
-			KAnonymity: l.KAnonymity, ReferenceProbe: l.ReferenceProbe, IdleTimeout: l.IdleTimeout, MaxSession: l.MaxSession}
+			KAnonymity: l.KAnonymity, ReferenceProbe: l.ReferenceProbe, IdleTimeout: l.IdleTimeout, MaxSession: l.MaxSession,
+			GrantMaxDuration: grantDuration(l.GrantMaxDuration), GrantMaxStatements: l.GrantMaxStatements, GrantMaxRows: l.GrantMaxRows, GrantMaxBytes: l.GrantMaxBytes}
 	}
 	if h := s.SSH; h != nil {
 		r.SSH = &rawSSH{Host: h.Host, Port: h.Port, User: h.User, Auth: h.Auth, Credentials: h.Credentials}
@@ -536,6 +543,10 @@ func (f *ConfigFile) TOML(header string) []byte {
 			num("reference_probe", int64(l.ReferenceProbe))
 			str("idle_timeout", l.IdleTimeout)
 			str("max_session", l.MaxSession)
+			str("grant_max_duration", string(l.GrantMaxDuration))
+			num("grant_max_statements", l.GrantMaxStatements)
+			num("grant_max_rows", l.GrantMaxRows)
+			num("grant_max_bytes", l.GrantMaxBytes)
 		}
 		if h := r.SSH; h != nil {
 			fmt.Fprintf(&b, "\n[profiles.%s.ssh]\n", tomlQuote(name))

@@ -609,3 +609,34 @@ func TestClientUsageErrors(t *testing.T) {
 		}
 	}
 }
+
+// locksql grant asks for a grant, then activates its decided ticket; the
+// reads it covers run at once, and status lists it.
+func TestGrantCommand(t *testing.T) {
+	dir := project(t, uatConfig)
+	sio := startConsole(t, dir, "uat")
+
+	o := cli(t, dir, "", "grant", "--profile", "uat", "--db", "app", "--rows", "50", "--intent", "debug", "--json", "users")
+	o.want(t, exitOK)
+	var gr ipc.GrantResult
+	decodeJSON(t, o.stdout, &gr)
+	if gr.Status != "pending" || gr.Ticket == "" {
+		t.Fatalf("grant = %+v", gr)
+	}
+	sio.hub.Decide(gr.Ticket, ticket.Approved, "")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		o = cli(t, dir, "", "grant", "--profile", "uat", gr.Ticket)
+		if !strings.Contains(o.stdout+o.stderr, "no decision") || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	o.want(t, exitOK, "Grant active: "+gr.Ticket, "app.users", "50/50 rows")
+
+	o = cli(t, dir, "", "plan", "--profile", "uat", "--db", "app", "--json", "SELECT id, email FROM users WHERE id = 1 LIMIT 5")
+	var pl ipc.PlanResult
+	decodeJSON(t, o.stdout, &pl)
+	cli(t, dir, "", "run", "--profile", "uat", pl.PlanID).want(t, exitOK, "1\t<redacted>\n", "(ran under grant "+gr.Ticket)
+	cli(t, dir, "", "status", "--profile", "uat").want(t, exitOK, "grant limits", gr.Ticket, "199/200 statements")
+}

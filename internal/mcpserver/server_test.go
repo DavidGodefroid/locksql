@@ -33,6 +33,7 @@ type fakeConn struct {
 	runErr    error
 	planIn    ipc.PlanParams
 	planErr   error
+	grantIn   ipc.GrantParams
 }
 
 func (f *fakeConn) record(m string) {
@@ -73,6 +74,20 @@ func (f *fakeConn) Plan(_ context.Context, p ipc.PlanParams) (ipc.PlanResult, er
 
 func (f *fakeConn) RunTicket(ctx context.Context, ticket string) (ipc.RunResult, error) {
 	return f.Run(ctx, "ticket:"+ticket)
+}
+
+func (f *fakeConn) Grant(_ context.Context, p ipc.GrantParams) (ipc.GrantResult, error) {
+	f.record("grant " + strings.Join(p.Tables, ","))
+	f.mu.Lock()
+	f.grantIn = p
+	f.mu.Unlock()
+	return ipc.GrantResult{Status: "pending", Ticket: "01JTICKETGRANT000000000000", Lock: "locksql", Instance: "sql-uat"}, nil
+}
+
+func (f *fakeConn) ActivateGrant(_ context.Context, ticket string) (ipc.GrantResult, error) {
+	f.record("activate " + ticket)
+	return ipc.GrantResult{Status: "active", Grant: &ipc.GrantInfo{ID: ticket, DB: "app", Tables: []string{"app.orders"}, Duration: "1h0m0s",
+		ExpiresInS: 3600, Budget: ipc.GrantBudget{Statements: 200, Rows: 10000, Bytes: 1 << 20}, Remaining: ipc.GrantBudget{Statements: 200, Rows: 10000, Bytes: 1 << 20}}}, nil
 }
 
 func (f *fakeConn) Run(ctx context.Context, planID string) (ipc.RunResult, error) {
@@ -155,6 +170,7 @@ func call(t *testing.T, cs *mcp.ClientSession, name string, args map[string]any)
 
 var specTools = []string{
 	"locksql_describe",
+	"locksql_grant",
 	"locksql_list_tables",
 	"locksql_pii_add",
 	"locksql_pii_list",
@@ -338,6 +354,7 @@ func TestNoConsoleErrorCarriesStartCommand(t *testing.T) {
 		"locksql_describe":       {"table": "users"},
 		"locksql_plan":           {"sql": "SELECT 1 LIMIT 1"},
 		"locksql_run":            {"plan_id": "p1"},
+		"locksql_grant":          {"tables": []string{"orders"}},
 		"locksql_pii_list":       {},
 		"locksql_pii_add":        {"column": "app.users.email"},
 		"locksql_request_change": {"change": "tier=write"},
@@ -660,5 +677,28 @@ func TestRunResultHasNoPendingFields(t *testing.T) {
 	b, _ := json.Marshal(call(t, cs, "locksql_run", map[string]any{"plan_id": "p1"}).StructuredContent)
 	if strings.Contains(string(b), "status") || strings.Contains(string(b), "ticket") {
 		t.Fatalf("structured content %s", b)
+	}
+}
+
+// locksql_grant asks for a grant (pending, with the ticket) and activates
+// the decided ticket.
+func TestGrantTool(t *testing.T) {
+	f := &fakeConn{profile: "uat"}
+	cs := connect(t, withFake(f), nil)
+	r := call(t, cs, "locksql_grant", map[string]any{"db": "app", "tables": []string{"orders"}, "rows": 50, "intent": "why"})
+	b, _ := json.Marshal(r.StructuredContent)
+	var out GrantOut
+	if err := json.Unmarshal(b, &out); err != nil || r.IsError || out.Status != "pending" || out.Ticket == "" || out.Instance != "sql-uat" {
+		t.Fatalf("pending grant: %s (%s)", b, text(r))
+	}
+	if f.grantIn.Rows != 50 || f.grantIn.Intent != "why" || f.grantIn.DB != "app" {
+		t.Fatalf("params %+v", f.grantIn)
+	}
+	r = call(t, cs, "locksql_grant", map[string]any{"ticket": out.Ticket})
+	if got := text(r); r.IsError || !strings.Contains(got, "Grant active: "+out.Ticket) || !strings.Contains(got, "app.orders") {
+		t.Fatalf("activation: %s", got)
+	}
+	if r := call(t, cs, "locksql_grant", map[string]any{}); !r.IsError {
+		t.Fatal("a grant without tables or ticket")
 	}
 }

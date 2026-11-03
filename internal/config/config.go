@@ -98,6 +98,14 @@ type Limits struct {
 	// loosening. Bounds: 1m <= IdleTimeout <= MaxSession <= 24h.
 	IdleTimeout time.Duration `toml:"idle_timeout" json:"idle_timeout,omitempty"`
 	MaxSession  time.Duration `toml:"max_session" json:"max_session,omitempty"`
+	// The grant limits (Grants): the longest grant and its largest read
+	// budget. Zero is the default; GrantsOff (grant_max_duration = 0 in
+	// the file) disables grants. Raising any of them is a loosening.
+	GrantMaxDuration   time.Duration `toml:"grant_max_duration" json:"grant_max_duration,omitempty"`
+	GrantMaxStatements int64         `toml:"grant_max_statements" json:"grant_max_statements,omitempty"`
+	GrantMaxRows       int64         `toml:"grant_max_rows" json:"grant_max_rows,omitempty"`
+	GrantMaxBytes      int64         `toml:"grant_max_bytes" json:"grant_max_bytes,omitempty"`
+	GrantsOff          bool          `toml:"-" json:"grants_off,omitempty"`
 }
 
 // Profile is one named database target with its policy.
@@ -244,6 +252,11 @@ type rawLimits struct {
 	ReferenceProbe    int     `toml:"reference_probe"`
 	IdleTimeout       string  `toml:"idle_timeout"`
 	MaxSession        string  `toml:"max_session"`
+	// GrantMaxDuration takes "0" or 0 to disable grants.
+	GrantMaxDuration   grantDuration `toml:"grant_max_duration"`
+	GrantMaxStatements int64         `toml:"grant_max_statements"`
+	GrantMaxRows       int64         `toml:"grant_max_rows"`
+	GrantMaxBytes      int64         `toml:"grant_max_bytes"`
 }
 
 type rawProfile struct {
@@ -346,7 +359,8 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 			ExplainRowsWarn: r.Limits.ExplainRowsWarn, ExplainRowsRefuse: r.Limits.ExplainRowsRefuse,
 			MaxRows: r.Limits.MaxRows, MaxCellChars: r.Limits.MaxCellChars, MaxOutputBytes: r.Limits.MaxOutputBytes,
 			ExplainCostRefuse: r.Limits.ExplainCostRefuse, KAnonymity: r.Limits.KAnonymity,
-			ReferenceProbe: r.Limits.ReferenceProbe,
+			ReferenceProbe:     r.Limits.ReferenceProbe,
+			GrantMaxStatements: r.Limits.GrantMaxStatements, GrantMaxRows: r.Limits.GrantMaxRows, GrantMaxBytes: r.Limits.GrantMaxBytes,
 		},
 	}
 
@@ -444,6 +458,9 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		}
 		*f.dst = d
 	}
+	if err := parseGrantDuration(&p.Limits, string(r.Limits.GrantMaxDuration), errf); err != nil {
+		return Profile{}, err
+	}
 	if r.CredentialsTTL != "" {
 		d, err := time.ParseDuration(r.CredentialsTTL)
 		if err != nil || d < time.Minute {
@@ -468,6 +485,9 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		{"reference_probe", int64(p.Limits.ReferenceProbe)},
 		{"idle_timeout", int64(p.Limits.IdleTimeout)},
 		{"max_session", int64(p.Limits.MaxSession)},
+		{"grant_max_statements", p.Limits.GrantMaxStatements},
+		{"grant_max_rows", p.Limits.GrantMaxRows},
+		{"grant_max_bytes", p.Limits.GrantMaxBytes},
 	} {
 		if f.val < 0 {
 			return Profile{}, errf("limits.%s must not be negative", f.key)
