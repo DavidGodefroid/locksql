@@ -955,7 +955,8 @@ locksql grant --profile P TICKET      # once the grant's ticket is decided
 `:status` and `locksql status` list the active grants with their tables,
 time left and budget left. The audit log has a `grant` record for each
 activation, a `grant_end` record for each end (`revoked`, `expired`,
-`session end: …`, `policy_changed`), and an `approved`
+`session end: …`, `policy_changed`; with what the grant used:
+`statements_used`, `rows` and `bytes_used`), and an `approved`
 (decision `grant`) and a `run` record for each covered run; all carry the
 grant id (`grant`, also in `ticket`) and the hub's signature of its decision
 (`hub_sig`).

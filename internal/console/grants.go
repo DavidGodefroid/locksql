@@ -549,7 +549,8 @@ func (s *Server) endGrant(g *grant, why string) {
 	}
 	s.grants = slices.Delete(s.grants, i, i+1)
 	rec := s.grantRecord(context.Background(), g, audit.EventGrantEnd, why)
-	rec.Rows = g.scope.Budget.Rows - g.left.Rows
+	statements, bytes := g.scope.Budget.Statements-g.left.Statements, g.scope.Budget.Bytes-g.left.Bytes
+	rec.Rows, rec.StatementsUsed, rec.BytesUsed = g.scope.Budget.Rows-g.left.Rows, &statements, &bytes
 	s.audit(rec)
 	s.println(paint.Warn("grant " + safeText(g.id, false) + " ended: " + why))
 }

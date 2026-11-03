@@ -653,3 +653,25 @@ func TestGrantBudgetCoversBothRenderings(t *testing.T) {
 		t.Fatalf("%d bytes charged for %d bytes of text alone (left %d)", budget-left.Bytes, text, left.Bytes)
 	}
 }
+
+// Finding 5: the end of a grant records what it used: statements, rows
+// and bytes, 0 included.
+func TestGrantEndRecordsUsage(t *testing.T) {
+	h := newHarness(t, uatProfile())
+	used := newGrant(t, h, ipc.GrantParams{Tables: []string{"users"}})
+	idle := newGrant(t, h, ipc.GrantParams{Tables: []string{"orders"}})
+	rr, ok := covered(t, runOf(t, h, readUsers, ipc.Requester{}))
+	if !ok {
+		t.Fatal("not covered")
+	}
+	h.s.Command(context.Background(), ":revoke")
+	end := auditRecords(t, h, "grant_end", used.ID)
+	if len(end) != 1 || end[0]["statements_used"] != float64(1) || end[0]["rows"] != float64(1) ||
+		end[0]["bytes_used"] != float64(used.Budget.Bytes-rr.GrantLeft.Bytes) {
+		t.Fatalf("end of the used grant: %v", end)
+	}
+	end = auditRecords(t, h, "grant_end", idle.ID)
+	if len(end) != 1 || end[0]["statements_used"] != float64(0) || end[0]["bytes_used"] != float64(0) {
+		t.Fatalf("end of the idle grant: %v", end)
+	}
+}

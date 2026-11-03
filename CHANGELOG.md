@@ -42,7 +42,8 @@ older hub refuses the grant's ticket; everything else works as before.
   budget left.
 - Audit: `grant` and `grant_end` records, and the records of every covered
   run, carry the grant id (`grant`, `ticket`) and the hub's signature of its
-  decision (`hub_sig`); `grant_scope` describes the scope.
+  decision (`hub_sig`); `grant_scope` describes the scope, and `grant_end`
+  records what the grant used (`statements_used`, `rows`, `bytes_used`).
 - New refusal code `E_GRANTS_OFF` (`ask_user`).
 
 ## v0.15.0 (2026-11-02)

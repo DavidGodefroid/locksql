@@ -112,6 +112,10 @@ type Record struct {
 	// its scope in words (database, tables, duration, budget).
 	Grant      string `json:"grant,omitempty"`
 	GrantScope string `json:"grant_scope,omitempty"`
+	// StatementsUsed and BytesUsed are what a grant used, on its
+	// grant_end record (with Rows); set there only, 0 included.
+	StatementsUsed *int64 `json:"statements_used,omitempty"`
+	BytesUsed      *int64 `json:"bytes_used,omitempty"`
 }
 
 // AuditEvent implements lockkit's audit.Record.
