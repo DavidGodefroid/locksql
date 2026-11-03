@@ -4,11 +4,12 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## Unreleased
+## v0.16.0 (2026-11-03)
 
-Needs lockkit v0.12.0 (risk class `grant`). Grants need a lockhub that
-knows the `grant` risk (lockhub #99/#100, merged, not yet released): an
-older hub refuses the grant's ticket; everything else works as before.
+Supported lockhub: v0.3.0 or later; grants need lockhub v0.6.0 or later (risk
+class `grant`): an older hub refuses the grant's ticket, everything else works
+as before. Built on lockkit v0.12.0. No `:review` on upgrade: an unchanged
+policy keeps its fingerprint.
 
 ### New
 
