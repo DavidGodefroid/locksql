@@ -4,6 +4,20 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+### Changed
+
+- **A production console asks for its profile name once per approved
+  policy, not at every start** (#178). The name is typed when the policy is
+  first approved and after a reviewed loosening; a restart of an approved,
+  unchanged production profile (or one only tightened since) shows the
+  banner and goes on to the credentials (a Vault token, when the profile
+  needs one, is still asked). The console records the policy the name was
+  typed for beside the approved policy (`approved/confirmed-<key>.json`);
+  without that record, as on the first start after the upgrade or after a
+  wrong name, the name is asked.
+
 ## v0.16.0 (2026-11-03)
 
 Supported lockhub: v0.3.0 or later; grants need lockhub v0.6.0 or later (risk

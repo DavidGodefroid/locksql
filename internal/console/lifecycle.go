@@ -75,6 +75,9 @@ type starter struct {
 	// renewals do not ask again; nil until asked, and after Vault refused
 	// it. wipeVaultToken wipes it when the console ends.
 	vaultToken []byte
+	// reviewed is set by startPolicy when the human approved the policy
+	// review ("Apply these changes?") of this start.
+	reviewed bool
 }
 
 // wipeVaultToken wipes the Vault token the human typed.
@@ -557,15 +560,24 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 
-	// 2. Production banner and typed profile name.
+	// 2. Production banner, and the typed profile name when the policy in
+	// force was not confirmed by it before (#178).
 	if p.Production {
 		o.IO.Println(red + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + reset)
 		o.IO.Println(red + "  " + ui.MarkWarn + " PRODUCTION profile " + p.Name + " (" + st.where() + ")" + reset)
 		o.IO.Println(red + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + reset)
-		bell(o.IO)
-		ans, ok := o.IO.Ask(ctx, fmt.Sprintf("Type the profile name %q to continue: ", p.Name), ApprovalTimeout)
-		if !ok || strings.TrimSpace(ans) != p.Name {
-			return errors.New("console: production profile not confirmed")
+		if productionNameNeeded(o.StateDir, key, approved, st.reviewed) {
+			bell(o.IO)
+			ans, ok := o.IO.Ask(ctx, fmt.Sprintf("Type the profile name %q to continue: ", p.Name), ApprovalTimeout)
+			if !ok || strings.TrimSpace(ans) != p.Name {
+				return errors.New("console: production profile not confirmed")
+			}
+			if err := config.SaveConfirmed(o.StateDir, key, approved); err != nil {
+				// Not recorded: the next start asks again.
+				o.IO.Println(paint.Warn("warning: the confirmation could not be recorded: " + safeText(err.Error(), false)))
+			}
+		} else {
+			o.IO.Println(paint.Dim("profile name typed at an earlier start; the approved policy has not loosened since"))
 		}
 	}
 
@@ -684,6 +696,22 @@ func Run(ctx context.Context, o Options) error {
 	return serveErr
 }
 
+// productionNameNeeded reports whether the start of a production profile
+// asks for its name: when the human approved a policy review at this start
+// (first approval, or a loosening), and when the policy in force loosens
+// the one the name was last typed for, or none was (a wrong name leaves
+// none). An unreadable record asks.
+func productionNameNeeded(stateDir, key string, inForce config.Policy, reviewed bool) bool {
+	if reviewed {
+		return true
+	}
+	confirmed, err := config.LoadConfirmed(stateDir, key)
+	if err != nil {
+		return true
+	}
+	return !confirmed.Profile.Production || kconsole.Loosens(config.Diff(*confirmed, inForce))
+}
+
 // refuseX11Production is refuseX11IfProduction for the loaded profile p
 // and for the policy approved before under key, when there is one.
 func refuseX11Production(iso *isolation, stateDir, key string, p config.Profile) error {
@@ -756,6 +784,7 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 		if err := config.SaveApproved(stateDir, key, cur); err != nil {
 			return config.Policy{}, "", st.failed(true, err)
 		}
+		st.reviewed = true
 		return cur, "", nil
 	}
 	if err != nil {
@@ -796,6 +825,7 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 	if err := config.SaveApproved(stateDir, key, cur); err != nil {
 		return config.Policy{}, "", st.failed(true, err)
 	}
+	st.reviewed = true
 	return cur, "", nil
 }
 

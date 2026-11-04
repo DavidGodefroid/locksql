@@ -91,7 +91,9 @@ root. Access to the Docker daemon is such a way: an agent that can run
 - A request is approved only by lockhub's signed decision; the console's
   terminal answers only its own prompts (`:review`, `:unmask`).
 - locksql never rewrites SQL: what the human approves is what runs.
-- Production profiles need the profile name typed, not `y`.
+- Production profiles need the profile name typed, not `y`. At console
+  start it is typed once per approved policy: on the first approval and
+  after a loosening, not on a restart of an unchanged policy.
 - REFUSE verdicts cannot be overridden from the console; the human has to
   raise the limits, which is itself a confirmed loosening.
 

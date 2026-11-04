@@ -356,3 +356,40 @@ func TestStartPolicyChangeLockout(t *testing.T) {
 		t.Fatalf("checkLockedOut = %v", err)
 	}
 }
+
+// productionNameNeeded skips the name only for a policy that does not
+// loosen the one the name was typed for, outside a reviewed approval.
+func TestProductionNameNeeded(t *testing.T) {
+	state := t.TempDir()
+	key := config.ApprovedKey(t.TempDir(), "prod")
+	pol := config.NewPolicy(prodProfile(), []string{"*.*.email"}, nil)
+	if !productionNameNeeded(state, key, pol, false) {
+		t.Error("no confirmation recorded: not asked")
+	}
+	if err := config.SaveConfirmed(state, key, pol); err != nil {
+		t.Fatal(err)
+	}
+	if productionNameNeeded(state, key, pol, false) {
+		t.Error("unchanged confirmed policy: asked")
+	}
+	if !productionNameNeeded(state, key, pol, true) {
+		t.Error("reviewed at this start: not asked")
+	}
+	if productionNameNeeded(state, key, config.NewPolicy(prodProfile(), []string{"*.*.email", "*.*.phone"}, nil), false) {
+		t.Error("tightened policy: asked")
+	}
+	if !productionNameNeeded(state, key, config.NewPolicy(prodProfile(), nil, nil), false) {
+		t.Error("loosened policy: not asked")
+	}
+	// The record sits beside the approved policy, never in its place.
+	if _, err := config.LoadApproved(state, key); err == nil {
+		t.Error("the confirmation was saved as the approved policy")
+	}
+	path := filepath.Join(state, product.P.Name, "approved", "confirmed-"+key+".json")
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !productionNameNeeded(state, key, pol, false) {
+		t.Error("unreadable record: not asked")
+	}
+}

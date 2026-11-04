@@ -15,7 +15,7 @@
 # database    = ""                  # set: the only database served; empty: chosen per query
 # credentials = "ask"               # ask | keychain
 # tier        = "read"              # read | write | ddl | admin
-# production  = false               # true: stricter limits, typed profile name at start
+# production  = false               # true: stricter limits, typed profile name on approval
 
 # [profiles.dev.limits]
 # statement_timeout   = "30s"

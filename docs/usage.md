@@ -607,7 +607,12 @@ The console needs an interactive terminal (`lox attach` attaches yours). At star
    detectors, PII rules) is shown and must be approved. Later starts compare
    it with the last approved policy (see [Policy changes](#policy-changes)).
 2. **Production banner.** A `production = true` profile prints a red banner
-   and asks you to type the profile name.
+   and asks you to type the profile name when its policy was just approved
+   (the first start, or a reviewed loosening), and when the policy in force
+   loosens the one the name was last typed for. A plain restart of an
+   approved, unchanged profile (or one only tightened since) shows the
+   banner and goes on to the credentials; a wrong name leaves nothing
+   recorded, so the next start asks again.
 3. **Credentials.** It asks for the database user when the profile has none,
    then for the password (no echo). With `credentials = "keychain"` (not in a
    container, which has no keychain) it reads the OS keychain (service `locksql`, account `<profile>@<host>:<port>`, or
