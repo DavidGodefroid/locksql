@@ -275,6 +275,24 @@ func SaveApproved(stateDir, key string, p Policy) error {
 	return kconfig.SaveApproved(product.P, stateDir, key, canonical(p))
 }
 
+// confirmedKey names, in the approved-policy store, the production policy
+// whose profile name the human last typed at start-up (#178). Its prefix
+// never starts a policy key, which is "user-" or a hex project hash.
+func confirmedKey(key string) string { return "confirmed-" + key }
+
+// LoadConfirmed reads the production policy confirmed by its typed profile
+// name under key. When none was confirmed yet, the error wraps
+// fs.ErrNotExist.
+func LoadConfirmed(stateDir, key string) (*Policy, error) {
+	return LoadApproved(stateDir, confirmedKey(key))
+}
+
+// SaveConfirmed records p as the production policy whose profile name the
+// human typed under key.
+func SaveConfirmed(stateDir, key string, p Policy) error {
+	return SaveApproved(stateDir, confirmedKey(key), p)
+}
+
 // StateDir returns the user state directory (without the locksql suffix):
 // $XDG_STATE_HOME or ~/.local/state on Linux and other Unix systems,
 // and os.UserConfigDir() on macOS.
