@@ -561,7 +561,12 @@ locksql console --hub URL --hub-key-file PATH --instance NAME [--profile dev] [-
 
 `lox attach sql-dev` attaches your terminal to it (detach: Ctrl-P Ctrl-Q):
 the console asks its start-up questions there (below), and again when it
-restarts. Started without its hub flags, `locksql console` exits with ``launched by `lox up` only`` (exit code 3) before any prompt or file write. Without
+restarts. A question asked before you attached is not printed again: while
+it waits, the console keeps it (the prompt, never your answer) in
+`<socket directory>/<project>-<profile>.question`, next to its socket, and
+removes it once answered; `lox attach` and lea read it to tell you what the
+console waits for (after a restart of an approved production profile, the
+Vault token or the password, not the profile name). Started without its hub flags, `locksql console` exits with ``launched by `lox up` only`` (exit code 3) before any prompt or file write. Without
 `--profile` the console uses the only profile, or asks which one when
 there are several. [docker.md](docker.md#run-the-console) has the volumes,
 Vault and the networks a database needs.
