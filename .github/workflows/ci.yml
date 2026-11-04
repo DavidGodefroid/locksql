@@ -5,7 +5,8 @@ on:
     branches: [main]
   pull_request:
   schedule:
-    - cron: "17 3 * * *" # nightly: fuzzing
+    - cron: "17 3 * * *" # nightly: fuzzing, macOS
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,7 +17,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # macOS runs on main, nightly and by hand, not on pull requests:
+        # hosted macOS runners are too often not acquired to gate a PR.
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     env:
       CGO_ENABLED: "0"
