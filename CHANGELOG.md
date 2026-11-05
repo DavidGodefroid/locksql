@@ -6,7 +6,7 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
-Built on the lockkit release with DavidGodefroid/lockkit#127.
+Built on lockkit v0.12.1.
 
 ### Changed
 
