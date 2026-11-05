@@ -453,6 +453,9 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 	key := config.ApprovedKey(cfg.ProjectRoot, p.Name)
+	// The question the console waits for is kept next to its socket, where
+	// lox attach and lea read it: they attach after it was printed (#182).
+	recordQuestions(iso, o.IO, o.Cwd, p.Name)
 	n, err := migrateRules(rulesDir)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrConfig, err)
@@ -694,6 +697,20 @@ func Run(ctx context.Context, o Options) error {
 	s.audit(audit.Record{Event: audit.EventLogout, Decision: reason})
 	o.IO.Println(paint.Step("session ended: " + reason))
 	return serveErr
+}
+
+// recordQuestions makes io keep the question it waits for in the
+// lockkit question file of the profile's socket (kconsole.QuestionPath),
+// when io records questions (the real Terminal) and the socket path is
+// known; nothing otherwise.
+func recordQuestions(iso *isolation, io IO, cwd, profile string) {
+	r, ok := io.(kconsole.QuestionRecorder)
+	if !ok {
+		return
+	}
+	if path, err := iso.socketPath(config.ProjectKey(cwd), profile); err == nil {
+		r.SetQuestionFile(kconsole.QuestionPath(path))
+	}
 }
 
 // productionNameNeeded reports whether the start of a production profile

@@ -4,6 +4,18 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+Built on lockkit v0.12.1.
+
+### Changed
+
+- The console keeps the question it waits for (the prompt, never the
+  answer) next to its socket, in `<project>-<profile>.question`, removed
+  once answered: `lox attach` and lea show the question actually pending
+  after a restart, instead of guessing "its profile name" while the
+  console waits for the Vault token (#182).
+
 ## v0.16.1 (2026-11-04)
 
 Supported lockhub: as v0.16.0. Built on lockkit v0.12.0.
