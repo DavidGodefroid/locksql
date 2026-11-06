@@ -524,6 +524,37 @@ func TestTemplatesTeachEveryRefusalCode(t *testing.T) {
 	}
 }
 
+// A pending ticket's decision comes back to the agent by itself: every
+// generated instruction tells the agent to end its turn and run the ticket
+// when told, never to ask the user to report the approval, and keeps the
+// fallback for hosts that deliver no decision (#176).
+func TestTemplatesTeachTheDecisionComesBack(t *testing.T) {
+	for name, body := range map[string]string{
+		"skill.md":        mustTemplate(t, "templates/skill.md"),
+		"agents.md":       mustTemplate(t, "templates/agents.md"),
+		"cursor-rule.mdc": cursorRule(),
+	} {
+		s := strings.Join(strings.Fields(strings.ToLower(body)), " ")
+		for _, want := range []string{
+			"end your turn",
+			"comes back to you by itself, as a new turn",
+			"when told the ticket is approved, run it",
+			"never ask the user to tell you it was approved",
+			"if your host delivers no decision, `locksql run --profile p ticket` shows the ticket's state",
+			"end your turn the same way, and when told it is approved, activate it",
+		} {
+			if !strings.Contains(s, want) {
+				t.Errorf("%s lacks %q", name, want)
+			}
+		}
+		for _, stale := range []string{"waiting for your approval", "you are waiting for their approval", "once the human decided"} {
+			if strings.Contains(s, stale) {
+				t.Errorf("%s still says %q", name, stale)
+			}
+		}
+	}
+}
+
 // Token masking is gone: no generated instruction may teach tok_ values.
 func TestTemplatesHaveNoTokens(t *testing.T) {
 	for name, body := range map[string]string{

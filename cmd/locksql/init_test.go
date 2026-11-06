@@ -32,6 +32,20 @@ func TestInitCommand(t *testing.T) {
 			t.Errorf("%s not written at the git root: %v", rel, err)
 		}
 	}
+	// The installed instructions tell the agent that a pending ticket's
+	// decision comes back by itself (#176).
+	for _, rel := range []string{".claude/skills/locksql/SKILL.md", "AGENTS.md"} {
+		b, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := strings.Join(strings.Fields(string(b)), " ")
+		for _, want := range []string{"end your turn", "comes back to you by itself", "Never ask the user to tell you it was approved"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s lacks %q", rel, want)
+			}
+		}
+	}
 	s := out.String()
 	for _, want := range []string{"created    .mcp.json", "[mcp_servers.locksql]", "lox up", filepath.Join(root, ".locksql", "config.toml")} {
 		if !strings.Contains(s, want) {

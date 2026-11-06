@@ -35,16 +35,20 @@ the workspace, found through its `.lockfamily/up.json`. With several locksql loc
    - Pass `intent`: one line saying why, in the user's terms (the human reads it on the approval
      screen without the chat). CLI: `--intent "..."`.
 5. **Show the user** in chat, before running: target (profile, host, database), the SQL, the EXPLAIN
-   summary and the verdict. Then say: *"Waiting for your approval in lockhub (`lox approve`)."* When the
+   summary and the verdict, and that the human approves it in lockhub (`lox approve`). When the
    statement filters on a PII column the verdict is decided on the console at run time and may still
    be refused there.
 6. **Run.** `locksql_run` with the plan id, or `locksql run --profile P PLAN_ID`: it answers pending
-   with a ticket. Do not retry; once the human decided in lockhub, run the ticket (`locksql run
-   --profile P TICKET`). Plans are one-shot and expire after 10 minutes.
+   with a ticket. Do not retry: **end your turn**. The decision comes back to you by itself, as a
+   new turn, when your host delivers it (lea does, for MCP and CLI runs alike). When told the ticket
+   is approved, run it (`locksql_run` with `ticket`, CLI `locksql run --profile P TICKET`); when told
+   it is denied, stop. Never ask the user to tell you it was approved. If your host delivers no
+   decision, `locksql run --profile P TICKET` shows the ticket's state. Plans are one-shot and
+   expire after 10 minutes.
    For several reads of the same few tables, ask once for a grant instead (`locksql_grant` with the
    tables and an `intent`, CLI `locksql grant --profile P --db D TABLE...`): it answers pending with
-   a ticket; once decided, activate it (`locksql_grant` with `ticket`, CLI `locksql grant --profile
-   P TICKET`). While it lasts, `locksql_run` runs your reads of those tables at once, within its
+   a ticket; end your turn the same way, and when told it is approved, activate it (`locksql_grant`
+   with `ticket`, CLI `locksql grant --profile P TICKET`). While it lasts, `locksql_run` runs your reads of those tables at once, within its
    budget; writes, unmask and filters, groups or aggregates on PII columns still get a ticket.
 7. **Report** the answer to the user's question, quoting rows as returned. Masked values stay masked.
 
@@ -128,7 +132,7 @@ locksql status   [--profile P]                        # consoles, databases, lim
 locksql tables   --profile P [--db D]
 locksql describe --profile P [--db D] TABLE
 locksql plan     --profile P [--db D] [--unmask] [--intent TEXT] "SQL" # validate + EXPLAIN -> plan id
-locksql run      --profile P PLAN_ID|TICKET           # pending, then the ticket once approved in lockhub
+locksql run      --profile P PLAN_ID|TICKET           # pending: end your turn; run the ticket when told it is approved
 locksql request  --profile P "limits.max_rows=500"    # queued for the human, never applied
 ```
 
