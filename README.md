@@ -28,7 +28,9 @@
 
 ---
 
-locksql puts a **console** between your AI agent and MariaDB, MySQL,
+A Lock of the [Lock Family](https://github.com/DavidGodefroid/lockfamily),
+harness security for AI agents: locksql puts a **console** between your AI
+agent and MariaDB, MySQL,
 PostgreSQL or SQLite. The agent proposes SQL; the console holds the
 credentials, parses and weighs every statement, masks personal data and
 sends it to [lockhub](https://github.com/DavidGodefroid/lockhub), where
