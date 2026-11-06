@@ -3,7 +3,7 @@
 This guide walks through a session: setting up a project and its agents,
 running the console, and what the agent can do through the CLI and the MCP
 server. locksql runs in Docker: [docker.md](docker.md) is the setup guide,
-and the [README](../README.md) has the configuration reference.
+and [configuration.md](configuration.md) has the configuration reference.
 
 `locksql` is the launcher ([docker.md](docker.md#install)): every command
 runs in the image, with the account it needs. The client commands
