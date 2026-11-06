@@ -42,7 +42,7 @@ func TestAutoRulesEndToEnd(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(project, ".locksql"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"local.db", "prod.db"} {
+	for _, name := range []string{"local.db", "prod.db", "returning.db"} {
 		db, err := sql.Open("sqlite", filepath.Join(project, name))
 		if err != nil {
 			t.Fatal(err)
@@ -65,6 +65,15 @@ engine = "sqlite"
 path = "prod.db"
 tier = "write"
 production = true
+
+[profiles.returning]
+engine = "sqlite"
+path = "returning.db"
+tier = "write"
+
+[profiles.returning.auto]
+preset = "full-auto"
+unmask = "ask"
 `
 	if err := os.WriteFile(filepath.Join(project, ".locksql", "config.toml"), []byte(conf), 0o644); err != nil {
 		t.Fatal(err)
@@ -100,7 +109,7 @@ production = true
 			Rules      map[string]string `json:"rules"`
 		} `json:"profiles"`
 	}
-	if err := json.Unmarshal(out, &rules); err != nil || rules.Lock != "locksql" || len(rules.Profiles) != 2 {
+	if err := json.Unmarshal(out, &rules); err != nil || rules.Lock != "locksql" || len(rules.Profiles) != 3 {
 		t.Fatalf("profile rules: %v\n%s", err, out)
 	}
 	if l := rules.Profiles[0]; l.Profile != "local" || l.Preset != "full-auto" || l.Rules["write"] != "auto" || l.Rules["ddl"] != "auto" {
@@ -109,10 +118,13 @@ production = true
 	if p := rules.Profiles[1]; p.Profile != "prod" || !p.Production || p.Rules["read"] != "auto" || p.Rules["write"] != "ask" || p.Rules["connect"] != "ask" {
 		t.Fatalf("prod rules: %+v", p)
 	}
+	if r := rules.Profiles[2]; r.Profile != "returning" || r.Preset != "" || r.Rules["write"] != "auto" || r.Rules["unmask"] != "ask" {
+		t.Fatalf("returning rules: %+v", r)
+	}
 
-	start := func(t *testing.T, profile string, answers ...string) (*consoleProc, *rpc) {
+	startWith := func(t *testing.T, flags []string, profile string, answers ...string) (*consoleProc, *rpc) {
 		t.Helper()
-		c := startConsole(t, project, envOf(profile), "--profile", profile)
+		c := startConsole(t, project, envOf(profile), append([]string{"--profile", profile}, flags...)...)
 		for _, a := range answers {
 			parts := strings.SplitN(a, "|", 2)
 			c.expect(parts[0])
@@ -133,11 +145,20 @@ production = true
 		}
 		return c, cl
 	}
+	start := func(t *testing.T, profile string, answers ...string) (*consoleProc, *rpc) {
+		t.Helper()
+		return startWith(t, nil, profile, answers...)
+	}
+	var submitWith func(t *testing.T, cl *rpc, sql string, unmask bool) string
 	// submit plans sql and runs the plan: the ticket the lock pushed.
 	submit := func(t *testing.T, cl *rpc, sql string) string {
 		t.Helper()
+		return submitWith(t, cl, sql, false)
+	}
+	submitWith = func(t *testing.T, cl *rpc, sql string, unmask bool) string {
+		t.Helper()
 		var pr ipc.PlanResult
-		if e := cl.call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "main", SQL: sql}, &pr); e != nil {
+		if e := cl.call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "main", SQL: sql, Unmask: unmask}, &pr); e != nil {
 			t.Fatalf("plan %q: %v", sql, e)
 		}
 		var rr ipc.RunResult
@@ -246,6 +267,59 @@ production = true
 		}
 		log := auditLog(t, "prod")
 		for _, want := range []string{`"auto_rule":"auto.read = auto"`, `"decided_by":"auto:auto.read"`, `"auto_rule":"auto.write = ask"`, `"decided_by":"auto:rogue"`, `"decided_by":"human"`} {
+			if !strings.Contains(log, want) {
+				t.Errorf("audit lacks %s:\n%s", want, log)
+			}
+		}
+		c.send("\x03")
+		_ = c.wait()
+	})
+
+	// An unmasked write sends its RETURNING rows back in clear: on a
+	// profile whose writes are auto but whose unmask is asked, lox run's
+	// auto mode must not approve it. The lock marks its ticket never-auto
+	// and refuses an auto rule's approval; the same write masked stays
+	// auto.
+	t.Run("unmasked RETURNING on a write-auto profile", func(t *testing.T) {
+		c, cl := startWith(t, []string{"--allow-unmask"}, "returning", "Apply these changes? [y/N]|y")
+		const ins = "INSERT INTO items (id, label) VALUES (10, 'clear') RETURNING id, label"
+		tk := submitWith(t, cl, ins, true)
+		if !loxRunAuto(t, c.hub, tk, "") {
+			t.Fatal("lox run would auto-approve an unmasked write under unmask = ask")
+		}
+		autoApprove(t, c.hub, tk, "auto.write")
+		if e := runTk(t, cl, tk, nil); e == nil || e.Code != ipc.CodeDenied || !strings.Contains(e.Message, "approved by an auto rule") {
+			t.Fatalf("auto approval of an unmasked write: %+v", e)
+		}
+		count := func() int {
+			h, err := sql.Open("sqlite", filepath.Join(project, "returning.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer h.Close()
+			var n int
+			if err := h.QueryRow("SELECT count(*) FROM items WHERE id >= 10").Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}
+		if n := count(); n != 0 {
+			t.Fatalf("an auto approval ran an unmasked write: %d rows", n)
+		}
+		// Masked, the write is left to auto and runs.
+		tk = submitWith(t, cl, "INSERT INTO items (id, label) VALUES (11, 'masked') RETURNING id", false)
+		if loxRunAuto(t, c.hub, tk, "auto.write") {
+			t.Fatal("lox run would ask for a masked write of a write-auto profile")
+		}
+		var rr ipc.RunResult
+		if e := runTk(t, cl, tk, &rr); e != nil {
+			t.Fatalf("masked write: %v", e)
+		}
+		if n := count(); n != 1 {
+			t.Fatalf("masked write: %d rows", n)
+		}
+		log := auditLog(t, "returning")
+		for _, want := range []string{`"auto_rule":"auto.unmask = ask"`, `"decided_by":"auto:auto.write"`} {
 			if !strings.Contains(log, want) {
 				t.Errorf("audit lacks %s:\n%s", want, log)
 			}

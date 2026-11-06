@@ -123,6 +123,44 @@ func TestAutoRulesUnmaskedReadTakesTheStricter(t *testing.T) {
 	}
 }
 
+// An unmasked write (its RETURNING rows come back in clear) is decided by
+// the stricter of write and unmask: write = auto never lets cleartext
+// results through unmask = deny (refused before any ticket) or unmask =
+// ask (the ticket is never-auto).
+func TestAutoRulesUnmaskedWriteTakesTheStricter(t *testing.T) {
+	const ins = "INSERT INTO users (id, note) VALUES (99, 'n') RETURNING email"
+	r := config.AutoRules{Write: config.AutoAuto, Unmask: config.AutoDeny}
+	h := newHarness(t, autoProfile(&r), allowUnmask)
+	resp := h.call(t, ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: ins, Unmask: true})
+	wantCode(t, resp, ipc.CodeRefused)
+	if refusalCode(resp) != refusal.AutoDeny || !strings.Contains(resp.Error.Message, "auto.unmask = deny") {
+		t.Fatalf("write = auto, unmask = deny: unmasked write %+v", resp.Error)
+	}
+	if h.hub.Pushed() != 0 {
+		t.Fatal("a denied unmasked write reached the hub")
+	}
+	if log := h.auditLog(t); !strings.Contains(log, `"code":"E_AUTO_DENY"`) || !strings.Contains(log, `"auto_rule":"auto.unmask = deny"`) {
+		t.Fatalf("audit:\n%s", log)
+	}
+	// Masked, the same write is left to auto.
+	pr := h.plan(t, ins, false)
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	if neverAutoOf(t, h.hub, tk) {
+		t.Fatal("write = auto: a masked write marked never-auto")
+	}
+
+	r = config.AutoRules{Write: config.AutoAuto, Unmask: config.AutoAsk}
+	h = newHarness(t, autoProfile(&r), allowUnmask)
+	pr = h.plan(t, ins, true)
+	tk = pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	if !neverAutoOf(t, h.hub, tk) {
+		t.Fatal("write = auto, unmask = ask: an unmasked write left to auto")
+	}
+	if log := h.auditLog(t); !strings.Contains(log, `"auto_rule":"auto.unmask = ask"`) {
+		t.Fatalf("pending record without its rule:\n%s", log)
+	}
+}
+
 // The defaults: reads auto, writes and schema changes asked.
 func TestAutoRulesDefaultsOnTickets(t *testing.T) {
 	h := newHarness(t, autoProfile(nil))

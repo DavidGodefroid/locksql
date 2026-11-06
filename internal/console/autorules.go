@@ -64,7 +64,7 @@ func actionNoun(a config.AutoAction) string {
 	case config.ActionDDL:
 		return "schema change"
 	case config.ActionUnmask:
-		return "unmasked read"
+		return "unmasked result"
 	}
 	return string(a)
 }

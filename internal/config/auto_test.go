@@ -108,21 +108,23 @@ func TestAutoRuleOfEveryActionAndValue(t *testing.T) {
 			}{
 				{TierRead, false, ActionRead}, {TierWrite, false, ActionWrite},
 				{TierDDL, false, ActionDDL}, {TierAdmin, false, ActionDDL},
-				{TierWrite, true, ActionWrite},
 			} {
 				act, got := AutoRuleOf(r, tc.class, tc.unmask)
 				if act != tc.action || got != r.Get(tc.action) {
 					t.Errorf("%s=%s, class %s: %s %s, want %s %s", a, v, tc.class, act, got, tc.action, r.Get(tc.action))
 				}
 			}
-			// An unmasked read takes the stricter of read and unmask.
-			act, got := AutoRuleOf(r, TierRead, true)
-			wantAct := ActionRead
-			if r.Get(ActionUnmask).rank() <= r.Get(ActionRead).rank() {
-				wantAct = ActionUnmask
-			}
-			if act != wantAct || got != r.Get(wantAct) {
-				t.Errorf("%s=%s, unmasked read: %s %s, want %s", a, v, act, got, wantAct)
+			// An unmasked statement of any class takes the stricter of its
+			// class's action and unmask.
+			for class, own := range map[Tier]AutoAction{TierRead: ActionRead, TierWrite: ActionWrite, TierDDL: ActionDDL, TierAdmin: ActionDDL} {
+				act, got := AutoRuleOf(r, class, true)
+				wantAct := own
+				if r.Get(ActionUnmask).rank() <= r.Get(own).rank() {
+					wantAct = ActionUnmask
+				}
+				if act != wantAct || got != r.Get(wantAct) {
+					t.Errorf("%s=%s, unmasked %s: %s %s, want %s", a, v, class, act, got, wantAct)
+				}
 			}
 		}
 	}
@@ -131,6 +133,39 @@ func TestAutoRuleOfEveryActionAndValue(t *testing.T) {
 	}
 	if a, v := AutoRuleOf(DefaultAutoRules, TierRead, true); a != ActionUnmask || v != AutoAsk {
 		t.Errorf("default unmasked read: %s %s", a, v)
+	}
+}
+
+// An unmasked write (INSERT ... RETURNING, a data-modifying CTE) sends its
+// rows back in clear: a looser write rule never lets them through an
+// unmask rule that asks or denies.
+func TestAutoRuleOfUnmaskedWrite(t *testing.T) {
+	for _, tc := range []struct {
+		r      AutoRules
+		class  Tier
+		action AutoAction
+		value  AutoValue
+	}{
+		{AutoRules{Write: AutoAuto, Unmask: AutoDeny}, TierWrite, ActionUnmask, AutoDeny},
+		{AutoRules{Write: AutoAuto, Unmask: AutoAsk}, TierWrite, ActionUnmask, AutoAsk},
+		{AutoRules{Write: AutoAuto, Unmask: AutoAuto}, TierWrite, ActionUnmask, AutoAuto},
+		{AutoRules{Write: AutoDeny, Unmask: AutoAuto}, TierWrite, ActionWrite, AutoDeny},
+		{AutoRules{Write: AutoAsk, Unmask: AutoAuto}, TierWrite, ActionWrite, AutoAsk},
+		{AutoRules{DDL: AutoAuto, Unmask: AutoDeny}, TierDDL, ActionUnmask, AutoDeny},
+		{AutoRules{DDL: AutoAuto, Unmask: AutoAsk}, TierAdmin, ActionUnmask, AutoAsk},
+	} {
+		a, v := AutoRuleOf(tc.r.Effective(), tc.class, true)
+		if a != tc.action || v != tc.value {
+			t.Errorf("%s, unmasked %s: %s %s, want %s %s", tc.r, tc.class, a, v, tc.action, tc.value)
+		}
+		// Masked, the class's own rule decides.
+		own := ActionWrite
+		if tc.class >= TierDDL {
+			own = ActionDDL
+		}
+		if a, v := AutoRuleOf(tc.r.Effective(), tc.class, false); a != own || v != tc.r.Get(own) {
+			t.Errorf("%s, masked %s: %s %s", tc.r, tc.class, a, v)
+		}
 	}
 }
 

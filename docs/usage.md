@@ -916,12 +916,14 @@ ddl = "deny"            # refused, even when a human would approve it
 | `read` | a `SELECT` (and a grant: a bounded read scope) | `auto` |
 | `write` | `INSERT`, `UPDATE`, `UPSERT`, `DELETE`, `MERGE` | `ask` (every time) |
 | `ddl` | a schema change, or an admin statement | `ask` (every time) |
-| `unmask` | a read whose results come back in clear (`--unmask`) | `ask` (every time) |
+| `unmask` | a statement whose results come back in clear (`--unmask`): a read, or a write's `RETURNING` rows | `ask` (every time) |
 
 Each value is `auto` (no question), `ask` or `deny`. `auto = "full-auto"`
 sets every action to `auto`; a table may start from a preset and override
-some actions (`preset = "full-auto"`, then `ddl = "ask"`). An unmasked read
-takes the stricter of `read` and `unmask`. Any other key or value is a
+some actions (`preset = "full-auto"`, then `ddl = "ask"`). An unmasked
+statement takes the stricter of its own action and `unmask`: an unmasked
+read the stricter of `read` and `unmask`, an unmasked write (`INSERT ...
+RETURNING`, a data-modifying CTE) the stricter of `write` and `unmask`. Any other key or value is a
 configuration error.
 
 The rules only shape auto mode: in manual mode (Shift+Tab in `lox run`)

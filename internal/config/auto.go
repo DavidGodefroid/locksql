@@ -73,7 +73,8 @@ const (
 	ActionWrite AutoAction = "write"
 	// ActionDDL runs a schema change, or an admin statement.
 	ActionDDL AutoAction = "ddl"
-	// ActionUnmask runs a read whose results come back in clear.
+	// ActionUnmask runs a statement whose results come back in clear: a
+	// read, or a write or schema change with RETURNING rows.
 	ActionUnmask AutoAction = "unmask"
 )
 
@@ -193,18 +194,23 @@ func (p Profile) AutoRules() AutoRules {
 }
 
 // AutoRuleOf is the action of a statement class (read, write, ddl, admin),
-// unmasked or not: an unmasked read is decided by the stricter of read
-// and unmask (unmask when they are equal).
+// unmasked or not. An unmasked statement of any class (a read, or a write
+// or schema change whose RETURNING rows come back in clear) is decided by
+// the stricter of its class's action and unmask (unmask when they are
+// equal), so that a looser write or ddl rule never lets cleartext results
+// through an unmask rule that asks or denies.
 func AutoRuleOf(r AutoRules, class Tier, unmask bool) (AutoAction, AutoValue) {
+	act := ActionRead
 	switch {
 	case class >= TierDDL:
-		return ActionDDL, r.Get(ActionDDL)
+		act = ActionDDL
 	case class == TierWrite:
-		return ActionWrite, r.Get(ActionWrite)
-	case unmask && r.Get(ActionUnmask).rank() <= r.Get(ActionRead).rank():
+		act = ActionWrite
+	}
+	if unmask && r.Get(ActionUnmask).rank() <= r.Get(act).rank() {
 		return ActionUnmask, r.Get(ActionUnmask)
 	}
-	return ActionRead, r.Get(ActionRead)
+	return act, r.Get(act)
 }
 
 // rawAuto is the auto key of a profile as written: a preset name
