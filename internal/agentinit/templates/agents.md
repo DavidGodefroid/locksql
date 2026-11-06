@@ -19,15 +19,19 @@ the CLI and MCP reach the lock that `lox up` runs for the workspace, found throu
    the human allowed it in the console (`--allow-unmask` or `:unmask`).
    Pass `intent`: one line saying why, in the user's terms (the human reads it on the approval
    screen without the chat).
-5. Show the user the target, the SQL, the EXPLAIN summary and the verdict, then say you are waiting
-   for their approval in lockhub (`lox approve`). When the statement filters on a PII column the verdict is decided on the
+5. Show the user the target, the SQL, the EXPLAIN summary and the verdict, and that the human
+   approves it in lockhub (`lox approve`). When the statement filters on a PII column the verdict is decided on the
    console at run time and may still be refused there.
 6. `locksql_run` with the plan id, or `locksql run --profile P PLAN_ID`: it answers pending with a
-   ticket. Do not retry; once the human decided, run the ticket (`locksql run --profile P TICKET`).
+   ticket. Do not retry: end your turn. The decision comes back to you by itself, as a new turn, when
+   your host delivers it (lea does, for MCP and CLI runs alike). When told the ticket is approved,
+   run it (`locksql_run` with `ticket`, CLI `locksql run --profile P TICKET`); when told it is
+   denied, stop. Never ask the user to tell you it was approved. If your host delivers no decision,
+   `locksql run --profile P TICKET` shows the ticket's state.
    For several reads of the same few tables, ask once for a grant instead (`locksql_grant` with the
    tables and an `intent`, CLI `locksql grant --profile P --db D TABLE...`): it answers pending with
-   a ticket; once decided, activate it (`locksql_grant` with `ticket`, CLI `locksql grant --profile
-   P TICKET`). While it lasts, `locksql_run` runs your reads of those tables at once, within its
+   a ticket; end your turn the same way, and when told it is approved, activate it (`locksql_grant`
+   with `ticket`, CLI `locksql grant --profile P TICKET`). While it lasts, `locksql_run` runs your reads of those tables at once, within its
    budget; writes, unmask and filters, groups or aggregates on PII columns still get a ticket.
 7. Report the answer, quoting rows as returned; masked values stay masked.
 
