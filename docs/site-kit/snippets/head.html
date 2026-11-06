@@ -1,0 +1,41 @@
+<!-- head.html: the <head> of every page. Placeholders: {{TITLE}}, {{DESCRIPTION}},
+     {{URL}} (canonical URL of the page), {{DOMAIN}} (https://<site>, no slash),
+     {{LOCK}}, {{OG_ALT}}, {{ROOT}} ("" on the home page, "../" one level down,
+     "/" on 404.html). Keep tokens.css before lock-site.css. -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{TITLE}}</title>
+  <meta name="description" content="{{DESCRIPTION}}">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f4efe4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#16140f" media="(prefers-color-scheme: dark)">
+  <link rel="canonical" href="{{URL}}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{LOCK}}">
+  <meta property="og:title" content="{{TITLE}}">
+  <meta property="og:description" content="{{DESCRIPTION}}">
+  <meta property="og:url" content="{{URL}}">
+  <meta property="og:image" content="{{DOMAIN}}/assets/og.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="{{OG_ALT}}">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{TITLE}}">
+  <meta name="twitter:description" content="{{DESCRIPTION}}">
+  <meta name="twitter:image" content="{{DOMAIN}}/assets/og.png">
+  <meta name="twitter:image:alt" content="{{OG_ALT}}">
+  <link rel="icon" href="{{ROOT}}assets/logo.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="{{ROOT}}assets/apple-touch-icon.png">
+  <link rel="preload" href="{{ROOT}}assets/fonts/zilla-slab-700.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="{{ROOT}}assets/fonts/source-serif-4-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="{{ROOT}}assets/tokens.css">
+  <link rel="stylesheet" href="{{ROOT}}assets/lock-site.css">
+  <script src="{{ROOT}}assets/anchors.js" defer></script>
+  <script src="{{ROOT}}assets/copy.js" defer></script>
+</head>
+<body>

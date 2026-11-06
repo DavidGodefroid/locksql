@@ -3,38 +3,42 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>locksql — Your AI writes the query. You hold the key.</title>
-  <meta name="description" content="locksql puts a human-held console between your AI agent and MariaDB, MySQL, PostgreSQL or SQLite. The agent never sees a credential.">
+  <title>locksql: your agent writes the query, you hold the key</title>
+  <meta name="description" content="locksql lets any AI agent query MariaDB, MySQL, PostgreSQL or SQLite: personal data comes back masked, connections and writes wait for your approval, and the agent never holds a password.">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f4efe4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#16140f" media="(prefers-color-scheme: dark)">
   <link rel="canonical" href="https://locksql.com/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="locksql">
-  <meta property="og:title" content="locksql — Your AI writes the query. You hold the key.">
-  <meta property="og:description" content="locksql puts a human-held console between your AI agent and MariaDB, MySQL, PostgreSQL or SQLite. The agent never sees a credential.">
+  <meta property="og:title" content="locksql: your agent writes the query, you hold the key">
+  <meta property="og:description" content="locksql lets any AI agent query MariaDB, MySQL, PostgreSQL or SQLite: personal data comes back masked, connections and writes wait for your approval, and the agent never holds a password.">
   <meta property="og:url" content="https://locksql.com/">
   <meta property="og:image" content="https://locksql.com/assets/og.png">
   <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="locksql — Your AI writes the query. You hold the key.">
+  <meta property="og:image:alt" content="locksql: your agent writes the query, you hold the key.">
   <meta property="og:locale" content="en_US">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="locksql — Your AI writes the query. You hold the key.">
-  <meta name="twitter:description" content="locksql puts a human-held console between your AI agent and MariaDB, MySQL, PostgreSQL or SQLite. The agent never sees a credential.">
+  <meta name="twitter:title" content="locksql: your agent writes the query, you hold the key">
+  <meta name="twitter:description" content="locksql lets any AI agent query MariaDB, MySQL, PostgreSQL or SQLite: personal data comes back masked, connections and writes wait for your approval, and the agent never holds a password.">
   <meta name="twitter:image" content="https://locksql.com/assets/og.png">
-  <meta name="twitter:image:alt" content="locksql — Your AI writes the query. You hold the key.">
+  <meta name="twitter:image:alt" content="locksql: your agent writes the query, you hold the key.">
   <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
-  <link rel="stylesheet" href="assets/style.css">
+  <link rel="preload" href="assets/fonts/zilla-slab-700.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="assets/fonts/source-serif-4-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="assets/tokens.css">
+  <link rel="stylesheet" href="assets/lock-site.css">
   <script src="assets/anchors.js" defer></script>
+  <script src="assets/copy.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
     <div class="wrap">
-      <a class="brand" href="./"><img src="assets/logo.svg" alt="" width="32" height="32"><span class="wordmark">lock<span>sql</span></span></a>
+      <a class="brand" href="./"><img src="assets/logo.svg" alt="" width="32" height="32"><span class="wordmark">locksql</span></a>
       <nav class="site-nav" aria-label="Main">
         <ul>
           <li><a href="./" aria-current="page">Home</a></li>
@@ -51,21 +55,39 @@
     <div class="wrap">
 
 <section class="hero" aria-labelledby="hero-title">
-  <p class="eyebrow"><a href="install/"><span class="badge">v0.16</span> Pre-release · open source, Apache 2.0</a></p>
-  <h1 id="hero-title">Your AI writes the query. <br><span class="key">You hold the key.</span></h1>
-  <p class="lead">Let Claude Code, Codex, Cursor or Gemini CLI query your databases without ever handing them a password.</p>
-  <p class="intro">locksql puts a <strong>human-held console</strong> between your AI agent and MariaDB, MySQL, PostgreSQL or SQLite. The agent proposes SQL; the console, running in a terminal you keep in view, holds the credentials, parses and weighs every statement, masks personal data and waits for <strong>your</strong> approval. The agent never sees a credential and never opens a connection.</p>
-  <div class="actions">
-    <a class="button primary" href="install/">Install</a>
-    <a class="button" href="how-it-works/">How it works</a>
-    <a class="button" href="https://github.com/DavidGodefroid/locksql">View on GitHub</a>
+  <div class="hero-text">
+    <p class="eyebrow"><span class="badge">v0.17 pre-release</span>A Lock of the Lock&nbsp;Family · open&nbsp;source · Apache&nbsp;2.0</p>
+    <h1 id="hero-title">Your agent writes the query. <span class="key">You hold the key.</span></h1>
+    <p class="lead">Any AI agent can query MariaDB, MySQL, PostgreSQL or SQLite through locksql. Personal data comes back masked, and connections and writes wait for you.</p>
+    <div class="install">
+      <div class="install-head"><span>Install with Homebrew</span></div>
+      <pre tabindex="0" aria-label="Install commands"><code><span class="cmd">brew trust davidgodefroid/tap</span>
+<span class="cmd">brew install davidgodefroid/tap/lox davidgodefroid/tap/locksql</span></code></pre>
+      <p class="install-note">Needs Docker. Then <code>lox add locksql</code> and <code>lox run</code>. The whole family: <code>brew install davidgodefroid/tap/lockfamily</code>.</p>
+    </div>
+    <div class="actions">
+      <a class="button primary" href="install/">Install guide</a>
+      <a class="button" href="how-it-works/">How it works</a>
+      <a class="button" href="https://github.com/DavidGodefroid/locksql">GitHub</a>
+    </div>
+    <p class="hub-line">Part of the <a href="https://lockfamily.dev">Lock Family</a>: one hub (<code>lox run</code>) approves for every Lock.</p>
   </div>
-  <ul class="facts" aria-label="At a glance">
-    <li>Runs in Docker: Linux, macOS, Windows</li>
-    <li>amd64 and arm64</li>
-    <li>MariaDB, MySQL, PostgreSQL, SQLite</li>
-    <li>Apache 2.0</li>
-  </ul>
+  <figure class="hero-aside ticket" aria-labelledby="ticket-caption">
+    <div class="ticket-face">
+      <p class="ticket-head"><span>locksql · profile dev</span><span>lox run · auto mode</span></p>
+      <dl class="ticket-fields">
+        <div class="wide"><dt>Connect</dt><dd><span class="status asked">asked</span>once per <code>lox run</code> session<span class="note">The password is typed at your terminal, never by the agent.</span></dd></div>
+        <div class="wide"><dt>Read</dt><dd><span class="status auto">auto</span><code>SELECT id, email FROM customers LIMIT 20</code><span class="note">The <code>email</code> column comes back <span class="masked">&lt;redacted&gt;</span>.</span></dd></div>
+        <div class="wide"><dt>Write · DDL · unmask</dt><dd><span class="status asked">asked</span>every time<span class="note">Runs only on the hub’s signed decision.</span></dd></div>
+      </dl>
+      <p class="stamp">Approved · <kbd>y</kbd></p>
+    </div>
+    <div class="ticket-stub">
+      <p><span class="label">Your rules, per profile</span></p>
+      <p>Each action is <code>auto</code>, <code>ask</code> or <code>deny</code> in <code>.locksql/config.toml</code>. These are the defaults.</p>
+    </div>
+    <figcaption id="ticket-caption">What waits for you, and what does not, with the default rules.</figcaption>
+  </figure>
 </section>
 
 <section class="demo-section" aria-labelledby="demo">
@@ -74,20 +96,21 @@
     <video controls autoplay muted loop playsinline preload="metadata" poster="assets/demo-poster.jpg" width="1700" height="940" aria-describedby="demo-caption">
       <source src="assets/demo.webm" type="video/webm">
       <source src="assets/demo.mp4" type="video/mp4">
-      <img src="assets/demo-poster.jpg" alt="The locksql console asking for approval of a query written by Claude Code" width="1700" height="940">
+      <img src="assets/demo-poster.jpg" alt="The locksql console asking for approval of a query written by an agent (here Claude Code)" width="1700" height="940">
     </video>
     <script>if (matchMedia("(prefers-reduced-motion: reduce)").matches) { const v = document.currentScript.previousElementSibling; v.removeAttribute("autoplay"); v.pause(); }</script>
-    <figcaption id="demo-caption">Claude Code (left, account <code>alice</code>) asks for the top Belgian customers; the locksql console (right, account <code>locksql</code>, started with <code>--show-results</code>) stops each query for approval. Recorded before the console ran attached to lockhub only: approvals are now given in lockhub, masked cells come back as plain <code>&lt;redacted&gt;</code>, and placeholders and cell references are not supported.</figcaption>
+    <figcaption id="demo-caption">An agent (here Claude Code, left) asks for the top Belgian customers; the locksql console (right) stops each query for approval. Recorded before approvals moved to lockhub: today you answer in <code>lox run</code>, and masked cells come back as plain <code>&lt;redacted&gt;</code>.</figcaption>
   </figure>
 </section>
 
 <section aria-labelledby="why">
   <h2 id="why">Why locksql?</h2>
   <div class="prose">
-    <p>Agent tools already ask before running a command, but that approval lives inside the agent’s own process: the agent holds the credentials, the prompt can be configured away, and a long session trains you to press “yes”. locksql moves the decision <strong>out of the agent</strong>.</p>
+    <p>Agent tools already ask before running a command. But that approval lives inside the agent’s own process: the agent holds the credentials, and the prompt can be configured away.</p>
+    <p>A long session also trains you to press “yes”. locksql moves the decision <strong>out of the agent</strong>.</p>
   </div>
 <div class="table-wrap" role="region" aria-label="In-agent approval compared with locksql" tabindex="0">
-<table>
+<table class="compare">
 <caption>In-agent approval compared with locksql</caption>
 <thead><tr><th scope="col"><span class="visually-hidden">Property</span></th><th scope="col">In-agent approval</th><th scope="col">locksql</th></tr></thead>
 <tbody>
@@ -98,20 +121,22 @@
 <tr><th scope="row"><code>EXPLAIN</code> cost check before running</th><td class="no">No</td><td class="yes">Yes</td></tr>
 <tr><th scope="row">PII masked on its source column, not its label</th><td class="no">No</td><td class="yes">Yes</td></tr>
 <tr><th scope="row">k-anonymity warning on PII filters and aggregates</th><td class="no">No</td><td class="yes">Yes</td></tr>
-<tr><th scope="row">Search on a PII value the agent never sees</th><td class="no">No</td><td class="yes">Yes</td></tr>
 <tr><th scope="row">Policy loosening needs a human confirmation</th><td class="no">No</td><td class="yes">Yes</td></tr>
 <tr><th scope="row">Append-only audit log</th><td class="no">No</td><td class="yes">Yes</td></tr>
 </tbody>
 </table>
 </div>
-  <blockquote class="prose"><p>In-agent approval is a convenience; a separate approval process is a boundary.</p></blockquote>
+  <blockquote><p>In-agent approval is a convenience; a separate approval process is a boundary.</p></blockquote>
 </section>
 
 <section aria-labelledby="approve">
   <h2 id="approve">See what you approve</h2>
-  <p class="prose">When the agent calls <code>locksql run PLAN_ID</code>, the console shows this screen and sends it, every literal masked, as a ticket to <a href="https://github.com/DavidGodefroid/lockhub">lockhub</a>. The statement runs only after you approve the ticket there (<code>lox approve</code>).</p>
+  <div class="prose">
+    <p>Before a statement runs, the console prints its screen: the plan, the cost and the personal data it touches. The same screen goes to <a href="https://github.com/DavidGodefroid/lockhub">lockhub</a> as a ticket, every literal masked.</p>
+    <p>With the default rules a read runs on its own. A write, a schema change or an unmasked read waits until you answer it in <code>lox run</code>.</p>
+  </div>
   <figure>
-    <pre tabindex="0" class="term"><code>╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
+    <pre tabindex="0" class="term" aria-label="The approval screen of a read"><code>╭─ DEV · 127.0.0.1 / app · user alice · tier read ─────
 │ requested by uid 1000 (alice) · pid 48211 (claude)
 │
 │   SELECT id, email FROM customers WHERE country = 'BE' LIMIT 20
@@ -123,64 +148,50 @@
 │ masked outputs: email → redact
 │ PII: masked (4 column rules; detectors: email, phone, iban, card)
 ╰─ pending: ticket 01J…</code></pre>
-    <figcaption>On approval the console runs the statement, masks PII, caps the output and hands the rows back to the agent, framed as untrusted data.</figcaption>
+    <figcaption>Once approved, the console runs the statement, masks PII, caps the output and hands the rows to the agent, framed as untrusted data.</figcaption>
   </figure>
-  <p class="prose">Nothing is asked in the console’s terminal: you approve or deny the ticket in lockhub, which asks for the typed instance name on a production profile.</p>
 </section>
 
 <section aria-labelledby="highlights">
   <h2 id="highlights">Highlights</h2>
   <ul class="cards">
     <li><span class="icon" aria-hidden="true">🔑</span><h3>One key holder</h3><p>Credentials are typed at console start, or read from HashiCorp Vault. Never in argv, env, files, logs, the socket or error messages.</p></li>
-    <li><span class="icon" aria-hidden="true">👤</span><h3>Human in the loop</h3><p>Every statement is shown with its plan, cost and PII footprint, and runs only once you approve its ticket in lockhub.</p></li>
+    <li><span class="icon" aria-hidden="true">👤</span><h3>Human in the loop</h3><p>Each statement carries its plan, cost and PII footprint. Writes, schema changes and unmasked reads run only once you approve them.</p></li>
     <li><span class="icon" aria-hidden="true">🧱</span><h3>Fail closed</h3><p>A dialect-aware classifier refuses anything it cannot classify with certainty. Reads are parsed in full; unknown syntax is refused.</p></li>
     <li><span class="icon" aria-hidden="true">🕶️</span><h3>PII masking</h3><p>Every output column is traced to its source through aliases, CTEs, unions and joins, then masked (<code>redact</code> by default, <code>partial</code> or <code>email</code>).</p></li>
-    <li><span class="icon" aria-hidden="true">⚖️</span><h3>Weight check</h3><p><code>LIMIT</code> is mandatory, <code>EXPLAIN</code> runs first, and plans that would scan too many rows are refused before they run.</p></li>
-    <li><span class="icon" aria-hidden="true">🛡️</span><h3>OS separation</h3><p>The console runs as its own account in its own container, the agent’s MCP server in another; the kernel checks every peer on the socket they share.</p></li>
-    <li><span class="icon" aria-hidden="true">🔎</span><h3>No typed values</h3><p>Masked cells come back as <code>&lt;redacted&gt;</code>, with no reference to their value; placeholders (<code>'${...}'</code>) are not supported and are refused at plan time.</p></li>
-    <li><span class="icon" aria-hidden="true">👁️</span><h3>Clear for you only</h3><p>Ctrl-O in the console prints the clear rows there while the agent gets them masked; <code>--allow-unmask</code> (or <code>:unmask</code> in the console) is the only way an agent can ask for raw PII.</p></li>
-    <li><span class="icon" aria-hidden="true">🔐</span><h3>Remote, verified</h3><p>TLS verifies the server certificate by default, with an optional client certificate, and an <code>ssh</code> table reaches a database behind a bastion: the console opens the tunnel itself, checks the host key and listens on no local port.</p></li>
-    <li><span class="icon" aria-hidden="true">✍️</span><h3>Writes analysed too</h3><p>A write whose rows come back (<code>RETURNING</code>, data-modifying CTEs) or that stores a query’s rows (<code>INSERT ... SELECT</code>) is parsed like a read, and the rows it returns are masked by where they come from.</p></li>
-    <li><span class="icon" aria-hidden="true">🏷️</span><h3>Refusals the agent can act on</h3><p>Every refusal carries a stable code, the place in the statement where the check stopped, a hint and a retry rule: rewrite, ask the user, or stop.</p></li>
-    <li><span class="icon" aria-hidden="true">🧪</span><h3>Tested for leaks</h3><p>The SQL analyzer is fuzzed nightly, and a canary suite checks that seeded values never reach the agent unmasked on six MariaDB, MySQL and PostgreSQL versions and SQLite.</p></li>
+    <li><span class="icon" aria-hidden="true">⚖️</span><h3>Weight check</h3><p><code>LIMIT</code> is mandatory and <code>EXPLAIN</code> runs first. Plans that would scan too many rows are refused before they run.</p></li>
+    <li><span class="icon" aria-hidden="true">🛡️</span><h3>OS separation</h3><p>The console runs as its own account in its own container, the agent’s MCP server in another. The kernel checks every peer on the socket they share.</p></li>
+    <li><span class="icon" aria-hidden="true">🔎</span><h3>No typed values</h3><p>Masked cells come back as <code>&lt;redacted&gt;</code>, with no reference to their value. Placeholders (<code>'${...}'</code>) are refused at plan time.</p></li>
+    <li><span class="icon" aria-hidden="true">👁️</span><h3>Clear for you only</h3><p>Ctrl-O in the console prints the clear rows there while the agent gets them masked. Only <code>--allow-unmask</code> or <code>:unmask</code> lets an agent ask for raw PII.</p></li>
+    <li><span class="icon" aria-hidden="true">🔐</span><h3>Remote databases</h3><p>The <code>tls</code> settings go to the driver as they are; <code>verify-full</code> checks the certificate. An <code>ssh</code> table reaches a database behind a bastion, with no local port.</p></li>
+    <li><span class="icon" aria-hidden="true">✍️</span><h3>Writes analysed too</h3><p>A write that returns rows (<code>RETURNING</code>) or stores a query’s rows (<code>INSERT ... SELECT</code>) is parsed like a read, and its rows are masked by where they come from.</p></li>
+    <li><span class="icon" aria-hidden="true">🏷️</span><h3>Refusals the agent can act on</h3><p>Every refusal carries a stable code, the place where the check stopped, a hint and a retry rule: rewrite, ask the user, or stop.</p></li>
+    <li><span class="icon" aria-hidden="true">🧪</span><h3>Tested for leaks</h3><p>The SQL analyzer is fuzzed nightly. A canary suite checks that seeded values never reach the agent unmasked, on six server versions and SQLite.</p></li>
   </ul>
 </section>
 
 <section aria-labelledby="quick-start">
   <h2 id="quick-start">Quick start</h2>
-  <p class="prose">The shortest path is the Lock Family’s: install it with Homebrew, then let <a href="https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-add.md"><code>lox add locksql</code></a> ask where your database is, set up its lock and start its console:</p>
-  <pre tabindex="0" class="term"><code>brew trust davidgodefroid/tap                # Homebrew asks you to trust a third-party tap once
-brew install davidgodefroid/tap/lockfamily   # or only this tool: brew install davidgodefroid/tap/locksql
-cd ~/projects                                 # with lea: its projects directory; with claude: the project
-lox add locksql                               # asks about the database, sets up the lock, runs lox up
-lea                                           # or: claude, then lox approve</code></pre>
-  <p class="prose">By hand: locksql runs in Docker, with nothing on your machine but Docker and the <code>locksql</code> launcher. A first approved query, from your project directory:</p>
-  <pre tabindex="0" class="term"><code># 1. Install the launcher (it runs every locksql command in Docker)
-V=vX.Y.Z
-curl -fsSLO "https://raw.githubusercontent.com/DavidGodefroid/locksql/$V/scripts/install.sh"
-less install.sh && LOCKSQL_VERSION=$V sh install.sh
-
-# 2. In your project: Claude Code's files (its MCP server is `locksql mcp`),
-#    a database profile, then doctor --fix (your agents, .locksql/ as lox up reads it)
-locksql init claude
-locksql profile add
-locksql doctor --fix --yes
-
-# 3. Declare the lock in lockhub and start it: lox up starts the console,
-#    lox attach answers its questions (the policy, the PII rules, the password)
-lox add locksql sql-dev
-lox up
-lox attach sql-dev</code></pre>
-  <p class="prose">Then ask your agent, in the project: “how many orders were placed yesterday?”. Each query waits for your decision in lockhub: <code>lox approve</code>. The console runs attached to <a href="https://github.com/DavidGodefroid/lockhub">lockhub</a> only.</p>
-  <p class="prose">Every command runs in the image, with the account it needs: the console as <code>locksql</code> in its own container, the agent’s MCP server as <code>agent</code> in a throwaway one. A database on your machine is <code>host.docker.internal</code>, and <code>credentials = "keychain"</code> is not available in a container: use <code>ask</code> or <code>vault</code>.</p>
-  <p><a href="install/">The full Docker setup</a></p>
+  <ol class="steps prose">
+    <li><p>Install with Homebrew (the box above). Docker must be running.</p></li>
+    <li><p>In your project, <code>lox add locksql</code> asks where your database is, sets up the lock and starts its console.</p>
+      <pre tabindex="0"><code>cd your-project
+lox add locksql</code></pre></li>
+    <li><p>In a terminal of its own, outside any agent, keep <code>lox run</code> open. Every ticket shows up there for your decision.</p>
+      <pre tabindex="0"><code>lox run</code></pre></li>
+    <li><p>Start your agent in the project (<code>claude</code>, <code>codex</code>, <code>gemini</code>, …) and ask: “how many orders were placed yesterday?”</p></li>
+  </ol>
+  <div class="prose">
+    <p><code>lox add</code> wires Claude Code. For Codex, Cursor or Gemini CLI, also run <code>locksql init codex</code> (or <code>cursor</code>, <code>gemini</code>).</p>
+    <p><a href="install/">Without Homebrew, or step by step: the install guide</a></p>
+  </div>
 </section>
 
 <section aria-labelledby="limits">
   <h2 id="limits">Know the limits</h2>
   <div class="prose">
     <p>The console is the enforcement point. Skills, rules and MCP tool descriptions only guide the agent; the console’s checks are the guarantee.</p>
-    <p>locksql has documented limits: masking is best effort, and k-anonymity is a warning that does not stop differencing attacks.</p>
+    <p>Masking is best effort, and k-anonymity is a warning: it does not stop differencing attacks.</p>
     <p><a href="security/">Read the security model</a></p>
   </div>
 </section>
@@ -188,15 +199,41 @@ lox attach sql-dev</code></pre>
     </div>
   </main>
   <footer class="site-footer">
-    <div class="wrap">
-      <ul>
-        <li><a href="https://github.com/DavidGodefroid/locksql">Source on GitHub</a></li>
-        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md">README</a></li>
-        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md">Usage guide</a></li>
-        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
-        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
-      </ul>
-      <p>Pre-release (<code>v0.16.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+    <div class="wrap footer-grid">
+      <div class="footer-about">
+        <a class="brand" href="./"><img src="assets/logo.svg" alt="" width="32" height="32"><span class="wordmark">locksql</span></a>
+        <p>SQL databases for AI agents: the agent queries, personal data comes back masked, and connections and writes wait for you.</p>
+        <p class="family-link">Part of the <a href="https://lockfamily.dev">Lock Family</a>, harness security for AI agents.</p>
+      </div>
+      <nav aria-labelledby="footer-lock">
+        <h2 id="footer-lock">locksql</h2>
+        <ul>
+          <li><a href="https://github.com/DavidGodefroid/locksql">Source on GitHub</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md">README</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md">Usage guide</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/CHANGELOG.md">Changelog</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
+        </ul>
+      </nav>
+      <nav class="family-strip" aria-labelledby="footer-family">
+        <h2 id="footer-family">The Lock Family</h2>
+        <ul>
+          <li data-lock="locksql" aria-current="true"><a href="https://github.com/DavidGodefroid/locksql">locksql</a><span>SQL databases, PII masked</span></li>
+          <li data-lock="lockmq"><a href="https://github.com/DavidGodefroid/lockmq">lockmq</a><span>RabbitMQ queues</span></li>
+          <li data-lock="lockfile"><a href="https://github.com/DavidGodefroid/lockfile">lockfile</a><span>Files: S3, SFTP, disk</span></li>
+          <li data-lock="lockhttp"><a href="https://github.com/DavidGodefroid/lockhttp">lockhttp</a><span>Outbound HTTP(S)</span></li>
+          <li data-lock="locklog"><a href="https://github.com/DavidGodefroid/locklog">locklog</a><span>Logs, masked search</span></li>
+          <li data-lock="lockssh"><a href="https://github.com/DavidGodefroid/lockssh">lockssh</a><span>Commands over SSH</span></li>
+          <li data-lock="lockhub"><a href="https://github.com/DavidGodefroid/lockhub">lockhub</a><span>The approval hub and <code>lox</code></span></li>
+          <li data-lock="lockkit"><a href="https://github.com/DavidGodefroid/lockkit">lockkit</a><span>The shared Go core</span></li>
+          <li data-lock="lea"><a href="https://github.com/DavidGodefroid/lea">lea</a><span>Agents in containers</span></li>
+        </ul>
+      </nav>
+    </div>
+    <div class="wrap footer-bottom">
+      <p>Pre-release (v0.17.x). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p><a href="https://lockfamily.dev">lockfamily.dev</a> · <a href="https://github.com/DavidGodefroid/lockfamily">the family on GitHub</a></p>
     </div>
   </footer>
 </body>

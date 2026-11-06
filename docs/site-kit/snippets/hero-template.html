@@ -1,0 +1,35 @@
+<!-- hero-template.html: the first thing in <main><div class="wrap">. Order is
+     fixed: label line, h1 (short; .key = the human's part, in signature
+     ink), lead (at most 2 sentences: the Lock's strength), the install box,
+     the three buttons, the hub line. The aside is optional: a ticket that
+     shows what waits for the human (see locksql), or delete it and the hero
+     is one column. -->
+<section class="hero" aria-labelledby="hero-title">
+  <div class="hero-text">
+    <p class="eyebrow"><span class="badge">{{VERSION_SHORT}} pre-release</span>A Lock of the Lock&nbsp;Family · open&nbsp;source · Apache&nbsp;2.0</p>
+    <h1 id="hero-title">{{H1_FIRST}} <span class="key">{{H1_KEY}}</span></h1>
+    <p class="lead">{{LEAD}}</p>
+    {{INSTALL_BOX}}
+    <div class="actions">
+      <a class="button primary" href="install/">Install guide</a>
+      <a class="button" href="how-it-works/">How it works</a>
+      <a class="button" href="https://github.com/DavidGodefroid/{{LOCK}}">GitHub</a>
+    </div>
+    <p class="hub-line">Part of the <a href="https://lockfamily.dev">Lock Family</a>: one hub (<code>lox run</code>) approves for every Lock.</p>
+  </div>
+  <figure class="hero-aside ticket" aria-labelledby="ticket-caption">
+    <div class="ticket-face">
+      <p class="ticket-head"><span>{{LOCK}} · profile dev</span><span>lox run · auto mode</span></p>
+      <dl class="ticket-fields">
+        <div class="wide"><dt>{{ACTION_1}}</dt><dd><span class="status auto">auto</span>{{WHAT_1}}<span class="note">{{NOTE_1}}</span></dd></div>
+        <div class="wide"><dt>{{ACTION_2}}</dt><dd><span class="status asked">asked</span>{{WHAT_2}}<span class="note">{{NOTE_2}}</span></dd></div>
+      </dl>
+      <p class="stamp">Approved · <kbd>y</kbd></p>
+    </div>
+    <div class="ticket-stub">
+      <p><span class="label">{{STUB_LABEL}}</span></p>
+      <p>{{STUB_TEXT}}</p>
+    </div>
+    <figcaption id="ticket-caption">{{CAPTION}}</figcaption>
+  </figure>
+</section>

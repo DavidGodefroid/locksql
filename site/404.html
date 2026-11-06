@@ -3,22 +3,42 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Page not found — locksql</title>
+  <title>Page not found · locksql</title>
   <meta name="description" content="This page does not exist on locksql.com.">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
-  <meta name="robots" content="noindex">
+  <meta name="theme-color" content="#f4efe4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#16140f" media="(prefers-color-scheme: dark)">
+  <link rel="canonical" href="https://locksql.com/404.html">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="locksql">
+  <meta property="og:title" content="Page not found · locksql">
+  <meta property="og:description" content="This page does not exist on locksql.com.">
+  <meta property="og:url" content="https://locksql.com/404.html">
+  <meta property="og:image" content="https://locksql.com/assets/og.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="locksql: your agent writes the query, you hold the key.">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Page not found · locksql">
+  <meta name="twitter:description" content="This page does not exist on locksql.com.">
+  <meta name="twitter:image" content="https://locksql.com/assets/og.png">
+  <meta name="twitter:image:alt" content="locksql: your agent writes the query, you hold the key.">
   <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
-  <link rel="stylesheet" href="/assets/style.css">
+  <link rel="preload" href="/assets/fonts/zilla-slab-700.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/assets/fonts/source-serif-4-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/assets/tokens.css">
+  <link rel="stylesheet" href="/assets/lock-site.css">
   <script src="/assets/anchors.js" defer></script>
+  <script src="/assets/copy.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
     <div class="wrap">
-      <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="32" height="32"><span class="wordmark">lock<span>sql</span></span></a>
+      <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="32" height="32"><span class="wordmark">locksql</span></a>
       <nav class="site-nav" aria-label="Main">
         <ul>
           <li><a href="/">Home</a></li>
@@ -34,10 +54,11 @@
   <main id="main" tabindex="-1">
     <div class="wrap">
 
+<p class="eyebrow">Error 404</p>
 <h1>Page not found</h1>
 <div class="prose">
   <p class="lead">The page you asked for does not exist.</p>
-  <ul>
+  <ul class="more">
     <li><a href="/">Home</a></li>
     <li><a href="/install/">Install</a></li>
     <li><a href="/faq/">FAQ</a></li>
@@ -48,15 +69,41 @@
     </div>
   </main>
   <footer class="site-footer">
-    <div class="wrap">
-      <ul>
-        <li><a href="https://github.com/DavidGodefroid/locksql">Source on GitHub</a></li>
-        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md">README</a></li>
-        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md">Usage guide</a></li>
-        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
-        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
-      </ul>
-      <p>Pre-release (<code>v0.16.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+    <div class="wrap footer-grid">
+      <div class="footer-about">
+        <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="32" height="32"><span class="wordmark">locksql</span></a>
+        <p>SQL databases for AI agents: the agent queries, personal data comes back masked, and connections and writes wait for you.</p>
+        <p class="family-link">Part of the <a href="https://lockfamily.dev">Lock Family</a>, harness security for AI agents.</p>
+      </div>
+      <nav aria-labelledby="footer-lock">
+        <h2 id="footer-lock">locksql</h2>
+        <ul>
+          <li><a href="https://github.com/DavidGodefroid/locksql">Source on GitHub</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md">README</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md">Usage guide</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/CHANGELOG.md">Changelog</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
+        </ul>
+      </nav>
+      <nav class="family-strip" aria-labelledby="footer-family">
+        <h2 id="footer-family">The Lock Family</h2>
+        <ul>
+          <li data-lock="locksql" aria-current="true"><a href="https://github.com/DavidGodefroid/locksql">locksql</a><span>SQL databases, PII masked</span></li>
+          <li data-lock="lockmq"><a href="https://github.com/DavidGodefroid/lockmq">lockmq</a><span>RabbitMQ queues</span></li>
+          <li data-lock="lockfile"><a href="https://github.com/DavidGodefroid/lockfile">lockfile</a><span>Files: S3, SFTP, disk</span></li>
+          <li data-lock="lockhttp"><a href="https://github.com/DavidGodefroid/lockhttp">lockhttp</a><span>Outbound HTTP(S)</span></li>
+          <li data-lock="locklog"><a href="https://github.com/DavidGodefroid/locklog">locklog</a><span>Logs, masked search</span></li>
+          <li data-lock="lockssh"><a href="https://github.com/DavidGodefroid/lockssh">lockssh</a><span>Commands over SSH</span></li>
+          <li data-lock="lockhub"><a href="https://github.com/DavidGodefroid/lockhub">lockhub</a><span>The approval hub and <code>lox</code></span></li>
+          <li data-lock="lockkit"><a href="https://github.com/DavidGodefroid/lockkit">lockkit</a><span>The shared Go core</span></li>
+          <li data-lock="lea"><a href="https://github.com/DavidGodefroid/lea">lea</a><span>Agents in containers</span></li>
+        </ul>
+      </nav>
+    </div>
+    <div class="wrap footer-bottom">
+      <p>Pre-release (v0.17.x). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p><a href="https://lockfamily.dev">lockfamily.dev</a> · <a href="https://github.com/DavidGodefroid/lockfamily">the family on GitHub</a></p>
     </div>
   </footer>
 </body>

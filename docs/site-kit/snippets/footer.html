@@ -1,0 +1,28 @@
+<!-- footer.html: after </main>. {{PITCH}} is the Lock's one-line strength
+     (README pitch), {{VERSION}} its release line ("v0.17.x"). Drop a link of
+     the middle column only if the file does not exist in the repo. -->
+  <footer class="site-footer">
+    <div class="wrap footer-grid">
+      <div class="footer-about">
+        <a class="brand" href="{{HOME}}"><img src="{{ROOT}}assets/logo.svg" alt="" width="32" height="32"><span class="wordmark">{{LOCK}}</span></a>
+        <p>{{PITCH}}</p>
+        <p class="family-link">Part of the <a href="https://lockfamily.dev">Lock Family</a>, harness security for AI agents.</p>
+      </div>
+      <nav aria-labelledby="footer-lock">
+        <h2 id="footer-lock">{{LOCK}}</h2>
+        <ul>
+          <li><a href="https://github.com/DavidGodefroid/{{LOCK}}">Source on GitHub</a></li>
+          <li><a href="https://github.com/DavidGodefroid/{{LOCK}}/blob/main/README.md">README</a></li>
+          <li><a href="https://github.com/DavidGodefroid/{{LOCK}}/blob/main/docs/usage.md">Usage guide</a></li>
+          <li><a href="https://github.com/DavidGodefroid/{{LOCK}}/blob/main/docs/security-model.md">Security model</a></li>
+          <li><a href="https://github.com/DavidGodefroid/{{LOCK}}/blob/main/CHANGELOG.md">Changelog</a></li>
+          <li><a href="https://github.com/DavidGodefroid/{{LOCK}}/blob/main/SECURITY.md">Report a vulnerability</a></li>
+        </ul>
+      </nav>
+{{FAMILY_STRIP}}
+    </div>
+    <div class="wrap footer-bottom">
+      <p>Pre-release ({{VERSION}}). {{LOCK}} is licensed under the <a href="https://github.com/DavidGodefroid/{{LOCK}}/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p><a href="https://lockfamily.dev">lockfamily.dev</a> · <a href="https://github.com/DavidGodefroid/lockfamily">the family on GitHub</a></p>
+    </div>
+  </footer>

@@ -3,38 +3,42 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Install locksql — Docker setup</title>
-  <meta name="description" content="Build the locksql Docker image, set up a project, wire your agent to the image and start the console in its own container.">
+  <title>Install locksql: Homebrew or the install script</title>
+  <meta name="description" content="Install locksql with Homebrew or its signed install script, add a database with lox add, decide in lox run, and wire any MCP agent: Claude Code, Codex, Cursor, Gemini CLI.">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f4efe4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#16140f" media="(prefers-color-scheme: dark)">
   <link rel="canonical" href="https://locksql.com/install/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="locksql">
-  <meta property="og:title" content="Install locksql — Docker setup">
-  <meta property="og:description" content="Build the locksql Docker image, set up a project, wire your agent to the image and start the console in its own container.">
+  <meta property="og:title" content="Install locksql: Homebrew or the install script">
+  <meta property="og:description" content="Install locksql with Homebrew or its signed install script, add a database with lox add, decide in lox run, and wire any MCP agent: Claude Code, Codex, Cursor, Gemini CLI.">
   <meta property="og:url" content="https://locksql.com/install/">
   <meta property="og:image" content="https://locksql.com/assets/og.png">
   <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="locksql — Your AI writes the query. You hold the key.">
+  <meta property="og:image:alt" content="locksql: your agent writes the query, you hold the key.">
   <meta property="og:locale" content="en_US">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Install locksql — Docker setup">
-  <meta name="twitter:description" content="Build the locksql Docker image, set up a project, wire your agent to the image and start the console in its own container.">
+  <meta name="twitter:title" content="Install locksql: Homebrew or the install script">
+  <meta name="twitter:description" content="Install locksql with Homebrew or its signed install script, add a database with lox add, decide in lox run, and wire any MCP agent: Claude Code, Codex, Cursor, Gemini CLI.">
   <meta name="twitter:image" content="https://locksql.com/assets/og.png">
-  <meta name="twitter:image:alt" content="locksql — Your AI writes the query. You hold the key.">
+  <meta name="twitter:image:alt" content="locksql: your agent writes the query, you hold the key.">
   <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
-  <link rel="stylesheet" href="../assets/style.css">
+  <link rel="preload" href="../assets/fonts/zilla-slab-700.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="../assets/fonts/source-serif-4-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/lock-site.css">
   <script src="../assets/anchors.js" defer></script>
+  <script src="../assets/copy.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
     <div class="wrap">
-      <a class="brand" href="../"><img src="../assets/logo.svg" alt="" width="32" height="32"><span class="wordmark">lock<span>sql</span></span></a>
+      <a class="brand" href="../"><img src="../assets/logo.svg" alt="" width="32" height="32"><span class="wordmark">locksql</span></a>
       <nav class="site-nav" aria-label="Main">
         <ul>
           <li><a href="../">Home</a></li>
@@ -50,62 +54,101 @@
   <main id="main" tabindex="-1">
     <div class="wrap">
 
+<p class="eyebrow">Install · pre-release v0.17.x</p>
 <h1>Install locksql</h1>
 <div class="prose">
-  <p class="lead">locksql runs in Docker: nothing on your machine but Docker and the <code>locksql</code> launcher, a short shell script that runs every command, <code>locksql console</code>, <code>locksql version</code>, <code>locksql mcp</code> and the others, in the locksql image.</p>
-  <p>locksql is a pre-release (<code>v0.16.x</code>). The image holds the separated setup: the console runs as the <code>locksql</code> account (uid 10001) in its own container, the only one that holds the database credentials; the agent’s MCP server runs as <code>agent</code> (uid 10002) in a throwaway container. The two share only the socket volume <code>locksql-run</code>, and the kernel checks every peer on the socket.</p>
+  <p class="lead">locksql runs in Docker. On your machine you need only Docker and the <code>locksql</code> launcher, a short shell script that runs every command in the locksql image.</p>
 </div>
 
+<section aria-labelledby="homebrew">
+  <h2 id="homebrew">With Homebrew</h2>
+  <div class="install">
+    <div class="install-head"><span>Install with Homebrew</span></div>
+    <pre tabindex="0" aria-label="Install commands"><code><span class="cmd">brew trust davidgodefroid/tap</span>
+<span class="cmd">brew install davidgodefroid/tap/lox davidgodefroid/tap/locksql</span></code></pre>
+    <p class="install-note">Homebrew asks you to trust a third-party tap once. <code>brew install davidgodefroid/tap/lockfamily</code> installs the whole family instead.</p>
+  </div>
+  <ol class="steps prose">
+    <li><p>In your project, <code>lox add locksql</code> asks where your database is. It writes the profile, wires your agent, runs <code>locksql doctor --fix</code>, shows a short review and starts the console.</p>
+      <pre tabindex="0"><code>lox add locksql</code></pre></li>
+    <li><p>In a terminal of its own, outside any agent, keep <code>lox run</code> open. It serves the decisions: every ticket shows up there.</p>
+      <pre tabindex="0"><code>lox run</code></pre></li>
+    <li><p>Start your agent in the project and ask it a question about your data.</p></li>
+  </ol>
+  <div class="prose">
+    <p>With <a href="https://github.com/DavidGodefroid/lea">lea</a>, run <code>lox add</code> in lea’s projects directory. If lea already runs, <code>lea stop</code>, then <code>lea</code>, brings the new lock in. <a href="https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-add.md">How <code>lox add</code> works</a>.</p>
+    <p>Upgrade with <code>brew upgrade locksql</code>, not <code>locksql update</code>.</p>
+  </div>
+</section>
+
 <section aria-labelledby="build">
-  <h2 id="build">Install the launcher</h2>
-  <p class="prose">With Homebrew: <code>brew trust davidgodefroid/tap</code> (Homebrew asks you to trust a third-party tap once), then <code>brew install davidgodefroid/tap/locksql</code>, or <code>brew install davidgodefroid/tap/lockfamily</code> for the whole Lock Family, then <code>lox add locksql</code> (with lea, in its projects directory; with <code>claude</code>, in your project) (<a href="https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-add.md">lox add</a>) sets up the lock; if lea already runs, <code>lea stop</code>, then <code>lea</code> brings it in. Without Homebrew, download the install script from the release you install, read it, then run it with that release:</p>
+  <h2 id="build">Without Homebrew</h2>
+  <p class="prose">Download the install script from the release you install, read it, then run it with that release:</p>
   <pre tabindex="0"><code>V=vX.Y.Z
 curl -fsSLO "https://raw.githubusercontent.com/DavidGodefroid/locksql/$V/scripts/install.sh"
 less install.sh
 LOCKSQL_VERSION=$V sh install.sh</code></pre>
   <div class="prose">
-    <p>It checks the release’s cosign signature and checksum and installs the launcher as <code>/usr/local/bin/locksql</code>. The launcher runs the image of its own release, <code>ghcr.io/davidgodefroid/locksql:X.Y.Z</code>, which Docker pulls on first use. Linux and macOS (Docker Desktop); on Windows, install it in WSL 2 with Docker Desktop.</p>
-    <p><code>locksql version</code> prints the launcher’s version and its image’s; <code>locksql update</code> installs the latest release’s launcher and pulls its image. For <code>credentials = "vault"</code>, <code>LOCKSQL_VAULT=1</code> selects the image with the vault CLI (some 550 MB more). <code>LOCKSQL_IMAGE</code> runs an image of your own, such as <code>docker build -t locksql .</code> from a clone.</p>
+    <p>It checks the release’s cosign signature and checksum, and installs the launcher as <code>/usr/local/bin/locksql</code>. The launcher runs the image of its own release, <code>ghcr.io/davidgodefroid/locksql:X.Y.Z</code>, which Docker pulls on first use.</p>
+    <p>Linux and macOS (Docker Desktop); on Windows, install it in WSL 2 with Docker Desktop.</p>
+    <ul>
+      <li><code>locksql version</code> prints the launcher’s version and its image’s.</li>
+      <li><code>locksql update</code> installs the latest release’s launcher and pulls its image.</li>
+      <li><code>LOCKSQL_VAULT=1</code> selects the image with the vault CLI (some 550 MB more), for <code>credentials = "vault"</code>.</li>
+      <li><code>LOCKSQL_IMAGE</code> runs an image of your own, such as <code>docker build -t locksql .</code> from a clone.</li>
+    </ul>
+  </div>
+</section>
+
+<section aria-labelledby="where">
+  <h2 id="where">What runs where</h2>
+  <div class="prose">
+    <p>The console runs as the <code>locksql</code> account (uid 10001) in its own container. It is the only one that holds the database credentials.</p>
+    <p>The agent’s MCP server runs as <code>agent</code> (uid 10002) in a throwaway container. The two share only the console’s socket volume, and the kernel checks every peer on the socket.</p>
   </div>
 </section>
 
 <section aria-labelledby="project">
-  <h2 id="project">Set up a project</h2>
-  <p class="prose">The launcher mounts the project at its own path and runs each command with the account it needs. In the project directory, write Claude Code’s files, add a database profile, then check the setup and repair what can be:</p>
-  <pre tabindex="0"><code>locksql init claude
+  <h2 id="project">Set up a project by hand</h2>
+  <p class="prose"><code>lox add</code> runs these for you. By hand, in the project directory: write the agent’s files, add a database profile, then check the setup and repair what can be.</p>
+  <pre tabindex="0"><code>locksql init claude      <span class="cmt"># or codex, cursor, gemini</span>
 locksql profile add
 locksql doctor --fix --yes</code></pre>
   <div class="prose">
-    <p><code>init</code> and <code>profile</code> run as you, so the files are yours. <code>init</code> writes <code>.locksql/config.toml</code> with a commented example profile, and <code>.mcp.json</code> with <code>locksql mcp</code> as the MCP command: the launcher (<a href="#wire">wire the agent</a>).</p>
-    <p><code>profile add</code> asks for the engine, host, port, TLS and where the password comes from (typed at console start, or Vault), never for the password itself, and appends the profile to <code>.locksql/config.toml</code>. <code>--engine</code> and its flags skip their questions, and <code>--non-interactive</code> asks none (<code>locksql profile add --non-interactive --engine postgres --host db.internal --credentials vault --vault-path database/creds/ro</code>). Inside a container <code>localhost</code> is the container itself, and the wizard knows it:</p>
+    <p><code>init</code> and <code>profile</code> run as you, so the files are yours. <code>init</code> writes <code>.locksql/config.toml</code> with a commented example profile, the agent’s instructions, and an MCP entry <code>locksql mcp</code>: the launcher (<a href="#wire">wire the agent</a>).</p>
+    <p><code>profile add</code> asks for the engine, host, port, TLS and where the password comes from: typed at console start, or Vault. It never asks for the password itself.</p>
+    <p><code>--engine</code> and its flags skip their questions; <code>--non-interactive</code> asks none (<code>locksql profile add --non-interactive --engine postgres --host db.internal --credentials vault --vault-path database/creds/ro</code>).</p>
+    <p>Inside a container <code>localhost</code> is the container itself, and the wizard knows it:</p>
     <ul>
-      <li>a database on your machine is <code>host = "host.docker.internal"</code>, which the launcher maps to your machine. <code>tls</code> defaults to <code>prefer</code>, as for any host: a local server without TLS connects in plain TCP, with a warning;</li>
+      <li>a database on your machine is <code>host = "host.docker.internal"</code>, which the launcher maps to your machine. <code>tls</code> defaults to <code>prefer</code>: a local server without TLS connects in plain TCP, with a warning;</li>
       <li>a database in another container is reached by its name on a shared network (<code>LOCKSQL_DOCKER_ARGS="--network NAME" locksql console</code>);</li>
-      <li><code>credentials = "keychain"</code> is not available in a container, which has no OS keychain: use <code>ask</code>, or <code>vault</code> with the <code>vault</code> image;</li>
+      <li><code>credentials = "keychain"</code> is not available in a container, which has no OS keychain: use <code>ask</code>, or <code>vault</code> with the vault image;</li>
       <li>a SQLite <code>path</code> is relative to the project root, which is mounted.</li>
     </ul>
-    <p><code>doctor --fix</code> runs as you. It wires your agents and keeps <code>.locksql/</code> as <code>lox up</code> reads it: <code>lox up</code> copies it once for the console, which never reads the project, and takes only files and directories that are yours and that no one else can write. Entries the console account owns (uid 10001, left by <code>doctor --fix</code> up to v0.13.0) are given back to you as root, in a container of its own run only then. Its checks of the console and its profiles warn from this container, which runs no console.</p>
+    <p><code>doctor --fix</code> runs as you. It wires your agents and keeps <code>.locksql/</code> as <code>lox up</code> reads it: copied once for the console, which never reads the project, taking only files and directories that are yours and that no one else can write.</p>
+    <p>Entries the console account owns (uid 10001, left by <code>doctor --fix</code> up to v0.13.0) are given back to you as root, in a container of its own run only then. Its checks of the console warn from this container, which runs no console.</p>
   </div>
 
   <h3 id="profiles">Describe your databases</h3>
   <div class="prose">
-    <p>Profiles live in <code>.locksql/config.toml</code> at the project root, the file the console’s container and the agent’s both see. No file ever holds a secret: keys named like <code>password</code>, <code>passwd</code>, <code>pwd</code>, <code>secret</code> or <code>token</code>, and DSNs with an embedded password, are refused.</p>
+    <p>Profiles live in <code>.locksql/config.toml</code> at the project root, the file both the console’s container and the agent’s see.</p>
+    <p>No file ever holds a secret. Keys named like <code>password</code>, <code>passwd</code>, <code>pwd</code>, <code>secret</code> or <code>token</code>, and DSNs with an embedded password, are refused.</p>
   </div>
   <pre tabindex="0"><code>[profiles.uat]
-engine      = "mariadb"             # mariadb | mysql | postgres | sqlite
-host        = "db.uat.example.com"  # or path = "app.db" for sqlite
-port        = 3306                  # default 3306, or 5432 for postgres
-user        = ""                    # empty: asked at console start
-database    = ""                    # empty: chosen per query (--db)
-credentials = "ask"                 # ask | vault (no keychain in a container)
-vault_path  = ""                    # with vault: "database/creds/&lt;role&gt;" or a KV secret
-tls         = "verify-full"         # disable | prefer (default) | require | verify-ca | verify-full, passed to the driver
-tls_ca      = ""                    # optional PEM bundle replacing the system roots
-tls_cert    = ""                  # optional client certificate (PEM)
-tls_key     = ""                    # its private key (PEM, unencrypted, mode 0600)
-tls_server_name = ""                # optional: the name verify-full checks instead of host
-credentials_ttl = "20m"             # optional: ask for the secret again
-tier        = "read"                # read | write | ddl | admin
+engine      = "mariadb"             <span class="cmt"># mariadb | mysql | postgres | sqlite</span>
+host        = "db.uat.example.com"  <span class="cmt"># or path = "app.db" for sqlite</span>
+port        = 3306                  <span class="cmt"># default 3306, or 5432 for postgres</span>
+user        = ""                    <span class="cmt"># empty: asked at console start</span>
+database    = ""                    <span class="cmt"># empty: chosen per query (--db)</span>
+credentials = "ask"                 <span class="cmt"># ask | vault (no keychain in a container)</span>
+vault_path  = ""                    <span class="cmt"># with vault: "database/creds/&lt;role&gt;" or a KV secret</span>
+tls         = "verify-full"         <span class="cmt"># disable | prefer (default) | require | verify-ca | verify-full</span>
+tls_ca      = ""                    <span class="cmt"># optional PEM bundle replacing the system roots</span>
+tls_cert    = ""                    <span class="cmt"># optional client certificate (PEM)</span>
+tls_key     = ""                    <span class="cmt"># its private key (PEM, unencrypted, mode 0600)</span>
+tls_server_name = ""                <span class="cmt"># optional: the name verify-full checks instead of host</span>
+credentials_ttl = "20m"             <span class="cmt"># optional: ask for the secret again</span>
+tier        = "read"                <span class="cmt"># read | write | ddl | admin</span>
 production  = false
 detectors   = ["email", "phone", "iban", "card", "be_niss"]
 
@@ -117,73 +160,112 @@ max_rows            = 200
 max_cell_chars      = 200
 max_output_bytes    = 65536
 k_anonymity         = 5
-explain_cost_refuse = 0             # engine cost units; 0 = off</code></pre>
-  <p class="prose">A remote host defaults to <code>tls = "verify-full"</code>: the server certificate must verify, against <code>tls_ca</code> for a private CA; <code>tls_server_name</code> names the certificate’s host when <code>host</code> is an IP address or an alias. <code>tls_cert</code> and <code>tls_key</code> go together, need <code>require</code> or stronger, and present a client certificate when the server asks for one (PostgreSQL <code>clientcert</code>/<code>cert</code> in <code>pg_hba.conf</code>, MySQL <code>REQUIRE X509</code>); keep both files in the console account’s home, the <code>locksql-home</code> volume, the key readable by that account only. On MariaDB and MySQL, a remote host whose certificate is not verified answers no request for the password in clear: connect with <code>verify-ca</code> or <code>verify-full</code>, or use an account with <code>mysql_native_password</code> or <code>ed25519</code>. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#tls-to-the-database">TLS to the database</a>.</p>
-  <p class="prose">A database reachable only from a bastion gets an <code>ssh</code> table: the console opens the SSH connection itself, with no local listening port, and checks the bastion against the console account’s <code>~/.ssh/known_hosts</code>, kept in the <code>locksql-home</code> volume, asking on first use and refusing a changed key. <code>host</code> is then the database as seen from the bastion.</p>
+explain_cost_refuse = 0             <span class="cmt"># engine cost units; 0 = off</span></code></pre>
+  <div class="prose">
+    <p>The <code>tls</code> settings go to the driver as they are, and the default is <code>prefer</code> whatever the host. Set <code>tls = "verify-full"</code> to verify the server certificate, with <code>tls_ca</code> for a private CA.</p>
+    <p><code>tls_server_name</code> names the certificate’s host when <code>host</code> is an IP address or an alias. <code>tls_cert</code> and <code>tls_key</code> go together and present a client certificate when the server asks for one; keep both in the console account’s home, the <code>locksql-home</code> volume.</p>
+    <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#tls-to-the-database">TLS to the database</a></p>
+    <p>A database reachable only from a bastion gets an <code>ssh</code> table. The console opens the SSH connection itself, with no local listening port. It checks the bastion against the console account’s <code>~/.ssh/known_hosts</code>, asking on first use and refusing a changed key.</p>
+    <p><code>host</code> is then the database as seen from the bastion.</p>
+  </div>
   <pre tabindex="0"><code>[profiles.prod]
 engine      = "postgres"
-host        = "db.internal"         # as seen from the bastion
+host        = "db.internal"         <span class="cmt"># as seen from the bastion</span>
 tls         = "verify-full"
 production  = true
 
 [profiles.prod.ssh]
 host        = "bastion.example.com"
 user        = "deploy"
-auth        = "key"                 # key | agent | password
-key         = "~/.ssh/id_ed25519"   # in the locksql-home volume, owned by locksql, mode 0600</code></pre>
-  <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md#configuration">All profile keys</a></p>
+auth        = "key"                 <span class="cmt"># key | agent | password</span>
+key         = "~/.ssh/id_ed25519"   <span class="cmt"># in the locksql-home volume, owned by locksql, mode 0600</span></code></pre>
+  <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/configuration.md">All profile keys</a></p>
 </section>
 
 <section aria-labelledby="wire">
   <h2 id="wire">Wire the agent</h2>
-  <p class="prose"><code>init claude</code> already did: the MCP command it writes, <code>locksql mcp</code>, is the launcher, which starts the MCP server in a throwaway container, as <code>agent</code>, with the socket volume and the project mounted. Start the agent at the project root, or below it. For every project instead:</p>
+  <div class="prose">
+    <p>locksql works with any MCP client. <code>locksql init claude|codex|cursor|gemini</code> writes the project files, the instructions and the MCP command <code>locksql mcp</code>.</p>
+    <p>That command is the launcher: it starts the MCP server in a throwaway container, as <code>agent</code>, with the socket volume and the project mounted. Start the agent at the project root, or below it.</p>
+    <p>For every project instead of one, add the same command to the agent’s user config. Claude Code, for example:</p>
+  </div>
   <pre tabindex="0"><code>claude mcp add --scope user locksql -- locksql mcp</code></pre>
   <div class="prose">
-    <p>Codex, Gemini CLI and Cursor take the same command (<code>locksql</code>, argument <code>mcp</code>) in their MCP config; keep their <code>tool_timeout_sec</code> or <code>timeout</code>, since the console waits up to 5 minutes for an approval. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#agent-wiring">Agent wiring in the usage guide</a>.</p>
-    <p>The client commands run the same way, for example <code>locksql status</code>.</p>
+    <p>Codex, Gemini CLI and Cursor take the same command (<code>locksql</code>, argument <code>mcp</code>) in their MCP config. Keep their <code>tool_timeout_sec</code> or <code>timeout</code> long, since the console waits up to 5 minutes for an approval.</p>
+    <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#agent-wiring">Agent wiring in the usage guide</a></p>
   </div>
 </section>
 
 <section aria-labelledby="console">
   <h2 id="console">Start the console</h2>
-  <p class="prose">The console runs attached to <a href="https://github.com/DavidGodefroid/lockhub">lockhub</a> only. From the project directory:</p>
-  <pre tabindex="0"><code>lox add locksql sql-dev
-lox up
-lox attach sql-dev</code></pre>
   <div class="prose">
-    <p><code>lox attach sql-dev</code> attaches your terminal to the console (detach: Ctrl-P Ctrl-Q), where it asks its policy, the PII rules and the password; it asks again when it restarts.</p>
-    <p>Then ask your agent, in the project: “how many orders were placed yesterday?”. Each query waits for your decision in lockhub: <code>lox approve</code>.</p>
-    <p><code>lox up</code> starts <code>locksql console</code> with its hub flags and the lock's settings (<code>--profile P</code>, <code>--show-results</code> or <code>--allow-unmask</code>); without its hub flags the console exits with <code>launched by `lox up` only</code>. The console runs as the <code>locksql</code> account in its own container, one per project. The <code>locksql-home</code> volume keeps the console account’s state from one run to the next: the approved policy, the audit log and <code>~/.ssh/known_hosts</code> for an <code>ssh</code> profile.</p>
-    <p>With <code>credentials = "vault"</code>, run <code>LOCKSQL_VAULT=1 VAULT_ADDR=https://vault.example.com locksql console</code>. The console account needs no <code>vault login</code>: at start the console asks for the Vault token in its terminal (no echo) and keeps it in memory for the session, never on disk. When Vault refuses a read (expired or revoked token, or a policy that may not read the path), it asks again.</p>
+    <p>The console runs attached to <a href="https://github.com/DavidGodefroid/lockhub">lockhub</a> only. <code>lox add locksql</code> declares the lock and starts it; <code>lox run</code> starts the hub and the workspace’s locks, then serves the decisions.</p>
+    <p><code>lox attach NAME</code> attaches your terminal to the console (detach: Ctrl-P Ctrl-Q). There it asks its policy, the PII rules and the password; it asks again when it restarts.</p>
+    <p>Without its hub flags, which lockhub writes, <code>locksql console</code> exits with <code>launched by `lox up` only</code>. It runs as the <code>locksql</code> account in its own container, one per project.</p>
+    <p>The <code>locksql-home</code> volume keeps the console account’s state from one run to the next: the approved policy, the audit log, and <code>~/.ssh/known_hosts</code> for an <code>ssh</code> profile.</p>
+  </div>
+
+  <h3 id="vault">With HashiCorp Vault</h3>
+  <div class="prose">
+    <p>With <code>credentials = "vault"</code>, use the vault image (<code>LOCKSQL_VAULT=1</code>) and set <code>VAULT_ADDR</code>. The console account needs no <code>vault login</code>.</p>
+    <p>At start the console asks for the Vault token (no echo) and keeps it in memory for the session, never on disk. When Vault refuses a read, it asks again.</p>
     <p>Get the token without storing it in your account, where the agent runs, then paste it at the prompt:</p>
   </div>
   <pre tabindex="0"><code>vault login -method=oidc -no-store -token-only</code></pre>
   <div class="prose">
-    <p>A plain <code>vault login</code> would write <code>~/.vault-token</code>, which the agent could read; do not leave <code>VAULT_TOKEN</code> set in that shell either.</p>
+    <p>A plain <code>vault login</code> would write <code>~/.vault-token</code>, which the agent could read. Do not leave <code>VAULT_TOKEN</code> set in that shell either.</p>
+    <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/docker.md">Running locksql in Docker, the full guide</a></p>
   </div>
-  <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/docker.md">Running locksql in Docker, the full guide</a></p>
 </section>
 
 <section aria-labelledby="separation">
   <h2 id="separation">What Docker does and does not separate</h2>
   <div class="prose">
-    <p>The agent’s container holds no credential, has no database connection and reaches the console only through the socket; a process that is neither the console account nor in <code>locksql-clients</code> is refused.</p>
-    <p>Your own account is another matter. Whoever can run <code>docker</code> commands can attach to the console and type an approval, exec into it and read its memory, or open the <code>locksql-home</code> volume, and an agent that runs shell commands in your account usually can: the launcher it runs for the MCP server is itself a <code>docker run</code>. This setup keeps the credentials out of the agent’s reach and the approval in your terminal, but it does not stop an agent determined to go around it. The stronger boundary is to run the agent itself in its own container, without access to the Docker socket, and to start the console with <code>--allowed-uids</code> set to the agent’s uid (or to build its image with <code>--build-arg ALLOWED_UIDS=</code>, run with <code>LOCKSQL_IMAGE</code>). <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/docker.md#agent-in-its-own-container">Agent in its own container</a>.</p>
+    <p>The agent’s container holds no credential, has no database connection and reaches the console only through the socket. A process that is neither the console account nor in <code>locksql-clients</code> is refused.</p>
+    <p>Your own account is another matter. Whoever can run <code>docker</code> commands can attach to the console and type an answer, exec into it and read its memory, or open the <code>locksql-home</code> volume.</p>
+    <p>An agent that runs shell commands in your account usually can: the launcher it runs for the MCP server is itself a <code>docker run</code>. This setup keeps the credentials out of the agent’s reach, but it does not stop an agent determined to go around it.</p>
+    <p>The stronger boundary: run the agent itself in its own container, without the Docker socket, and start the console with <code>--allowed-uids</code> set to the agent’s uid (or build its image with <code>--build-arg ALLOWED_UIDS=</code> and run it with <code>LOCKSQL_IMAGE</code>). <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/docker.md#agent-in-its-own-container">Agent in its own container</a>.</p>
   </div>
 </section>
 
     </div>
   </main>
   <footer class="site-footer">
-    <div class="wrap">
-      <ul>
-        <li><a href="https://github.com/DavidGodefroid/locksql">Source on GitHub</a></li>
-        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md">README</a></li>
-        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md">Usage guide</a></li>
-        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model (full)</a></li>
-        <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
-      </ul>
-      <p>Pre-release (<code>v0.16.x</code>). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+    <div class="wrap footer-grid">
+      <div class="footer-about">
+        <a class="brand" href="../"><img src="../assets/logo.svg" alt="" width="32" height="32"><span class="wordmark">locksql</span></a>
+        <p>SQL databases for AI agents: the agent queries, personal data comes back masked, and connections and writes wait for you.</p>
+        <p class="family-link">Part of the <a href="https://lockfamily.dev">Lock Family</a>, harness security for AI agents.</p>
+      </div>
+      <nav aria-labelledby="footer-lock">
+        <h2 id="footer-lock">locksql</h2>
+        <ul>
+          <li><a href="https://github.com/DavidGodefroid/locksql">Source on GitHub</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/README.md">README</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md">Usage guide</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/security-model.md">Security model</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/CHANGELOG.md">Changelog</a></li>
+          <li><a href="https://github.com/DavidGodefroid/locksql/blob/main/SECURITY.md">Report a vulnerability</a></li>
+        </ul>
+      </nav>
+      <nav class="family-strip" aria-labelledby="footer-family">
+        <h2 id="footer-family">The Lock Family</h2>
+        <ul>
+          <li data-lock="locksql" aria-current="true"><a href="https://github.com/DavidGodefroid/locksql">locksql</a><span>SQL databases, PII masked</span></li>
+          <li data-lock="lockmq"><a href="https://github.com/DavidGodefroid/lockmq">lockmq</a><span>RabbitMQ queues</span></li>
+          <li data-lock="lockfile"><a href="https://github.com/DavidGodefroid/lockfile">lockfile</a><span>Files: S3, SFTP, disk</span></li>
+          <li data-lock="lockhttp"><a href="https://github.com/DavidGodefroid/lockhttp">lockhttp</a><span>Outbound HTTP(S)</span></li>
+          <li data-lock="locklog"><a href="https://github.com/DavidGodefroid/locklog">locklog</a><span>Logs, masked search</span></li>
+          <li data-lock="lockssh"><a href="https://github.com/DavidGodefroid/lockssh">lockssh</a><span>Commands over SSH</span></li>
+          <li data-lock="lockhub"><a href="https://github.com/DavidGodefroid/lockhub">lockhub</a><span>The approval hub and <code>lox</code></span></li>
+          <li data-lock="lockkit"><a href="https://github.com/DavidGodefroid/lockkit">lockkit</a><span>The shared Go core</span></li>
+          <li data-lock="lea"><a href="https://github.com/DavidGodefroid/lea">lea</a><span>Agents in containers</span></li>
+        </ul>
+      </nav>
+    </div>
+    <div class="wrap footer-bottom">
+      <p>Pre-release (v0.17.x). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p><a href="https://lockfamily.dev">lockfamily.dev</a> · <a href="https://github.com/DavidGodefroid/lockfamily">the family on GitHub</a></p>
     </div>
   </footer>
 </body>

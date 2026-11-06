@@ -1,0 +1,21 @@
+<!-- install-box.html: the Homebrew copy-paste box (assets/copy.js adds the
+     Copy button; without JS it is a plain selectable <pre>). One
+     <span class="cmd"> per command, separated by a real newline, nothing
+     else in the <pre>: no prompt (CSS draws "$ "), no comment. The Lock
+     formulas do not pull in lox: install it with the Lock.
+     A Lock with a formula: -->
+    <div class="install">
+      <div class="install-head"><span>Install with Homebrew</span></div>
+      <pre tabindex="0" aria-label="Install commands"><code><span class="cmd">brew trust davidgodefroid/tap</span>
+<span class="cmd">brew install davidgodefroid/tap/lox davidgodefroid/tap/{{LOCK}}</span></code></pre>
+      <p class="install-note">Needs Docker. Then <code>lox add {{LOCK}}</code> and <code>lox run</code>. The whole family: <code>brew install davidgodefroid/tap/lockfamily</code>.</p>
+    </div>
+<!-- A Lock without a formula yet (locklog, lockssh today): the family block,
+     then the repo's own documented install path in the note.
+    <div class="install">
+      <div class="install-head"><span>Install the Lock Family with Homebrew</span></div>
+      <pre tabindex="0" aria-label="Install commands"><code><span class="cmd">brew trust davidgodefroid/tap</span>
+<span class="cmd">brew install davidgodefroid/tap/lockfamily</span></code></pre>
+      <p class="install-note">{{LOCK}} itself: <a href="install/">its install guide</a>. Homebrew formula coming with the next release.</p>
+    </div>
+-->
