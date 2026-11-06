@@ -197,14 +197,18 @@ type StatusResult struct {
 	Production    bool   `json:"production"`
 	// AutoApprove is always false: lockhub decides every statement. Kept
 	// for the clients that read it.
-	AutoApprove    bool          `json:"auto_approve"`
-	AllowUnmask    bool          `json:"allow_unmask"`
-	ShowResults    bool          `json:"show_results"`
-	Tier           string        `json:"tier"`
-	Databases      []string      `json:"databases"`
-	Limits         config.Limits `json:"limits"`
-	IdleTimeoutInS int           `json:"idle_timeout_in_s"`
-	SessionEndsInS int           `json:"session_ends_in_s"`
+	AutoApprove bool `json:"auto_approve"`
+	// Auto is the profile's auto mode in force, every action set
+	// (locksql#185): what lox run's auto mode may approve without a
+	// question (auto), must ask (ask) or never gets (deny).
+	Auto           config.AutoRules `json:"auto"`
+	AllowUnmask    bool             `json:"allow_unmask"`
+	ShowResults    bool             `json:"show_results"`
+	Tier           string           `json:"tier"`
+	Databases      []string         `json:"databases"`
+	Limits         config.Limits    `json:"limits"`
+	IdleTimeoutInS int              `json:"idle_timeout_in_s"`
+	SessionEndsInS int              `json:"session_ends_in_s"`
 	// Health is what the console found at start-up, for locksql doctor.
 	Health *Health `json:"health,omitempty"`
 	// Grants are the active grants, oldest first.

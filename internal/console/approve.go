@@ -239,6 +239,7 @@ func describePolicy(p config.Policy) []string {
 		fmt.Sprintf("  session: idle_timeout %s · max_session %s", l.IdleTimeout, l.MaxSession),
 		"  detectors: " + safeText(strings.Join(pr.Detectors, ", "), false),
 		fmt.Sprintf("  PII rules: set %q · %d mask, %d allow", pr.PIIRules, len(p.PIIMask), len(p.PIIAllow)),
+		autoLine(pr),
 	}
 	if pr.Engine != config.EngineSQLite {
 		mode := pr.TLS

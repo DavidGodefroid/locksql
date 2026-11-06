@@ -131,6 +131,9 @@ func (s *Server) grantRequest(ctx context.Context, req ipc.Request) ipc.Response
 		return s.refuse(ctx, req.ID, intent, p.DB, "", "read", "", "", refusal.New(refusal.GrantsOff,
 			"grants are off in this profile (limits.grant_max_duration = 0): plan and run each query"))
 	}
+	if r := s.autoDenied(sqlclass.Read, false); r != nil {
+		return s.refuseAuto(ctx, req.ID, intent, p.DB, "", "read", "", "", r)
+	}
 	if len(p.Tables) == 0 || len(p.Tables) > maxGrantTables {
 		return errResp(req.ID, ipc.CodeInvalidParams, fmt.Sprintf("a grant names 1 to %d tables", maxGrantTables))
 	}
@@ -330,6 +333,10 @@ func (s *Server) grantActivate(ctx context.Context, id int64, ticketID string, w
 	if _, on := s.profile.Limits.Grants(); !on {
 		finish(false, "grants are off")
 		return s.refuse(ctx, id, body.Intent, body.DB, "", "read", "", "", refusal.New(refusal.GrantsOff, "grants are off in this profile (limits.grant_max_duration = 0)"))
+	}
+	if r := s.autoDenied(sqlclass.Read, false); r != nil {
+		finish(false, "denied by the auto rules")
+		return s.refuseAuto(ctx, id, body.Intent, body.DB, "", "read", "", "", r)
 	}
 	sc := *body.Grant
 	d, err := time.ParseDuration(sc.Duration)

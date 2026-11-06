@@ -543,6 +543,13 @@ func Run(ctx context.Context, o Options) error {
 	}
 	p = approved.Profile
 	st.profile = p
+	// connect = "deny" in the approved policy's auto rules: the profile
+	// is never connected, whoever asks (locksql#185).
+	if p.AutoRules().Get(config.ActionConnect) == config.AutoDeny {
+		err := fmt.Errorf("console: the auto rules of profile %s deny its connection (auto.connect = deny)", p.Name)
+		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error(), AutoRule: "auto.connect = deny"})
+		return err
+	}
 	// The start-up refusals of a production profile, applied again by the
 	// server when the policy in force becomes production (#93).
 	refuseProduction := func() error {
@@ -590,6 +597,7 @@ func Run(ctx context.Context, o Options) error {
 
 	// 3. Host (confirmed with the policy) and user.
 	o.IO.Println(paint.OK(fmt.Sprintf("profile %s · %s %s · PII rules %q %s", paint.Bold(p.Name), p.Engine, st.where(), p.PIIRules, paint.Dim("(approved policy)"))))
+	o.IO.Println(paint.Dim(autoLine(p)))
 	st.user = p.User
 	// With credentials = "vault" the user comes with the login (connect).
 	if st.user == "" && p.Engine != config.EngineSQLite && p.Credentials != config.CredentialsVault {

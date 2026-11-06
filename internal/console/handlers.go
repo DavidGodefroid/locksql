@@ -334,6 +334,9 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 		return nil, ptr(s.refuse(ctx, id, p.Intent, db, st.SQL, class, "", p.SQL, refusal.Newf(refusal.Tier,
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier)))
 	}
+	if r := s.autoDenied(st.Class, p.Unmask); r != nil {
+		return nil, ptr(s.refuseAuto(ctx, id, p.Intent, db, st.SQL, class, "", p.SQL, r))
+	}
 	if sqlast.HasPlaceholder(s.dialect, st.SQL) {
 		// Placeholders and cell references are not supported: refused
 		// before anything is analysed, so that no value is looked up and
@@ -547,6 +550,10 @@ func (s *Server) runChecks(ctx context.Context, id int64, pl *plan) (hidden *ref
 	if int(pl.st.Class) > int(s.profile.Tier) {
 		return nil, ptr(s.refuse(ctx, id, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, refusal.Newf(refusal.Tier,
 			"statement class %s is above the profile tier %s", strings.ToUpper(class), s.profile.Tier)))
+	}
+	// The auto rules may have been tightened to deny since query.plan.
+	if r := s.autoDenied(pl.st.Class, pl.unmask); r != nil {
+		return nil, ptr(s.refuseAuto(ctx, id, pl.intent, pl.db, pl.st.SQL, class, pl.level, pl.src, r))
 	}
 	// Unmasked output may have been turned off (:unmask) since query.plan.
 	if pl.unmask && !s.allowUnmask() {

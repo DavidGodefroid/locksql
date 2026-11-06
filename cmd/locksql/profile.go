@@ -104,8 +104,11 @@ func usageFailure(err error) *verbFailure {
 // asks for or writes a secret: the console asks for the password at start,
 // or reads it from Vault (or, from the interactive form, its keychain).
 func runProfile(e env, args []string) int {
+	if len(args) > 0 && args[0] == "rules" {
+		return runProfileRules(e, args[1:])
+	}
 	if len(args) == 0 || args[0] != "add" {
-		f := verbFailure{exit: exitUsage, code: verbs.CodeUsage, msg: "the only subcommand is add"}
+		f := verbFailure{exit: exitUsage, code: verbs.CodeUsage, msg: "the subcommands are add and rules"}
 		return f.report(e, "profile", profileAddUsage, verbs.WantsJSON(args))
 	}
 	args = args[1:]

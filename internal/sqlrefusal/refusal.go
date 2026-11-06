@@ -81,6 +81,9 @@ const (
 	// GrantNeedsAgent: a grant asked for, activated or run under without
 	// the agent's lea token, which alone tells one agent from another.
 	GrantNeedsAgent Code = "E_GRANT_NEEDS_AGENT"
+	// AutoDeny: the profile's auto rules deny the action (auto.<action>
+	// = "deny"), even with a human's approval.
+	AutoDeny Code = "E_AUTO_DENY"
 	// Policy is the fail-closed code of a refusal no check named: it
 	// should never be seen, and is a bug to report. lockkit defines it.
 	Policy Code = refusal.Policy
@@ -147,6 +150,8 @@ var table = map[Code]struct {
 		"plan the statement again (locksql_plan): the human approves the new plan"},
 	GrantNeedsAgent: {RetryAskUser, "a grant without the agent's lea token",
 		"grants are for agents run by lea (LEA_AGENT_TOKEN): plan and run each query, or ask the user to run the agent under lea"},
+	AutoDeny: {RetryAskUser, "the profile's auto rules deny this action",
+		"do not look for another way to run it; only the human can change the profile's auto rules (auto in .locksql): tell the user"},
 	GrantsOff: {RetryAskUser, "grants are off in this profile",
 		"plan and run each query (locksql_plan, locksql_run); only the human can turn grants on (limits.grant_max_duration)"},
 }

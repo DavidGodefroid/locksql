@@ -53,7 +53,7 @@ func TestOpenPath(t *testing.T) {
 // hold a password or row data; adding one must be a deliberate change here.
 func TestRecordFieldSet(t *testing.T) {
 	want := []string{
-		"affected", "allow_loosen", "approval", "approver", "bytes_used", "class", "code", "db", "db_user", "decision", "duration_ms", "engine", "error",
+		"affected", "allow_loosen", "approval", "approver", "auto_rule", "bytes_used", "class", "code", "db", "db_user", "decided_by", "decision", "duration_ms", "engine", "error",
 		"event", "facade", "grant", "grant_scope", "host", "hub_sig", "intent", "peer_pid", "peer_uid", "peer_user", "prev_hash", "profile", "profiles", "reason", "rows", "scope", "span", "sql", "ssh_host", "ssh_host_key", "statements_used", "ticket", "truncated", "ts",
 		"unmasked", "verdict", "warnings",
 	}
@@ -70,6 +70,7 @@ func TestRecordFieldSet(t *testing.T) {
 		Scope: "user", Profiles: []string{"p"}, AllowLoosen: true,
 		Ticket: "t", Approver: &ticket.Approver{ID: "u", Display: "d"}, Facade: "tty", HubSig: "s",
 		Grant: "g", GrantScope: "database d · tables d.t", StatementsUsed: new(int64), BytesUsed: new(int64),
+		AutoRule: "auto.write = ask", DecidedBy: "human",
 	}
 	if err := l.Append(full); err != nil {
 		t.Fatal(err)

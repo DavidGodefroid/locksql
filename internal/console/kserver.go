@@ -174,6 +174,7 @@ func (s *Server) statusOf(c kconsole.StatusResult) ipc.StatusResult {
 		SessionEndsInS: c.SessionEndsInS,
 		Health:         s.cfg.Health,
 		Grants:         s.grantInfos(),
+		Auto:           s.profile.AutoRules(),
 	}
 }
 
@@ -186,6 +187,7 @@ func (s *Server) StatusRows(v kconsole.StatusView) [][2]string {
 		{"profile", fmt.Sprintf("%s · %s %s · tier %s · production %t", st.Profile, st.Engine, safeText(st.Host, false), st.Tier, st.Production)},
 		{"databases", safeText(strings.Join(st.Databases, ", "), false)},
 		{"decided", "in lockhub, instance " + safeText(s.cfg.Hub.Instance, false)},
+		{"auto mode", st.Auto.String()},
 		{"results", kconsole.StatusResultsRow(v, w)},
 		{"unmask", kconsole.StatusUnmaskRow(v)},
 		{"limits", fmt.Sprintf("timeout %s · warn %d · refuse %d · max_rows %d · max_cell_chars %d · max_output_bytes %d",

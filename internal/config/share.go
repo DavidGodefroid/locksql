@@ -50,24 +50,27 @@ type SharedRule struct {
 // source profile had, which the importer supplies with --local. User is
 // exported only on request: it is the employee's own login.
 type SharedProfile struct {
-	Engine         string        `json:"engine"`
-	Host           string        `json:"host,omitempty"`
-	Port           int           `json:"port,omitempty"`
-	User           string        `json:"user,omitempty"`
-	Database       string        `json:"database,omitempty"`
-	Credentials    string        `json:"credentials,omitempty"`
-	VaultPath      string        `json:"vault_path,omitempty"`
-	CredentialsTTL string        `json:"credentials_ttl,omitempty"`
-	TLS            string        `json:"tls,omitempty"`
-	TLSServerName  string        `json:"tls_server_name,omitempty"`
-	Tier           string        `json:"tier,omitempty"`
-	Production     bool          `json:"production,omitempty"`
-	Detectors      []string      `json:"detectors"`
-	PIIRules       string        `json:"pii_rules,omitempty"`
-	WriteFunctions string        `json:"write_functions,omitempty"`
-	Limits         *SharedLimits `json:"limits,omitempty"`
-	SSH            *SharedSSH    `json:"ssh,omitempty"`
-	NeedsLocal     []string      `json:"needs_local,omitempty"`
+	Engine         string   `json:"engine"`
+	Host           string   `json:"host,omitempty"`
+	Port           int      `json:"port,omitempty"`
+	User           string   `json:"user,omitempty"`
+	Database       string   `json:"database,omitempty"`
+	Credentials    string   `json:"credentials,omitempty"`
+	VaultPath      string   `json:"vault_path,omitempty"`
+	CredentialsTTL string   `json:"credentials_ttl,omitempty"`
+	TLS            string   `json:"tls,omitempty"`
+	TLSServerName  string   `json:"tls_server_name,omitempty"`
+	Tier           string   `json:"tier,omitempty"`
+	Production     bool     `json:"production,omitempty"`
+	Detectors      []string `json:"detectors"`
+	PIIRules       string   `json:"pii_rules,omitempty"`
+	WriteFunctions string   `json:"write_functions,omitempty"`
+	// Auto is the profile's auto mode, the actions that differ from the
+	// defaults (nil: the defaults).
+	Auto       *AutoRules    `json:"auto,omitempty"`
+	Limits     *SharedLimits `json:"limits,omitempty"`
+	SSH        *SharedSSH    `json:"ssh,omitempty"`
+	NeedsLocal []string      `json:"needs_local,omitempty"`
 }
 
 // SharedLimits are the limits of a SharedProfile; durations as Go
@@ -139,7 +142,7 @@ func ExportProfile(p Profile, set string, includeUser bool) (SharedProfile, erro
 		Engine: p.Engine, Host: p.Host, Port: p.Port, Database: p.Database,
 		Credentials: p.Credentials, VaultPath: p.VaultPath, TLS: p.TLS, TLSServerName: p.TLSServerName,
 		Tier: p.Tier.String(), Production: p.Production, Detectors: append([]string{}, p.Detectors...), PIIRules: set,
-		WriteFunctions: p.WriteFunctions,
+		WriteFunctions: p.WriteFunctions, Auto: p.Auto.sparseCopy(),
 		Limits: &SharedLimits{
 			StatementTimeout: durString(l.StatementTimeout), ExplainRowsWarn: l.ExplainRowsWarn, ExplainRowsRefuse: l.ExplainRowsRefuse,
 			MaxRows: l.MaxRows, MaxCellChars: l.MaxCellChars, MaxOutputBytes: l.MaxOutputBytes, ExplainCostRefuse: l.ExplainCostRefuse,
@@ -451,7 +454,7 @@ func (s SharedProfile) raw() rawProfile {
 		Engine: s.Engine, Host: s.Host, Port: s.Port, User: s.User, Database: s.Database, Credentials: s.Credentials,
 		TLS: s.TLS, TLSServer: s.TLSServerName, Tier: s.Tier, Production: s.Production,
 		Detectors: append([]string{}, s.Detectors...), CredentialsTTL: s.CredentialsTTL, VaultPath: s.VaultPath,
-		WriteFunctions: s.WriteFunctions,
+		WriteFunctions: s.WriteFunctions, Auto: rawAutoOf(s.Auto),
 	}
 	if s.Detectors == nil {
 		r.Detectors = nil
@@ -528,6 +531,15 @@ func (f *ConfigFile) TOML(header string) []byte {
 			fmt.Fprintf(&b, "pii_rules = %s\n", tomlQuote(*r.PIIRules))
 		}
 		str("write_functions", r.WriteFunctions)
+		if a := r.Auto; a != nil {
+			fmt.Fprintf(&b, "\n[profiles.%s.auto]\n", tomlQuote(name))
+			str("preset", a.Preset)
+			str("connect", a.Connect)
+			str("read", a.Read)
+			str("write", a.Write)
+			str("ddl", a.DDL)
+			str("unmask", a.Unmask)
+		}
 		if l := r.Limits; l != (rawLimits{}) {
 			fmt.Fprintf(&b, "\n[profiles.%s.limits]\n", tomlQuote(name))
 			str("statement_timeout", l.StatementTimeout)
