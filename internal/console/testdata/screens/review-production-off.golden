@@ -2,7 +2,7 @@
 "pending policy change for profile prod:"
 "\x1b[1;31m  ~ production: true → false  (loosens)\x1b[0m"
 "<bell>"
-"? Apply these changes? [y/N] "
+"? Apply these changes? Type the profile name \"prod\" to apply them: "
 "policy change applied"
 == audit
 event=policy decision=applied approval=session

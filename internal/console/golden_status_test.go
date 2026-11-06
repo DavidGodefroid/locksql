@@ -96,10 +96,10 @@ func TestGoldenStatusAndReview(t *testing.T) {
 	}{
 		{name: "review-applied", start: uatProfile, answer: "y", change: func(p *config.Profile) { p.Limits.MaxRows = 5000; p.Tier = config.TierWrite }},
 		{name: "review-refused", start: uatProfile, answer: "n", change: func(p *config.Profile) { p.Limits.MaxRows = 5000 }},
-		{name: "review-production-off", start: prodProfile, answer: "y", change: func(p *config.Profile) { p.Production = false }},
+		{name: "review-production-off", start: prodProfile, answer: "prod", change: func(p *config.Profile) { p.Production = false }},
 		// lockkit's FormatChanges, :review wording and adopt differ here:
 		// "- " only for PII rules and detectors, and the wider connection-change check (tls, ssh, proxy_command).
-		{name: "review-removals-connection", answer: "y", mask: []string{},
+		{name: "review-removals-connection", answer: "prod", mask: []string{},
 			start: func() config.Profile {
 				p := prodProfile()
 				p.Detectors, p.TLSCA = []string{"email", "iban"}, "/etc/ca.pem"

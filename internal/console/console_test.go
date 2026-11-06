@@ -1037,7 +1037,7 @@ func TestCustomSessionLimits(t *testing.T) {
 	if _, ended := h.s.Ended(); ended {
 		t.Fatal("ended before the custom idle timeout")
 	}
-	h.ok(t, ipc.MethodStatus, nil, nil) // activity
+	h.ok(t, ipc.MethodCatalogList, nil, nil) // activity (a backend call)
 
 	// A shorter idle timeout tightens: applied at once, used by the next tick.
 	p.Limits.IdleTimeout = time.Minute
@@ -1055,7 +1055,8 @@ func TestCustomSessionLimits(t *testing.T) {
 	h = newHarness(t, p)
 	for range 10 {
 		h.now = h.now.Add(59 * time.Second)
-		h.ok(t, ipc.MethodStatus, nil, nil)
+		// A backend call is activity; status is not (lockkit#10).
+		h.ok(t, ipc.MethodCatalogList, nil, nil)
 		h.s.Tick()
 	}
 	if _, ended := h.s.Ended(); ended { // 9m50s in, active
