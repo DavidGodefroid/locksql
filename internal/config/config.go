@@ -156,6 +156,10 @@ type Profile struct {
 	// WriteFunctions is "" (the denylist of every class) or
 	// WriteFunctionsAllowlist: writes may call allowlisted functions only.
 	WriteFunctions string `json:"write_functions,omitempty"`
+	// Auto is the profile's auto mode (auto.go): only the actions that
+	// differ from DefaultAutoRules, nil when none does. Read it with
+	// AutoRules.
+	Auto *AutoRules `json:"auto,omitempty"`
 }
 
 // ruleSetRe is a valid PII rule set name: it becomes a file name, so no
@@ -284,6 +288,8 @@ type rawProfile struct {
 	// PIIRules is nil when the key is absent: "" is refused.
 	PIIRules       *string `toml:"pii_rules"`
 	WriteFunctions string  `toml:"write_functions"`
+	// Auto is a preset name or a table of actions (auto.go).
+	Auto *rawAuto `toml:"auto"`
 }
 
 type rawFile struct {
@@ -434,6 +440,13 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		p.WriteFunctions = WriteFunctionsAllowlist
 	default:
 		return Profile{}, errf("unknown write_functions mode (want denylist or allowlist)")
+	}
+	if r.Auto != nil {
+		rules, err := r.Auto.rules()
+		if err != nil {
+			return Profile{}, errf("%v", err)
+		}
+		p.Auto = rules.sparse()
 	}
 	for i, d := range p.Detectors {
 		if !knownDetectors[d] {

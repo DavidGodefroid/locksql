@@ -882,6 +882,84 @@ Then:
   still has comes back at the next start: remove it there too), or remove
   the console's copy from its volume to take the profile's set again.
 
+### Auto mode per profile
+
+<a id="auto-mode-per-profile"></a>
+
+`lox run` decides tickets in **auto mode** by default: some actions are
+approved without a question, the others are asked. Each profile says which,
+per action, in its `auto` key (`.locksql/config.toml`, written by the human
+on the host; agents see it read-only):
+
+```toml
+[profiles.local]
+engine = "sqlite"
+path = "local.db"
+tier = "ddl"
+auto = "full-auto"      # every action auto: no question at all
+
+[profiles.prod]
+engine = "postgres"
+host = "db.internal"
+production = true
+
+[profiles.prod.auto]
+connect = "ask"         # the default: y/n once per lox run session
+read = "auto"           # the default
+write = "ask"           # the default: every write asked
+ddl = "deny"            # refused, even when a human would approve it
+```
+
+| Action | What it covers | Default |
+|---|---|---|
+| `connect` | opening the profile's connection | `ask` (once per `lox run` session) |
+| `read` | a `SELECT` (and a grant: a bounded read scope) | `auto` |
+| `write` | `INSERT`, `UPDATE`, `UPSERT`, `DELETE`, `MERGE` | `ask` (every time) |
+| `ddl` | a schema change, or an admin statement | `ask` (every time) |
+| `unmask` | a statement whose results come back in clear (`--unmask`): a read, or a write's `RETURNING` rows | `ask` (every time) |
+
+Each value is `auto` (no question), `ask` or `deny`. `auto = "full-auto"`
+sets every action to `auto`; a table may start from a preset and override
+some actions (`preset = "full-auto"`, then `ddl = "ask"`). An unmasked
+statement takes the stricter of its own action and `unmask`: an unmasked
+read the stricter of `read` and `unmask`, an unmasked write (`INSERT ...
+RETURNING`, a data-modifying CTE) the stricter of `write` and `unmask`. Any other key or value is a
+configuration error.
+
+The rules only shape auto mode: in manual mode (Shift+Tab in `lox run`)
+every ticket is asked. The lock enforces its side whatever the decider
+does:
+
+- `deny` is refused by the console before any ticket (`E_AUTO_DENY`), at
+  the plan and again at the run; `connect = "deny"` refuses to start the
+  console on the profile, ends a running session as soon as the policy in
+  force denies the connection (a tightening in the files, a change
+  approved at `:review`), and refuses a reconnection; each end is audited.
+- A grant is never approved by an auto rule, whatever `read` says: its
+  ticket is always never-auto, and an auto approval of it is refused,
+  audited and withdrawn, with no grant activated.
+- `ask` marks the ticket never-auto (`flags.never_auto`): an auto rule's
+  approval of it is refused by the console (nothing runs, the refusal is
+  audited), only a human's approval runs it.
+- `auto` leaves the ticket to `lox run`'s auto mode.
+
+The rules in force are those of the approved policy: loosening one (toward
+`auto`) is a policy loosening, reviewed at start or at `:review`, with the
+profile name typed on a production profile; tightening one applies at once.
+The console shows them at start, in the first-start review and in
+`:status` (`auto` in the status answer). `locksql profile rules [--json]
+[--profile P]` prints them from the config files, every action set, which
+is what `lox run` shows at start. The audit names the rule of every ticket
+(`auto_rule`, such as `"auto.write = ask"`) and what decided it
+(`decided_by`: `human`, or `auto:<rule id>` for an auto rule of the
+decider).
+
+Tickets stay version 1 for now (lockhub main reads no other): the rule
+reaches the decider as the ticket's never-auto flag. Connect tickets come
+with lazy connections; until then the console connects at start, in the
+human's presence, and `connect` other than `deny` is information for
+`lox run`.
+
 ### Grants
 
 Approving every small read of a debugging session leads to approval
@@ -1020,7 +1098,8 @@ The console watches the config and PII files while it runs.
   host, port, engine, user or database,
   any change of the `ssh` table (except `ssh.credentials` set to `ask`),
   `ask → keychain` or `vault`, any change of `vault_path`,
-  `write_functions = "allowlist" → "denylist"`, a removed mask rule or detector, a mask mode
+  `write_functions = "allowlist" → "denylist"`, an `auto` rule moved toward
+  `auto` (`deny → ask → auto`), a removed mask rule or detector, a mask mode
   changed to anything but `redact`, a new allow rule) waits for you. Plans are
   refused with `policy_pending` until you run `:review` and answer
   `Apply these changes? [y/N]`.
@@ -1044,7 +1123,7 @@ importer keeps the same sets. `--output` writes the file with mode 0600.
 
 | Exported | Never exported |
 |---|---|
-| `engine`, `host`, `port`, `database`, `credentials`, `vault_path`, `credentials_ttl`, `tls`, `tls_server_name`, `tier`, `production`, `detectors`, `pii_rules`, `write_functions`, every `limits.*`, `ssh.host`, `ssh.port`, `ssh.user`, `ssh.auth`, `ssh.credentials`; `user` with `--include-user` | secrets (a value that looks like one fails the whole export), `tls_ca`, `tls_cert`, `tls_key`, `ssh.key` (named in `needs_local`), `proxy_command` (named in `needs_local`; a command line is never taken from a shared file nor from `--local`: the import keeps the one of your config, or skips the profile), SQLite and Unix-socket profiles (skipped with a warning), `/etc/locksql/system.toml`, approved policies, the audit log, stats, `known_hosts`, console flags |
+| `engine`, `host`, `port`, `database`, `credentials`, `vault_path`, `credentials_ttl`, `tls`, `tls_server_name`, `tier`, `production`, `detectors`, `pii_rules`, `write_functions`, `auto`, every `limits.*`, `ssh.host`, `ssh.port`, `ssh.user`, `ssh.auth`, `ssh.credentials`; `user` with `--include-user` | secrets (a value that looks like one fails the whole export), `tls_ca`, `tls_cert`, `tls_key`, `ssh.key` (named in `needs_local`), `proxy_command` (named in `needs_local`; a command line is never taken from a shared file nor from `--local`: the import keeps the one of your config, or skips the profile), SQLite and Unix-socket profiles (skipped with a warning), `/etc/locksql/system.toml`, approved policies, the audit log, stats, `known_hosts`, console flags |
 
 `locksql config import FILE|- [--project] [--profile NAME]... [--replace]
 [--dry-run] [--yes] [--allow-loosen] [--local NAME.KEY=VALUE]...`:
@@ -1406,6 +1485,7 @@ The retry rules:
 | `E_STALE` | the definitions the statement resolves to (functions, views, rules, triggers, row-level policies, grants, search path) changed between the plan and the run, or during the run | rewrite | plan the statement again; the human approves the new plan |
 | `E_GRANT_NEEDS_AGENT` | a grant asked for, or activated, without the agent's lea token (`LEA_AGENT_TOKEN`): outside lea every process of the account would share it | ask_user | plan and run each query, or run the agent under lea |
 | `E_GRANTS_OFF` | a grant asked for, or activated, while grants are off in the profile (`limits.grant_max_duration = 0`) | ask_user | plan and run each query; only the human turns grants on |
+| `E_AUTO_DENY` | an action the profile's auto rules deny (`auto.read`, `auto.write`, `auto.ddl` or `auto.unmask` = `"deny"`; a grant is a read): refused before any ticket, a human cannot approve it | ask_user | none: only the human changes the profile's `auto` rules |
 | `E_POLICY` | a refusal no check named (fail-closed; should not happen) | stop | none: report it as a bug |
 
 `E_STALE` comes from the plan hash: on PostgreSQL it covers the effective `search_path` and the definitions of what the statement resolves to (functions and operators, including the operators views, rules, policies, defaults and `CHECK`s use and their commutators and negators, views, rules, triggers, row-level policies, grants, column defaults and generated columns, constraints, partitions, the domains, enum labels and composite types of the columns; for a write, the tables its foreign keys cascade into; for DDL, the event triggers and, for a `DROP` or `ALTER` with `CASCADE`, every relation pg_depend says it would drop or change along with its relations: views over them, policies, constraints, defaults and triggers that use them, inheritance children, owned sequences and their users, columns of their row type, recursively; the functions and domains it would drop are not hashed, and `DROP FUNCTION/DOMAIN/SCHEMA ... CASCADE` or `DROP TYPE` of an enum name no relation and are not walked), followed up to 8 levels deep; a deeper statement is refused. The functions a PL/pgSQL body calls and the objects dynamic SQL reaches are not followed: only the calling function's own source is hashed.

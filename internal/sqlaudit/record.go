@@ -110,7 +110,14 @@ type Record struct {
 	// Grant is the grant behind a record: its activation, its end and
 	// every run it covered (with the decision's HubSig); GrantScope is
 	// its scope in words (database, tables, duration, budget).
-	Grant      string `json:"grant,omitempty"`
+	Grant string `json:"grant,omitempty"`
+	// AutoRule is the profile's auto rule for the action of a record
+	// ("auto.write = ask", locksql#185): what made its ticket asked or
+	// left to lox run's auto mode, or the refusal of a denied action.
+	// DecidedBy is what decided the ticket, from the hub's version-2
+	// decision: "human" or "auto:<rule id>".
+	AutoRule   string `json:"auto_rule,omitempty"`
+	DecidedBy  string `json:"decided_by,omitempty"`
 	GrantScope string `json:"grant_scope,omitempty"`
 	// StatementsUsed and BytesUsed are what a grant used, on its
 	// grant_end record (with Rows); set there only, 0 included.

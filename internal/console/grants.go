@@ -131,6 +131,9 @@ func (s *Server) grantRequest(ctx context.Context, req ipc.Request) ipc.Response
 		return s.refuse(ctx, req.ID, intent, p.DB, "", "read", "", "", refusal.New(refusal.GrantsOff,
 			"grants are off in this profile (limits.grant_max_duration = 0): plan and run each query"))
 	}
+	if r := s.autoDenied(sqlclass.Read, false); r != nil {
+		return s.refuseAuto(ctx, req.ID, intent, p.DB, "", "read", "", "", r)
+	}
 	if len(p.Tables) == 0 || len(p.Tables) > maxGrantTables {
 		return errResp(req.ID, ipc.CodeInvalidParams, fmt.Sprintf("a grant names 1 to %d tables", maxGrantTables))
 	}
@@ -217,7 +220,12 @@ func (s *Server) grantRequest(ctx context.Context, req ipc.Request) ipc.Response
 	}
 	sc := &clear
 	sc.Hub = &kconsole.HubTicket{PlanID: hp.ID, Caller: caller, Risk: ticket.RiskGrant, Masked: masked, Requester: ticket.Requester{Agent: agent}}
-	rec := withPeerRecord(ctx, audit.Record{DB: db, Class: "read", Intent: intent, GrantScope: scope.words()})
+	// A grant covers many reads: whatever auto.read says, no auto rule
+	// approves one (lockkit sets never_auto on every grant ticket, and
+	// the lock says so itself). The record names the read rule in force.
+	sc.NeverAuto = true
+	rec := withPeerRecord(ctx, audit.Record{DB: db, Class: "read", Intent: intent, GrantScope: scope.words(),
+		AutoRule: s.autoRuleText(sqlclass.Read, false)})
 	s.println(paint.Step("grant asked for: " + safeText(scope.words(), false)))
 	a := s.asker().Ask(ctx, req.ID, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
 		rec.Event, rec.Decision, rec.Reason, rec.Error, rec.Approval, rec.Ticket = b.Event, b.Decision, b.Reason, b.Error, b.Approval, b.Ticket
@@ -310,6 +318,13 @@ func (s *Server) grantActivate(ctx context.Context, id int64, ticketID string, w
 		s.auditGrant(ctx, audit.Record{Event: audit.EventGrant, Decision: "stale", Ticket: ticketID, Error: "the policy changed since the grant was asked for"}, body, dec)
 		msg := "the policy changed since the grant was asked for: ask for a new grant"
 		return refusedResp(id, msg, refusal.New(refusal.Stale, msg).Info("", 0))
+	case errors.Is(err, ticket.ErrAuto):
+		// An auto rule of the decider approved a grant: only a human
+		// grants one. Refused, on record, the ticket withdrawn, nothing
+		// activated.
+		s.auditAutoRefused(ctx, ticketID, dec, err)
+		s.withdraw(ctx, ticketID, caller)
+		return errResp(id, ipc.CodeDenied, "ticket "+ticketID+": the grant was approved by an auto rule, but only a human grants one: not active; ask for the grant again and wait for the human's decision")
 	case errors.Is(err, hubclient.ErrDenied):
 		if dec != nil {
 			s.auditHubDenial(ctx, ticketID, dec)
@@ -330,6 +345,10 @@ func (s *Server) grantActivate(ctx context.Context, id int64, ticketID string, w
 	if _, on := s.profile.Limits.Grants(); !on {
 		finish(false, "grants are off")
 		return s.refuse(ctx, id, body.Intent, body.DB, "", "read", "", "", refusal.New(refusal.GrantsOff, "grants are off in this profile (limits.grant_max_duration = 0)"))
+	}
+	if r := s.autoDenied(sqlclass.Read, false); r != nil {
+		finish(false, "denied by the auto rules")
+		return s.refuseAuto(ctx, id, body.Intent, body.DB, "", "read", "", "", r)
 	}
 	sc := *body.Grant
 	d, err := time.ParseDuration(sc.Duration)

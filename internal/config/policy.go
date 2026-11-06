@@ -75,6 +75,12 @@ func canonical(p Policy) Policy {
 	if p.Profile.WriteFunctions == WriteFunctionsDenylist {
 		p.Profile.WriteFunctions = "" // the default
 	}
+	if p.Profile.Auto != nil {
+		// Only what differs from the defaults: a policy approved before
+		// auto rules existed, and one that spells the defaults out, are
+		// the same policy.
+		p.Profile.Auto = p.Profile.Auto.sparse()
+	}
 	if p.Profile.TLS == "" && p.Profile.Engine != EngineSQLite && p.Profile.Engine != "" {
 		p.Profile.TLS = TLSPrefer // approved before the setting existed
 	}
@@ -101,7 +107,8 @@ func Fingerprint(p Policy) string { return kconfig.Fingerprint(canonical(p)) }
 // rule or detector, an added allow rule, any change of engine, host, port,
 // path, database or user, and a credentials mode other than ask, any
 // change of the ssh table or of proxy_command, any change of the PII rule
-// set, and write_functions from allowlist to denylist.
+// set, write_functions from allowlist to denylist, and an auto rule moved
+// toward auto (deny → ask → auto).
 func Diff(approved, current Policy) []Change {
 	a, c := canonical(approved), canonical(current)
 	ap, cp := a.Profile, c.Profile
@@ -207,6 +214,7 @@ func Diff(approved, current Policy) []Change {
 		}
 	}
 	out = append(out, grantDiff(al, cl)...)
+	out = append(out, autoDiff(ap.AutoRules(), cp.AutoRules())...)
 	if ap.WriteFunctions != cp.WriteFunctions {
 		name := func(v string) string {
 			if v == "" {

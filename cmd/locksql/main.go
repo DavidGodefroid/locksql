@@ -41,6 +41,7 @@ type helpRow struct{ name, args, desc string }
 var helpSections = []helpSection{
 	{title: "Human commands", rows: []helpRow{
 		{"profile", "add [--non-interactive] [--json] [--engine E ...]", "add a database profile to the project\n(never a secret: the console asks at start, or Vault)"},
+		{"", "rules [--json] [--profile P]", "the auto mode of each profile, as lox run applies it\n(connect, read, write, ddl, unmask: auto, ask or deny)"},
 		{"console", "--hub URL --hub-key-file PATH --instance NAME ...", "run the console (launched by `lox up` only)"},
 		{"forget", "--profile P", "remove the keychain secret"},
 		{"update", "[vX.Y.Z]", "update the launcher and its image (on the host;\ncosign signature and checksum checked)"},

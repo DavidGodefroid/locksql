@@ -354,6 +354,12 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 	sc := &clear
 	sc.Hub = &kconsole.HubTicket{PlanID: hp.ID, Caller: caller, Risk: s.hubRisk(pl), Masked: masked,
 		Requester: ticket.Requester{Agent: agent}}
+	// The profile's auto rule for this action: ask marks the ticket
+	// never-auto, so that no auto rule of the decider may approve it (and
+	// the lock refuses an auto decision on it); auto leaves it to lox
+	// run's auto mode. deny never reaches here (autoDenied).
+	sc.NeverAuto = s.neverAuto(pl.st.Class, pl.unmask)
+	rec.AutoRule = s.autoRuleText(pl.st.Class, pl.unmask)
 	a := s.asker().Ask(ctx, id, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
 		rec.Event, rec.Decision, rec.Reason, rec.Error, rec.Approval, rec.Ticket = b.Event, b.Decision, b.Reason, b.Error, b.Approval, b.Ticket
 		s.audit(rec)
@@ -417,6 +423,12 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 		// it pending: withdraw it (a no-op on an ended plan).
 		s.withdraw(ctx, ticketID, caller)
 		return s.hubStale(ctx, id, body, ticketID, who, 0)
+	case errors.Is(err, ticket.ErrAuto):
+		// An auto rule of the decider approved a ticket the profile's
+		// auto rules leave to the human: never run on it.
+		s.auditAutoRefused(ctx, ticketID, dec, err)
+		s.withdraw(ctx, ticketID, caller)
+		return errResp(id, ipc.CodeDenied, "ticket "+ticketID+": approved by an auto rule, but the profile's auto rules ask the human for it: not run; plan the query again and wait for the human's decision")
 	case errors.Is(err, hubclient.ErrDenied):
 		if dec != nil {
 			s.auditHubDenial(ctx, ticketID, dec)
@@ -473,7 +485,9 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 		// --lock` checks this record against the hub's key; runApproved
 		// keeps it on the approval record only, not on the run's.
 		rec.Approver, rec.Facade, rec.HubSig = &dec.Approver, dec.Facade, dec.Sig
+		rec.DecidedBy = decidedBy(dec)
 	}
+	rec.AutoRule = s.autoRuleText(pl.st.Class, pl.unmask)
 	resp := s.runApproved(ctx, id, sess, pl, rec, class, time.Time{})
 	if resp.Error != nil {
 		if d := resp.Error.Data; d != nil && d.Code == refusal.Stale {
@@ -516,11 +530,36 @@ func (s *Server) auditReplanFailed(ctx context.Context, ticketID string, body hu
 // and is not recorded again.
 func (s *Server) auditHubDenial(ctx context.Context, ticketID string, dec *ticket.Decision) {
 	rec := audit.Record{Event: audit.EventDenied, Decision: string(dec.Decision), Reason: s.safeReason(dec.Reason),
-		Approval: kconsole.HubApproval, Ticket: ticketID, Approver: &dec.Approver, Facade: dec.Facade, HubSig: dec.Sig}
+		Approval: kconsole.HubApproval, Ticket: ticketID, Approver: &dec.Approver, Facade: dec.Facade, HubSig: dec.Sig,
+		DecidedBy: decidedBy(dec)}
 	if p, err := s.cfg.Hub.Store.TicketPlan(ticketID); err == nil {
 		var body hubPlan
 		if json.Unmarshal(p.Body, &body) == nil {
 			rec.DB, rec.SQL, rec.Unmasked, rec.Intent = body.DB, body.SQL, body.Unmask, body.Intent
+		}
+	}
+	s.audit(withPeerRecord(ctx, rec))
+}
+
+// auditAutoRefused records an auto rule's approval of a never-auto
+// ticket, refused: the statement of the stored plan, the rule that
+// approved it and the hub's signature.
+func (s *Server) auditAutoRefused(ctx context.Context, ticketID string, dec *ticket.Decision, err error) {
+	rec := audit.Record{Event: audit.EventRefused, Decision: "refused", Error: s.safeReason(err.Error()),
+		Approval: kconsole.HubApproval, Ticket: ticketID, DecidedBy: decidedBy(dec)}
+	if dec != nil {
+		rec.Facade, rec.HubSig = dec.Facade, dec.Sig
+	}
+	if p, err := s.cfg.Hub.Store.TicketPlan(ticketID); err == nil {
+		var body hubPlan
+		if json.Unmarshal(p.Body, &body) == nil {
+			rec.DB, rec.SQL, rec.Unmasked, rec.Intent, rec.Class = body.DB, body.SQL, body.Unmask, body.Intent, body.Class
+			if c, ok := classOf(body.Class); ok {
+				rec.AutoRule = s.autoRuleText(c, body.Unmask)
+			}
+			if body.Grant != nil {
+				rec.GrantScope = body.Grant.words()
+			}
 		}
 	}
 	s.audit(withPeerRecord(ctx, rec))
