@@ -4,6 +4,35 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## v0.17.0 (2026-11-06)
+
+Supported lockhub: as v0.16.0 (tickets stay version 1). Built on lockkit
+v0.13.0.
+
+### New
+
+- **Auto mode per profile** (#185, #186). `auto = "full-auto"` or an
+  `[auto]` table per profile in `.locksql/config.toml` sets `connect`,
+  `read`, `write`, `ddl` and `unmask` to `auto`, `ask` or `deny` for
+  `lox run`'s auto mode (defaults: connect ask, read auto, write/ddl/unmask
+  ask). `deny` is refused by the console (`E_AUTO_DENY`), `ask` tickets are
+  never-auto, and loosening a rule is a reviewed policy loosening. New
+  `locksql profile rules [--json]`; the audit records `auto_rule` and
+  `decided_by`.
+
+### Changed
+
+- With the default rules, write, DDL and unmasked-read tickets are now
+  never-auto: lockhub's renewal re-approval and any auto mode no longer
+  approve them without a human (#186).
+- The generated skill and `AGENTS.md` tell the agent to end its turn on a
+  pending ticket or grant and to run it when told it is approved, instead
+  of asking the user to report the approval (#176, #187).
+
+### Security
+
+- `github.com/klauspost/compress` bumped to v1.20.2 (GO-2026-6865) (#187).
+
 ## v0.16.2 (2026-11-05)
 
 Supported lockhub: as v0.16.0. Built on lockkit v0.12.1.
