@@ -42,7 +42,7 @@ func TestAutoRulesEndToEnd(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(project, ".locksql"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"local.db", "prod.db", "returning.db"} {
+	for _, name := range []string{"local.db", "prod.db", "returning.db", "tighten.db"} {
 		db, err := sql.Open("sqlite", filepath.Join(project, name))
 		if err != nil {
 			t.Fatal(err)
@@ -74,6 +74,12 @@ tier = "write"
 [profiles.returning.auto]
 preset = "full-auto"
 unmask = "ask"
+
+[profiles.tighten]
+engine = "sqlite"
+path = "tighten.db"
+tier = "write"
+auto = "full-auto"
 `
 	if err := os.WriteFile(filepath.Join(project, ".locksql", "config.toml"), []byte(conf), 0o644); err != nil {
 		t.Fatal(err)
@@ -109,7 +115,7 @@ unmask = "ask"
 			Rules      map[string]string `json:"rules"`
 		} `json:"profiles"`
 	}
-	if err := json.Unmarshal(out, &rules); err != nil || rules.Lock != "locksql" || len(rules.Profiles) != 3 {
+	if err := json.Unmarshal(out, &rules); err != nil || rules.Lock != "locksql" || len(rules.Profiles) != 4 {
 		t.Fatalf("profile rules: %v\n%s", err, out)
 	}
 	if l := rules.Profiles[0]; l.Profile != "local" || l.Preset != "full-auto" || l.Rules["write"] != "auto" || l.Rules["ddl"] != "auto" {
@@ -326,6 +332,65 @@ unmask = "ask"
 		}
 		c.send("\x03")
 		_ = c.wait()
+	})
+
+	// A grant covers many reads: even on a full-auto profile only a human
+	// grants one. The lock marks its ticket never-auto and refuses an auto
+	// rule's approval: the grant is not active and the ticket withdrawn.
+	// Then connect = deny, written in the files while the console runs, is
+	// applied at once and ends the session, on record.
+	t.Run("full-auto grant and connect tightened to deny", func(t *testing.T) {
+		c, cl := start(t, "tighten", "Apply these changes? [y/N]|y")
+		agent := ipc.Requester{Agent: "e2e", Token: "e2e-token"}
+		var gr ipc.GrantResult
+		if e := cl.call(ipc.MethodGrant, ipc.GrantParams{DB: "main", Tables: []string{"items"}, Requester: agent}, &gr); e != nil || gr.Status != "pending" {
+			t.Fatalf("grant: %+v %v", gr, e)
+		}
+		if !loxRunAuto(t, c.hub, gr.Ticket, "") {
+			t.Fatal("lox run would auto-approve a grant")
+		}
+		autoApprove(t, c.hub, gr.Ticket, "auto.read")
+		deadline := time.Now().Add(30 * time.Second)
+		var e *ipc.RPCError
+		for {
+			e = cl.call(ipc.MethodGrant, ipc.GrantParams{Ticket: gr.Ticket, Requester: agent}, nil)
+			if e == nil || !strings.Contains(e.Message, "no decision") || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if e == nil || e.Code != ipc.CodeDenied || !strings.Contains(e.Message, "approved by an auto rule") {
+			t.Fatalf("auto approval of a grant: %+v", e)
+		}
+		var st ipc.StatusResult
+		if e := cl.call(ipc.MethodStatus, nil, &st); e != nil || len(st.Grants) != 0 {
+			t.Fatalf("grants after an auto approval: %+v %v", st.Grants, e)
+		}
+		if _, ok := c.hub.Withdrawn(gr.Ticket); !ok {
+			t.Error("the auto-approved grant ticket was not withdrawn")
+		}
+
+		cfgPath := filepath.Join(project, ".locksql", "config.toml")
+		b, err := os.ReadFile(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tightened := strings.Replace(string(b), "path = \"tighten.db\"\ntier = \"write\"\nauto = \"full-auto\"\n",
+			"path = \"tighten.db\"\ntier = \"write\"\n\n[profiles.tighten.auto]\npreset = \"full-auto\"\nconnect = \"deny\"\n", 1)
+		if tightened == string(b) {
+			t.Fatal("config not rewritten")
+		}
+		if err := os.WriteFile(cfgPath, []byte(tightened), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		c.expect("now deny its connection (auto.connect = deny): the session ends")
+		_ = c.wait()
+		log := auditLog(t, "tighten")
+		for _, want := range []string{`"auto_rule":"auto.connect = deny"`, `"error":"policy changed: console: the auto rules deny the connection`, `"decided_by":"auto:auto.read"`} {
+			if !strings.Contains(log, want) {
+				t.Errorf("audit lacks %s:\n%s", want, log)
+			}
+		}
 	})
 }
 

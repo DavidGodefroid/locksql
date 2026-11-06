@@ -60,6 +60,15 @@ func decode(req ipc.Request, v any) *ipc.Response {
 // expired (credentials_ttl, a Vault lease) or the connection was lost
 // (lockkit's console decides; reconnect opens the new one).
 func (s *Server) session(ctx context.Context, id int64) (engine.Session, *ipc.Response) {
+	// No statement reaches a connection the policy in force denies, even
+	// before the serve loop sees the end.
+	if err := connectDenied(s.profile); err != nil {
+		if _, ended := s.k.Ended(); !ended {
+			s.endConnectDenied("request", err)
+		}
+		r := errResp(id, ipc.CodeConnLost, "the auto rules of this profile deny its connection (auto.connect = deny): the session ended")
+		return nil, &r
+	}
 	ks, err := s.k.Session(ctx)
 	if err != nil {
 		r := errResp(id, ipc.CodeConnLost, err.Error())

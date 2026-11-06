@@ -545,9 +545,8 @@ func Run(ctx context.Context, o Options) error {
 	st.profile = p
 	// connect = "deny" in the approved policy's auto rules: the profile
 	// is never connected, whoever asks (locksql#185).
-	if p.AutoRules().Get(config.ActionConnect) == config.AutoDeny {
-		err := fmt.Errorf("console: the auto rules of profile %s deny its connection (auto.connect = deny)", p.Name)
-		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error(), AutoRule: "auto.connect = deny"})
+	if err := connectDenied(p); err != nil {
+		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error(), AutoRule: connectDeniedRule})
 		return err
 	}
 	// The start-up refusals of a production profile, applied again by the

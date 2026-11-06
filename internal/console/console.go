@@ -335,7 +335,14 @@ func (s *Server) reconnect(ctx context.Context, p kconsole.Policy) (kconsole.Ses
 		w(true)
 		defer w(false)
 	}
-	sess, err := s.cfg.Reconnect(ctx, p.(kpolicy).p.Profile)
+	prof := p.(kpolicy).p.Profile
+	// The rules of the policy in force at the reconnection, which may
+	// have been tightened since start: connect = deny opens nothing.
+	if err := connectDenied(prof); err != nil {
+		s.endConnectDenied("reconnect", err)
+		return nil, &kconsole.EndError{Reason: "the auto rules deny the connection", Err: err}
+	}
+	sess, err := s.cfg.Reconnect(ctx, prof)
 	switch {
 	case err == nil:
 		s.sess = sess

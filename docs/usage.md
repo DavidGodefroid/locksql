@@ -932,7 +932,12 @@ does:
 
 - `deny` is refused by the console before any ticket (`E_AUTO_DENY`), at
   the plan and again at the run; `connect = "deny"` refuses to start the
-  console on the profile.
+  console on the profile, ends a running session as soon as the policy in
+  force denies the connection (a tightening in the files, a change
+  approved at `:review`), and refuses a reconnection; each end is audited.
+- A grant is never approved by an auto rule, whatever `read` says: its
+  ticket is always never-auto, and an auto approval of it is refused,
+  audited and withdrawn, with no grant activated.
 - `ask` marks the ticket never-auto (`flags.never_auto`): an auto rule's
   approval of it is refused by the console (nothing runs, the refusal is
   audited), only a human's approval runs it.

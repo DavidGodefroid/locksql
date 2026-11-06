@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/DavidGodefroid/lockkit/ticket"
@@ -103,4 +104,33 @@ func classOf(name string) (sqlclass.Class, bool) {
 		}
 	}
 	return 0, false
+}
+
+// connectDeniedRule is the audit text of the rule that refuses a
+// connection.
+const connectDeniedRule = "auto.connect = deny"
+
+// errConnectDenied marks a connection the auto rules refuse.
+var errConnectDenied = errors.New("console: the auto rules deny the connection (auto.connect = deny)")
+
+// connectDenied is the refusal of a connection under p, nil when p's
+// auto rules allow it (connect = auto or ask: the console connects with
+// the human at its terminal, and lockkit refuses a plan's connect
+// ticket).
+func connectDenied(p config.Profile) error {
+	if p.AutoRules().Get(config.ActionConnect) != config.AutoDeny {
+		return nil
+	}
+	return fmt.Errorf("%w: profile %s", errConnectDenied, p.Name)
+}
+
+// endConnectDenied ends the session of a profile whose policy in force
+// now denies its connection (a tightening applied from the files, a
+// reviewed change, a reconnection): the open connection no longer
+// matches the policy. The end is on record first; when stage says where
+// it was found.
+func (s *Server) endConnectDenied(stage string, err error) {
+	s.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: stage + ": " + err.Error(), AutoRule: connectDeniedRule})
+	s.println(paint.Fail("the auto rules of profile " + safeText(s.profile.Name, false) + " now deny its connection (auto.connect = deny): the session ends"))
+	s.k.End("the auto rules deny the connection")
 }

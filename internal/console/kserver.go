@@ -148,6 +148,16 @@ func (s *Server) ApplyPolicy(kp kconsole.Policy) error {
 	s.dialect = d
 	s.setLive(fp) // what the hub's goroutine checks tickets against
 	s.grantPolicyChanged(old, oldFP, p, fp)
+	// connect = deny in the policy now in force (a tightening from the
+	// files, a reviewed change): the profile may not stay connected.
+	// Checked here, where every policy change of the running console is
+	// applied, not only at start (locksql#185).
+	if err := connectDenied(p.Profile); err != nil {
+		if s.k == nil {
+			return err // NewServer's start policy: never served
+		}
+		s.endConnectDenied("policy changed", err)
+	}
 	return nil
 }
 

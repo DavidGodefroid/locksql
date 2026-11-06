@@ -557,6 +557,9 @@ func (s *Server) auditAutoRefused(ctx context.Context, ticketID string, dec *tic
 			if c, ok := classOf(body.Class); ok {
 				rec.AutoRule = s.autoRuleText(c, body.Unmask)
 			}
+			if body.Grant != nil {
+				rec.GrantScope = body.Grant.words()
+			}
 		}
 	}
 	s.audit(withPeerRecord(ctx, rec))
