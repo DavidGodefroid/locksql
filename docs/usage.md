@@ -710,8 +710,8 @@ engine = "postgres"
 host   = "db.example.com"
 tls    = "verify-full"          # disable | prefer | require | verify-ca | verify-full
 tls_ca = "/etc/ssl/rds.pem"     # optional PEM bundle; replaces the system roots
-tls_cert = "/home/locksql/.config/locksql/app.crt"  # optional client certificate (PEM)
-tls_key  = "/home/locksql/.config/locksql/app.key"  # its private key (PEM, unencrypted, mode 0600)
+tls_cert = "~/.config/locksql/app.crt"  # optional client certificate (PEM)
+tls_key  = "~/.config/locksql/app.key"  # its private key (PEM, unencrypted, mode 0600)
 tls_server_name = "db.internal"  # optional: the name verify-full checks instead of host
 ```
 
@@ -728,6 +728,14 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
   certificate (PostgreSQL `clientcert`/`cert` in `pg_hba.conf`, MySQL
   `REQUIRE X509`). The key file is read by the console account and refused
   when group or others can read it; keep both files in that account's home.
+- File keys (`tls_ca`, `tls_cert`, `tls_key`, `ssh.key`): a leading `~/` is
+  the console account's home (`/home/locksql` in the image, the
+  `locksql-home` volume); any other path is read as written. The console
+  opens each file right after the policy review, before the production name
+  or any secret is asked, and stops with `tls_ca: <path> not found in the
+  console's home (/home/locksql)` when one is missing. `locksql doctor`, run
+  as the console account, flags a missing file with the `docker exec`
+  command that copies it there.
 - When the established connection is plaintext, the console warns `the
   connection to the database is NOT encrypted (tls = ...)` at session start
   and audits it as a notice; the session proceeds. A TLS connection gets no

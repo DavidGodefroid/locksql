@@ -19,6 +19,8 @@ import (
 // certificate names host (or tls_server_name). "" is prefer, the mode of
 // policies approved before the setting existed. tls_cert and tls_key, when
 // set, are the client certificate presented to a server that asks for one.
+// A leading "~/" in tls_ca, tls_cert or tls_key is the console account's
+// home, as in ssh.key.
 func TLSConfig(p config.Profile) (*tls.Config, error) {
 	mode := p.TLS
 	if mode == "" {
@@ -29,7 +31,7 @@ func TLSConfig(p config.Profile) (*tls.Config, error) {
 	}
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if p.TLSCert != "" || p.TLSKey != "" {
-		cert, err := ClientCertificate(p.TLSCert, p.TLSKey)
+		cert, err := ClientCertificate(config.HomePath(p.TLSCert), config.HomePath(p.TLSKey))
 		if err != nil {
 			return nil, err
 		}
@@ -46,7 +48,7 @@ func TLSConfig(p config.Profile) (*tls.Config, error) {
 	default:
 		return nil, fmt.Errorf("unknown tls mode %q", mode)
 	}
-	roots, err := rootPool(p.TLSCA)
+	roots, err := rootPool(config.HomePath(p.TLSCA))
 	if err != nil {
 		return nil, err
 	}

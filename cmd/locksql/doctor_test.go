@@ -134,7 +134,7 @@ func TestDoctorSSHKeyFile(t *testing.T) {
 	p := config.Profile{Name: "p", Engine: config.EnginePostgres, Host: "127.0.0.1", TLS: config.TLSPrefer, Credentials: config.CredentialsAsk,
 		SSH: &config.SSHProfile{Host: "b", Port: 22, User: "u", Auth: config.SSHAuthKey, Key: key, Credentials: config.CredentialsAsk}}
 	checks := profileChecks(d, p, nil, dir)
-	if !hasCheck(checks, checkFail, "ssh key") {
+	if !hasCheck(checks, checkFail, "ssh.key") {
 		t.Error("group/world-readable key not reported")
 	}
 	if !hasCheck(checks, checkOK, "ssh") {
@@ -146,14 +146,14 @@ func TestDoctorSSHKeyFile(t *testing.T) {
 	if err := os.Chmod(key, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if !hasCheck(profileChecks(d, p, nil, dir), checkOK, "ssh key") {
+	if !hasCheck(profileChecks(d, p, nil, dir), checkOK, "ssh.key") {
 		t.Error("0600 key not reported ok")
 	}
 	p.SSH.Key = filepath.Join(dir, "missing")
-	if !hasCheck(profileChecks(d, p, nil, dir), checkFail, "ssh key") {
+	if !hasCheck(profileChecks(d, p, nil, dir), checkFail, "ssh.key") {
 		t.Error("missing key not reported")
 	}
-	if hasCheck(profileChecks(d, p, separatedSys(), dir), checkFail, "ssh key") {
+	if hasCheck(profileChecks(d, p, separatedSys(), dir), checkFail, "ssh.key") {
 		t.Error("an unreadable key in the console account's home reported as failing in a separated setup")
 	}
 }
@@ -165,6 +165,57 @@ func findCheck(checks []check, titlePart string) *check {
 		}
 	}
 	return nil
+}
+
+// TestDoctorTLSFiles: tls_ca, tls_cert and tls_key under "~/" resolve in
+// the account's home; a missing one fails with the command that copies it
+// into the console's home, in a container; the console account checks its
+// own home in a separated setup, the agent's account does not (#194).
+func TestDoctorTLSFiles(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "ca.pem"), []byte("pem"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := fakeDoctor(nil)
+	d.current = func() (*user.User, error) { return &user.User{Uid: "900", Username: "locksql", HomeDir: home}, nil }
+	inContainer := false
+	d.stat = func(p string) (os.FileInfo, error) {
+		if p == "/.dockerenv" || p == "/run/.containerenv" {
+			if inContainer {
+				return fakeInfo{".dockerenv", 0o644}, nil
+			}
+			return nil, fs.ErrNotExist
+		}
+		return os.Stat(p)
+	}
+	p := config.Profile{Name: "p", Engine: config.EnginePostgres, Host: "db.example", TLS: config.TLSVerifyFull,
+		Credentials: config.CredentialsAsk, TLSCA: "~/ca.pem"}
+	if c := findCheck(profileChecks(d, p, nil, t.TempDir()), "tls_ca"); c == nil || c.state != checkOK || !strings.Contains(c.detail, filepath.Join(home, "ca.pem")) {
+		t.Errorf("present ~/ca.pem: %+v, want ok naming %s", c, filepath.Join(home, "ca.pem"))
+	}
+	p.TLSCA = "~/.ssh/db-ca.pem"
+	missing := filepath.Join(home, ".ssh", "db-ca.pem")
+	c := findCheck(profileChecks(d, p, nil, t.TempDir()), "tls_ca")
+	if c == nil || c.state != checkFail || !strings.Contains(c.detail, missing) || c.fix != "check tls_ca" {
+		t.Errorf("missing ~/.ssh/db-ca.pem outside a container: %+v", c)
+	}
+	inContainer = true
+	c = findCheck(profileChecks(d, p, separatedSys(), t.TempDir()), "tls_ca")
+	if c == nil || c.state != checkFail || !strings.Contains(c.fix, "docker exec -i ") || !strings.Contains(c.fix, "cat > "+missing) ||
+		!strings.HasSuffix(c.fix, "< db-ca.pem") {
+		t.Errorf("missing tls_ca as the console account in its container: %+v, want the docker exec copy", c)
+	}
+	p.TLSCA, p.TLSKey, p.TLSCert = "", "~/app.key", "~/ca.pem"
+	if err := os.WriteFile(filepath.Join(home, "app.key"), []byte("k"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if c := findCheck(profileChecks(d, p, nil, t.TempDir()), "tls_key"); c == nil || c.state != checkFail || !strings.HasPrefix(c.fix, "chmod 600 ") {
+		t.Errorf("tls_key readable by others: %+v", c)
+	}
+	d.current = func() (*user.User, error) { return &user.User{Uid: "1000", Username: "agent", HomeDir: home}, nil }
+	if c := findCheck(profileChecks(d, p, separatedSys(), t.TempDir()), "tls_"); c != nil {
+		t.Errorf("agent account in a separated setup: %+v, want no file check", c)
+	}
 }
 
 func separatedSys() *sysconf.Config {

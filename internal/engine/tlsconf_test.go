@@ -254,6 +254,44 @@ func TestTLSConfigClientCertificate(t *testing.T) {
 	}
 }
 
+// TestTLSConfigTildeHome: tls_ca, tls_cert and tls_key under "~/" are read
+// from the console account's home, as ssh.key (#194).
+func TestTLSConfigTildeHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no group or other mode bits on Windows: every file reads as 0666")
+	}
+	caFile, server := testCA(t, "db.example")
+	certFile, keyFile, clients := clientPair(t, 0o600)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".ssh")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for src, dst := range map[string]string{caFile: "db-ca.pem", certFile: "app.crt", keyFile: "app.key"} {
+		b, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, dst), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := config.Profile{Engine: config.EnginePostgres, Host: "db.example", TLS: config.TLSVerifyFull,
+		TLSCA: "~/.ssh/db-ca.pem", TLSCert: "~/.ssh/app.crt", TLSKey: "~/.ssh/app.key"}
+	cfg, err := TLSConfig(p)
+	if err != nil {
+		t.Fatalf("TLSConfig with ~/ paths: %v", err)
+	}
+	if err := handshakeClientAuth(t, cfg, server, clients); err != nil {
+		t.Errorf("handshake with the ~/ CA and client certificate: %v", err)
+	}
+	p.TLSCA = "~/missing.pem"
+	if _, err := TLSConfig(p); err == nil || !strings.Contains(err.Error(), filepath.Join(home, "missing.pem")) {
+		t.Errorf("missing ~/ tls_ca: %v, want an error naming %s", err, filepath.Join(home, "missing.pem"))
+	}
+}
+
 func TestTLSConfigClientKeyChecks(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no group or other mode bits on Windows: every file reads as 0666")
