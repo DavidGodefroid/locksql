@@ -219,7 +219,8 @@ func (s *Server) grantRequest(ctx context.Context, req ipc.Request) ipc.Response
 		return errResp(req.ID, ipc.CodeInternal, "plan store: "+err.Error())
 	}
 	sc := &clear
-	sc.Hub = &kconsole.HubTicket{PlanID: hp.ID, Caller: caller, Risk: ticket.RiskGrant, Masked: masked, Requester: ticket.Requester{Agent: agent}}
+	sc.Hub = &kconsole.HubTicket{PlanID: hp.ID, Caller: caller, Risk: ticket.RiskGrant, Masked: masked, Requester: ticket.Requester{Agent: agent},
+		Kind: ticket.KindRead, Subject: s.hubSubject()}
 	// A grant covers many reads: whatever auto.read says, no auto rule
 	// approves one (lockkit sets never_auto on every grant ticket, and
 	// the lock says so itself). The record names the read rule in force.
