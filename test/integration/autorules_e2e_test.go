@@ -215,6 +215,7 @@ auto = "full-auto"
 			{"CREATE TABLE notes (id INTEGER PRIMARY KEY)", "ddl"},
 		} {
 			tk := submit(t, cl, q.sql)
+			wantKind(t, c.hub, tk, ticket.Kind(q.kind), "local")
 			if asked := loxRunAuto(t, c.hub, tk, "auto."+q.kind); asked {
 				t.Fatalf("%s: lox run would ask on a full-auto profile", q.kind)
 			}
@@ -240,6 +241,7 @@ auto = "full-auto"
 		c, cl := start(t, "prod", "Apply these changes? [y/N]|y", `Type the profile name "prod" to continue: |prod`)
 		// The read: auto.
 		tk := submit(t, cl, "SELECT id, label FROM items WHERE id = 1 LIMIT 1")
+		wantKind(t, c.hub, tk, ticket.KindRead, "prod")
 		if loxRunAuto(t, c.hub, tk, "auto.read") {
 			t.Fatal("lox run would ask for a read of prod")
 		}
@@ -250,6 +252,7 @@ auto = "full-auto"
 		// The write: asked. An auto approval is refused by the lock.
 		const upd = "UPDATE items SET label = 'prod-human' WHERE id = 1"
 		tk = submit(t, cl, upd)
+		wantKind(t, c.hub, tk, ticket.KindWrite, "prod")
 		if !loxRunAuto(t, c.hub, tk, "") {
 			t.Fatal("lox run would auto-approve a write of prod")
 		}
@@ -346,6 +349,7 @@ auto = "full-auto"
 		if e := cl.call(ipc.MethodGrant, ipc.GrantParams{DB: "main", Tables: []string{"items"}, Requester: agent}, &gr); e != nil || gr.Status != "pending" {
 			t.Fatalf("grant: %+v %v", gr, e)
 		}
+		wantKind(t, c.hub, gr.Ticket, ticket.KindRead, "tighten")
 		if !loxRunAuto(t, c.hub, gr.Ticket, "") {
 			t.Fatal("lox run would auto-approve a grant")
 		}
@@ -396,17 +400,14 @@ auto = "full-auto"
 
 // loxRunAuto decides ticket tk as `lox run` does in auto mode: a ticket
 // the lock left to auto is approved by the auto rule id at once; a
-// never-auto one waits for the human (it returns true: asked).
+// never-auto one waits for the human (it returns true: asked), and so
+// does a version-1 one, which names neither its kind nor its profile
+// (locksql#195).
 func loxRunAuto(t *testing.T, hub *hubtest.Hub, tk, id string) (asked bool) {
 	t.Helper()
-	var v struct {
-		Flags struct {
-			NeverAuto bool `json:"never_auto"`
-		} `json:"flags"`
-	}
-	raw := hub.Ticket(tk)
-	if err := json.Unmarshal(raw, &v); err != nil {
-		t.Fatalf("ticket %s: %v: %s", tk, err, raw)
+	v := pushedTicket(t, hub, tk)
+	if v.V != ticket.VersionKinds || v.Kind == "" || v.Subject == nil || v.Subject.Profile == "" {
+		return true
 	}
 	if v.Flags.NeverAuto {
 		return true
@@ -416,6 +417,26 @@ func loxRunAuto(t *testing.T, hub *hubtest.Hub, tk, id string) (asked bool) {
 	}
 	autoApprove(t, hub, tk, id)
 	return false
+}
+
+// pushedTicket is the ticket tk the lock pushed to the hub.
+func pushedTicket(t *testing.T, hub *hubtest.Hub, tk string) ticket.Ticket {
+	t.Helper()
+	var v ticket.Ticket
+	raw := hub.Ticket(tk)
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatalf("ticket %s: %v: %s", tk, err, raw)
+	}
+	return v
+}
+
+// wantKind checks that ticket tk names kind and profile (version 2).
+func wantKind(t *testing.T, hub *hubtest.Hub, tk string, kind ticket.Kind, profile string) {
+	t.Helper()
+	v := pushedTicket(t, hub, tk)
+	if v.V != ticket.VersionKinds || v.Kind != kind || v.Subject == nil || v.Subject.Profile != profile {
+		t.Fatalf("ticket %s: v%d kind %q subject %+v, want v%d %s of profile %s", tk, v.V, v.Kind, v.Subject, ticket.VersionKinds, kind, profile)
+	}
 }
 
 // autoApprove approves tk as auto rule id of a decider.
