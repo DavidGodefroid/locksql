@@ -42,7 +42,7 @@ var helpSections = []helpSection{
 	{title: "Human commands", rows: []helpRow{
 		{"profile", "add [--non-interactive] [--json] [--engine E ...]", "add a database profile to the project\n(never a secret: the console asks at start, or Vault)"},
 		{"", "rules [--json] [--profile P]", "the auto mode of each profile, as lox run applies it\n(connect, read, write, ddl, unmask: auto, ask or deny)"},
-		{"console", "--hub URL --hub-key-file PATH --instance NAME ...", "run the console (launched by `lox up` only)"},
+		{"console", "--hub URL --hub-key-file PATH --instance NAME ...", "run the console (launched by `lox run` only)"},
 		{"forget", "--profile P", "remove the keychain secret"},
 		{"update", "[vX.Y.Z]", "update the launcher and its image (on the host;\ncosign signature and checksum checked)"},
 		{"doctor", "[--profile P] [--instance NAME] [--fix [--yes]] [--json]", "check the setup\n(--fix: repair permissions, socket dir, wiring)"},
@@ -65,7 +65,7 @@ var helpSections = []helpSection{
 		"Client commands accept --json. --profile may be left out when exactly",
 		"one profile is configured. --instance NAME reaches one lock among",
 		"several of this type (lea mounts each at /run/locksql/NAME); it is not",
-		"the console's --instance, which `lox up` passes.",
+		"the console's --instance, which `lox run` passes.",
 	}},
 	{title: "Other", rows: []helpRow{
 		{"version", "", "print the version"},
@@ -161,7 +161,7 @@ func runEnv(e env, args []string) int {
 	case "console":
 		return runConsole(e, args[1:])
 	case "hub-key":
-		// The instance's public key, for lox up to pin at the hub; the
+		// The instance's public key, for lox run to pin at the hub; the
 		// key itself stays in the console account's home.
 		if err := hubclient.HubKeyCommand(stdout, "", args[1:]); err != nil {
 			fmt.Fprintln(stderr, "locksql hub-key:", err)

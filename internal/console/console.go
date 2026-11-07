@@ -67,7 +67,7 @@ type Options struct {
 	// StateDir defaults to config.StateDir().
 	StateDir string
 	// PIIDir, when set (PIIDirEnv), is the directory of the PII rule sets
-	// (pii/<set>.toml) instead of the profile's: lox up's copy of the
+	// (pii/<set>.toml) instead of the profile's: lox run's copy of the
 	// profile is read-only, and the console writes its first rule set and
 	// every rule it adds. A set it lacks is first copied from the
 	// profile's directory.
@@ -78,7 +78,7 @@ type Options struct {
 	// must be the console's account in a separated setup.
 	TTY *os.File
 	// Hub is the lockhub the console is decided on (--hub, --hub-key-file,
-	// --instance, as lox up passes them): required. The human decides in
+	// --instance, as lox run passes them): required. The human decides in
 	// lockhub, query.run answers pending with a ticket.
 	Hub kconsole.HubOptions
 	// AllowedUIDs (--allowed-uids) may connect besides the members of the

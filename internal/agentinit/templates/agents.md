@@ -1,18 +1,18 @@
 ## Database access (locksql)
 
 Agents get database access only through locksql: every query is approved by the human
-in lockhub; the `locksql console`, a separate process that `lox up` starts, holds the credentials and
+in lockhub; the `locksql console`, a separate process that `lox run` starts, holds the credentials and
 the only database connection. Use it for debugging and finding facts, one targeted question at a time, and only on the
 user's explicit request. If a database fact would merely help, propose the query and wait.
 
 Workflow (MCP tools `locksql_*`, or the `locksql` CLI from the workspace or a directory below it:
-the CLI and MCP reach the lock that `lox up` runs for the workspace, found through its
+the CLI and MCP reach the lock that `lox run` runs for the workspace, found through its
 `.lockfamily/up.json`; with several locksql locks there, add `--instance NAME`):
 
 1. Prefer a non-production profile unless the question is about real production data. Find the
    database and table from the code first.
 2. `locksql_status` (CLI `locksql status`). If no console runs (CLI exit code 2), ask the user to
-   start it with `lox up` (`locksql doctor` checks the setup) and stop. Never start one yourself.
+   start it with `lox run` (`locksql doctor` checks the setup) and stop. Never start one yourself.
 3. `locksql_list_tables` / `locksql_describe` if needed (no approval).
 4. `locksql_plan` with one narrow statement: indexed predicates, an explicit `LIMIT`, no comments, no
    variables. Use `unmask` only if the user asked to see personal data in clear; it is refused unless

@@ -18,7 +18,7 @@ import (
 // "-- -launcher-test-end-". PATH holds only the tools the launcher needs.
 type launcherFixture struct {
 	root, bin, project, calls, script string
-	// fake holds what the fake docker prints for lox up's volumes and
+	// fake holds what the fake docker prints for lox run's volumes and
 	// containers (launcher_lockup_test.go).
 	fake string
 	env  []string
@@ -59,7 +59,7 @@ func newLauncherFixture(t *testing.T) *launcherFixture {
 	f.script = filepath.Join(root, "locksql")
 	writeExec(t, f.script, string(launcher))
 	f.env = []string{"PATH=" + f.bin, "HOME=" + filepath.Join(root, "home")}
-	// The workspace (root) runs a locksql lock db under lox up.
+	// The workspace (root) runs a locksql lock db under lox run.
 	f.loxUp(t, root, map[string]string{"db": "locksql"})
 	return f
 }
@@ -356,7 +356,7 @@ func TestLauncherAccountsPerCommand(t *testing.T) {
 	f := newLauncherFixture(t)
 	me := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
 	home := filepath.Join(f.root, "home")
-	// The agent commands: lox up's socket volume, read-only; never the
+	// The agent commands: lox run's socket volume, read-only; never the
 	// fixed one of a console the launcher started.
 	sock, fixed := mountOf(f.root, "db"), []string{"-v", "locksql-run:/run/locksql"}
 	for _, tc := range []struct {
@@ -691,7 +691,7 @@ func TestLauncherUpdateRefusesABadTag(t *testing.T) {
 
 // doctor --fix runs as you; root only for the one repair that needs it,
 // giving back .locksql entries that are not yours (doctor --fix up to
-// v0.13.0 gave .locksql to the console account, which lox up refuses), in
+// v0.13.0 gave .locksql to the console account, which lox run refuses), in
 // a container of its own before the run as you, its output on stderr so
 // that stdout carries the one JSON line of the run as you.
 func TestLauncherDoctorFixIdentities(t *testing.T) {

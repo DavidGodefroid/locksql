@@ -31,10 +31,10 @@ terminals, else `-i`.
 | `stats`, `forget` | `locksql` | volume `locksql-home` | they read the console account's state |
 | `init`, `config` | you (`id -u`:`id -g`) | `-e HOME=$HOME -v $HOME:$HOME` | they write your agents' files and your user config, owned by you |
 | `profile` | you | `-e HOME=/tmp` | it writes `.locksql/config.toml`, yours to edit |
-| `doctor --fix` | you (`id -u`:`id -g`), in the group `locksql-clients`; root (`--user 0`) first, only when `.locksql/` holds entries that are not yours | `-e HOME=$HOME -e USER -v $HOME:$HOME`, `-e LOCKSQL_DOCTOR_FOR=uid:gid`; no socket volume | it wires your agents and keeps `.locksql/` as `lox up` reads it: yours, writable by you only. The root run gives back to you what the console account owns in `.locksql/` (left by `doctor --fix` up to v0.13.0, which `lox up` refuses), nothing else, its output on stderr |
-| `mcp` | `agent` (uid 10002, image default) | lox up's socket volume of the workspace's locksql lock, read-only (below), `-i` only | the agent speaks MCP on stdin/stdout |
-| `status`, `tables`, `describe`, `plan`, `run`, `request`, `logout`, `pii` | `agent` | lox up's socket volume, read-only (below) | client commands reach the console through the socket only |
-| `doctor` | `agent` | lox up's socket volume when there is one; else none, and the launcher says why; `-e LOCKSQL_DOCTOR_FOR=uid:gid` | the checks run either way; `.locksql/` is checked for you |
+| `doctor --fix` | you (`id -u`:`id -g`), in the group `locksql-clients`; root (`--user 0`) first, only when `.locksql/` holds entries that are not yours | `-e HOME=$HOME -e USER -v $HOME:$HOME`, `-e LOCKSQL_DOCTOR_FOR=uid:gid`; no socket volume | it wires your agents and keeps `.locksql/` as `lox run` reads it: yours, writable by you only. The root run gives back to you what the console account owns in `.locksql/` (left by `doctor --fix` up to v0.13.0, which `lox run` refuses), nothing else, its output on stderr |
+| `mcp` | `agent` (uid 10002, image default) | lox run's socket volume of the workspace's locksql lock, read-only (below), `-i` only | the agent speaks MCP on stdin/stdout |
+| `status`, `tables`, `describe`, `plan`, `run`, `request`, `logout`, `pii` | `agent` | lox run's socket volume, read-only (below) | client commands reach the console through the socket only |
+| `doctor` | `agent` | lox run's socket volume when there is one; else none, and the launcher says why; `-e LOCKSQL_DOCTOR_FOR=uid:gid` | the checks run either way; `.locksql/` is checked for you |
 | anything else (`help`, ...) | `agent` | | no console to reach |
 | `version` | | | prints `locksql launcher X (image I)`, then runs `I version` |
 | `update [vX.Y.Z]` | (host) | | below |
@@ -43,23 +43,23 @@ Invariants: the Docker socket is never mounted; only the console's
 container gets `locksql-home`; the agent's containers share only the
 console's socket volume with it, read-only.
 
-## The socket of lox up's lock
+## The socket of lox run's lock
 
-The consoles run hub-attached only, started by `lox up` (lockhub): each
+The consoles run hub-attached only, started by `lox run` (lockhub): each
 under compose, with its socket in the volume
-`lockfamily-<8 hex of sha256(workspace)>_<instance>-run`, which `lox up`
-names in `<workspace>/.lockfamily/up.json` (lockhub's `docs/lox-up.md`).
+`lockfamily-<8 hex of sha256(workspace)>_<instance>-run`, which `lox run`
+names in `<workspace>/.lockfamily/up.json` (lockhub's `docs/lox-run.md`).
 The agent commands mount that volume on `/run/locksql`, read-only
 (connecting to a socket needs no write), and no other: without it they stop
-(exit 2) and say why, and what to do (`lox up`), never falling back to the
+(exit 2) and say why, and what to do (`lox run`), never falling back to the
 fixed `locksql-run`. The launcher takes the volume only after the checks
 lea makes for its own agents:
 
 - `up.json` is found in the nearest directory up from here whose
   `.lockfamily` holds one (that directory is the workspace); the
   `.lockfamily` directory and `up.json` are no link, are yours, and
-  neither group nor others may write them; `up.json` is lox up's state
-  (version 1, as `lox up` writes it: two-space indented JSON, the values
+  neither group nor others may write them; `up.json` is lox run's state
+  (version 1, as `lox run` writes it: two-space indented JSON, the values
   the launcher reads unescaped) of this very workspace (its `workspace`,
   and its `project` `lockfamily-<8 hex of sha256(workspace)>`);
 - the lock is the workspace's only locksql lock, or the one `--instance
@@ -67,16 +67,16 @@ lea makes for its own agents:
   with several and no `--instance`, the error names them). In
   `.mcp.json`, add it to the arguments: `"args": ["mcp", "--instance",
   "NAME"]`;
-- its socket volume is the one `lox up` names for it, its clients group
+- its socket volume is the one `lox run` names for it, its clients group
   the image's (10000);
-- Docker confirms the volume: lox up's labels (compose's project and
+- Docker confirms the volume: lox run's labels (compose's project and
   volume, `dev.lockfamily.role=socket`, its instance, type and workspace),
   read as JSON and compared whole; and every container that mounts it is
-  lox up's own (compose ran it from lox up's state directory: its
+  lox run's own (compose ran it from lox run's state directory: its
   `project.working_dir` is `$XDG_STATE_HOME/lockfamily/<project>` or
   `~/.local/state/lockfamily/<project>`, its `config_files` `-` or that
   directory's `compose.yaml`) or mounts it read-only (the agents', as the
-  launcher's own). A compose file written in the workspace, with lox up's
+  launcher's own). A compose file written in the workspace, with lox run's
   project name and volume, or any container mounting the volume
   read-write, could serve the socket from an image of its own: the
   launcher then trusts none of that socket.
@@ -89,7 +89,7 @@ workspace's lock, a volume or compose file of the same name) and files
 others than you can write. They are no boundary against an agent that
 runs as you on the host with Docker access (Claude Code started in a
 terminal usually does): it can write `up.json`, make volumes and
-containers with any labels, or `docker exec` into lox up's containers.
+containers with any labels, or `docker exec` into lox run's containers.
 Even then it holds none of the console's credentials and cannot sign a
 decision (the hub signs them, the console checks the hub's key), but it
 could serve an impostor socket to another agent. To contain the agent
@@ -97,7 +97,7 @@ itself, run it in lea, whose containers have no Docker access.
 
 The socket's name derives from the project (`.locksql/config.toml` up from
 the working directory) and the profile: run the agent from the workspace,
-whose `.locksql` lox up's console serves.
+whose `.locksql` lox run's console serves.
 
 ## Version pinning
 

@@ -26,7 +26,7 @@ import (
 // runs in the human's terminal only. Without --profile it opens the only
 // profile, or asks which one among several.
 func runConsole(e env, args []string) int {
-	const usage = "usage: locksql console --hub URL --hub-key-file PATH --instance NAME [--hub-plain-http] [--facade-keys-file PATH] [--devices-file PATH [--require-device RISKS] [--seal-clear]] [--profile P] [--project DIR] [--allow-unmask] [--show-results] [--allowed-uids UID,...] (launched by `lox up` only)"
+	const usage = "usage: locksql console --hub URL --hub-key-file PATH --instance NAME [--hub-plain-http] [--facade-keys-file PATH] [--devices-file PATH [--require-device RISKS] [--seal-clear]] [--profile P] [--project DIR] [--allow-unmask] [--show-results] [--allowed-uids UID,...] (launched by `lox run` only)"
 	fs := flag.NewFlagSet("console", flag.ContinueOnError)
 	fs.SetOutput(e.stderr)
 	profile := fs.String("profile", "", "profile to open")
@@ -45,7 +45,7 @@ func runConsole(e env, args []string) int {
 		fmt.Fprintln(e.stderr, usage)
 		return exitUsage
 	}
-	// One mode: the console is started by `lox up`, with its hub.
+	// One mode: the console is started by `lox run`, with its hub.
 	if !hub.Enabled() {
 		fmt.Fprintln(e.stderr, "locksql console:", console.ErrNoHub)
 		fmt.Fprintln(e.stderr, usage)
@@ -125,7 +125,7 @@ func runConsole(e env, args []string) int {
 		}
 		if name == "" {
 			if separated, _ := isServiceAccount(e); separated {
-				fmt.Fprintf(e.stderr, "locksql console: no profile visible here; in separated mode, put the profile in the project's .locksql/config.toml (project %s), then run `lox up` again\n", projectDirHint(pe))
+				fmt.Fprintf(e.stderr, "locksql console: no profile visible here; in separated mode, put the profile in the project's .locksql/config.toml (project %s), then run `lox run` again\n", projectDirHint(pe))
 			} else {
 				fmt.Fprintln(e.stderr, "locksql console: no profile: put the profile in the project's .locksql/config.toml (locksql init <agent> writes an example)")
 			}
@@ -142,11 +142,11 @@ func runConsole(e env, args []string) int {
 // set them.
 type consoleFlags struct {
 	allowUnmask, showResults bool
-	// hub is the hub the console is decided on, written by lox up.
+	// hub is the hub the console is decided on, written by lox run.
 	hub kconsole.HubOptions
 	// allowedUIDs (--allowed-uids) may connect besides the client group's
 	// members: set by whoever starts the console (the human, the
-	// launcher, lox up), never by a client.
+	// launcher, lox run), never by a client.
 	allowedUIDs []int
 }
 

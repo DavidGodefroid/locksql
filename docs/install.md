@@ -11,14 +11,15 @@ and where you decide each query.
 
 The shortest path is the Lock Family's: install it with Homebrew, then let
 [`lox add locksql`](https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-add.md)
-ask where your database is, set up its lock and start its console:
+ask where your database is and set up its lock, then start it with `lox run`:
 
 ```sh
 brew trust davidgodefroid/tap                # Homebrew asks you to trust a third-party tap once
 brew install davidgodefroid/tap/lockfamily   # or only this tool: brew install davidgodefroid/tap/locksql
 cd ~/projects                                 # with lea: its projects directory; with claude: the project
-lox add locksql                               # asks about the database, sets up the lock, runs lox up
-lea                                           # or: claude, then lox approve
+lox add locksql                               # asks about the database, sets up the lock
+lox run                                       # a terminal of its own, outside the agent: starts the hub and the lock, approves
+lea                                           # in another terminal; or: claude
 ```
 
 If a lea container already runs for the project, `lox add` says `lea gets lock
@@ -35,34 +36,34 @@ curl -fsSLO "https://raw.githubusercontent.com/DavidGodefroid/locksql/$V/scripts
 less install.sh && LOCKSQL_VERSION=$V sh install.sh
 
 # 2. In your project: Claude Code's files (its MCP server is `locksql mcp`),
-#    a database profile, then doctor --fix (your agents, .locksql/ as lox up reads it)
+#    a database profile, then doctor --fix (your agents, .locksql/ as lox run reads it)
 locksql init claude
 locksql profile add
 locksql doctor --fix --yes
 
-# 3. Declare the lock in lockhub and start it: lox up starts the console,
-#    lox attach answers its questions (the policy, the PII rules, the password)
+# 3. Declare the lock in lockhub and start it: lox run, in a terminal of its
+#    own outside the agent, starts the hub and the console and serves the
+#    decisions; lox attach, in another terminal, answers the console's
+#    questions (the policy, the PII rules, the password)
 lox add locksql sql-dev
-lox up
+lox run
 lox attach sql-dev
 ```
 
 Then ask your agent, in the project: "how many orders were placed
-yesterday?". Each query waits for your decision in lockhub:
+yesterday?". Each query is decided in the `lox run` terminal: reads pass by
+rule in auto mode, writes and connections are asked there (`lox approve`
+answers too).
 
-```sh
-lox approve
-```
-
-`locksql console` is started by `lox up` only: without its hub flags
-(`--hub`, `--hub-key-file`, `--instance`) it exits with ``launched by `lox up` only``.
+`locksql console` is started by `lox run` only: without its hub flags
+(`--hub`, `--hub-key-file`, `--instance`) it exits with ``launched by `lox run` only``.
 
 The console runs as the `locksql` account (uid 10001) in its own container,
 the only one that holds the database credentials. The agent's MCP server runs
 as `agent` (uid 10002) in a throwaway container. The two share only the
-console's socket volume, which `lox up` names in `.lockfamily/up.json` and the
-launcher mounts read-only once Docker confirms it is lox up's
-([docs/launcher.md](launcher.md#the-socket-of-lox-ups-lock)); the kernel
+console's socket volume, which `lox run` names in `.lockfamily/up.json` and the
+launcher mounts read-only once Docker confirms it is lox run's
+([docs/launcher.md](launcher.md#the-socket-of-lox-runs-lock)); the kernel
 checks every peer on the socket.
 
 `init claude` writes `.mcp.json` with `locksql mcp`: the launcher, which
@@ -117,7 +118,7 @@ install](docker.md#migrating-from-a-host-install).
 With [lea](https://github.com/DavidGodefroid/lea), `lox add locksql`, run in lea's
 projects directory (lea reads `.lockfamily/up.json` only there), sets up the
 lock (with your uid in its `allowed_uids`, as lea's agents run as you) and
-`lox up` runs the console; with locksql on in lea (`lea init --locksql` or
+`lox run` runs the console; with locksql on in lea (`lea init --locksql` or
 `LEA_LOCKSQL=1`), its agents reach the lock's socket read-only. lea starts
 no console and puts no `locksql` command on the host.
 

@@ -80,7 +80,7 @@ func startConsole(t *testing.T, project string, env []string, args ...string) *c
 	}
 	var hub *hubtest.Hub
 	if !slices.Contains(args, "--hub") {
-		// One mode: the console is decided on a hub, as lox up starts it.
+		// One mode: the console is decided on a hub, as lox run starts it.
 		var hubArgs []string
 		hub, hubArgs = fakeHub(t, envHome(t, env))
 		args = append(args, hubArgs...)

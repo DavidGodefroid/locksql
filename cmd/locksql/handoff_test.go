@@ -45,10 +45,10 @@ func fakeHandoff(uid int, onPath ...string) (*handoffEnv, *[]string) {
 	}, &ran
 }
 
-// hubArgs are the hub flags lox up starts a console with.
+// hubArgs are the hub flags lox run starts a console with.
 var hubArgs = []string{"--hub", "http://lockhub:8443", "--hub-key-file", "/k/hub.pub", "--instance", "sql-dev", "--hub-plain-http"}
 
-// hubbed is a console command line with the hub flags lox up adds.
+// hubbed is a console command line with the hub flags lox run adds.
 func hubbed(args ...string) []string { return append(args, hubArgs...) }
 
 func handoffTestEnv(t *testing.T, h *handoffEnv) (env, *bytes.Buffer) {

@@ -86,7 +86,7 @@ func TestRunOverRealSocket(t *testing.T) {
 		t.Fatalf("text = %q", text(r))
 	}
 
-	// Another profile has no console: the error asks for `lox up`, with no
+	// Another profile has no console: the error asks for `lox run`, with no
 	// value in the hint.
 	other := connect(t, Options{Dial: DialClient(cwd, "1.2.3", "")}, nil)
 	r = call(t, other, "locksql_plan", map[string]any{"profile": "prod", "sql": "SELECT 1 LIMIT 1"})

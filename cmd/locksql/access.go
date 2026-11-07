@@ -39,7 +39,7 @@ type svcAccount struct {
 const doctorForEnv = "LOCKSQL_DOCTOR_FOR"
 
 // projectOwner is the account the project's .locksql must belong to: the
-// human who runs `lox up`.
+// human who runs `lox run`.
 type projectOwner struct{ uid, gid int }
 
 // ownerFor is the account the project's .locksql must belong to:
@@ -67,8 +67,8 @@ func ownerFor(d doctorEnv, me *user.User) (projectOwner, error) {
 	return projectOwner{uid, gid}, nil
 }
 
-// projectChecks are what `lox up` needs of the project's .locksql at root
-// (lockhub docs/lox-up.md): it reads it as you, following no link, and
+// projectChecks are what `lox run` needs of the project's .locksql at root
+// (lockhub docs/lox-run.md): it reads it as you, following no link, and
 // copies it to the console, which never reads the project itself. So
 // .locksql is a directory, not a link, and each of its entries a directory
 // or a regular file that o owns, can read, and no one else can write. o is
@@ -90,7 +90,7 @@ func projectChecks(d doctorEnv, root string, o projectOwner, cur, svcUID int) []
 		return nil
 	}
 	if !top.IsDir() {
-		return []check{{state: checkFail, title: title, detail: dir + " is not a directory (a symbolic link?): lox up copies only a directory of yours",
+		return []check{{state: checkFail, title: title, detail: dir + " is not a directory (a symbolic link?): lox run copies only a directory of yours",
 			fix: "replace it with a directory holding its files"}}
 	}
 	var links, console, foreign, modes []string
@@ -130,7 +130,7 @@ func projectChecks(d doctorEnv, root string, o projectOwner, cur, svcUID int) []
 		}
 		ents, err := d.readDir(path)
 		if err != nil {
-			return // not readable from this account: lox up reads it as o
+			return // not readable from this account: lox run reads it as o
 		}
 		for _, e := range ents {
 			p := filepath.Join(path, e.Name())
@@ -143,7 +143,7 @@ func projectChecks(d doctorEnv, root string, o projectOwner, cur, svcUID int) []
 
 	var out []check
 	if len(links) > 0 {
-		out = append(out, check{state: checkFail, title: title, detail: listPaths(links) + ": not a regular file or a directory (a symbolic link?): lox up copies none",
+		out = append(out, check{state: checkFail, title: title, detail: listPaths(links) + ": not a regular file or a directory (a symbolic link?): lox run copies none",
 			fix: "replace each with a regular file or a directory"})
 	}
 	chown := fmt.Sprintf("sudo chown -R %d:%d %s", o.uid, o.gid, shellQuote(dir))
@@ -152,7 +152,7 @@ func projectChecks(d doctorEnv, root string, o projectOwner, cur, svcUID int) []
 	}
 	if len(console) > 0 {
 		c := check{state: checkFail, title: title + " owner",
-			detail: fmt.Sprintf("%s: owned by the console account (uid %d), not by you (uid %d): lox up copies only your own files (doctor --fix up to v0.13.0 gave them to the console account)", listPaths(console), svcUID, o.uid),
+			detail: fmt.Sprintf("%s: owned by the console account (uid %d), not by you (uid %d): lox run copies only your own files (doctor --fix up to v0.13.0 gave them to the console account)", listPaths(console), svcUID, o.uid),
 			fix:    "locksql doctor --fix (it gives them back to you as root), or " + chown}
 		if cur == 0 && o.uid > 0 {
 			c.repair = &repair{what: fmt.Sprintf("give back to uid %d what the console account owns in %s", o.uid, dir),
@@ -166,12 +166,12 @@ func projectChecks(d doctorEnv, root string, o projectOwner, cur, svcUID int) []
 			uids = append(uids, strconv.Itoa(u))
 		}
 		out = append(out, check{state: checkFail, title: title + " owner",
-			detail: fmt.Sprintf("%s: owned by uid %s, not by you (uid %d): lox up copies only your own files", listPaths(foreign), strings.Join(uids, ", "), o.uid),
+			detail: fmt.Sprintf("%s: owned by uid %s, not by you (uid %d): lox run copies only your own files", listPaths(foreign), strings.Join(uids, ", "), o.uid),
 			fix:    "check that they are yours, then " + chown})
 	}
 	if len(modes) > 0 {
 		c := check{state: checkFail, title: title + " mode",
-			detail: listPaths(modes) + ": writable by group or others, or not readable by you: lox up copies only files no one else can write",
+			detail: listPaths(modes) + ": writable by group or others, or not readable by you: lox run copies only files no one else can write",
 			fix:    "chmod -R go-w,u+rX " + shellQuote(dir)}
 		if cur == o.uid {
 			c.repair = &repair{what: "make " + dir + " writable by you only, and readable by you (chmod go-w,u+rX)", apply: func() error {
@@ -185,7 +185,7 @@ func projectChecks(d doctorEnv, root string, o projectOwner, cur, svcUID int) []
 		out = append(out, c)
 	}
 	if len(out) == 0 {
-		out = append(out, check{state: checkOK, title: title, detail: fmt.Sprintf("%s: yours (uid %d), writable by you only, as lox up copies it", dir, o.uid)})
+		out = append(out, check{state: checkOK, title: title, detail: fmt.Sprintf("%s: yours (uid %d), writable by you only, as lox run copies it", dir, o.uid)})
 	}
 	return out
 }

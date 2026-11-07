@@ -4,6 +4,21 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## v0.17.1 (2026-11-07)
+
+Supported lockhub: as v0.16.0. Built on lockkit v0.14.1.
+
+### Changed
+
+- Every user- and agent-facing text names `lox run`, which starts the hub
+  and the locks and serves the decisions in a terminal of its own, outside
+  the agent, instead of `lox up`, deprecated since lockhub v0.10.0 (#192):
+  the docs and the site, the agent assets `locksql init` writes (skill,
+  AGENTS.md, config.toml), the MCP server's instructions, the launcher's
+  errors, `doctor`, `init` and the console's messages. The shared texts
+  come from lockkit v0.14.1. No behavior changes: container labels,
+  `.lockfamily/up.json` and the flags stay the same.
+
 ## v0.17.0 (2026-11-06)
 
 Supported lockhub: as v0.16.0 (tickets stay version 1). Built on lockkit

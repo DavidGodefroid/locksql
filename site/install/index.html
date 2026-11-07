@@ -125,7 +125,7 @@ locksql doctor --fix --yes</code></pre>
       <li><code>credentials = "keychain"</code> is not available in a container, which has no OS keychain: use <code>ask</code>, or <code>vault</code> with the vault image;</li>
       <li>a SQLite <code>path</code> is relative to the project root, which is mounted.</li>
     </ul>
-    <p><code>doctor --fix</code> runs as you. It wires your agents and keeps <code>.locksql/</code> as <code>lox up</code> reads it: copied once for the console, which never reads the project, taking only files and directories that are yours and that no one else can write.</p>
+    <p><code>doctor --fix</code> runs as you. It wires your agents and keeps <code>.locksql/</code> as <code>lox run</code> reads it: copied once for the console, which never reads the project, taking only files and directories that are yours and that no one else can write.</p>
     <p>Entries the console account owns (uid 10001, left by <code>doctor --fix</code> up to v0.13.0) are given back to you as root, in a container of its own run only then. Its checks of the console warn from this container, which runs no console.</p>
   </div>
 
@@ -199,9 +199,9 @@ key         = "~/.ssh/id_ed25519"   <span class="cmt"># in the locksql-home volu
 <section aria-labelledby="console">
   <h2 id="console">Start the console</h2>
   <div class="prose">
-    <p>The console runs attached to <a href="https://github.com/DavidGodefroid/lockhub">lockhub</a> only. <code>lox add locksql</code> declares the lock and starts it; <code>lox run</code> starts the hub and the workspace’s locks, then serves the decisions.</p>
+    <p>The console runs attached to <a href="https://github.com/DavidGodefroid/lockhub">lockhub</a> only. <code>lox add locksql</code> declares the lock; <code>lox run</code>, in a terminal of its own outside the agent, starts the hub and the workspace’s locks, then serves the decisions.</p>
     <p><code>lox attach NAME</code> attaches your terminal to the console (detach: Ctrl-P Ctrl-Q). There it asks its policy, the PII rules and the password; it asks again when it restarts.</p>
-    <p>Without its hub flags, which lockhub writes, <code>locksql console</code> exits with <code>launched by `lox up` only</code>. It runs as the <code>locksql</code> account in its own container, one per project.</p>
+    <p>Without its hub flags, which lockhub writes, <code>locksql console</code> exits with <code>launched by `lox run` only</code>. It runs as the <code>locksql</code> account in its own container, one per project.</p>
     <p>The <code>locksql-home</code> volume keeps the console account’s state from one run to the next: the approved policy, the audit log, and <code>~/.ssh/known_hosts</code> for an <code>ssh</code> profile.</p>
   </div>
 
