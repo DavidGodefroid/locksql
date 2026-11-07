@@ -27,7 +27,7 @@ const fakeInstance = "sql-it"
 
 // fakeHub is a fake lockhub for a console whose home is home: the
 // instance key in home (where the console reads it), the hub's pinned key
-// in a directory of its own, and the hub flags lox up passes.
+// in a directory of its own, and the hub flags lox run passes.
 func fakeHub(t *testing.T, home string) (*hubtest.Hub, []string) {
 	t.Helper()
 	key, err := hubclient.InstanceKey(home, fakeInstance)

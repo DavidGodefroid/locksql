@@ -5,7 +5,7 @@
 # reads it from the OS keychain. Keys that look like secrets are refused.
 #
 # Uncomment and adapt the example, then start the console with lockhub:
-# lox add locksql sql-dev && lox up
+# lox add locksql sql-dev && lox run
 
 # [profiles.dev]
 # engine      = "postgres"          # mariadb | mysql | postgres | sqlite

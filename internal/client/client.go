@@ -31,8 +31,8 @@ var ErrConsoleClosed = kclient.ErrConsoleClosed
 // NoConsoleError reports a missing console and how to start it.
 type NoConsoleError = kclient.NoConsoleError
 
-// StartCommand is the command that starts the console: `lox up`, for
-// every profile and project (a console is started by `lox up` only, so no
+// StartCommand is the command that starts the console: `lox run`, for
+// every profile and project (a console is started by `lox run` only, so no
 // profile or project value is put in it).
 func StartCommand(profile, project string) string {
 	return kclient.StartCommand(product.P, profile, project)

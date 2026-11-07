@@ -323,7 +323,7 @@ func TestDefaultProgressIntervalIsUnderTenSeconds(t *testing.T) {
 }
 
 // Inside a project the hint still names no project (nor profile flag): it
-// asks for `lox up`, which starts the console on the project.
+// asks for `lox run`, which starts the console on the project.
 func TestNoConsoleInProjectHintNamesNoProject(t *testing.T) {
 	o := Options{
 		Profile: "uat",
@@ -362,7 +362,7 @@ func TestNoConsoleErrorCarriesStartCommand(t *testing.T) {
 	for _, name := range specTools {
 		r := call(t, cs, name, args[name])
 		got := text(r)
-		if !strings.Contains(got, client.StartHint) || !strings.Contains(got, "lox up") || strings.Contains(got, "--profile") {
+		if !strings.Contains(got, client.StartHint) || !strings.Contains(got, "lox run") || strings.Contains(got, "--profile") {
 			t.Errorf("%s: output lacks the start hint, or carries a value:\n%s", name, got)
 		}
 		if name != "locksql_status" && !r.IsError {

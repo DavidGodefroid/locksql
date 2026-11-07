@@ -93,7 +93,7 @@ func pendingTicket(t *testing.T, resp ipc.Response, status string) string {
 }
 
 // runHub is the hub options of a console Run starts in a test: a fake
-// lockhub, its pinned key and the instance key, as lox up writes them.
+// lockhub, its pinned key and the instance key, as lox run writes them.
 func runHub(t *testing.T) kconsole.HubOptions {
 	t.Helper()
 	home := t.TempDir()

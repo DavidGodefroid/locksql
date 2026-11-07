@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-// loxUpProject is a project whose .locksql is as lox up copies it: yours,
+// loxUpProject is a project whose .locksql is as lox run copies it: yours,
 // writable by you only. It returns the project and its .locksql.
 func loxUpProject(t *testing.T) (string, string) {
 	t.Helper()
@@ -100,7 +100,7 @@ func TestProjectChecksLoxUp(t *testing.T) {
 		t.Errorf("after the repair: %+v", got)
 	}
 
-	// A link inside, which lox up refuses: no repair.
+	// A link inside, which lox run refuses: no repair.
 	if err := os.Symlink("/etc/passwd", filepath.Join(dot, "pii", "linked.toml")); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestProjectChecksLoxUp(t *testing.T) {
 }
 
 // The old failure (lockhub#92): doctor --fix up to v0.13.0 gave .locksql
-// to the console account, and lox up then refused it ("owned by uid 10001,
+// to the console account, and lox run then refused it ("owned by uid 10001,
 // not by you"). Doctor now reports it as a failure for you, repaired only
 // as root (the launcher's root container); never the other way round.
 func TestProjectChecksConsoleOwned(t *testing.T) {

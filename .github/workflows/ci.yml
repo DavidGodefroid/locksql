@@ -122,7 +122,7 @@ jobs:
           code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" profile add --non-interactive --json --profile local --engine sqlite --path app.db >out || code=$?
           test "$code" = 3 && grep -q '"code":"exists"' out
           # doctor --fix as lox add calls it: one line of JSON, ok (warnings
-          # only: no console runs here), and .locksql left as lox up copies
+          # only: no console runs here), and .locksql left as lox run copies
           # it: yours, writable by you only, only directories and files.
           fix_ok() {
             sh "$GITHUB_WORKSPACE/scripts/locksql" doctor --fix --yes --json >out || { cat out; return 1; }
@@ -137,11 +137,11 @@ jobs:
           chmod g+w .locksql .locksql/config.toml
           fix_ok
           # What doctor --fix up to v0.13.0 left (lockhub#92): .locksql given
-          # to the console account, which lox up refuses ("owned by uid
+          # to the console account, which lox run refuses ("owned by uid
           # 10001, not by you"). Given back as root.
           sudo chown -R 10001 .locksql
           fix_ok
-          # No lox up here: no console's socket to mount (exit 2, as a client
+          # No lox run here: no console's socket to mount (exit 2, as a client
           # that finds no console), never the fixed locksql-run instead.
           code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" status --profile local 2>err || code=$?
           test "$code" = 2 && grep -q 'no .lockfamily/up.json' err

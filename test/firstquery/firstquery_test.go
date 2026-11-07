@@ -3,13 +3,13 @@
 // Package firstquery checks the README's quick start end to end and
 // without a human, through the launcher and the image: locksql init,
 // profile add and doctor --fix, then the console in a terminal, attached
-// to a lockhub as `lox up` starts it (here a fake lockhub served by the
+// to a lockhub as `lox run` starts it (here a fake lockhub served by the
 // test, reached over the host network). The console's start-up prompts
 // stay keystrokes in its terminal, which the test types as the human
 // would; the agent's plan and run follow, the run answers pending with a
 // ticket, the test approves it in the fake lockhub as the human would, and
 // the run of the ticket returns the rows. The agent's commands reach the
-// console through the socket volume lox up names in .lockfamily/up.json,
+// console through the socket volume lox run names in .lockfamily/up.json,
 // as the launcher finds it. It uses the Docker volume locksql-home: CI
 // runs it on a throwaway runner.
 //
@@ -60,7 +60,7 @@ func imageName() string {
 }
 
 // fakeHub serves a fake lockhub for the console whose home is the volume
-// homeVol, as lox up pins it: the console's instance key (made in that
+// homeVol, as lox run pins it: the console's instance key (made in that
 // volume by locksql hub-key) at the hub, the hub's key in a directory of
 // the project (mounted in the console's container) owned by the console
 // account. It returns the hub and the
@@ -81,7 +81,7 @@ func fakeHub(t *testing.T, homeVol, project string) (*hubtest.Hub, []string) {
 	}
 	hub := hubtest.New(t, instance, ed25519.PublicKey(pub))
 	// The console reads the hub's key only from a directory root or its
-	// own account owns, as lox up's: given to the console account.
+	// own account owns, as lox run's: given to the console account.
 	dir := filepath.Join(project, ".hub")
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -271,12 +271,12 @@ func TestConsoleRefusesAnotherLocksqlDir(t *testing.T) {
 	}
 }
 
-// loxUpConsole is the console of project as lox up runs it (lockhub's
-// docs/lox-up.md), the agents' side of it only: a lock of its own
+// loxUpConsole is the console of project as lox run runs it (lockhub's
+// docs/lox-run.md), the agents' side of it only: a lock of its own
 // (instance fq-<pid>-<n>) in compose project lockfamily-<hash>, run by
-// compose from lox up's state directory ($XDG_STATE_HOME, a directory of
+// compose from lox run's state directory ($XDG_STATE_HOME, a directory of
 // the test's), its socket in the volume lockfamily-<hash>_<instance>-run
-// with lox up's labels, named in <project>/.lockfamily/up.json, the home
+// with lox run's labels, named in <project>/.lockfamily/up.json, the home
 // volume locksql-home; on the host network, where the fake hub listens.
 // The socket volume is removed at the end.
 func loxUpConsole(t *testing.T, project string, readOnly bool, hubFlags []string) (*exec.Cmd, string) {
@@ -312,14 +312,14 @@ func loxUpConsole(t *testing.T, project string, readOnly bool, hubFlags []string
 	if err := os.Chmod(filepath.Join(lf, "up.json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// The compose file, as JSON (YAML): the console's container as lox up
-	// confines it, its socket volume labelled as lox up labels it.
+	// The compose file, as JSON (YAML): the console's container as lox run
+	// confines it, its socket volume labelled as lox run labels it.
 	mounts := []map[string]any{
 		{"type": "volume", "source": instance + "-run", "target": "/run/locksql"},
 		{"type": "volume", "source": "home", "target": "/home/locksql"},
 		{"type": "bind", "source": project, "target": project, "read_only": readOnly},
 	}
-	// lox up's: the console keeps its PII rule sets in its home volume,
+	// lox run's: the console keeps its PII rule sets in its home volume,
 	// never in the project's .locksql, which is yours.
 	env := map[string]string{"LOCKSQL_PII_DIR": "/home/locksql/pii-rules"}
 	if readOnly {
@@ -397,18 +397,18 @@ func firstQuery(t *testing.T, readOnly bool) {
 
 	// The human's commands of the quick start: the agent's files, a
 	// profile, then doctor --fix, which passes (no console runs yet: a
-	// warning) and leaves .locksql/ yours, as lox up reads it.
+	// warning) and leaves .locksql/ yours, as lox run reads it.
 	human(t, 1, project, []string{"init", "claude"})
 	human(t, 2, project, []string{"profile", "add", "--non-interactive", "--profile", "dev", "--engine", "sqlite", "--path", "demo.db"})
 	human(t, 3, project, []string{"doctor", "--fix", "--yes"})
 	var st syscall.Stat_t
 	if err := syscall.Lstat(filepath.Join(project, ".locksql"), &st); err != nil || int(st.Uid) != os.Getuid() || st.Mode&0o022 != 0 {
-		t.Fatalf(".locksql after doctor --fix: uid %d, mode %04o, %v; lox up wants it yours, writable by you only", st.Uid, st.Mode&0o7777, err)
+		t.Fatalf(".locksql after doctor --fix: uid %d, mode %04o, %v; lox run wants it yours, writable by you only", st.Uid, st.Mode&0o7777, err)
 	}
 
-	// The console, in a terminal, as lox up starts it: as the console
+	// The console, in a terminal, as lox run starts it: as the console
 	// account, in its own container, attached to the hub, with its socket
-	// in a volume of lox up's (its labels, named in .lockfamily/up.json),
+	// in a volume of lox run's (its labels, named in .lockfamily/up.json),
 	// which the launcher mounts for the agent's commands.
 	hub, hubFlags := fakeHub(t, "locksql-home", project)
 	cmd, vol := loxUpConsole(t, project, readOnly, hubFlags)
@@ -483,7 +483,7 @@ func firstQuery(t *testing.T, readOnly bool) {
 	}
 	t.Logf("first approved query: %v %v", rows.Columns, rows.Rows)
 
-	// A container lox up did not start that mounts the socket volume
+	// A container lox run did not start that mounts the socket volume
 	// read-write could listen on the socket's path: the launcher then
 	// trusts none of it (exit 2), and runs nothing.
 	squat := fmt.Sprintf("locksql-fq-squat-%d", os.Getpid())

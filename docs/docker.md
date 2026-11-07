@@ -14,7 +14,7 @@ holds the separated setup:
 - `/etc/locksql/system.toml` is owned by root and the binary by root;
 - the socket directory `/run/locksql` (mode 2710, `locksql:locksql-clients`)
   is a named volume, shared by the console container and the agent's
-  containers (read-only there): `lox up`'s socket volume of the lock
+  containers (read-only there): `lox run`'s socket volume of the lock
   (`lockfamily-<hash>_<instance>-run`, named in `.lockfamily/up.json`). The
   kernel checks every peer on the socket.
 
@@ -63,7 +63,7 @@ runs each command with the account it needs:
 | `init`, `config` | you (your uid and gid), with your home mounted: they write the agents' files and your user config; a `config` file must be under the project or your home | |
 | `profile` | you, with `HOME=/tmp` | |
 | `doctor --fix` | you, with your home mounted (your agents' wiring); first as root, only to give back `.locksql/` entries that are not yours | |
-| the agent commands: `mcp`, `status`, `tables`, `plan`, `run`, `doctor`... | `agent` | the socket volume of the workspace's locksql lock that `lox up` runs, read-only ([launcher.md](launcher.md#the-socket-of-lox-ups-lock)) |
+| the agent commands: `mcp`, `status`, `tables`, `plan`, `run`, `doctor`... | `agent` | the socket volume of the workspace's locksql lock that `lox run` runs, read-only ([launcher.md](launcher.md#the-socket-of-lox-runs-lock)) |
 | everything else: `help`... | `agent` | none |
 
 The socket name is derived from the project path, so the console and the
@@ -156,12 +156,12 @@ Then check the setup, and repair what can be:
 locksql doctor --fix --yes
 ```
 
-It wires your agents and keeps `.locksql/` as `lox up` reads it: `lox up`
+It wires your agents and keeps `.locksql/` as `lox run` reads it: `lox run`
 copies it, once, for the console, which never reads the project itself, and
 takes only directories and regular files that are yours and that no one
 else can write. `doctor --fix` runs as you and removes the write bits of
 group and others there (`chmod go-w`); entries owned by the console account
-(uid 10001), which `doctor --fix` up to v0.13.0 gave it and `lox up`
+(uid 10001), which `doctor --fix` up to v0.13.0 gave it and `lox run`
 refuses, it gives back to you as root, in a container of its own run only
 then. The checks of the console and its profiles warn from this container,
 which runs no console. Run it again whenever `.locksql/` changes hands, by a
@@ -173,15 +173,16 @@ The console runs attached to lockhub only: from the project directory,
 
 ```sh
 lox add locksql sql-dev
-lox up
-lox attach sql-dev
+lox run                # a terminal of its own, outside the agent: keep it open
+lox attach sql-dev     # in another terminal
 ```
 
-`lox up` starts the console with its hub flags, through the launcher
+`lox run` starts the hub and the workspace's locks, then serves the
+decisions in its terminal. It starts the console with its hub flags, through the launcher
 (`locksql console --hub URL --hub-key-file PATH --instance NAME`, plus
 `--profile P`, `--show-results` or `--allow-unmask` from the lock's
 settings: [Start the console](usage.md#2-start-the-console)). Started
-without them, `locksql console` exits with ``launched by `lox up` only``.
+without them, `locksql console` exits with ``launched by `lox run` only``.
 `lox attach sql-dev` attaches your terminal to it (detach: Ctrl-P Ctrl-Q):
 the console asks its start-up questions there, and again when it restarts. The
 `locksql-home` volume keeps the console account's state from one run to the
@@ -354,8 +355,8 @@ build writes them to `allowed_uids` in the image's
 (the console prints them at start). Both refuse root (0), the console's own
 uid (10001) and 65534 (nobody, the kernel's overflow uid). Only whoever
 starts the console sets them: you, through the launcher (which passes the
-flag on) or through `lox up` (lockhub v0.3.0 or later: a lock's
-`allowed_uids` in the lockfamily.yaml lox up reviews with you); no client
+flag on) or through `lox run` (lockhub v0.3.0 or later: a lock's
+`allowed_uids` in the lockfamily.yaml lox run reviews with you); no client
 can. Every process of that uid, in any container that mounts the socket
 volume, may then use the console. It is the uid the kernel reports
 for the agent's process, as the console sees it: the agent container's uid
@@ -385,7 +386,7 @@ docker run … -v locksql-run:/run/locksql -v "$PWD:$PWD" -w "$PWD" agent-image
 `locksql init claude` then needs no change: the `locksql mcp` it writes in
 `.mcp.json` runs inside the agent's container. Check from there with
 `locksql status`. `locksql doctor` run there also checks the project's
-`.locksql/` as `lox up` reads it: yours, writable by you only
+`.locksql/` as `lox run` reads it: yours, writable by you only
 ([Set up a project](#set-up-a-project)).
 
 ## What Docker does and does not separate

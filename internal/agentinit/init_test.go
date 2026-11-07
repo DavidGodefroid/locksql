@@ -473,7 +473,7 @@ func TestTemplatesCarryTheRules(t *testing.T) {
 			"one targeted",    // one question at a time
 			"locksql_plan",    // show the plan first
 			"pending",         // run answers pending: the ticket runs once decided
-			"lox up",          // lockhub starts the console
+			"lox run",         // lockhub starts the console
 			"denied",          // stop on deny
 			"refused",         // stop on refuse
 			"export",          // no exports
@@ -487,6 +487,24 @@ func TestTemplatesCarryTheRules(t *testing.T) {
 			if !strings.Contains(s, want) {
 				t.Errorf("%s lacks %q", name, want)
 			}
+		}
+	}
+}
+
+// The wired assets send the user to `lox run`, never to the deprecated
+// `lox up`.
+func TestTemplatesNameLoxRun(t *testing.T) {
+	for name, body := range map[string]string{
+		"skill.md":        mustTemplate(t, "templates/skill.md"),
+		"agents.md":       mustTemplate(t, "templates/agents.md"),
+		"config.toml":     mustTemplate(t, "templates/config.toml"),
+		"cursor-rule.mdc": cursorRule(),
+	} {
+		if !strings.Contains(body, "lox run") {
+			t.Errorf("%s does not name lox run", name)
+		}
+		if strings.Contains(body, "lox up") {
+			t.Errorf("%s names the deprecated lox up", name)
 		}
 	}
 }

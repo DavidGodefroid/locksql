@@ -154,7 +154,7 @@ func runDoctor(e env, args []string) int {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	profile := fs.String(verbs.FlagProfile, "", "profile whose console to check (default: every profile)")
 	instanceFlag := fs.String(client.FlagInstance, "", "reach one lock among several of this type")
-	fix := fs.Bool(verbs.FlagFix, false, "repair the agents' wiring, the project's .locksql as lox up reads it, and the socket directory")
+	fix := fs.Bool(verbs.FlagFix, false, "repair the agents' wiring, the project's .locksql as lox run reads it, and the socket directory")
 	yes := fs.Bool(verbs.FlagYes, false, "with --fix: make the repairs without asking")
 	fs.Bool(verbs.FlagJSON, false, "print one line of JSON on stdout")
 	fs.SetOutput(io.Discard)
@@ -430,7 +430,7 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 	}
 	svc, isService := consoleAccount(d, sys, myUID)
 
-	// The agents of this account, and the project's .locksql as lox up
+	// The agents of this account, and the project's .locksql as lox run
 	// reads it: yours (the launcher names you, doctorForEnv).
 	if !isService && myUID != 0 {
 		out = append(out, wiringChecks(d)...)
@@ -578,7 +578,7 @@ func separationChecks(d doctorEnv, sys *sysconf.Config, me *user.User, myUID int
 		case unknown:
 			// The launcher's doctor --fix runs as your uid, which has no
 			// account in the image: no group to add it to.
-			add(checkOK, "client access", fmt.Sprintf("uid %d has no account here: the launcher runs the agent's commands as the image's agent account, a member of %s; an agent of uid %d in a container of its own needs a console that allows it (lox up's allowed_uids)", myUID, sys.ClientGroup, myUID), "")
+			add(checkOK, "client access", fmt.Sprintf("uid %d has no account here: the launcher runs the agent's commands as the image's agent account, a member of %s; an agent of uid %d in a container of its own needs a console that allows it (lox run's allowed_uids)", myUID, sys.ClientGroup, myUID), "")
 		default:
 			cmd := fmt.Sprintf("usermod -aG %s %s", shellQuote(sys.ClientGroup), shellQuote(me.Username))
 			if d.goos == "darwin" {

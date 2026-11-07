@@ -36,14 +36,14 @@ import (
 var ErrConfig = kconsole.ErrConfig
 
 // ErrNoHub refuses a console started without its hub: the console runs
-// hub-attached only, started by `lox up`.
+// hub-attached only, started by `lox run`.
 // It is an ErrConfig (exit code 3).
 var ErrNoHub error = noHubError{}
 
 type noHubError struct{}
 
 func (noHubError) Error() string {
-	return "launched by `lox up` only: requests are decided in lockhub (--hub, --hub-key-file and --instance are missing)"
+	return "launched by `lox run` only: requests are decided in lockhub (--hub, --hub-key-file and --instance are missing)"
 }
 
 func (noHubError) Unwrap() error { return ErrConfig }
@@ -236,7 +236,7 @@ func legacyRulesNotice(cwd, projectRoot, rulesPath string) string {
 }
 
 // PIIDirEnv names the directory where the console keeps its PII rule
-// sets (pii/<set>.toml) instead of the profile's directory: lox up sets
+// sets (pii/<set>.toml) instead of the profile's directory: lox run sets
 // it to the console's own volume, its profile copy being read-only.
 const PIIDirEnv = "LOCKSQL_PII_DIR"
 
@@ -258,7 +258,7 @@ func profileSet(dir, set string) string {
 
 // mergeProfileMasks adds to the console's rule set at rulesPath the mask
 // rules of the profile's set (in profileDir) it lacks: a tightening made
-// in the workspace and reviewed by lox up applies. Nothing else of the
+// in the workspace and reviewed by lox run applies. Nothing else of the
 // profile's set is taken (an allow rule, a removed mask or another mode
 // would loosen the console's set). It returns the rules added.
 func mergeProfileMasks(profileDir, set, rulesPath string) (int, error) {
@@ -339,7 +339,7 @@ func Run(ctx context.Context, o Options) error {
 	if o.IO == nil {
 		return errors.New("console: no terminal")
 	}
-	// One mode: requests are decided in lockhub, and `lox up` starts the
+	// One mode: requests are decided in lockhub, and `lox run` starts the
 	// console with its hub. Refused before any prompt or file write.
 	if !o.Hub.Enabled() {
 		return ErrNoHub

@@ -116,11 +116,11 @@ func TestDialWithoutConsoleIsErrNoConsole(t *testing.T) {
 	if !errors.As(err, &nc) || nc.Profile != "uat" {
 		t.Fatalf("err = %#v, want a *NoConsoleError for uat", err)
 	}
-	// The hint is StartHint: `lox up`, the only start, with no value.
-	if !strings.Contains(err.Error(), StartHint) || !strings.Contains(StartHint, "lox up") {
+	// The hint is StartHint: `lox run`, the only start, with no value.
+	if !strings.Contains(err.Error(), StartHint) || !strings.Contains(StartHint, "lox run") {
 		t.Fatalf("message lacks the start hint: %q", err.Error())
 	}
-	if StartCommand("uat", "") != "lox up" || nc.Command() != "lox up" {
+	if StartCommand("uat", "") != "lox run" || nc.Command() != "lox run" {
 		t.Fatalf("StartCommand = %q, Command = %q", StartCommand("uat", ""), nc.Command())
 	}
 	if h := nc.Hint(); !strings.HasPrefix(h, StartHint) || !strings.Contains(h, "locksql doctor") || strings.Contains(h, "uat") || strings.Contains(h, "--profile") || strings.Contains(h, "--project") {
@@ -132,7 +132,7 @@ func TestDialWithoutConsoleIsErrNoConsole(t *testing.T) {
 }
 
 // Inside a project the socket key is the project's (nc.Project), but the
-// hint and the start command name no project: `lox up` starts the
+// hint and the start command name no project: `lox run` starts the
 // console on it, and no value is put in what an agent passes on.
 func TestDialWithoutConsoleInProjectNamesProject(t *testing.T) {
 	runtimeDir(t)
@@ -146,14 +146,14 @@ func TestDialWithoutConsoleInProjectNamesProject(t *testing.T) {
 	if !errors.As(err, &nc) || nc.Project != root {
 		t.Fatalf("err = %#v", err)
 	}
-	if nc.Command() != "lox up" || !strings.Contains(err.Error(), StartHint) || strings.Contains(err.Error(), root) ||
+	if nc.Command() != "lox run" || !strings.Contains(err.Error(), StartHint) || strings.Contains(err.Error(), root) ||
 		strings.Contains(nc.Hint(), "uat") || strings.Contains(err.Error(), "run `locksql`") {
 		t.Fatalf("hint %q / command %q", err.Error(), nc.Command())
 	}
-	if got := DescribeError(err); got.Start != "lox up" || strings.Contains(got.Message, root) {
+	if got := DescribeError(err); got.Start != "lox run" || strings.Contains(got.Message, root) {
 		t.Fatalf("json = %+v", got)
 	}
-	if got := StartCommand("uat", "/a b/it's"); got != "lox up" {
+	if got := StartCommand("uat", "/a b/it's"); got != "lox run" {
 		t.Fatalf("a project value in the start command: %s", got)
 	}
 }

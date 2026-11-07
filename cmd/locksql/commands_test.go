@@ -315,7 +315,7 @@ func TestStatusWithoutProfileListsEveryProfile(t *testing.T) {
 	dir := project(t, twoProfiles)
 	startConsole(t, dir, "uat")
 	o := cli(t, dir, "", "status")
-	o.want(t, exitOK, "uat", "console running", "prod", "no console (start: lox up)")
+	o.want(t, exitOK, "uat", "console running", "prod", "no console (start: lox run)")
 	if strings.Contains(o.stdout, "--profile") || strings.Contains(o.stdout, dir) {
 		t.Fatalf("the start command carries a value: %q", o.stdout)
 	}
@@ -329,7 +329,7 @@ func TestStatusWithoutProfileListsEveryProfile(t *testing.T) {
 		Start   string            `json:"start"`
 	}
 	decodeJSON(t, o.stdout, &list)
-	if len(list) != 2 || list[0].Profile != "prod" || list[0].Running || list[0].Start != "lox up" ||
+	if len(list) != 2 || list[0].Profile != "prod" || list[0].Running || list[0].Start != "lox run" ||
 		list[1].Profile != "uat" || !list[1].Running || list[1].Status == nil {
 		t.Fatalf("status list = %+v", list)
 	}
@@ -563,9 +563,9 @@ func TestNoConsoleExitTwoWithHint(t *testing.T) {
 		if o.code != exitNoConsole {
 			t.Fatalf("%v: exit %d, want 2 (stderr %q)", args, o.code, o.stderr)
 		}
-		// The hint asks for `lox up`, the only start, and carries no
+		// The hint asks for `lox run`, the only start, and carries no
 		// value: neither the profile's flag nor the project dir.
-		if !strings.Contains(o.stderr, client.StartHint) || !strings.Contains(o.stderr, "lox up") {
+		if !strings.Contains(o.stderr, client.StartHint) || !strings.Contains(o.stderr, "lox run") {
 			t.Fatalf("%v: stderr lacks the start hint: %q", args, o.stderr)
 		}
 		if strings.Contains(o.stderr, dir) || strings.Contains(o.stderr, "--profile") || strings.Contains(o.stderr, "--project") {
@@ -581,7 +581,7 @@ func TestNoConsoleExitTwoWithHint(t *testing.T) {
 		} `json:"error"`
 	}
 	decodeJSON(t, o.stdout, &e)
-	if e.Error.Kind != "no_console" || e.Error.Start != "lox up" {
+	if e.Error.Kind != "no_console" || e.Error.Start != "lox run" {
 		t.Fatalf("error = %+v", e)
 	}
 }
