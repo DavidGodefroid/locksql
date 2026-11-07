@@ -17,8 +17,12 @@ func TestExpandHome(t *testing.T) {
 		{"~other/x.pem", "~other/x.pem"}, // another account's home: as is
 		{"", ""},
 	} {
-		if got := ExpandHome(tc.in, "/home/locksql"); got != tc.want {
-			t.Errorf("ExpandHome(%q) = %q, want %q", tc.in, got, tc.want)
+		want := tc.want
+		if strings.HasPrefix(tc.in, "~/") {
+			want = filepath.FromSlash(want) // filepath.Join's separator
+		}
+		if got := ExpandHome(tc.in, "/home/locksql"); got != want {
+			t.Errorf("ExpandHome(%q) = %q, want %q", tc.in, got, want)
 		}
 	}
 }
