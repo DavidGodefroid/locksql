@@ -205,6 +205,28 @@ func (s *Server) hubRisk(pl *plan) ticket.Risk {
 	return ticket.RiskRead
 }
 
+// hubKind is the kind of the ticket of a statement of class, what `lox
+// run`'s rules match on with the profile of hubSubject. A ticket without
+// one is version 1, which no auto rule may decide (locksql#195). Admin
+// statements go with the schema changes, as their tier does.
+func hubKind(class sqlclass.Class) ticket.Kind {
+	switch class {
+	case sqlclass.Read:
+		return ticket.KindRead
+	case sqlclass.Write:
+		return ticket.KindWrite
+	}
+	return ticket.KindDDL
+}
+
+// hubSubject is the subject of a plan's or a grant's ticket: the profile
+// it runs under, a name from the lock's own configuration. The database
+// stays on the masked screen: in the subject the hub would read it in
+// clear, and a quoted name need not pass ticket.Subject's target rules.
+func (s *Server) hubSubject() *ticket.Subject {
+	return &ticket.Subject{Profile: s.profile.Name}
+}
+
 // hubScreen is the approval screen of pl as it leaves the lock: the
 // structure of the statement, every literal masked (the hub and its
 // facades never see a value of the statement in clear), the verdict and
@@ -353,7 +375,7 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 	masked, clear := s.hubScreen(pl)
 	sc := &clear
 	sc.Hub = &kconsole.HubTicket{PlanID: hp.ID, Caller: caller, Risk: s.hubRisk(pl), Masked: masked,
-		Requester: ticket.Requester{Agent: agent}}
+		Requester: ticket.Requester{Agent: agent}, Kind: hubKind(pl.st.Class), Subject: s.hubSubject()}
 	// The profile's auto rule for this action: ask marks the ticket
 	// never-auto, so that no auto rule of the decider may approve it (and
 	// the lock refuses an auto decision on it); auto leaves it to lox
