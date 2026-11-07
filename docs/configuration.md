@@ -27,7 +27,7 @@ user        = ""                    # empty: asked at console start
 database    = ""                    # empty: chosen per query (--db)
 credentials = "ask"                 # ask | keychain | vault
 tls         = "verify-full"         # disable | prefer (default) | require | verify-ca | verify-full, as libpq's sslmode
-tls_ca      = ""                    # optional PEM bundle replacing the system roots
+tls_ca      = ""                    # optional PEM bundle replacing the system roots; "~/db-ca.pem" is in the console account's home
 credentials_ttl = "20m"             # optional: ask for the secret again
 tier        = "read"                # read | write | ddl | admin
 production  = false
@@ -126,8 +126,14 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `ssh.host`, `ssh.port`, `ssh.user` | required host and user; port 22 | the bastion; not with sqlite or a Unix socket `host` |
 | `ssh.auth` | required | `key`, `agent` (`SSH_AUTH_SOCK` of the console) or `password` |
 | `ssh.key` | required with `auth = "key"` | private key of the console account, mode 0600 |
+| `tls_ca`, `tls_cert`, `tls_key` | none | PEM files read by the console account ([TLS to the database](usage.md#tls-to-the-database)) |
 | `ssh.credentials` | the profile's `credentials` (`ask` when that is `vault`) | `ask` or `keychain` for the passphrase or SSH password; `locksql forget --profile P` removes it too |
 | `proxy_command` | none | argv run without a shell, as the console account, once per connection; its stdin and stdout carry it (`docker exec`, `kubectl exec`, `ssh ... socat`). Not with `ssh`, sqlite or a Unix socket `host`; any change is a loosening |
+
+In every file key (`tls_ca`, `tls_cert`, `tls_key`, `ssh.key`), a leading
+`~/` is the console account's home (`/home/locksql` in the image); the
+console checks each file right after the policy review, before any secret
+is asked.
 
 </details>
 

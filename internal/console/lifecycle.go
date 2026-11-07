@@ -569,6 +569,17 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 
+	// The files of tls_ca, tls_cert, tls_key and ssh.key, checked before the
+	// production name, the passphrase or the password is asked for: a
+	// missing one would only fail at connect (#194).
+	if home, err := os.UserHomeDir(); err == nil {
+		if err := config.CheckFiles(p, home); err != nil {
+			err = fmt.Errorf("%w: %v", ErrConfig, err)
+			st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
+			return err
+		}
+	}
+
 	// 2. Production banner, and the typed profile name when the policy in
 	// force was not confirmed by it before (#178).
 	if p.Production {

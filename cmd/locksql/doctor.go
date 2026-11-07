@@ -665,6 +665,77 @@ func socketDirScript(goos string, sys *sysconf.Config, mode string) string {
 	return s
 }
 
+// fileKeyChecks checks the files of tls_ca, tls_cert, tls_key and ssh.key,
+// "~/" resolved in this account's home, when this account can read them:
+// in same-user mode, or as the console account itself. A missing file is
+// reported with the command that copies it into the console's home; a key
+// readable by others with its chmod.
+func fileKeyChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, name string) []check {
+	me, err := d.current()
+	if err != nil {
+		return nil
+	}
+	if sys != nil {
+		myUID, _ := strconv.Atoi(me.Uid)
+		if _, isService := consoleAccount(d, sys, myUID); !isService {
+			// The files live in the console account's home, which this
+			// account cannot read: nothing to check here.
+			return nil
+		}
+	}
+	home := me.HomeDir
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	var out []check
+	add := func(state, title, detail, fix string) {
+		out = append(out, check{state: state, title: name + ": " + title, detail: detail, fix: fix})
+	}
+	for _, f := range p.FileKeys() {
+		path := config.ExpandHome(f.Path, home)
+		st, err := d.stat(path)
+		if err != nil {
+			var pe *fs.PathError
+			if errors.As(err, &pe) {
+				err = pe.Err // the path is already in the detail
+			}
+			fix := "check " + f.Key
+			if errors.Is(err, fs.ErrNotExist) {
+				fix = copyIntoHomeHint(d, path, f.Key)
+			}
+			add(checkFail, f.Key, path+": "+err.Error(), fix)
+			continue
+		}
+		switch private := f.Key == "tls_key" || f.Key == "ssh.key"; {
+		case !private:
+			add(checkOK, f.Key, path+" is present", "")
+		case st.Mode().Perm()&0o077 != 0:
+			add(checkFail, f.Key, path+" is readable by others", "chmod 600 "+path)
+		default:
+			add(checkOK, f.Key, path+" is private", "")
+		}
+	}
+	return out
+}
+
+// copyIntoHomeHint is the command that copies a file key's missing file to
+// path in the console's home: from the host into this console container,
+// whose name is its hostname; a plain check outside a container.
+func copyIntoHomeHint(d doctorEnv, path, key string) string {
+	if _, err := d.stat("/.dockerenv"); err != nil {
+		if _, err := d.stat("/run/.containerenv"); err != nil {
+			return "check " + key
+		}
+	}
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "<console container>"
+	}
+	script := "umask 077 && mkdir -p " + client.ShellQuote(filepath.Dir(path)) + " && cat > " + client.ShellQuote(path)
+	return "copy it into the console's home, from the host: docker exec -i " + client.ShellQuote(host) + " sh -c " +
+		client.ShellQuote(script) + " < " + client.ShellQuote(filepath.Base(path))
+}
+
 func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd string) []check {
 	var out []check
 	name := "profile " + p.Name
@@ -701,34 +772,8 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 
 	if s := p.SSH; s != nil {
 		add(checkOK, "ssh", "reached through "+s.User+"@"+s.Host+":"+strconv.Itoa(s.Port)+" ("+s.Auth+")", "")
-		if s.Auth == config.SSHAuthKey {
-			path := s.Key
-			if rest, ok := strings.CutPrefix(path, "~/"); ok {
-				home := "~"
-				if sys != nil {
-					home = "the console account's home"
-				} else if h, err := os.UserHomeDir(); err == nil {
-					home = h
-				}
-				path = filepath.Join(home, rest)
-			}
-			if st, err := d.stat(path); err != nil {
-				if sys == nil {
-					var pe *fs.PathError
-					if errors.As(err, &pe) {
-						err = pe.Err // the path is already in the detail
-					}
-					add(checkFail, "ssh key", path+": "+err.Error(), "check ssh.key")
-				}
-				// In a separated setup the key lives in the console account's
-				// home, which this account cannot read: nothing to check here.
-			} else if st.Mode().Perm()&0o077 != 0 {
-				add(checkFail, "ssh key", path+" is readable by others", "chmod 600 "+path)
-			} else {
-				add(checkOK, "ssh key", path+" is private", "")
-			}
-		}
 	}
+	out = append(out, fileKeyChecks(d, p, sys, name)...)
 
 	if len(p.ProxyCommand) > 0 {
 		out = append(out, proxyChecks(d, p, sys, cwd, name)...)
