@@ -69,8 +69,14 @@ func (s *Server) session(ctx context.Context, id int64) (engine.Session, *ipc.Re
 		r := errResp(id, ipc.CodeConnLost, "the auto rules of this profile deny its connection (auto.connect = deny): the session ended")
 		return nil, &r
 	}
+	s.idleErr = nil
 	ks, err := s.k.Session(ctx)
 	if err != nil {
+		if s.idleErr != nil {
+			// Closed on idle: why the connect ticket did not open it, not
+			// lockkit's "restart the console" (it keeps running).
+			err = s.idleErr
+		}
 		r := errResp(id, ipc.CodeConnLost, err.Error())
 		return nil, &r
 	}

@@ -4,6 +4,19 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+### Changed
+
+- `limits.idle_timeout` closes the database connection and the SSH tunnel
+  instead of ending the console (#198). The console keeps running and its
+  socket; the next request asks a connect ticket in `lox run`, and is
+  served once approved, without the start questions (policy review,
+  production name, unchanged privilege findings). A secret that is
+  `ask` (`credentials`, `ssh.credentials`) is typed in `lox run` and comes
+  sealed to a one-use key of the console; the bastion's takes a second
+  ticket. `max_session` still ends the session.
+
 ## v0.17.2 (2026-11-07)
 
 Supported lockhub: v0.9.0 or later (hub-mode tickets are now version 2,

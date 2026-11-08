@@ -690,13 +690,31 @@ answered. Between requests you can also type:
 | `:revoke` | end every active grant; `:revoke ID` ends one (see [Grants](#grants)) |
 | `:quit` | end the session |
 
-The session ends on Ctrl-C, `:quit`, `locksql logout`, after
-`limits.idle_timeout` without activity (default 20 minutes, production 10,
-or `max_session` when that is shorter), or after `limits.max_session`
-(default 4 hours, production 2). A change of
-either applied while the console runs counts from the session start and the
-last activity, at the next check. Each end closes the connection, removes
-the socket and is audited.
+The session ends on Ctrl-C, `:quit`, `locksql logout`, or after
+`limits.max_session` (default 4 hours, production 2). Each end closes the
+connection, removes the socket and is audited.
+
+After `limits.idle_timeout` without activity (default 20 minutes,
+production 10, or `max_session` when that is shorter) the console closes
+its database connection and its SSH tunnel, but keeps running and keeps
+its socket. Activity is a request that reaches the database (catalog,
+plan, run, grant) or a line or key typed in the console; a client polling
+`status` is not. The next request that needs the database asks a
+**connect ticket**, decided in `lox run` like a statement's, and is served
+once it is approved: the policy review and the production name are not
+asked again, nor the privilege audit when its findings did not change.
+With `credentials = "ask"` the password is typed in `lox run` and comes
+sealed in the decision to a one-use key of the console: the hub relays a
+box it cannot open, and the password is in no ticket, log or audit
+record. With `ssh.credentials = "ask"` (a key passphrase or an SSH
+password) the bastion asks a second connect ticket for its own secret.
+`auto.connect` decides these tickets as it does at start: `ask` takes a
+human's approval, `deny` ends the session. A refused or undecided ticket
+answers the agent with the reason; the console stays up and the next
+request asks again. Every close, ticket and reconnection is audited.
+
+A change of either limit applied while the console runs counts from the
+session start and the last activity, at the next check.
 
 ### TLS to the database
 
