@@ -22,6 +22,14 @@ Built on lockkit v0.15.0.
   count, when the next ticket is accepted and the key that raises it
   (`not submitted: too many tickets: … retry after 42s`), instead of a
   general "too many requests are waiting".
+- `limits.idle_timeout` closes the database connection and the SSH tunnel
+  instead of ending the console (#198). The console keeps running and its
+  socket; the next request asks a connect ticket in `lox run`, and is
+  served once approved, without the start questions (policy review,
+  production name, unchanged privilege findings). A secret that is
+  `ask` (`credentials`, `ssh.credentials`) is typed in `lox run` and comes
+  sealed to a one-use key of the console; the bastion's takes a second
+  ticket. `max_session` still ends the session.
 
 ## v0.17.2 (2026-11-07)
 

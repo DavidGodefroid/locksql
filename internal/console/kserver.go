@@ -59,7 +59,7 @@ func (k kpolicy) Profile() kconsole.Profile {
 	}
 	return kconsole.Profile{Name: pr.Name, Production: pr.Production, Where: where, Host: pr.Host, Port: pr.Port,
 		User: pr.User, Credentials: pr.Credentials, VaultPath: pr.VaultPath, CredentialsTTL: pr.CredentialsTTL,
-		IdleTimeout: pr.Limits.IdleTimeout, MaxSession: pr.Limits.MaxSession}
+		IdleTimeout: noIdleEnd, MaxSession: pr.Limits.MaxSession}
 }
 
 // noFingerFields is the audit text of a refusal for want of a finger; it
@@ -77,13 +77,23 @@ func (s *Server) Methods() map[string]kconsole.Handler {
 	h := func(f func(context.Context, ipc.Request) ipc.Response) kconsole.Handler {
 		return func(ctx context.Context, req ipc.Request, _ kconsole.Env) ipc.Response { return f(ctx, req) }
 	}
-	return map[string]kconsole.Handler{
+	return map[string]kconsole.Handler{ // productMethod lists them too
 		ipc.MethodCatalogList:     h(s.catalog),
 		ipc.MethodCatalogDescribe: h(s.catalog),
 		ipc.MethodQueryPlan:       h(s.queryPlan),
 		ipc.MethodQueryRun:        h(s.queryRun),
 		ipc.MethodGrant:           h(s.grantRequest),
 	}
+}
+
+// productMethod reports a method of Methods: what reaches the database
+// and counts as activity for the idle timeout.
+func productMethod(m string) bool {
+	switch m {
+	case ipc.MethodCatalogList, ipc.MethodCatalogDescribe, ipc.MethodQueryPlan, ipc.MethodQueryRun, ipc.MethodGrant:
+		return true
+	}
+	return false
 }
 
 // Connect implements kconsole.Backend. locksql runs its own start-up
@@ -185,7 +195,7 @@ func (s *Server) statusOf(c kconsole.StatusResult) ipc.StatusResult {
 		Tier:           s.profile.Tier.String(),
 		Databases:      nonNil(s.cfg.Databases),
 		Limits:         s.profile.Limits,
-		IdleTimeoutInS: c.IdleTimeoutInS,
+		IdleTimeoutInS: int(s.idleTimeout() / time.Second),
 		SessionEndsInS: c.SessionEndsInS,
 		Health:         s.cfg.Health,
 		Grants:         s.grantInfos(),

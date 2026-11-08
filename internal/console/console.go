@@ -153,6 +153,11 @@ type ServerConfig struct {
 	Refused string
 	// Hub is the lockhub the requests are decided on (required).
 	Hub *kconsole.Hub
+	// IdleConnect opens the session again after an idle end, on approved
+	// connect tickets (idleconn.go): the console then closes its
+	// connection at idle_timeout and keeps running. nil (tests of the
+	// server alone) ends the session at idle_timeout instead.
+	IdleConnect idleConnector
 }
 
 // plan is a one-shot plan awaiting query.run.
@@ -263,6 +268,15 @@ type Server struct {
 	live        atomic.Pointer[hubLive]
 	recomputeMu sync.Mutex
 	recomputed  map[string]recomputed
+
+	// lastSeen is the last activity for the idle timeout, and idleClosed
+	// marks a connection closed on idle, which the next request opens
+	// again on connect tickets (idleconn.go).
+	lastSeen   time.Time
+	idleClosed bool
+	// idleErr is why the last reconnection after an idle end failed, for
+	// the agent (nil: none).
+	idleErr error
 }
 
 // maxAuditFails consecutive failures of the hub goroutine's records end
@@ -290,6 +304,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	cfg.Databases = servedDatabases(cfg.Policy.Profile.Database, cfg.Databases)
 	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, quantum: cfg.Quantum}
+	s.lastSeen = cfg.Now()
 	// The security level: 2 with the fingerprint approver, 1 on the
 	// desktop with typed approvals, 0 in a session of the console account.
 	level := 0
@@ -318,7 +333,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			return err
 		}
 	}
-	if cfg.Reconnect != nil {
+	if cfg.Reconnect != nil || cfg.IdleConnect != nil {
 		kc.ReconnectPolicy = s.reconnect
 	}
 	k, err := kconsole.NewServer(kc)
@@ -346,7 +361,17 @@ func (s *Server) reconnect(ctx context.Context, p kconsole.Policy) (kconsole.Ses
 		s.endConnectDenied("reconnect", err)
 		return nil, &kconsole.EndError{Reason: "the auto rules deny the connection", Err: err}
 	}
-	sess, err := s.cfg.Reconnect(ctx, prof)
+	var sess engine.Session
+	var err error
+	switch {
+	case s.idleClosed && s.cfg.IdleConnect != nil:
+		// Closed on idle: the connect tickets decide the new connection.
+		sess, err = s.reconnectIdle(ctx, prof)
+	case s.cfg.Reconnect != nil:
+		sess, err = s.cfg.Reconnect(ctx, prof)
+	default:
+		return nil, &kconsole.EndError{Reason: "connection lost", Err: errors.New("console: the database connection is lost")}
+	}
 	switch {
 	case err == nil:
 		s.sess = sess
@@ -406,10 +431,17 @@ func (s *Server) End(reason string) { s.k.End(reason) }
 // Ended reports whether the session is over, and why.
 func (s *Server) Ended() (string, bool) { return s.k.Ended() }
 
-// Tick ends the session on idle or maximum session timeout, as set by the
-// policy in force: a policy change applies from the next tick.
+// Tick ends the session at the maximum session length, as set by the
+// policy in force (a policy change applies from the next tick), and
+// closes the connection at the idle timeout (idleconn.go); without
+// IdleConnect, the idle timeout ends the session.
 func (s *Server) Tick() {
 	s.k.Tick()
+	if s.cfg.IdleConnect != nil {
+		s.idleTick()
+	} else if _, ended := s.k.Ended(); !ended && s.now().Sub(s.lastSeen) >= s.idleTimeout() {
+		s.End("idle timeout")
+	}
 	s.expireGrants()
 	if s.auditFails.Load() >= maxAuditFails {
 		// Failures of the hub's own records end the session here, on the
@@ -421,11 +453,19 @@ func (s *Server) Tick() {
 // Handle serves one request. It is the whole client surface of the console:
 // none of the methods loosens the policy.
 func (s *Server) Handle(ctx context.Context, req ipc.Request) ipc.Response {
+	if productMethod(req.Method) {
+		// Activity for the idle timeout, as lockkit counts it: the call
+		// may wait on the human's answer, and its end restarts the idle
+		// time.
+		s.seen()
+		defer s.seen()
+	}
 	return s.k.Handle(ctx, req)
 }
 
 // Command runs a console command typed by the human between requests.
 func (s *Server) Command(ctx context.Context, line string) {
+	s.seen()
 	f := strings.Fields(line)
 	if len(f) > 0 && f[0] == ":revoke" && len(f) <= 2 {
 		s.revoke(strings.Join(f[1:], ""))
@@ -439,7 +479,10 @@ func (s *Server) Command(ctx context.Context, line string) {
 }
 
 // Key handles a control key pressed in the console.
-func (s *Server) Key(k Key) { s.k.Key(k) }
+func (s *Server) Key(k Key) {
+	s.seen()
+	s.k.Key(k)
+}
 
 // CheckPolicy re-reads the policy from the config files. Changes that only
 // tighten are applied at once; a loosening waits for :review, and plans are
@@ -479,8 +522,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener, lines <-chan string
 func (s *Server) loop() *kconsole.Loop {
 	l := s.k.Loop()
 	l.Poll = s.CheckPolicy
-	l.Tick = s.Tick       // the hub goroutine's audit failures too
-	l.Command = s.Command // :revoke
+	l.Tick = s.Tick                   // the hub goroutine's audit failures too
+	l.Command = s.Command             // :revoke
+	l.Handle, l.Key = s.Handle, s.Key // the idle timeout's activity
 	return l
 }
 

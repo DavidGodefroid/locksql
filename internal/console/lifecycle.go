@@ -78,7 +78,17 @@ type starter struct {
 	// reviewed is set by startPolicy when the human approved the policy
 	// review ("Apply these changes?") of this start.
 	reviewed bool
+	// sealed holds the secrets of a reconnection after an idle end, opened
+	// from its connect tickets: asked for instead of the terminal (nil
+	// otherwise). sshAsked records that the bastion took a secret (a key
+	// passphrase, a password) when the tunnel last opened.
+	sealed   *connectSecrets
+	sshAsked bool
 }
+
+// errNotSealed: a reconnection after an idle end needs a secret its
+// connect tickets did not carry.
+var errNotSealed = errors.New("console: the connection needs a secret the connect ticket did not ask for; the next request asks for it")
 
 // wipeVaultToken wipes the Vault token the human typed.
 func (st *starter) wipeVaultToken() {
@@ -686,7 +696,7 @@ func Run(ctx context.Context, o Options) error {
 		Policy: approved, RulesPath: rulesPath, StateDir: o.StateDir, ApprovedKey: key, Refused: refusedFP,
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Approver: approver, Fingerprint: iso.verifier != nil, Boundary: iso.boundary(), Now: o.Now,
 		AllowUnmask: o.AllowUnmask, ShowResults: o.ShowResults, Version: o.Version, LoadPolicy: loadPolicy,
-		Reconnect: st.reconnect, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health, Hub: hub,
+		Reconnect: st.reconnect, IdleConnect: st, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health, Hub: hub,
 		RefuseProduction: refuseProduction,
 	})
 	if err != nil {
@@ -953,6 +963,14 @@ func (st *starter) connect(ctx context.Context, first bool) (engine.Session, err
 // OS keychain (credentials = "ask" or "keychain").
 func (st *starter) connectSecret(ctx context.Context, p config.Profile, open func([]byte) (engine.Session, error), first bool) (engine.Session, error) {
 	ask := func() ([]byte, error) {
+		if st.sealed != nil {
+			// After an idle end: the secret of the approved connect
+			// ticket, never a question on the terminal.
+			if st.sealed.db == nil {
+				return nil, errNotSealed
+			}
+			return append([]byte(nil), st.sealed.db...), nil
+		}
 		return st.io.AskSecret(ctx, fmt.Sprintf("Password for %s@%s: ", st.user, p.Host))
 	}
 	keychain := p.Credentials == config.CredentialsKeychain
@@ -1196,6 +1214,21 @@ func (st *starter) reconnect(ctx context.Context, p config.Profile) (engine.Sess
 	return sess, nil
 }
 
+// connectNeeds implements idleConnector.
+func (st *starter) connectNeeds(p config.Profile) (db, ssh bool) {
+	db = p.Engine != config.EngineSQLite && p.Credentials == config.CredentialsAsk
+	ssh = p.SSH != nil && p.SSH.Credentials == config.CredentialsAsk && p.SSH.Auth != config.SSHAuthAgent && st.sshAsked
+	return db, ssh
+}
+
+// reconnectSealed implements idleConnector: reconnect, with the secrets
+// of the connect tickets in place of the terminal's answers.
+func (st *starter) reconnectSealed(ctx context.Context, p config.Profile, sec *connectSecrets) (engine.Session, error) {
+	st.sealed = sec
+	defer func() { st.sealed = nil }()
+	return st.reconnect(ctx, p)
+}
+
 // privAuditFailed is the finding of a privilege audit the database failed.
 const privAuditFailed = "privilege audit failed (the details are shown on the console)"
 
@@ -1203,6 +1236,7 @@ const privAuditFailed = "privilege audit failed (the details are shown on the co
 // a typed "continue" otherwise.
 func (st *starter) privileges(ctx context.Context, sess engine.Session) error {
 	p := st.profile
+	accepted := st.privWarns
 	warns, err := sess.ExtraPrivileges(ctx, p.Tier)
 	if err != nil {
 		// The findings reach the agent (status health, doctor): never the
@@ -1224,6 +1258,12 @@ func (st *starter) privileges(ctx context.Context, sess engine.Session) error {
 	}
 	if p.Tier == config.TierRead {
 		st.io.Println("the session stays read-only either way")
+	}
+	if st.sealed != nil && slices.Equal(warns, accepted) {
+		// After an idle end: the findings the human accepted at start,
+		// unchanged, are not asked again.
+		st.io.Println("the same findings as at start, accepted then")
+		return nil
 	}
 	if r := st.decide(ctx, Decision{Prompt: `Type "continue" to proceed: `, Expected: "continue", Production: true}); r.Outcome != Approved {
 		return errors.New("console: stopped at the privilege audit")

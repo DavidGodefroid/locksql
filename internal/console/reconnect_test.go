@@ -18,9 +18,13 @@ const fakeEngineName = "fake-reconnect"
 
 var fakeNext *fakeSession
 
+// fakeSecret is the secret of the last connection of the fake engine.
+var fakeSecret []byte
+
 type fakeEngine struct{}
 
-func (fakeEngine) Connect(context.Context, config.Profile, []byte, engine.DialFunc) (engine.Session, error) {
+func (fakeEngine) Connect(_ context.Context, _ config.Profile, secret []byte, _ engine.DialFunc) (engine.Session, error) {
+	fakeSecret = append([]byte(nil), secret...)
 	return fakeNext, nil
 }
 

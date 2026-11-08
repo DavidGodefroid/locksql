@@ -42,7 +42,7 @@ max_cell_chars      = 200
 max_output_bytes    = 65536
 k_anonymity         = 5
 explain_cost_refuse = 0             # engine cost units; 0 = off
-idle_timeout        = "20m"         # the session ends after this long idle
+idle_timeout        = "20m"         # the connection closes after this long idle
 max_session         = "4h"          # ... and after this long in all
 grant_max_duration  = "1h"          # the longest grant; "0" turns grants off
 grant_max_statements = 200          # a grant's budget at most: statements,
@@ -123,7 +123,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `limits.max_output_bytes` | 65 536 | output is cut with a marker |
 | `limits.k_anonymity` | 5 (production 10) | a PII filter, a group or an aggregate of a PII column covering fewer rows warns on the approval screen (it no longer refuses); lowering it is a loosening |
 | `limits.reference_probe` | 5 | no effect: cell references are not supported; kept so that existing configs load (raising it is still recorded as a loosening) |
-| `limits.idle_timeout` | 20m (production 10m), or `max_session` when that is shorter | the console session ends after this long without activity; at least `1m` and at most `max_session`; raising it is a loosening |
+| `limits.idle_timeout` | 20m (production 10m), or `max_session` when that is shorter | the database connection and the SSH tunnel close after this long without activity; the console keeps running, and the next request asks a connect ticket in `lox run` ([usage](usage.md)); at least `1m` and at most `max_session`; raising it is a loosening |
 | `limits.max_session` | 4h (production 2h) | the console session ends after this long in all; at most `24h`; raising it is a loosening |
 | `limits.tickets_per_window`, `limits.ticket_window` | 30 per `5m` | tickets a human decides that the console opens per window at most; a ticket an auto rule of `lox run` decides (`read = auto`) leaves this count, and a safety cap of 300 tickets per window counts every one ([Ticket limits](usage.md#ticket-limits)); more tickets or a shorter window is a loosening |
 | `limits.max_pending` | 30 | tickets pending a decision at once at most; raising it is a loosening |

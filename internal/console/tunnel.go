@@ -112,6 +112,15 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 			usedKeychain = true
 			return append([]byte(nil), fromKeychain...), nil
 		}
+		st.sshAsked = true
+		if st.sealed != nil {
+			// After an idle end: the secret of the approved connect
+			// ticket of the SSH leg, never a question on the terminal.
+			if st.sealed.ssh == nil {
+				return nil, errNotSealed
+			}
+			return append([]byte(nil), st.sealed.ssh...), nil
+		}
 		v, err := st.io.AskSecret(ctx, prompt)
 		if err != nil {
 			return nil, err

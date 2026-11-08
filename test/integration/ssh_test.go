@@ -35,6 +35,15 @@ type sshServer struct {
 	conns   []net.Conn
 	// forwarded are the destinations of the accepted channels.
 	forwarded []string
+	// open counts the SSH connections not closed yet.
+	open int
+}
+
+// openConns is how many SSH connections are open.
+func (s *sshServer) openConns() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.open
 }
 
 func newSSHServer(t *testing.T, client ssh.PublicKey) *sshServer {
@@ -83,10 +92,19 @@ func newSSHServer(t *testing.T, client ssh.PublicKey) *sshServer {
 }
 
 func (s *sshServer) serve(nc net.Conn, cfg *ssh.ServerConfig) {
-	_, chans, reqs, err := ssh.NewServerConn(nc, cfg)
+	sc, chans, reqs, err := ssh.NewServerConn(nc, cfg)
 	if err != nil {
 		return
 	}
+	s.mu.Lock()
+	s.open++
+	s.mu.Unlock()
+	go func() {
+		_ = sc.Wait()
+		s.mu.Lock()
+		s.open--
+		s.mu.Unlock()
+	}()
 	go func() {
 		for r := range reqs {
 			if r.WantReply {
