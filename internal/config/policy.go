@@ -213,6 +213,22 @@ func Diff(approved, current Policy) []Change {
 			out = append(out, Change{Field: "limits." + f.field, Old: f.o.String(), New: f.n.String(), Loosens: f.n > f.o})
 		}
 	}
+	// More tickets, a shorter window or more pending tickets let an agent
+	// ask the human more often: a loosening. 0 is lockkit's default,
+	// compared as such (kconfig.DiffBase).
+	at, ct := al.TicketLimits(), cl.TicketLimits()
+	if al.TicketsPerWindow != cl.TicketsPerWindow {
+		out = append(out, Change{Field: "limits.tickets_per_window", Old: num(int64(al.TicketsPerWindow)), New: num(int64(cl.TicketsPerWindow)),
+			Loosens: ct.RateN > at.RateN})
+	}
+	if al.TicketWindow != cl.TicketWindow {
+		out = append(out, Change{Field: "limits.ticket_window", Old: al.TicketWindow.String(), New: cl.TicketWindow.String(),
+			Loosens: ct.RateWindow < at.RateWindow})
+	}
+	if al.MaxPending != cl.MaxPending {
+		out = append(out, Change{Field: "limits.max_pending", Old: num(int64(al.MaxPending)), New: num(int64(cl.MaxPending)),
+			Loosens: ct.MaxPending > at.MaxPending})
+	}
 	out = append(out, grantDiff(al, cl)...)
 	out = append(out, autoDiff(ap.AutoRules(), cp.AutoRules())...)
 	if ap.WriteFunctions != cp.WriteFunctions {

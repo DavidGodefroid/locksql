@@ -22,6 +22,9 @@ pii_rules = "shop"
 
 [profiles.uat.limits]
 max_rows = 300
+tickets_per_window = 60
+ticket_window = "10m"
+max_pending = 40
 
 [profiles.uat.ssh]
 host = "bastion.example.com"
