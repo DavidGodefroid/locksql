@@ -339,6 +339,8 @@ func Run(ctx context.Context, o Options) error {
 	if o.IO == nil {
 		return errors.New("console: no terminal")
 	}
+	// Questions asked once the console served repeat the detach keys.
+	o.IO = withDetachHint(o.IO)
 	// One mode: requests are decided in lockhub, and `lox run` starts the
 	// console with its hub. Refused before any prompt or file write.
 	if !o.Hub.Enabled() {
@@ -698,6 +700,7 @@ func Run(ctx context.Context, o Options) error {
 		o.IO.Println(l)
 	}
 	o.IO.Println("")
+	servedOnce(o.IO)
 	s.println(paint.Step("Listening…"))
 
 	var lines <-chan string
@@ -1417,8 +1420,10 @@ func readyLines(socket, root string, showResults bool) []string {
 	if showResults {
 		out = append(out, "  "+paint.Dim("results  ")+paint.Yellow("shown in clear in this console (--show-results)"))
 	}
-	out = append(out, "  "+paint.Dim("keys     ")+paint.Accent("Ctrl-O")+" results masked/clear"+paint.Dim(" · the status line below shows them"))
-	return append(out, "  "+paint.Dim("commands ")+paint.Accent(":review")+"  "+paint.Accent(":status")+"  "+paint.Accent(":results")+"  "+paint.Accent(":unmask")+"  "+paint.Accent(":quit")+paint.Dim(" · Ctrl-C ends the session"))
+	// The console runs under lox: leaving its terminal is detaching (#199).
+	out = append(out, "  "+paint.Dim("keys     ")+DetachLine)
+	out = append(out, "           "+paint.Accent("Ctrl-O")+" results masked/clear"+paint.Dim(" · the status line below shows them"))
+	return append(out, "  "+paint.Dim("commands ")+paint.Accent(":review")+"  "+paint.Accent(":status")+"  "+paint.Accent(":results")+"  "+paint.Accent(":unmask")+"  "+paint.Accent(":quit"))
 }
 
 // servedDatabases is what the console serves: the profile's database alone
