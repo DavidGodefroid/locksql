@@ -4,9 +4,9 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## Unreleased
+## v0.18.0 (2026-11-08)
 
-Built on lockkit v0.15.0.
+Supported lockhub: as v0.17.2. Built on lockkit v0.16.0.
 
 ### Changed
 
@@ -30,6 +30,28 @@ Built on lockkit v0.15.0.
   `ask` (`credentials`, `ssh.credentials`) is typed in `lox run` and comes
   sealed to a one-use key of the console; the bastion's takes a second
   ticket. `max_session` still ends the session.
+- The console's Ready box shows `lox run`'s detach keys (`Ctrl-P Ctrl-Q
+  detaches (the console keeps running) · Ctrl-C stops it · closing this
+  terminal only detaches`), and so does every question the console asks
+  after it served (a reconnect, a loosened policy review, the production
+  name, `:unmask`) (#199, #201).
+
+### Fixed
+
+From lockkit v0.16.0:
+
+- The question file `lox run` reads also holds the context the console
+  printed above the question (the PRODUCTION banner, the policy under
+  review), so a question shown after `lox run` attached keeps it; what the
+  human types, a clear result or an unmasked value never reaches it
+  (lockkit#152, lockkit#157).
+- Text from a client shown to the human (an approval note, a change
+  request) escapes zero-width, other format and default-ignorable
+  characters and variation selectors, so no text can be hidden or
+  smuggled in it (lockkit#116).
+- Hub mode: `read` tickets and their approvals expire after 1 h; a ticket
+  denied or withdrawn at the hub ends at once and frees its pending slot
+  (lockkit#155).
 
 ## v0.17.2 (2026-11-07)
 
