@@ -4,6 +4,25 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## Unreleased
+
+Built on lockkit v0.15.0.
+
+### Changed
+
+- Hub mode: the console opens at most 30 tickets a human decides per 5
+  minutes (was 10) and 30 pending ones (was 20); a ticket `lox run`'s
+  auto mode decides leaves that count, and a safety cap of 300 tickets per
+  window counts every one (lockkit v0.15.0, lockkit#150).
+- The profile's `limits.tickets_per_window`, `limits.ticket_window` and
+  `limits.max_pending` set those limits; more tickets, a shorter window or
+  more pending tickets is a loosening, reviewed like the others (the typed
+  profile name on production). They travel with `locksql config export`.
+- A run or a grant over a limit answers the agent with the limit, the
+  count, when the next ticket is accepted and the key that raises it
+  (`not submitted: too many tickets: … retry after 42s`), instead of a
+  general "too many requests are waiting".
+
 ## v0.17.2 (2026-11-07)
 
 Supported lockhub: v0.9.0 or later (hub-mode tickets are now version 2,

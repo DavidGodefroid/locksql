@@ -382,10 +382,10 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 	// run's auto mode. deny never reaches here (autoDenied).
 	sc.NeverAuto = s.neverAuto(pl.st.Class, pl.unmask)
 	rec.AutoRule = s.autoRuleText(pl.st.Class, pl.unmask)
-	a := s.asker().Ask(ctx, id, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
+	a := s.ask(ctx, id, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
 		rec.Event, rec.Decision, rec.Reason, rec.Error, rec.Approval, rec.Ticket = b.Event, b.Decision, b.Reason, b.Error, b.Approval, b.Ticket
 		s.audit(rec)
-	})
+	}, "plan the query again after that (the plan is used)")
 	return a.Refusal
 }
 

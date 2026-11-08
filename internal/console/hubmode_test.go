@@ -749,3 +749,50 @@ func TestHubModeDecisionsCarryHubSig(t *testing.T) {
 		t.Fatalf("runs %d", h.sess.runCount())
 	}
 }
+
+// The profile's limits.tickets_per_window, limits.ticket_window and
+// limits.max_pending reach the hub client, at start and when a reviewed
+// policy is applied; a ticket over the limit reaches the agent with the
+// limit, the count and when to retry, and nothing is pending (#150).
+func TestHubModeTicketLimits(t *testing.T) {
+	var hub *hubtest.Hub
+	p := uatProfile()
+	p.Limits.TicketsPerWindow, p.Limits.TicketWindow, p.Limits.MaxPending = 1, 10*time.Minute, 5
+	h := newHarness(t, p, withHub(t, &hub))
+	want := hubclient.Limits{MaxPending: 5, RateN: 1, RateWindow: 10 * time.Minute, RateTotal: hubclient.RateTotal}
+	if got := h.s.cfg.Hub.Client.Limits(); got != want {
+		t.Fatalf("hub client limits %+v, want %+v", got, want)
+	}
+	// Each statement its own ticket (the same plan again would reuse one).
+	run := func(n int) ipc.Response {
+		sql := "SELECT id FROM users WHERE id = " + strconv.Itoa(n) + " LIMIT 10"
+		return h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: h.plan(t, sql, false).PlanID})
+	}
+	pendingTicket(t, run(1), "pending")
+	r := run(2)
+	wantCode(t, r, ipc.CodeInternal)
+	for _, s := range []string{"1 tickets for a human in 10m0s (limit 1, raised by limits.tickets_per_window)", "retry after ", "plan the query again"} {
+		if !strings.Contains(r.Error.Message, s) {
+			t.Errorf("refusal %q does not say %q", r.Error.Message, s)
+		}
+	}
+	// A grant asks the hub too: refused the same way.
+	g := h.call(t, ipc.MethodGrant, ipc.GrantParams{Requester: agentA, DB: "app", Tables: []string{"users"}})
+	wantCode(t, g, ipc.CodeInternal)
+	if !strings.Contains(g.Error.Message, "limits.tickets_per_window") || !strings.Contains(g.Error.Message, "retry after ") {
+		t.Errorf("grant refusal %q", g.Error.Message)
+	}
+
+	// A reviewed policy with other limits replaces them; 0 is the default.
+	np := h.s.approved
+	np.Profile.Limits.TicketsPerWindow, np.Profile.Limits.TicketWindow, np.Profile.Limits.MaxPending = 60, 0, 0
+	if err := h.s.ApplyPolicy(kpolicy{np}); err != nil {
+		t.Fatal(err)
+	}
+	want = hubclient.DefaultLimits()
+	want.RateN = 60
+	if got := h.s.cfg.Hub.Client.Limits(); got != want {
+		t.Fatalf("after the policy change %+v, want %+v", got, want)
+	}
+	pendingTicket(t, run(3), "pending")
+}

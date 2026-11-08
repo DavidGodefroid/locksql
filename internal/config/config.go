@@ -20,6 +20,7 @@ import (
 	"unicode"
 
 	kconfig "github.com/DavidGodefroid/lockkit/config"
+	"github.com/DavidGodefroid/lockkit/hubclient"
 
 	"github.com/DavidGodefroid/locksql/internal/product"
 )
@@ -106,6 +107,21 @@ type Limits struct {
 	GrantMaxRows       int64         `toml:"grant_max_rows" json:"grant_max_rows,omitempty"`
 	GrantMaxBytes      int64         `toml:"grant_max_bytes" json:"grant_max_bytes,omitempty"`
 	GrantsOff          bool          `toml:"-" json:"grants_off,omitempty"`
+	// The hub client's ticket limits (TicketLimits): at most
+	// TicketsPerWindow tickets a human decides per TicketWindow, and
+	// MaxPending tickets pending. Zero keeps lockkit's default (30 per 5m,
+	// 30 pending). Raising either count or shortening the window is a
+	// loosening.
+	TicketsPerWindow int           `toml:"tickets_per_window" json:"tickets_per_window,omitempty"`
+	TicketWindow     time.Duration `toml:"ticket_window" json:"ticket_window,omitempty"`
+	MaxPending       int           `toml:"max_pending" json:"max_pending,omitempty"`
+}
+
+// TicketLimits are the hub client's limits of l, lockkit's defaults
+// applied where l sets none: what the console passes to
+// hubclient.Client.SetLimits once the policy is in force.
+func (l Limits) TicketLimits() hubclient.Limits {
+	return hubclient.Limits{MaxPending: l.MaxPending, RateN: l.TicketsPerWindow, RateWindow: l.TicketWindow}.Effective()
 }
 
 // Profile is one named database target with its policy.
@@ -261,6 +277,9 @@ type rawLimits struct {
 	GrantMaxStatements int64         `toml:"grant_max_statements"`
 	GrantMaxRows       int64         `toml:"grant_max_rows"`
 	GrantMaxBytes      int64         `toml:"grant_max_bytes"`
+	TicketsPerWindow   int           `toml:"tickets_per_window"`
+	TicketWindow       string        `toml:"ticket_window"`
+	MaxPending         int           `toml:"max_pending"`
 }
 
 type rawProfile struct {
@@ -367,6 +386,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 			ExplainCostRefuse: r.Limits.ExplainCostRefuse, KAnonymity: r.Limits.KAnonymity,
 			ReferenceProbe:     r.Limits.ReferenceProbe,
 			GrantMaxStatements: r.Limits.GrantMaxStatements, GrantMaxRows: r.Limits.GrantMaxRows, GrantMaxBytes: r.Limits.GrantMaxBytes,
+			TicketsPerWindow: r.Limits.TicketsPerWindow, MaxPending: r.Limits.MaxPending,
 		},
 	}
 
@@ -461,6 +481,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		{"statement_timeout", r.Limits.StatementTimeout, &p.Limits.StatementTimeout},
 		{"idle_timeout", r.Limits.IdleTimeout, &p.Limits.IdleTimeout},
 		{"max_session", r.Limits.MaxSession, &p.Limits.MaxSession},
+		{"ticket_window", r.Limits.TicketWindow, &p.Limits.TicketWindow},
 	} {
 		if f.val == "" {
 			continue
@@ -501,6 +522,9 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		{"grant_max_statements", p.Limits.GrantMaxStatements},
 		{"grant_max_rows", p.Limits.GrantMaxRows},
 		{"grant_max_bytes", p.Limits.GrantMaxBytes},
+		{"tickets_per_window", int64(p.Limits.TicketsPerWindow)},
+		{"ticket_window", int64(p.Limits.TicketWindow)},
+		{"max_pending", int64(p.Limits.MaxPending)},
 	} {
 		if f.val < 0 {
 			return Profile{}, errf("limits.%s must not be negative", f.key)

@@ -1094,6 +1094,34 @@ The limits are in the profile's `limits` table:
 
 Raising any of them, or turning grants on, is a loosening (`:review`).
 
+### Ticket limits
+
+The console bounds the tickets it opens on lockhub, so that an agent cannot
+flood you with questions. In the profile's `limits` table:
+
+| Key | Default | |
+|---|---|---|
+| `tickets_per_window` | `30` | tickets a human decides, opened per `ticket_window` at most |
+| `ticket_window` | `"5m"` | the window of the two counts |
+| `max_pending` | `30` | tickets pending a decision at once at most |
+
+A ticket an auto rule of `lox run` decides (a masked `SELECT` under
+`read = auto`) leaves the `tickets_per_window` count once its decision is
+read; a safety cap of 300 tickets per window still counts every one, against
+a runaway agent. A grant is a ticket too.
+
+A run or a grant over a limit is not submitted: the console prints
+`not submitted: …`, and the agent reads the limit, the count, when the next
+ticket is accepted and the key that raises it, for instance
+`not submitted: too many tickets: 30 tickets for a human in 5m0s (limit 30,
+raised by limits.tickets_per_window); retry after 42s; plan the query again
+after that (the plan is used)`. Over `max_pending` it retries once a
+pending ticket is decided.
+
+Lowering a limit applies at once; more tickets, a shorter window or more
+pending tickets is a loosening (`:review`, the typed profile name on
+production).
+
 ### Policy changes
 
 The console watches the config and PII files while it runs.
@@ -1105,7 +1133,8 @@ The console watches the config and PII files while it runs.
   limits, a smaller `k_anonymity`, a larger `reference_probe` (kept for
   compatibility, without effect since cell references are not supported), a longer
   `idle_timeout` or `max_session`, a larger grant limit or grants turned
-  on (`grant_max_*`), a higher or removed
+  on (`grant_max_*`), more tickets, a shorter `ticket_window` or more
+  pending tickets (`tickets_per_window`, `max_pending`), a higher or removed
   `explain_cost_refuse`, a longer or removed `credentials_ttl`, a new
   host, port, engine, user or database,
   any change of the `ssh` table (except `ssh.credentials` set to `ask`),
