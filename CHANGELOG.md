@@ -4,6 +4,24 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
+## v0.17.2 (2026-11-07)
+
+Supported lockhub: v0.9.0 or later (hub-mode tickets are now version 2,
+which older hubs refuse). Built on lockkit v0.14.1.
+
+### Fixed
+
+- Hub mode: every plan ticket names its kind (`read`, `write` or `ddl`;
+  admin statements count as `ddl`) and its profile, and grant tickets are
+  `read` tickets of risk grant (#195, #197). They were version 1, so
+  `lox run`'s auto mode asked every one, even a masked `SELECT` under
+  `read = auto`. Risk, never-auto and production flags are unchanged.
+- `tls_ca`, `tls_cert` and `tls_key` expand a leading `~/` to the console
+  account's home, as `ssh.key` does; the console checks every file key
+  right after the policy review, before any secret is asked, and
+  `locksql doctor` reports a missing one with the command that copies it
+  into the console's home (#194, #196).
+
 ## v0.17.1 (2026-11-07)
 
 Supported lockhub: as v0.16.0. Built on lockkit v0.14.1.
