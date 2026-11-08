@@ -27,6 +27,7 @@ environment variable can set them) and each change is audited.
 
 | Key | Typed | Effect |
 |---|---|---|
+| Ctrl-P Ctrl-Q | | detach (`lox attach`'s key): the console keeps running; the Ready box shows it, and so does each question asked after the console served (a reconnect, a loosened policy) |
 | Ctrl-O | `:results` | results masked ⇄ shown here in clear |
 | | `:unmask` | unmasked output off ⇄ allowed (allowing asks for `y`) |
 | | `:revoke` | end every active grant (`:revoke ID`: one) |

@@ -157,6 +157,11 @@ func (s *Server) ApplyPolicy(kp kconsole.Policy) error {
 	s.detectors = ds
 	s.dialect = d
 	s.setLive(fp) // what the hub's goroutine checks tickets against
+	if h := s.cfg.Hub; h != nil && h.Client != nil {
+		// The ticket limits of the policy in force: a raise reaches here
+		// only once reviewed (lockkit#150).
+		h.Client.SetLimits(p.Profile.Limits.TicketLimits())
+	}
 	s.grantPolicyChanged(old, oldFP, p, fp)
 	// connect = deny in the policy now in force (a tightening from the
 	// files, a reviewed change): the profile may not stay connected.

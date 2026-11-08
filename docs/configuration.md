@@ -48,6 +48,9 @@ grant_max_duration  = "1h"          # the longest grant; "0" turns grants off
 grant_max_statements = 200          # a grant's budget at most: statements,
 grant_max_rows      = 10000         # rows returned
 grant_max_bytes     = 1048576       # and bytes returned
+tickets_per_window  = 30            # tickets a human decides per window
+ticket_window       = "5m"
+max_pending         = 30            # tickets pending at once
 ```
 
 With `credentials = "vault"` the console runs `vault read -format=json
@@ -122,6 +125,8 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `limits.reference_probe` | 5 | no effect: cell references are not supported; kept so that existing configs load (raising it is still recorded as a loosening) |
 | `limits.idle_timeout` | 20m (production 10m), or `max_session` when that is shorter | the database connection and the SSH tunnel close after this long without activity; the console keeps running, and the next request asks a connect ticket in `lox run` ([usage](usage.md)); at least `1m` and at most `max_session`; raising it is a loosening |
 | `limits.max_session` | 4h (production 2h) | the console session ends after this long in all; at most `24h`; raising it is a loosening |
+| `limits.tickets_per_window`, `limits.ticket_window` | 30 per `5m` | tickets a human decides that the console opens per window at most; a ticket an auto rule of `lox run` decides (`read = auto`) leaves this count, and a safety cap of 300 tickets per window counts every one ([Ticket limits](usage.md#ticket-limits)); more tickets or a shorter window is a loosening |
+| `limits.max_pending` | 30 | tickets pending a decision at once at most; raising it is a loosening |
 | `limits.explain_cost_refuse` | 0 (off) | refuse plans above this total cost, in the engine's own units; SQLite reports no cost and is not checked |
 | `ssh.host`, `ssh.port`, `ssh.user` | required host and user; port 22 | the bastion; not with sqlite or a Unix socket `host` |
 | `ssh.auth` | required | `key`, `agent` (`SSH_AUTH_SOCK` of the console) or `password` |
