@@ -169,7 +169,13 @@ func (c *consoleProc) output() string {
 // expect waits for s in the output written since the last expect.
 func (c *consoleProc) expect(s string) string {
 	c.t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
+	return c.expectWithin(s, 60*time.Second)
+}
+
+// expectWithin is expect waiting up to d.
+func (c *consoleProc) expectWithin(s string, d time.Duration) string {
+	c.t.Helper()
+	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
 		out := c.output()
 		if i := strings.Index(out[c.mark:], s); i >= 0 {

@@ -148,7 +148,7 @@ credentials = "ask"
 		seen[id] = true
 	}
 	for round := 1; round <= 2; round++ {
-		c.expect("the console keeps running")
+		c.expectWithin("the console keeps running", 3*time.Minute) // idle_timeout is 1m
 		select {
 		case err := <-c.done:
 			t.Fatalf("round %d: the console exited at idle_timeout: %v", round, err)
