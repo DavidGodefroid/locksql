@@ -7,13 +7,13 @@ require (
 	github.com/DavidGodefroid/lockkit v0.14.1
 	github.com/creack/pty v1.1.24
 	github.com/go-mysql-org/go-mysql v1.16.0
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/jackc/pgx/v5 v5.12.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 )
 
 require (
