@@ -279,17 +279,80 @@ func FormatRun(w io.Writer, r ipc.RunResult) {
 	}
 }
 
-// FormatPII writes the rules as "mask<TAB>pattern" and "allow<TAB>pattern".
-func FormatPII(w io.Writer, r ipc.PIIListResult) {
+// PIIRules are the rules in force and those of them that name no column
+// of the catalog (dead rules: a mask rule that masks nothing).
+type PIIRules struct {
+	Mask  []string `json:"mask"`
+	Allow []string `json:"allow"`
+	// UnmatchedMask and UnmatchedAllow are the rules that name no column.
+	UnmatchedMask  []string `json:"unmatched_mask"`
+	UnmatchedAllow []string `json:"unmatched_allow"`
+	// Unchecked says why the rules could not be checked against the
+	// catalog, "" when they were.
+	Unchecked string `json:"unchecked,omitempty"`
+}
+
+// PIIChecker reads the rules that name no column (pii.unmatched).
+type PIIChecker interface {
+	PIIUnmatched(ctx context.Context) (ipc.PIIUnmatchedResult, error)
+}
+
+// CheckPII returns r with its rules checked against the catalog. A console
+// that cannot check them leaves Unchecked set.
+func CheckPII(ctx context.Context, c PIIChecker, r ipc.PIIListResult) PIIRules {
+	out := PIIRules{Mask: nonNil(r.Mask), Allow: nonNil(r.Allow), UnmatchedMask: []string{}, UnmatchedAllow: []string{}}
+	u, err := c.PIIUnmatched(ctx)
+	if err != nil {
+		var re *ipc.RPCError
+		if errors.As(err, &re) && re.Code == ipc.CodeMethodNotFound {
+			out.Unchecked = "this console does not check rules against the catalog (upgrade locksql)"
+		} else {
+			out.Unchecked = clean(err.Error())
+		}
+		return out
+	}
+	out.UnmatchedMask, out.UnmatchedAllow = nonNil(u.Mask), nonNil(u.Allow)
+	return out
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// FormatPIIAdded confirms a mask rule added, with a warning when it names
+// no column yet (a glob: the console refuses any other such pattern).
+func FormatPIIAdded(w io.Writer, pattern string, r PIIRules) {
+	fmt.Fprintf(w, "mask rule added: %s\n", clean(pattern))
+	if slices.Contains(r.UnmatchedMask, pattern) {
+		fmt.Fprintf(w, "warning: %s matches no column today: it masks nothing until such a column exists. Check the name with describe (schema.table.column on PostgreSQL).\n", clean(pattern))
+	}
+}
+
+// FormatPII writes the rules as "mask<TAB>pattern" and "allow<TAB>pattern",
+// a rule that names no column flagged.
+func FormatPII(w io.Writer, r PIIRules) {
 	if len(r.Mask) == 0 && len(r.Allow) == 0 {
 		fmt.Fprintln(w, "(no rules)")
 		return
 	}
+	line := func(kind, p string, dead []string) {
+		if slices.Contains(dead, p) {
+			fmt.Fprintf(w, "%s\t%s\t(matches no column: dead rule)\n", kind, clean(p))
+			return
+		}
+		fmt.Fprintf(w, "%s\t%s\n", kind, clean(p))
+	}
 	for _, m := range r.Mask {
-		fmt.Fprintf(w, "mask\t%s\n", clean(m))
+		line("mask", m, r.UnmatchedMask)
 	}
 	for _, a := range r.Allow {
-		fmt.Fprintf(w, "allow\t%s\n", clean(a))
+		line("allow", a, r.UnmatchedAllow)
+	}
+	if r.Unchecked != "" {
+		fmt.Fprintf(w, "(rules not checked against the catalog: %s)\n", r.Unchecked)
 	}
 }
 

@@ -1276,7 +1276,7 @@ locksql describe --profile P [--instance NAME] [--db D] TABLE
 locksql plan     --profile P [--instance NAME] [--db D] [--unmask] [--intent TEXT] "SQL" | -   # "-" reads SQL from stdin
 locksql run      --profile P [--instance NAME] PLAN_ID        # waits for the human's approval
 locksql grant    --profile P [--instance NAME] [--db D] [--duration 30m] [--statements N] [--rows N] [--bytes N] [--intent TEXT] TABLE... | TICKET
-locksql pii      list|add --profile P [--instance NAME] [DB.TABLE.COLUMN]
+locksql pii      list|add --profile P [--instance NAME] [SCHEMA.TABLE.COLUMN | DB.TABLE.COLUMN]
 locksql request  --profile P [--instance NAME] "tier=write" | "limits.max_rows=500" | "allow=app.t.c"
 locksql logout   --profile P [--instance NAME]
 locksql doctor   [--profile P] [--instance NAME] [--fix [--yes]] [--json]
@@ -1336,7 +1336,13 @@ locksql doctor   [--profile P] [--instance NAME] [--fix [--yes]] [--json]
   the verdict and its reasons and sends the ticket to lockhub; only once
   the human decided it does the run of the ticket answer the agent a
   generic `refused by the weight check`, whatever the decision.
-- `pii add` adds a mask rule at once, since it only tightens.
+- `pii add` adds a mask rule at once, since it only tightens. The pattern
+  names the column as `describe` does: `schema.table.column` on PostgreSQL
+  (`public.customers.name`, not the database name), `db.table.column` on
+  MySQL and MariaDB, `main.table.column` on SQLite. A pattern without `*`
+  that matches no column of the catalog is refused, with the columns it may
+  mean; a pattern with `*` that matches nothing yet is added with a warning.
+- `pii list` flags the dead rules, which name no column of the catalog.
 - `request` queues a proposal that the human sees in `:review`. It never
   changes the policy; the human edits the config, and the console then asks
   for confirmation.

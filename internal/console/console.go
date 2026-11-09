@@ -260,6 +260,9 @@ type Server struct {
 
 	// catalogCache holds the column catalog per database for the analyser.
 	catalogCache map[string][]engine.ColumnInfo
+	// addCtx is the context of the pii.add being served, nil otherwise:
+	// CheckMask reads the catalog with it.
+	addCtx context.Context
 	// quantum levels response times (ResponseQuantum; 0 in tests).
 	quantum time.Duration
 
@@ -464,6 +467,12 @@ func (s *Server) Handle(ctx context.Context, req ipc.Request) ipc.Response {
 		// time.
 		s.seen()
 		defer s.seen()
+	}
+	if req.Method == ipc.MethodPIIAdd {
+		// CheckMask resolves the pattern against the catalog with the
+		// request's context; requests are served one at a time.
+		s.addCtx = ctx
+		defer func() { s.addCtx = nil }()
 	}
 	return s.k.Handle(ctx, req)
 }
