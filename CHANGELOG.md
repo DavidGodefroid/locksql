@@ -8,6 +8,20 @@ This file records the changes a user or an agent has to know about.
 
 Built on lockkit v0.15.0.
 
+### Fixed
+
+- Two locksql locks in one workspace left the agent with no locksql tool:
+  `locksql mcp` exited at start (`several locksql locks: ...; pass
+  --instance NAME`). One server, as `locksql init` writes it, now serves
+  every lock: each tool goes to the lock whose directory holds its profile's
+  console socket, and the CLI commands do the same with `--profile`. The
+  launcher mounts every `lox run` locksql lock of the workspace, each on
+  `/run/locksql/<instance>`, as lea does. `mcp` never exits at start over
+  the instance: `locksql_status` reports the problem (#206).
+- With `--instance`, `status` and the tools no longer report the profiles of
+  another mounted lock as down, nor ask for a `profile` the lock does not
+  need (#206).
+
 ### Changed
 
 - Hub mode: the console opens at most 30 tickets a human decides per 5

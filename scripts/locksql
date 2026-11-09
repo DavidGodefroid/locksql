@@ -515,6 +515,7 @@ EOF_STATE
 			;;
 		*" "*)
 			lockup_why="lox run runs several locksql locks in $lu_ws ($lu_names): name one with --instance NAME"
+			lockup_several=$lu_names
 			return 1
 			;;
 		esac
@@ -640,18 +641,38 @@ mcp | doctor | status | tables | describe | plan | run | request | logout | pii)
 	;;
 esac
 
-# lockup_mount: lox run's socket volume of this workspace's locksql lock,
-# as the agent commands mount it, or the reason there is none (exit 2, as
-# a client finding no console).
+# lockup_mount: lox run's socket volumes of this workspace's locksql locks,
+# as the agent commands mount them ($mounts, docker run options), or the
+# reason there are none (exit 2, as a client finding no console). One lock,
+# or the one --instance names, is mounted on /run/locksql. Several and no
+# --instance: each, checked as one is, on /run/locksql/<instance>, and
+# their names in $instances (LEA_LOCKSQL_INSTANCES), as lea mounts them;
+# the client reaches each profile on the lock that serves it.
 lockup_mount() {
 	command -v docker >/dev/null 2>&1 || die "docker is required: locksql runs in Docker (docs/docker.md)"
 	mountable "$project"
 	mountable "$here"
-	lockup_volume "$instance" || {
+	lockup_several= instances=
+	if lockup_volume "$instance"; then
+		mounts="--mount type=volume,src=$lockup_vol,dst=/run/locksql,readonly"
+		return
+	fi
+	case "$lockup_several" in
+	"" | *[!a-z0-9\ -]*)
 		say "$lockup_why"
 		exit 2
-	}
-	mount="type=volume,src=$lockup_vol,dst=/run/locksql,readonly"
+		;;
+	esac
+	mounts=
+	lm_names=$lockup_several
+	for lm_name in $lm_names; do
+		lockup_volume "$lm_name" || {
+			say "$lockup_why"
+			exit 2
+		}
+		mounts="$mounts --mount type=volume,src=$lockup_vol,dst=/run/locksql/$lm_name,readonly"
+	done
+	instances=$lm_names
 }
 
 cmd="${1:-}"
@@ -764,11 +785,13 @@ doctor)
 mcp)
 	# The agent speaks MCP on stdin and stdout: no terminal.
 	lockup_mount
-	docker_run -i --mount "$mount" "$image" "$@"
+	# shellcheck disable=SC2086 # $mounts: checked words, split on purpose
+	docker_run -i $mounts ${instances:+-e "LEA_LOCKSQL_INSTANCES=$instances"} "$image" "$@"
 	;;
 status | tables | describe | plan | run | request | logout | pii)
 	lockup_mount
-	docker_run "$tty" --mount "$mount" "$image" "$@"
+	# shellcheck disable=SC2086 # $mounts: checked words, split on purpose
+	docker_run "$tty" $mounts ${instances:+-e "LEA_LOCKSQL_INSTANCES=$instances"} "$image" "$@"
 	;;
 *)
 	docker_run "$tty" "$image" "$@"

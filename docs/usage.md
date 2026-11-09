@@ -1278,10 +1278,14 @@ locksql doctor   [--profile P] [--instance NAME] [--fix [--yes]] [--json]
 - `--instance NAME` reaches one lock among several of this type (lea mounts
   each at `/run/locksql/NAME`; a name is lowercase letters, digits and `-`).
   `$LOCKSQL_INSTANCE` does the same when no flag is given, and lea lists its
-  locks in `$LEA_LOCKSQL_INSTANCES`: with one lock the client takes it, with
-  several and no `--instance` the error names them (`several locksql locks:
-  NAME NAME; pass --instance NAME (or set LOCKSQL_INSTANCE)`). It is not the
-  console's `--instance`, which `lox run` passes.
+  locks in `$LEA_LOCKSQL_INSTANCES`: with one lock the client takes it; with
+  several and no `--instance`, each profile goes to the lock whose directory
+  holds its console socket (profile names are unique in a workspace), so
+  `--profile` alone picks the lock. Only a profile whose socket is in several
+  locks needs `--instance`. With `--instance`, the profiles whose console
+  runs in another of those locks are left out (`status` does not report
+  them, and a lock that serves one profile needs no `--profile`). It is not
+  the console's `--instance`, which `lox run` passes.
 - `--db` defaults to the profile's `database`. A profile that names one
   serves that database only: another `--db` is refused.
 - `--json` gives machine-readable output on every client command. A failure
@@ -1571,9 +1575,14 @@ finds the project's consoles.
 | `locksql_request_change` | queued for the human; never applied by the tool |
 
 - Each tool takes an optional `profile` argument. With `--profile`, the server
-  is pinned to that profile and refuses any other. `--instance NAME` pins it
-  to one lock among several (in `.mcp.json`, `"args": ["mcp", "--instance",
-  "NAME"]`).
+  is pinned to that profile and refuses any other. One server serves every
+  locksql lock of the workspace: with several, each tool goes to the lock that
+  serves its `profile`, so adding a lock (`lox add locksql`) needs no change
+  to `.mcp.json`. `--instance NAME` still pins it to one lock among several
+  (in `.mcp.json`, `"args": ["mcp", "--instance", "NAME"]`).
+- The server never exits at start over the lock instance: a bad
+  `$LOCKSQL_INSTANCE`, or a profile whose console socket is in several locks,
+  is reported by `locksql_status` and by each tool that needs that lock.
 - `locksql_run` blocks until the human decides and sends a progress
   notification every 5 seconds meanwhile, so that clients do not time out.
   Configure the agent's tool timeout above 5 minutes (`init` does this for

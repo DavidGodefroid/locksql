@@ -29,10 +29,6 @@ func runMCP(e env, args []string) int {
 	if len(pos) > 0 {
 		return usageFail(e, "mcp", usage, "wrong number of arguments")
 	}
-	instance, err := client.ResolveInstance(instanceFlag)
-	if err != nil {
-		return usageFail(e, "mcp", usage, err.Error())
-	}
 	// The config is checked at start-up so that a broken config is a usage
 	// error the human sees, and read again on every call.
 	if _, err := config.Load(e.cwd); err != nil {
@@ -43,6 +39,10 @@ func runMCP(e env, args []string) int {
 			return usageFail(e, "mcp", usage, err.Error())
 		}
 	}
+	// The locks are resolved once, but a bad or ambiguous instance does not
+	// stop the server: lea or lox set it, the agent would be left with no
+	// tool, and locksql_status reports the error on every profile instead.
+	locks, lockErr := client.ResolveLocks(e.cwd, instanceFlag)
 	o := mcpserver.Options{
 		Profile: profile,
 		Profiles: func() ([]string, error) {
@@ -50,9 +50,12 @@ func runMCP(e env, args []string) int {
 			if err != nil {
 				return nil, err
 			}
-			return profileNames(cfg), nil
+			if lockErr != nil {
+				return profileNames(cfg), nil
+			}
+			return locks.Filter(profileNames(cfg)), nil
 		},
-		Dial:    mcpserver.DialClient(e.cwd, version, instance),
+		Dial:    mcpserver.DialLocks(locks, lockErr, version),
 		Version: version,
 	}
 	ctx, stop := signalContext()

@@ -119,11 +119,11 @@ func realDoctorEnv(instanceFlag string) doctorEnv {
 		keychain:   product.Keychain.Has,
 		readFile:   os.ReadFile,
 		status: func(cwd, profile string) (*ipc.StatusResult, error) {
-			instance, err := client.ResolveInstance(instanceFlag)
+			locks, err := client.ResolveLocks(cwd, instanceFlag)
 			if err != nil {
 				return nil, err
 			}
-			c, err := client.DialInstance(cwd, profile, instance)
+			c, err := locks.Dial(profile)
 			if err != nil {
 				return nil, err
 			}
