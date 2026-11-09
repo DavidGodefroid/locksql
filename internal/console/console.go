@@ -213,6 +213,11 @@ type plan struct {
 	// so beside its rowcount: triggers, rules, foreign-key cascades (from
 	// the definitions read on PostgreSQL).
 	sideEffects []string
+	// wholeTable marks an UPDATE or DELETE with no WHERE (wholeTableWrite),
+	// and tableRows the planner's estimate of the rows it changes, for its
+	// ticket.
+	wholeTable bool
+	tableRows  int64
 	// grant is the grant the plan runs under (nil: a ticket); grantRows
 	// and grantBytes are what its run returned, charged to it.
 	grant      *grant

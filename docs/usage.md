@@ -878,6 +878,15 @@ Then:
   covering them. The plan hash is checked in the same transaction, before
   and after the statement. No `LOCK TABLE` or `SERIALIZABLE`: the write
   takes only its own locks.
+- An `UPDATE` or `DELETE` with no `WHERE` (or an always-true one: `WHERE
+  TRUE`, `WHERE 1`, `WHERE 1 = 1`) and no `LIMIT` changes the whole table:
+  its plan answers `verdict WARN` with the reason `no WHERE: the write
+  changes every row of the table`, and its screen says `whole table: N rows`
+  (the planner's estimate).
+- Every literal of the statement is masked on the screen the hub shows. The
+  ticket says personal data is touched (`personal_column`), and the screen
+  names the columns (`personal data: masked columns email`), only when the
+  statement names a column under a mask rule (by name).
 - The bound counts the statement's own rows. Rows changed by triggers, functions,
   rules or foreign-key cascades are not counted: on PostgreSQL the ticket
   names the triggers, rules, volatile functions and cascading foreign keys the write reaches;
@@ -887,8 +896,8 @@ Then:
   approval does not make the ticket stale; under `ANSI_QUOTES` a table
   named in double quotes gets none listed). A
   statement with a data-modifying statement inside it (`WITH d AS (DELETE
-  ...) UPDATE ...`) is refused in hub mode (`E_STATEMENT_KIND`): its count
-  would not cover its rows. On MySQL/MariaDB a write naming a table a
+  ...) UPDATE ...`) is refused in hub mode (`E_STATEMENT_KIND`), by its
+  plan already: its count would not cover its rows. On MySQL/MariaDB a write naming a table a
   `ROLLBACK` cannot undo (MyISAM, Aria, MEMORY, ... or a view: of the
   current database by its bare name, or of any schema with its schema) is
   not run and refused with `E_STATEMENT_KIND` (as a DDL statement or
@@ -1433,9 +1442,13 @@ PII columns (columns under a mask rule) may be used as follows:
   another column is refused (`a masked column cannot receive values the agent
   chose`): masked on the next read, the value would still be one the agent
   knows, and joining that column with `=` to another PII column (which no
-  k-anonymity count covers) would tell it whose value matches. An `INSERT` without a column list must name its
-  columns (or store only `NULL`/`DEFAULT`); an `INSERT` into a masked column
-  from a query is refused. Writing other columns is unaffected.
+  k-anonymity count covers) would tell it whose value matches. An `INSERT` without a column list
+  (`INSERT INTO orders VALUES (...)`) is analysed like a write whose rows
+  come back: its values are matched to the table's columns in their
+  catalogue order, and it is refused only when a value lands in a masked
+  column (a table the catalogue does not list is refused as unknown); an
+  `INSERT` into a masked column from a query is refused. Writing other
+  columns is unaffected.
 
 #### Functions in writes (`write_functions`)
 

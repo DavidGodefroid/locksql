@@ -373,11 +373,14 @@ func (s *Server) checkShadows(ctx context.Context, sess engine.Session, db strin
 // (sqlast.NeedsWriteAnalysis) is parsed and analysed like a read: its
 // RETURNING list and the outer SELECT of its data-modifying CTEs are
 // resolved to their base columns and masked by provenance when it runs,
-// and anything the analysis cannot resolve is refused. Other writes pass
-// the checks by column name (pii.PlanCheck).
+// and anything the analysis cannot resolve is refused. So is an INSERT
+// without a column list (pii.PositionalInsert): the analysis resolves its
+// columns from the catalogue, in the table's order, so that only a value
+// landing in a masked column is refused. Other writes pass the checks by
+// column name (pii.PlanCheck).
 func (s *Server) writePlan(ctx context.Context, sess engine.Session, pl *plan) (*refusal.Error, error) {
 	st := pl.st
-	if len(s.rules.Mask) == 0 || !sqlast.NeedsWriteAnalysis(s.dialect, st.SQL) {
+	if len(s.rules.Mask) == 0 || !sqlast.NeedsWriteAnalysis(s.dialect, st.SQL) && !pii.PositionalInsert(st, s.dialect) {
 		if err := pii.PlanCheck(st, s.rules, s.dialect, sess.OriginColumns()); err != nil {
 			return shifted(err, pl.base), nil
 		}

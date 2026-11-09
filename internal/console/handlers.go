@@ -358,6 +358,11 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 		// a write never runs with the literal text '${...}'.
 		return nil, ptr(s.refuse(ctx, id, p.Intent, db, st.SQL, class, "", p.SQL, refusal.New(refusal.Placeholder, sqlast.PlaceholderRefusal)))
 	}
+	if st.Class == sqlclass.Write && nestedDML(s.dialect, st.SQL) {
+		// Refused by every run (hubSubmit): refused here, before the agent
+		// is told the plan is fine.
+		return nil, ptr(s.refuse(ctx, id, p.Intent, db, st.SQL, class, "", p.SQL, refusal.New(refusal.StatementKind, nestedDMLRefusal)))
+	}
 	sess, r := s.session(ctx, id)
 	if r != nil {
 		return nil, r
@@ -406,6 +411,11 @@ func (s *Server) buildPlan(ctx context.Context, id int64, p ipc.PlanParams) (*pl
 		}
 	} else {
 		pl.summary = "no EXPLAIN for " + strings.ToUpper(st.Kind)
+		if st.Class == sqlclass.Write && wholeTableWrite(s.dialect, st.SQL) {
+			pl.wholeTable = true
+			pl.level = weight.Warn.String()
+			pl.reasons = append(pl.reasons, "no WHERE: the write changes every row of the table")
+		}
 		s.noteRefused(pl)
 	}
 
