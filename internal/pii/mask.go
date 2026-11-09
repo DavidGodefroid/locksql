@@ -1452,8 +1452,11 @@ func (a *aliasCheck) plantedRow(o int, pos []int) bool {
 // plantedInserts checks every INSERT (or REPLACE) of a write: a target
 // column under a rule may only receive NULL or DEFAULT, written in VALUES;
 // an INSERT without a column list may store into any column, so all its
-// values must be NULL or DEFAULT (DEFAULT VALUES passes). A MySQL
-// INSERT ... SET list is checked as a SET list.
+// values must be NULL or DEFAULT (DEFAULT VALUES passes), unless the
+// write analysis also checks it (resolved): that analysis resolves the
+// table's columns from the catalogue, in their order, and checks each
+// value against the column it lands in. A MySQL INSERT ... SET list is
+// checked as a SET list.
 func (a *aliasCheck) plantedInserts() error {
 	if len(a.r.Mask) == 0 {
 		return nil
@@ -1473,6 +1476,9 @@ func (a *aliasCheck) plantedInserts() error {
 
 // plantedInsert checks the INSERT at token i.
 func (a *aliasCheck) plantedInsert(i int) error {
+	if a.resolved && !a.isWord(i-1, "THEN") && !a.columnList(i) {
+		return nil // positional: sqlast resolves its columns (PositionalInsert)
+	}
 	lvl := a.encl[i]
 	var pos []int
 	list := false
@@ -1521,6 +1527,52 @@ func (a *aliasCheck) plantedInsert(i int) error {
 		}
 	}
 	return nil
+}
+
+// columnList reports whether the INSERT or REPLACE at token i names the
+// columns it stores into: a column list, a MySQL SET list or DEFAULT
+// VALUES. Without one, its values land in the table's columns by position.
+func (a *aliasCheck) columnList(i int) bool {
+	lvl := a.encl[i]
+	for j := i + 1; j < len(a.toks) && a.encl[j] == lvl; j++ {
+		switch {
+		case a.isPunct(j, "("):
+			m := a.match[j]
+			if a.isWord(j-1, "PARTITION") && m > j {
+				j = m
+				continue
+			}
+			return m > j && a.namesOnly(j+1, m)
+		case a.isPunct(j, ";"), a.isWord(j, "SET", "DEFAULT"):
+			return true
+		case a.isWord(j, "VALUES") || a.isWord(j, "VALUE") && !a.isWord(j-1, "SYSTEM", "USER"),
+			a.isWord(j, "SELECT", "WITH", "TABLE"):
+			return false
+		}
+	}
+	return true
+}
+
+// PositionalInsert reports a write with an INSERT or REPLACE that names
+// no column (INSERT INTO t VALUES (...)): its values land in the table's
+// columns by position, which only the catalogue tells. While mask rules
+// exist the console runs it through the write analysis (sqlast), which
+// resolves those columns before the mask check; the check by name alone
+// would have to refuse every value but NULL and DEFAULT.
+func PositionalInsert(st sqlclass.Statement, d sqlclass.Dialect) bool {
+	toks, err := sqlclass.Lex(d, st.SQL)
+	if err != nil {
+		return false
+	}
+	a := newAliasCheck(toks, Rules{}, d)
+	for i := range a.toks {
+		insert := a.isWord(i, "INSERT") && !a.isPunct(i+1, "(") && !a.isWord(i-1, "THEN")
+		replace := a.isWord(i, "REPLACE") && !a.isPunct(i+1, "(") && !a.isWord(i-1, "OR")
+		if (insert || replace) && !a.columnList(i) {
+			return true
+		}
+	}
+	return false
 }
 
 // setTarget reports whether token k names the column a SET list assigns:

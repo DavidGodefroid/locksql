@@ -18,6 +18,21 @@ Built on lockkit v0.15.0.
   launcher mounts every `lox run` locksql lock of the workspace, each on
   `/run/locksql/<instance>`, as lea does. `mcp` never exits at start over
   the instance: `locksql_status` reports the problem (#206).
+- Writes while mask rules exist (#208): an `INSERT` without a column list
+  (`INSERT INTO orders VALUES (...)`) was refused as a masked write
+  (`E_MASKED_WRITE`, retry stop) even into a table with no masked column. Its
+  columns are now resolved from the catalogue, in the table's order, and it
+  is refused only when a value lands in a masked column.
+- Hub tickets said personal data was touched (`personal_column`) for every
+  statement with a literal. They now say so only when the statement names a
+  column under a mask rule, and the screen names those columns; literals
+  stay masked (#208).
+- An `UPDATE` or `DELETE` with no `WHERE` (or `WHERE TRUE`, `WHERE 1`,
+  `WHERE 1 = 1`) and no `LIMIT` got `verdict OK`: it now gets `verdict WARN`
+  and its screen says `whole table: N rows` (#208).
+- A statement with a data-modifying CTE passed `query.plan` and was refused
+  only by `query.run`: the plan refuses it now, with the same
+  `E_STATEMENT_KIND` (#208).
 - With `--instance`, `status` and the tools no longer report the profiles of
   another mounted lock as down, nor ask for a `profile` the lock does not
   need (#206).
