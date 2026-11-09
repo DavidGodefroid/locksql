@@ -303,9 +303,10 @@ func TestLauncherLockUpRefusals(t *testing.T) {
 			os.RemoveAll(filepath.Join(f.root, ".lockfamily"))
 			f.loxUp(t, f.root, map[string]string{"web": "lockhttp"})
 		}, "lox run runs no locksql lock in", nil, false},
-		{"two locksql locks", func(t *testing.T, f *launcherFixture) {
+		{"two locksql locks, one with no volume", func(t *testing.T, f *launcherFixture) {
 			f.loxUp(t, f.root, map[string]string{"db": "locksql", "crm-prod": "locksql", "web": "lockhttp"})
-		}, "lox run runs several locksql locks in ", nil, false},
+			os.Remove(filepath.Join(f.fake, "volume-"+loxProject(f.root)+"_crm-prod-run"))
+		}, "lock crm-prod: no volume ", nil, false},
 		{"an unknown instance", func(t *testing.T, f *launcherFixture) {
 			f.loxUp(t, f.root, map[string]string{"db": "locksql", "crm-prod": "locksql"})
 		}, "lox run runs no locksql lock nope in", []string{"status", "--instance", "nope"}, false},
@@ -402,14 +403,33 @@ func exitCode(err error) int {
 	return -1
 }
 
-// Two locksql locks: the error names both; --instance picks one, and the
-// launcher takes the option out of the command line.
+// Two locksql locks: without --instance both are mounted, each on
+// /run/locksql/<instance> and listed in LEA_LOCKSQL_INSTANCES, as lea mounts
+// them (#206); --instance picks one, and the launcher takes the option out
+// of the command line.
 func TestLauncherLockUpInstance(t *testing.T) {
 	f := newLauncherFixture(t)
 	f.loxUp(t, f.root, map[string]string{"db": "locksql", "crm-prod": "locksql", "web": "lockhttp"})
-	out, _, err := f.run(t, f.project, nil, "mcp")
-	if exitCode(err) != 2 || !strings.Contains(out, "(crm-prod db): name one with --instance NAME") {
-		t.Errorf("%v\n%s", err, out)
+	for _, args := range [][]string{{"mcp"}, {"status"}, {"tables", "--profile", "p"}} {
+		out, calls, err := f.run(t, f.project, nil, args...)
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+		run := lastRun(t, calls)
+		for _, name := range []string{"crm-prod", "db"} {
+			if !hasSeq(run, "--mount", "type=volume,src="+loxProject(f.root)+"_"+name+"-run,dst=/run/locksql/"+name+",readonly") {
+				t.Errorf("%v: no mount of %s: %q", args, name, run)
+			}
+		}
+		if !hasSeq(run, "-e", "LEA_LOCKSQL_INSTANCES=crm-prod db") || hasSeq(run, mountOf(f.root, "db")...) {
+			t.Errorf("%v: %q", args, run)
+		}
+		if strings.Contains(strings.Join(run, " "), "_web-") {
+			t.Errorf("%v: the lockhttp lock: %q", args, run)
+		}
+		if got := imageArgs(run, "locksql")[1:]; strings.Join(got, " ") != strings.Join(args, " ") {
+			t.Errorf("%v: command %q", args, got)
+		}
 	}
 	for _, tc := range []struct {
 		name       string
@@ -431,7 +451,7 @@ func TestLauncherLockUpInstance(t *testing.T) {
 			t.Errorf("%v: command %q, want %q", tc.args, got, tc.want)
 		}
 	}
-	out, _, err = f.run(t, f.project, nil, "mcp", "--instance")
+	out, _, err := f.run(t, f.project, nil, "mcp", "--instance")
 	if err == nil || !strings.Contains(out, "--instance: name the lock") {
 		t.Errorf("%v\n%s", err, out)
 	}

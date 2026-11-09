@@ -167,8 +167,10 @@ func FormatProfiles(w io.Writer, list []ProfileStatus) {
 		case p.Running && p.Status != nil:
 			fmt.Fprintf(w, "%s: console running\n", clean(p.Profile))
 			FormatStatus(w, *p.Status)
-		case p.Error != "":
+		case p.Error != "" && p.Running:
 			fmt.Fprintf(w, "%s: console running, status failed: %s\n", clean(p.Profile), clean(p.Error))
+		case p.Error != "":
+			fmt.Fprintf(w, "%s: console not reached: %s\n", clean(p.Profile), clean(p.Error))
 		default:
 			fmt.Fprintf(w, "%s: no console (start: %s)\n", clean(p.Profile), p.Start)
 		}

@@ -316,9 +316,17 @@ func runClient(e env, name string, args []string) int {
 		return usageFail(e, name, spec.usage, "wrong number of arguments")
 	}
 	o.args = pos
-	instance, err := client.ResolveInstance(o.instance)
+	locks, err := client.ResolveLocks(e.cwd, o.instance)
 	if err != nil {
 		return usageFail(e, name, spec.usage, err.Error())
+	}
+	if o.profile == "" {
+		// The one profile of the chosen lock needs no --profile.
+		if cfg, err := config.Load(e.cwd); err == nil {
+			if names := locks.Filter(profileNames(cfg)); len(names) == 1 {
+				o.profile = names[0]
+			}
+		}
 	}
 	profile, err := resolveProfile(e, o.profile)
 	if err != nil {
@@ -328,7 +336,7 @@ func runClient(e env, name string, args []string) int {
 
 	ctx, stop := signalContext()
 	defer stop()
-	c, err := client.DialInstance(e.cwd, profile, instance)
+	c, err := locks.Dial(profile)
 	if err != nil {
 		return fail(e, name, o.json, err)
 	}
@@ -396,7 +404,7 @@ func runStatus(e env, args []string) int {
 	if len(pos) > 0 {
 		return usageFail(e, "status", usage, "wrong number of arguments")
 	}
-	instance, err := client.ResolveInstance(o.instance)
+	locks, err := client.ResolveLocks(e.cwd, o.instance)
 	if err != nil {
 		return usageFail(e, "status", usage, err.Error())
 	}
@@ -404,9 +412,13 @@ func runStatus(e env, args []string) int {
 	if err != nil {
 		return usageFail(e, "status", usage, err.Error())
 	}
-	names := profileNames(cfg)
+	// Profiles another mounted lock serves are not this one's to report.
+	names := locks.Filter(profileNames(cfg))
 	if o.profile == "" && len(names) > 1 {
-		return statusAll(e, names, instance, o.json)
+		return statusAll(e, names, locks, o.json)
+	}
+	if o.profile == "" && len(names) == 1 {
+		o.profile = names[0]
 	}
 	profile, err := resolveProfile(e, o.profile)
 	if err != nil {
@@ -414,7 +426,7 @@ func runStatus(e env, args []string) int {
 	}
 	ctx, stop := signalContext()
 	defer stop()
-	c, err := client.DialInstance(e.cwd, profile, instance)
+	c, err := locks.Dial(profile)
 	if err != nil {
 		return fail(e, "status", o.json, err)
 	}
@@ -431,13 +443,13 @@ func runStatus(e env, args []string) int {
 	return exitOK
 }
 
-func statusAll(e env, names []string, instance string, asJSON bool) int {
+func statusAll(e env, names []string, locks client.Locks, asJSON bool) int {
 	ctx, stop := signalContext()
 	defer stop()
 	list := make([]client.ProfileStatus, 0, len(names))
 	for _, n := range names {
 		ps := client.ProfileStatus{Profile: n}
-		c, err := client.DialInstance(e.cwd, n, instance)
+		c, err := locks.Dial(n)
 		switch {
 		case errors.Is(err, client.ErrNoConsole):
 			ps.Start = startCommandOf(err, n)

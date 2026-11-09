@@ -17,8 +17,9 @@ query and wait.
 
 Use the MCP tools (`locksql_*`) when they are available, otherwise the `locksql` CLI from the
 workspace or a directory below it. Both talk to the same console: the lock that `lox run` runs for
-the workspace, found through its `.lockfamily/up.json`. With several locksql locks there, add
-`--instance NAME` (the error names them); never point locksql at another workspace's lock.
+the workspace, found through its `.lockfamily/up.json`. With several locksql locks there, the
+profile picks the lock (add `--instance NAME` only when an error asks for it); never point
+locksql at another workspace's lock.
 
 1. **Target.** Prefer a non-production profile unless the question is about real production data.
    Find the database and table from the code first.
