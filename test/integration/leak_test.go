@@ -304,8 +304,8 @@ func writeMaskedQueries(d sqlclass.Dialect) []string {
 }
 
 // writeNestedQueries hold a data-modifying statement inside a WITH: the
-// plan passes, the run is refused (E_STATEMENT_KIND), its row count would
-// not cover every row it changes.
+// plan is refused (E_STATEMENT_KIND), its row count would not cover every
+// row it changes (#208).
 func writeNestedQueries(d sqlclass.Dialect) []string {
 	if d != sqlclass.Postgres {
 		return nil
@@ -316,24 +316,15 @@ func writeNestedQueries(d sqlclass.Dialect) []string {
 	}
 }
 
-// assertRunRefused requires that each statement plans and that its run is
-// refused with code before anything is decided or run.
-func assertRunRefused(t *testing.T, s engine.Session, rules pii.Rules, code string, queries []string) {
+// assertPlanRefusedCode requires that each statement's plan is refused
+// with code, before anything is decided or run.
+func assertPlanRefusedCode(t *testing.T, s engine.Session, rules pii.Rules, code string, queries []string) {
 	t.Helper()
 	call := leakServer(t, s, "app", rules)
 	for _, q := range queries {
 		resp := call(ipc.MethodQueryPlan, ipc.PlanParams{DB: "app", SQL: q})
-		if resp.Error != nil {
-			t.Errorf("%s: plan refused: %s", q, resp.Error.Message)
-			continue
-		}
-		var pr ipc.PlanResult
-		if err := json.Unmarshal(resp.Result, &pr); err != nil {
-			t.Fatal(err)
-		}
-		resp = call(ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
 		if resp.Error == nil || resp.Error.Data == nil || string(resp.Error.Data.Code) != code {
-			t.Errorf("%s: run %s %+v, want %s", q, resp.Result, resp.Error, code)
+			t.Errorf("%s: plan %s %+v, want %s", q, resp.Result, resp.Error, code)
 		}
 	}
 }
