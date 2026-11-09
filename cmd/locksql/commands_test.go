@@ -487,15 +487,20 @@ func TestPIIAndRequest(t *testing.T) {
 	dir := project(t, uatConfig)
 	startConsole(t, dir, "uat")
 	cli(t, dir, "", "pii", "list", "--profile", "uat").want(t, exitOK, "mask\tapp.users.email")
-	cli(t, dir, "", "pii", "add", "--profile", "uat", "app.users.note").want(t, exitOK, "mask rule added: app.users.note")
+	// A pattern without '*' must name a column (locksql#207); a glob that
+	// matches nothing yet is added with a warning, and flagged as dead.
+	cli(t, dir, "", "pii", "add", "--profile", "uat", "app.users.note").want(t, exitFail, "app.users.note matches no column")
+	cli(t, dir, "", "pii", "add", "--profile", "uat", "app.users.note*").want(t, exitOK, "mask rule added: app.users.note*",
+		"warning: app.users.note* matches no column today")
+	cli(t, dir, "", "pii", "list", "--profile", "uat").want(t, exitOK, "mask\tapp.users.note*\t(matches no column: dead rule)")
 	o := cli(t, dir, "", "pii", "list", "--profile", "uat", "--json")
 	o.want(t, exitOK)
-	var pr ipc.PIIListResult
+	var pr client.PIIRules
 	decodeJSON(t, o.stdout, &pr)
-	if len(pr.Mask) != 2 {
+	if len(pr.Mask) != 2 || len(pr.UnmatchedMask) != 1 || pr.UnmatchedMask[0] != "app.users.note*" {
 		t.Fatalf("pii = %+v", pr)
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, ".locksql", "pii.toml")); err != nil || !strings.Contains(string(b), "app.users.note") {
+	if b, err := os.ReadFile(filepath.Join(dir, ".locksql", "pii.toml")); err != nil || !strings.Contains(string(b), "app.users.note*") {
 		t.Fatalf("pii.toml = %q, %v", b, err)
 	}
 	cli(t, dir, "", "pii", "add", "--profile", "uat", "not a pattern").want(t, exitFail)

@@ -83,6 +83,7 @@ func (s *Server) Methods() map[string]kconsole.Handler {
 		ipc.MethodQueryPlan:       h(s.queryPlan),
 		ipc.MethodQueryRun:        h(s.queryRun),
 		ipc.MethodGrant:           h(s.grantRequest),
+		ipc.MethodPIIUnmatched:    h(s.piiUnmatched),
 	}
 }
 
@@ -90,7 +91,7 @@ func (s *Server) Methods() map[string]kconsole.Handler {
 // and counts as activity for the idle timeout.
 func productMethod(m string) bool {
 	switch m {
-	case ipc.MethodCatalogList, ipc.MethodCatalogDescribe, ipc.MethodQueryPlan, ipc.MethodQueryRun, ipc.MethodGrant:
+	case ipc.MethodCatalogList, ipc.MethodCatalogDescribe, ipc.MethodQueryPlan, ipc.MethodQueryRun, ipc.MethodGrant, ipc.MethodPIIUnmatched:
 		return true
 	}
 	return false
@@ -313,13 +314,20 @@ func (s *Server) PIIRules(kp kconsole.Policy) (mask, allow []string) {
 }
 
 // CheckMask implements kconsole.PIIBackend: the canonical form of a
-// db.table.column pattern.
+// db.table.column pattern (schema.table.column on PostgreSQL), refused
+// when it names no column of the catalog (resolveMask).
 func (s *Server) CheckMask(pattern string) (string, error) {
 	var probe pii.Rules
 	if err := probe.Add(pattern); err != nil {
 		return "", err
 	}
-	return probe.Mask[0], nil
+	p := probe.Mask[0]
+	if s.addCtx != nil {
+		if err := s.resolveMask(s.addCtx, p); err != nil {
+			return "", err
+		}
+	}
+	return p, nil
 }
 
 // SaveMask implements kconsole.PIIBackend: the rule is added to the rule

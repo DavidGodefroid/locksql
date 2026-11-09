@@ -178,7 +178,7 @@ A set file:
 
 ```toml
 [[mask]]
-column = "app.users.email"            # db.table.column, * per segment
+column = "app.users.email"            # db.table.column (schema.table.column on PostgreSQL), * per segment
 mode   = "email"                      # j***@example.com
 [[mask]]
 column = "app.users.customer_ref"

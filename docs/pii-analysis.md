@@ -182,7 +182,13 @@ trailing `*` such as `*email*`) with an optional mode, and
 scans the schema and proposes rules for columns whose names look personal
 (`detect.go`: tokens in English, French, Dutch, German and Spanish), and
 quasi-identifiers apart. Adding a rule is a tightening any client may ask
-for; removing one is a loosening the human confirms.
+for; removing one is a loosening the human confirms. The first segment is
+the schema on PostgreSQL. A client's `pii.add` is resolved against the
+catalog (`console/piicheck.go`): a pattern without `*` that names no column
+is refused with the columns it may mean, since such a rule masks nothing
+while the client believes the column protected; a glob that matches
+nothing yet is accepted with a warning. `pii.unmatched` lists the dead
+rules for `pii list`.
 
 ## Where to start
 

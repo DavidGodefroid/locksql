@@ -178,6 +178,14 @@ func (c *Client) PIIAdd(ctx context.Context, pattern string) (ipc.PIIListResult,
 	return r, err
 }
 
+// PIIUnmatched returns the rules in force that name no column of the
+// catalog.
+func (c *Client) PIIUnmatched(ctx context.Context) (ipc.PIIUnmatchedResult, error) {
+	var r ipc.PIIUnmatchedResult
+	err := c.Call(ctx, ipc.MethodPIIUnmatched, nil, &r)
+	return r, err
+}
+
 // Request queues a policy change proposal for the human. It never changes
 // the policy itself.
 func (c *Client) Request(ctx context.Context, change string) (ipc.ChangeResult, error) {

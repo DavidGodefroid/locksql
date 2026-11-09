@@ -741,7 +741,7 @@ func TestAliasMaskedByProvenance(t *testing.T) {
 }
 
 func TestPIIAddWritesFile(t *testing.T) {
-	h := newHarness(t, uatProfile())
+	h := newHarness(t, uatProfile(), withColumn("app", "users", "phone"))
 	h.ok(t, ipc.MethodPIIAdd, ipc.PIIAddParams{Pattern: "app.users.phone"}, nil)
 	r, err := pii.LoadRules(h.root)
 	if err != nil {
@@ -1162,7 +1162,7 @@ func TestPolicyFromFilesKeepsMaskModes(t *testing.T) {
 func TestPIIAddKeepsMaskModes(t *testing.T) {
 	h := newHarness(t, uatProfile(), func(c *ServerConfig) {
 		c.Policy = c.Policy.WithModes(map[string]string{"app.users.email": "partial"})
-	})
+	}, withColumn("app", "users", "phone"))
 	h.ok(t, ipc.MethodPIIAdd, ipc.PIIAddParams{Pattern: "app.users.phone"}, nil)
 	if got := h.s.approved.PIIModes["app.users.email"]; got != "partial" {
 		t.Fatalf("mode lost after pii add: %v", h.s.approved.PIIModes)

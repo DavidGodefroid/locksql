@@ -21,6 +21,15 @@ Built on lockkit v0.15.0.
 - With `--instance`, `status` and the tools no longer report the profiles of
   another mounted lock as down, nor ask for a `profile` the lock does not
   need (#206).
+- `pii add` (and `locksql_pii_add`) accepted a pattern that names no column
+  and left the column in clear: on PostgreSQL, `app.customers.name` with
+  `app` the database, where rules name `schema.table.column`
+  (`public.customers.name`). A pattern without `*` that matches no column of
+  the catalog is now refused with the columns it may mean (`did you mean
+  public.customers.name?`); a pattern with `*` that matches nothing yet is
+  added with a warning. `pii list` flags the dead rules, which name no
+  column (new console method `pii.unmatched`). The tool descriptions and
+  the CLI help say `schema.table.column` for PostgreSQL (#207).
 
 ### Changed
 

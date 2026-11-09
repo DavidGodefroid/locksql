@@ -61,6 +61,7 @@ type Conn interface {
 	ActivateGrant(ctx context.Context, ticket string) (ipc.GrantResult, error)
 	PIIList(ctx context.Context) (ipc.PIIListResult, error)
 	PIIAdd(ctx context.Context, pattern string) (ipc.PIIListResult, error)
+	PIIUnmatched(ctx context.Context) (ipc.PIIUnmatchedResult, error)
 	Request(ctx context.Context, change string) (ipc.ChangeResult, error)
 	Close() error
 }
@@ -177,7 +178,7 @@ type (
 	}
 	PIIAddIn struct {
 		Profile string `json:"profile,omitempty" jsonschema:"Profile name from the locksql config. Optional when the server was started with --profile or exactly one profile is configured."`
-		Column  string `json:"column" jsonschema:"Column pattern db.table.column; * matches one whole segment."`
+		Column  string `json:"column" jsonschema:"Column pattern named as locksql_describe names the column: schema.table.column on PostgreSQL (public.customers.name, not the database name), db.table.column on MySQL and MariaDB, main.table.column on SQLite. * matches a whole segment, or a run at a segment's start or end. A pattern without * must name an existing column."`
 	}
 	ChangeIn struct {
 		Profile string `json:"profile,omitempty" jsonschema:"Profile name from the locksql config. Optional when the server was started with --profile or exactly one profile is configured."`
@@ -268,13 +269,14 @@ func New(o Options) *mcp.Server {
 	}, t.grant)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "locksql_pii_list",
-		Description: "List the PII column rules in force (mask and allow patterns db.table.column)." + guidance,
+		Description: "List the PII column rules in force (mask and allow patterns schema.table.column on PostgreSQL, db.table.column on MySQL and MariaDB) and flag the dead rules, which name no column." + guidance,
 		Annotations: readOnly,
 	}, t.piiList)
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "locksql_pii_add",
-		Description: "Add a mask rule db.table.column. This only tightens the policy, so it applies at once. " +
-			"Add one when you notice personal data that is not masked." + guidance,
+		Description: "Add a mask rule schema.table.column on PostgreSQL (the schema, such as public, not the database name), db.table.column on MySQL and MariaDB: the column as locksql_describe names it. " +
+			"A pattern without * that names no column is refused with the columns it may mean; a pattern with * that matches no column yet is added with a warning. " +
+			"This only tightens the policy, so it applies at once. Add one when you notice personal data that is not masked." + guidance,
 		Annotations: &mcp.ToolAnnotations{IdempotentHint: true, OpenWorldHint: &no},
 	}, t.piiAdd)
 	mcp.AddTool(s, &mcp.Tool{
@@ -552,35 +554,41 @@ func (t *tools) grant(ctx context.Context, req *mcp.CallToolRequest, in GrantIn)
 	return render(func(w *bytes.Buffer) { client.FormatGrant(w, r) }), out, nil
 }
 
-func (t *tools) piiList(ctx context.Context, _ *mcp.CallToolRequest, in PIIListIn) (*mcp.CallToolResult, ipc.PIIListResult, error) {
-	var r ipc.PIIListResult
-	err := t.with(in.Profile, func(c Conn) (err error) {
-		r, err = c.PIIList(ctx)
-		return err
+func (t *tools) piiList(ctx context.Context, _ *mcp.CallToolRequest, in PIIListIn) (*mcp.CallToolResult, client.PIIRules, error) {
+	var r client.PIIRules
+	err := t.with(in.Profile, func(c Conn) error {
+		l, err := c.PIIList(ctx)
+		if err != nil {
+			return err
+		}
+		r = client.CheckPII(ctx, c, l)
+		return nil
 	})
 	if err != nil {
-		return nil, ipc.PIIListResult{}, err
+		return nil, client.PIIRules{}, err
 	}
-	r.Mask, r.Allow = nonNil(r.Mask), nonNil(r.Allow)
 	return render(func(w *bytes.Buffer) { client.FormatPII(w, r) }), r, nil
 }
 
-func (t *tools) piiAdd(ctx context.Context, _ *mcp.CallToolRequest, in PIIAddIn) (*mcp.CallToolResult, ipc.PIIListResult, error) {
+func (t *tools) piiAdd(ctx context.Context, _ *mcp.CallToolRequest, in PIIAddIn) (*mcp.CallToolResult, client.PIIRules, error) {
 	col := strings.TrimSpace(in.Column)
 	if col == "" {
-		return nil, ipc.PIIListResult{}, errors.New("no column given: pass db.table.column")
+		return nil, client.PIIRules{}, errors.New("no column given: pass schema.table.column (PostgreSQL) or db.table.column (MySQL)")
 	}
-	var r ipc.PIIListResult
-	err := t.with(in.Profile, func(c Conn) (err error) {
-		r, err = c.PIIAdd(ctx, col)
-		return err
+	var r client.PIIRules
+	err := t.with(in.Profile, func(c Conn) error {
+		l, err := c.PIIAdd(ctx, col)
+		if err != nil {
+			return err
+		}
+		r = client.CheckPII(ctx, c, l)
+		return nil
 	})
 	if err != nil {
-		return nil, ipc.PIIListResult{}, err
+		return nil, client.PIIRules{}, err
 	}
-	r.Mask, r.Allow = nonNil(r.Mask), nonNil(r.Allow)
 	return render(func(w *bytes.Buffer) {
-		fmt.Fprintf(w, "mask rule added: %s\n", col)
+		client.FormatPIIAdded(w, col, r)
 		client.FormatPII(w, r)
 	}), r, nil
 }
