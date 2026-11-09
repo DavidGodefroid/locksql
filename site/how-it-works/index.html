@@ -187,7 +187,7 @@ locksql tables   --profile P [--db D]
 locksql describe --profile P [--db D] TABLE
 locksql plan     --profile P [--db D] [--unmask] "SQL" | -   <span class="cmt"># "-" reads SQL from stdin</span>
 locksql run      --profile P PLAN_ID                          <span class="cmt"># waits for the decision</span>
-locksql pii      list|add --profile P [DB.TABLE.COLUMN]
+locksql pii      list|add --profile P [SCHEMA.TABLE.COLUMN | DB.TABLE.COLUMN]
 locksql request  --profile P "tier=write" | "limits.max_rows=500" | "allow=app.t.c"
 locksql logout   --profile P
 locksql doctor   [--profile P] [--fix [--yes]] [--json]</code></pre>

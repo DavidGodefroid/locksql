@@ -65,9 +65,12 @@ const (
 	// MethodGrant asks for a grant (one human decision for a bounded read
 	// scope), or activates the decided one (GrantParams.Ticket). Its name
 	// does not read as an approval: nothing a client sends approves.
-	MethodGrant         = "scope.request"
-	MethodPIIList       = kipc.MethodPIIList
-	MethodPIIAdd        = kipc.MethodPIIAdd
+	MethodGrant   = "scope.request"
+	MethodPIIList = kipc.MethodPIIList
+	MethodPIIAdd  = kipc.MethodPIIAdd
+	// MethodPIIUnmatched lists the PII rules in force that name no column
+	// of the catalog (dead rules), for pii list.
+	MethodPIIUnmatched  = "pii.unmatched"
 	MethodChangeRequest = kipc.MethodChangeRequest
 	MethodLogout        = kipc.MethodLogout
 )
@@ -76,7 +79,7 @@ const (
 func Methods() []string {
 	return []string{
 		MethodHello, MethodStatus, MethodCatalogList, MethodCatalogDescribe, MethodQueryPlan,
-		MethodQueryRun, MethodGrant, MethodPIIList, MethodPIIAdd, MethodChangeRequest, MethodLogout,
+		MethodQueryRun, MethodGrant, MethodPIIList, MethodPIIAdd, MethodPIIUnmatched, MethodChangeRequest, MethodLogout,
 	}
 }
 
@@ -279,6 +282,13 @@ type Health struct {
 	ExplainOK bool `json:"explain_ok"`
 	// ReadOnly reports that the session is read-only on the server.
 	ReadOnly bool `json:"read_only"`
+}
+
+// PIIUnmatchedResult answers pii.unmatched: the mask and allow rules in
+// force that name no column of the databases served.
+type PIIUnmatchedResult struct {
+	Mask  []string `json:"mask"`
+	Allow []string `json:"allow"`
 }
 
 // TablesParams lists the tables of a database (catalog.list).
