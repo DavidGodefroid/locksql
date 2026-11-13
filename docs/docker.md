@@ -59,7 +59,7 @@ runs each command with the account it needs:
 
 | Command | Runs as | Volumes |
 |---|---|---|
-| `stats`, `forget` | `locksql` | `locksql-home`, not the lock's home volume that `lox run` gives the console: they do not see its state yet ([#220](https://github.com/DavidGodefroid/locksql/issues/220)) |
+| `stats`, `forget` | `locksql` | the home volume of the workspace's locksql lock that `lox run` runs, `lockfamily-<8 hex>_<instance>-home`, the one its console keeps its state in (`--instance NAME` for one of several; [launcher.md](launcher.md#the-home-of-lox-runs-lock)) |
 | `init`, `config` | you (your uid and gid), with your home mounted: they write the agents' files and your user config; a `config` file must be under the project or your home | |
 | `profile` | you, with `HOME=/tmp` | |
 | `doctor --fix` | you, with your home mounted (your agents' wiring); first as root, only to give back `.locksql/` entries that are not yours | |
@@ -210,10 +210,11 @@ of `auth = "key"`, owned by `locksql` with mode 0600) are in that volume
 too: `lox add` and `lox run` check them and print the command that copies a
 missing one there
 ([lockhub: the files a locksql profile names](https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-add.md#the-files-a-locksql-profile-names)).
-`auth = "password"` needs nothing there. The `locksql-home` volume of
-earlier releases holds no console's state any more; the launcher's `stats`
-and `forget` still mount it
-([#220](https://github.com/DavidGodefroid/locksql/issues/220)).
+`auth = "password"` needs nothing there. The launcher's `stats` and
+`forget` mount that volume. The `locksql-home` volume of earlier releases
+holds no console's state any more: they mount it only in a directory that
+`lox run` runs no lock for, when it exists, to read what a console started
+by hand left there.
 
 ## Credentials from Vault
 

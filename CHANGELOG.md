@@ -61,6 +61,15 @@ Built on lockkit v0.17.0.
   column (new console method `pii.unmatched`). The tool descriptions and
   the CLI help say `schema.table.column` for PostgreSQL (#207).
 
+- The launcher's `stats` and `forget` mounted the volume `locksql-home`,
+  which no console uses since `lox run` starts them: `stats` read an empty
+  or stale audit log, `forget` removed a secret no console reads. They now
+  mount the home volume of the workspace's locksql lock that `lox run`
+  runs (`lockfamily-<hash>_<instance>-home`), found and checked as the
+  agent commands find its socket, `--instance NAME` for one of several.
+  Without lox run's state, they still mount `locksql-home` when it exists,
+  and never create it (#220).
+
 ### Changed
 
 - Hub mode: the console opens at most 30 tickets a human decides per 5

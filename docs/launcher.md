@@ -27,7 +27,7 @@ terminals, else `-i`.
 
 | Subcommand | Account | Extra | Why |
 |---|---|---|---|
-| `stats`, `forget` | `locksql` | volume `locksql-home` | they read the console account's state; not yet the lock's home volume that `lox run` gives the console ([#220](https://github.com/DavidGodefroid/locksql/issues/220)) |
+| `stats`, `forget` | `locksql` | lox run's home volume of the workspace's locksql lock, on `/home/locksql` (below) | they read and change the console account's state: its audit log, its keychain secrets |
 | `init`, `config` | you (`id -u`:`id -g`) | `-e HOME=$HOME -v $HOME:$HOME` | they write your agents' files and your user config, owned by you |
 | `profile` | you | `-e HOME=/tmp` | it writes `.locksql/config.toml`, yours to edit |
 | `doctor --fix` | you (`id -u`:`id -g`), in the group `locksql-clients`; root (`--user 0`) first, only when `.locksql/` holds entries that are not yours | `-e HOME=$HOME -e USER -v $HOME:$HOME`, `-e LOCKSQL_DOCTOR_FOR=uid:gid`; no socket volume | it wires your agents and keeps `.locksql/` as `lox run` reads it: yours, writable by you only. The root run gives back to you what the console account owns in `.locksql/` (left by `doctor --fix` up to v0.13.0, which `lox run` refuses), nothing else, its output on stderr |
@@ -103,6 +103,24 @@ socket on itself, which no console serves: there the agent commands stop
 sub-project a workspace of its own with `lox init`). A workspace path
 holding `&`, `<` or `>`, which `up.json` escapes, is refused too, with a
 message that says so: move or rename the workspace.
+
+## The home of lox run's lock
+
+`stats` and `forget` run as the console account with the home volume
+`lox run` gives the lock's console,
+`lockfamily-<8 hex of sha256(workspace)>_<instance>-home`, mounted on
+`/home/locksql`: there are the audit log `stats` counts and the keychain
+secret `forget` removes. The lock is found as for the agent commands (the
+checks above, its socket volume included; `--instance NAME` for one of
+several), then Docker must confirm its home volume: compose's labels of
+lox run's project and of `<instance>-home` (lox run gives it no others).
+Anything else stops them (exit 2) with why.
+
+Without lox run's state (no `.lockfamily/up.json` up from here), they
+mount the volume `locksql-home` of a console started by hand (`locksql
+console`, up to v0.17), and say so, when that volume exists; else they
+stop (exit 2) and never create it. A `.lockfamily/up.json` the launcher
+cannot trust is no such case: they stop.
 
 ## Version pinning
 
