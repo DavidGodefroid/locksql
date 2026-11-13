@@ -56,6 +56,9 @@ ticket_window = "10m"
 	c := startConsole(t, project, env, "--profile", "uat")
 	c.expect("Apply these changes? [y/N]")
 	c.send("y\n")
+	// The database file is writable by this user: more than tier read needs.
+	c.expect(`Type "continue" to proceed: `)
+	c.send("continue\n")
 	seen := c.expect("Listening…")
 	m := socketLine.FindStringSubmatch(seen)
 	if m == nil {
