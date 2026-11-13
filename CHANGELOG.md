@@ -6,7 +6,12 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
-### Behaviour
+## v0.18.1 (2026-11-13)
+
+Supported lockhub: v0.9.0 or later (unchanged). Built on lockkit v0.19.1
+(unchanged).
+
+### Fixed
 
 - Hub mode: a pending answer comes at once again. Since the lockkit v0.17.0 bump
   (#214), every pushed ticket waited up to 2 s for a decision locksql never
