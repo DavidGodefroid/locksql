@@ -19,7 +19,29 @@ type launcherFixture struct {
 	// fake holds what the fake docker prints for lox run's volumes and
 	// containers (launcher_lockup_test.go).
 	fake string
-	env  []string
+	// managed is the launcher's managed directory (the host's
+	// /etc/lockfamily).
+	managed string
+	env     []string
+}
+
+// managedLines are the launcher's managed directories, Linux's and macOS'.
+var managedLines = []string{
+	`*) managed_dir=/etc/lockfamily ;;`,
+	`Darwin) managed_dir="/Library/Application Support/lockfamily" ;;`,
+}
+
+// withManagedDir is launcher with the managed directory of each of lines
+// replaced by dir.
+func withManagedDir(t *testing.T, launcher, dir string, lines ...string) string {
+	t.Helper()
+	for _, line := range lines {
+		if !strings.Contains(launcher, line) {
+			t.Fatalf("launcher lacks %q", line)
+		}
+		launcher = strings.Replace(launcher, line, line[:strings.Index(line, "managed_dir=")]+`managed_dir="`+dir+`" ;;`, 1)
+	}
+	return launcher
 }
 
 func newLauncherFixture(t *testing.T) *launcherFixture {
@@ -55,7 +77,10 @@ func newLauncherFixture(t *testing.T) *launcherFixture {
 		t.Fatal(err)
 	}
 	f.script = filepath.Join(root, "locksql")
-	writeExec(t, f.script, string(launcher))
+	// The machine's managed directory: one of the fixture's, absent until
+	// a test makes it, never the host's own.
+	f.managed = filepath.Join(root, "managed dir", "lockfamily")
+	writeExec(t, f.script, withManagedDir(t, string(launcher), f.managed, managedLines...))
 	f.env = []string{"PATH=" + f.bin, "HOME=" + filepath.Join(root, "home")}
 	// The workspace (root) runs a locksql lock db under lox run.
 	f.loxUp(t, root, map[string]string{"db": "locksql"})
@@ -74,6 +99,24 @@ case "$1 ${2:-}" in
 "run "*) for a in "$@"; do [ "$a" = version ] && echo "locksql 9.9.9"; done; [ -z "${FAKE_DOCKER_SAY:-}" ] || echo "$FAKE_DOCKER_SAY" ;;
 esac
 exit 0
+`)
+}
+
+// fakeUname makes uname -s print sysname, so the launcher picks that OS's
+// managed directory whatever the host (the macOS runner prints Darwin);
+// every other uname call is the real one.
+func (f *launcherFixture) fakeUname(t *testing.T, sysname string) {
+	t.Helper()
+	real, err := exec.LookPath("uname")
+	if err != nil {
+		t.Skip("no uname")
+	}
+	uname := filepath.Join(f.bin, "uname")
+	if err := os.Remove(uname); err != nil {
+		t.Fatal(err)
+	}
+	writeExec(t, uname, `#!/bin/sh
+case "$1" in -s) echo `+sysname+` ;; *) exec '`+real+`' "$@" ;; esac
 `)
 }
 

@@ -19,11 +19,17 @@ No host packages (`.deb`, `.rpm`, `.apk`) and no host binary.
 ## Subcommand → `docker run` profile
 
 Every run is `docker run --rm -v "$PROJECT:$PROJECT" -w "$PWD"
-$LOCKSQL_DOCKER_ARGS ... IMAGE SUBCOMMAND ARGS`, where `PROJECT` is the
-nearest directory up from `$PWD` holding `.locksql/` (else `$PWD`), mounted
-at its own path so that paths, and the socket name derived from the project
-path, are the same inside and outside. `-it` when stdin and stdout are
-terminals, else `-i`.
+[-v "$MANAGED:/etc/lockfamily:ro"] $LOCKSQL_DOCKER_ARGS ... IMAGE
+SUBCOMMAND ARGS`, where `PROJECT` is the nearest directory up from `$PWD`
+holding `.locksql/` (else `$PWD`), mounted at its own path so that paths,
+and the socket name derived from the project path, are the same inside and
+outside. `MANAGED` is the company's managed directory, by `uname -s`
+(`/Library/Application Support/lockfamily` on Darwin, else
+`/etc/lockfamily`), mounted read-only on `/etc/lockfamily` as `lox run`
+mounts it in its locks (lockhub#179): absent, no mount; a file, a dangling
+link or a `:` in its path stops the launcher before `docker run`
+([docker.md](docker.md#the-companys-managed-configuration)). `-it` when
+stdin and stdout are terminals, else `-i`.
 
 | Subcommand | Account | Extra | Why |
 |---|---|---|---|
