@@ -6,7 +6,42 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
-Built on lockkit v0.17.0.
+Built on lockkit v0.19.0.
+
+### Added
+
+- The company's managed configuration (`managed.toml`, lockfamily#31):
+  locksql enforces its `[locksql]` section. `[locksql.bounds]` bounds every
+  profile (tier, production, tls, credentials, engine, hosts,
+  write_functions, credentials_ttl, auto rules, limits, required detectors
+  and `[[pii_mask]]` rules always on); a profile beyond them is refused at
+  start and at every policy poll with no prompt, one `blocked by company
+  policy: locksql.bounds.<key> = <bound> (profile P: <field> = <value>)`
+  line each, audited `refused-managed`, exit 3. `[locksql.defaults]` fills
+  the keys a profile leaves unset; `[locksql.profiles.<name>]` are served
+  as written and cannot be redefined. `[family] vault.required` refuses a
+  profile whose credentials are not `vault`. The start screen shows
+  `Managed by <org> (sha256:…)`, approvals record `managed_sha256`, audit
+  records `managed`. New `locksql managed show` and `locksql managed check
+  [--profile P]` (lox runs it before it starts the lock), and a `managed`
+  line in `locksql doctor`. See docs/configuration.md (#209).
+
+### Changed
+
+- lockkit v0.19.0: the default PII detectors can mask more, or under
+  another kind (`fr_nir` before `card`, more phone formats, an e-mail with
+  an apostrophe); secret-looking config values are now refused as
+  "looks like it embeds a secret (a password or a token)"; the Claude Code
+  notes of `locksql init` introduce the allowed calls neutrally (#209).
+
+### Security
+
+- A weaker `tls` mode (`verify-full` to `require`, by `kconfig.TLSRank`),
+  another `tls_ca` or another `tls_server_name` is now a loosening the
+  human reviews: these changes were listed but applied without asking,
+  so a profile could be pointed at a server it trusted less. A profile
+  approved as `verify-full` (the former default) that now loads as
+  `prefer` is asked once (#209).
 
 ### Fixed
 

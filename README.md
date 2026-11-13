@@ -199,7 +199,7 @@ Every rule and limit: [docs/safety.md](docs/safety.md). Threat model:
 | [docs/install.md](docs/install.md) | install paths, the launcher and its image, the first query by hand, building |
 | [docs/docker.md](docs/docker.md) | what runs where in Docker, Vault, an agent in its own container |
 | [docs/usage.md](docs/usage.md) | the console, client commands, MCP server, agent wiring, grants, auto mode |
-| [docs/configuration.md](docs/configuration.md) | every profile key, TLS, SSH, PII rule sets, sharing a configuration |
+| [docs/configuration.md](docs/configuration.md) | every profile key, TLS, SSH, PII rule sets, sharing a configuration, the company's managed configuration (`[locksql]` of lockfamily's [managed.toml](https://github.com/DavidGodefroid/lockfamily/blob/main/docs/managed.md)) |
 | [docs/console.md](docs/console.md) | `--allow-unmask`, console keys, clear results (Ctrl-O) |
 | [docs/architecture.md](docs/architecture.md) | the life of a query, the approval screen, engines |
 | [docs/safety.md](docs/safety.md) | the safety model and the limitations, in full |

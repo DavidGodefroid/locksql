@@ -374,7 +374,13 @@ func TestManagedPIIMask(t *testing.T) {
 func TestLoadReadsManaged(t *testing.T) {
 	defer func(f func(context.Context) (*managed.File, error)) { loadManaged = f }(loadManaged)
 	loadManaged = func(context.Context) (*managed.File, error) { return nil, nil }
-	dir := installProject(t, "basic.toml")
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".locksql"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".locksql", "config.toml"), []byte("[profiles.a]\n"+devBase+"\n[profiles.b]\n"+devBase), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg, err := LoadFrom(dir, "")
 	if err != nil || cfg.Managed != nil {
 		t.Fatalf("no managed file: cfg %+v err %v", cfg, err)

@@ -40,6 +40,11 @@ jobs:
             grep -E -- '--- FAIL|_test\.go:[0-9]+:|^FAIL|panic:' test.log | head -40 | sed 's/^/::error::/'
             exit 1
           }
+      # The managed-configuration tests place a managed file through
+      # managed.SetTestPath, which only this tag builds: a release build
+      # never carries it.
+      - name: go test -tags lockfamily_managed_test
+        run: go test -tags lockfamily_managed_test ./...
 
   # Windows: the module builds and its unit tests run, but locksql itself
   # refuses to run there (docs/usage.md, Windows (WSL2)). Test files that
@@ -147,6 +152,36 @@ jobs:
           test "$code" = 2 && grep -q 'no .lockfamily/up.json' err
           code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" install 2>err || code=$?
           test "$code" = 1 && grep -q 'runs in Docker' err
+      # The release image, no test tag, reads the machine's managed file:
+      # written as root (0:0, 0644, /etc/lockfamily 0755) into a volume
+      # mounted read-only, as lox mounts it. managed check refuses a ddl
+      # profile under tier = "write"; a file others can write is refused.
+      - name: managed configuration (release image)
+        run: |
+          set -ex
+          docker volume create locksql-ci-managed
+          printf 'version = 1\norganisation = "Acme CI"\n\n[locksql.bounds]\ntier = "write"\n' |
+            docker run --rm -i --user 0:0 -v locksql-ci-managed:/etc/lockfamily --entrypoint sh locksql -c \
+              'chmod 0755 /etc/lockfamily && cat >/etc/lockfamily/managed.toml && chown 0:0 /etc/lockfamily/managed.toml && chmod 0644 /etc/lockfamily/managed.toml'
+          mkdir -p "$RUNNER_TEMP/managed/.locksql"
+          printf '[profiles.dev]\nengine = "postgres"\nhost = "db.example.internal"\ntier = "ddl"\n' >"$RUNNER_TEMP/managed/.locksql/config.toml"
+          chmod -R a+rX "$RUNNER_TEMP/managed"
+          run() { docker run --rm -v locksql-ci-managed:/etc/lockfamily:ro -v "$RUNNER_TEMP/managed:/proj:ro" -w /proj locksql "$@"; }
+          run managed show >out && cat out
+          grep -Eqx 'Managed by Acme CI \(sha256:[0-9a-f]{12}\)' out
+          run doctor >out || true
+          grep -Eq 'managed — Managed by Acme CI \(sha256:[0-9a-f]{12}\)' out
+          code=0; run managed check >out || code=$?
+          cat out; test "$code" = 3
+          grep -qx 'blocked by company policy: locksql.bounds.tier = write (profile dev: tier = ddl)' out
+          # Writable by others: refused, whatever it says.
+          docker run --rm --user 0:0 -v locksql-ci-managed:/etc/lockfamily --entrypoint chmod locksql 0666 /etc/lockfamily/managed.toml
+          code=0; run managed show 2>err || code=$?
+          cat err; test "$code" = 3
+          grep -q 'must be writable by root only' err
+          code=0; run managed check 2>err || code=$?
+          test "$code" = 3 && grep -q 'must be writable by root only' err
+          docker volume rm locksql-ci-managed
       - name: docker build with ALLOWED_UIDS
         run: |
           docker build --build-arg ALLOWED_UIDS=4242,4243 -t locksql-allowed .
@@ -244,7 +279,7 @@ jobs:
           done
           for p in $pids; do wait "$p"; done
       - name: go test -tags integration
-        run: go test -tags integration -timeout 30m ./...
+        run: go test -tags 'integration lockfamily_managed_test' -timeout 30m ./...
 
   # The approval hub's phase-1 demo (test/integration/hub_e2e_test.go)
   # against lockhub main: plan, pending, lox approve at a terminal, run,
