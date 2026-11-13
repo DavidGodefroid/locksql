@@ -512,10 +512,10 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 	// run's auto mode. deny never reaches here (autoDenied).
 	sc.NeverAuto = s.neverAuto(pl.st.Class, pl.unmask)
 	rec.AutoRule = s.autoRuleText(pl.st.Class, pl.unmask)
-	a := s.ask(ctx, id, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
+	a := withAgain(s.asker().Ask(ctx, id, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
 		rec.Event, rec.Decision, rec.Reason, rec.Error, rec.Approval, rec.Ticket = b.Event, b.Decision, b.Reason, b.Error, b.Approval, b.Ticket
 		s.audit(rec)
-	}, "plan the query again after that (the plan is used)")
+	}), "plan the query again after that (the plan is used)")
 	return a.Refusal
 }
 
@@ -764,3 +764,17 @@ func (s *Server) withdraw(ctx context.Context, ticketID string, caller plans.Cal
 }
 
 func (s *Server) safeReason(r string) string { return safeText(r, false) }
+
+// withAgain adds what the agent does next (again) to a ticket the hub
+// client refused over its limits: lockkit's Asker answers it with the
+// limit, the count and when to retry ("not submitted: ..."), each ask
+// its own (lockkit#150).
+func withAgain(a kconsole.Approval, again string) kconsole.Approval {
+	if a.Pending != nil || a.Refusal.Error == nil || a.Refusal.Error.Code != ipc.CodeInternal {
+		return a
+	}
+	if e := a.Refusal.Error; strings.HasPrefix(e.Message, "not submitted: ") {
+		a.Refusal = errResp(a.Refusal.ID, ipc.CodeInternal, e.Message+"; "+again)
+	}
+	return a
+}

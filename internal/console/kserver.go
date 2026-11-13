@@ -59,7 +59,7 @@ func (k kpolicy) Profile() kconsole.Profile {
 	}
 	return kconsole.Profile{Name: pr.Name, Production: pr.Production, Where: where, Host: pr.Host, Port: pr.Port,
 		User: pr.User, Credentials: pr.Credentials, VaultPath: pr.VaultPath, CredentialsTTL: pr.CredentialsTTL,
-		IdleTimeout: noIdleEnd, MaxSession: pr.Limits.MaxSession}
+		IdleTimeout: noIdleEnd, MaxSession: pr.Limits.MaxSession, TicketLimits: pr.Limits.TicketLimits()}
 }
 
 // noFingerFields is the audit text of a refusal for want of a finger; it
@@ -160,7 +160,8 @@ func (s *Server) ApplyPolicy(kp kconsole.Policy) error {
 	s.setLive(fp) // what the hub's goroutine checks tickets against
 	if h := s.cfg.Hub; h != nil && h.Client != nil {
 		// The ticket limits of the policy in force: a raise reaches here
-		// only once reviewed (lockkit#150).
+		// only once reviewed (lockkit#150). lockkit sets the same from
+		// Profile().TicketLimits whenever it applies a policy.
 		h.Client.SetLimits(p.Profile.Limits.TicketLimits())
 	}
 	s.grantPolicyChanged(old, oldFP, p, fp)

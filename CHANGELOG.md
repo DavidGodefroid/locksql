@@ -6,10 +6,15 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
-Built on lockkit v0.15.0.
+Built on lockkit v0.17.0.
 
 ### Fixed
 
+- A ticket refused over the hub client's limits (`limits.tickets_per_window`,
+  `limits.max_pending`) could answer one ask with another ask's limit or
+  retry-after: the last refusal was shared. Each ask now gets its own
+  (`not submitted: <limit, count, retry after>; <what to do next>`), from
+  lockkit v0.17.0 (#204).
 - Two locksql locks in one workspace left the agent with no locksql tool:
   `locksql mcp` exited at start (`several locksql locks: ...; pass
   --instance NAME`). One server, as `locksql init` writes it, now serves

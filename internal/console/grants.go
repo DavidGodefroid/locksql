@@ -228,10 +228,10 @@ func (s *Server) grantRequest(ctx context.Context, req ipc.Request) ipc.Response
 	rec := withPeerRecord(ctx, audit.Record{DB: db, Class: "read", Intent: intent, GrantScope: scope.words(),
 		AutoRule: s.autoRuleText(sqlclass.Read, false)})
 	s.println(paint.Step("grant asked for: " + safeText(scope.words(), false)))
-	a := s.ask(ctx, req.ID, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
+	a := withAgain(s.asker().Ask(ctx, req.ID, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
 		rec.Event, rec.Decision, rec.Reason, rec.Error, rec.Approval, rec.Ticket = b.Event, b.Decision, b.Reason, b.Error, b.Approval, b.Ticket
 		s.audit(rec)
-	}, "ask for the grant again after that")
+	}), "ask for the grant again after that")
 	return a.Refusal
 }
 
