@@ -1,0 +1,5 @@
+exit 3
+== stdout
+blocked by company policy: locksql.bounds.tier = write (profile dev: tier = ddl)
+blocked by company policy: locksql.bounds.tls = verify-full (profile dev: tls = require)
+== stderr

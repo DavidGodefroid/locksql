@@ -49,6 +49,7 @@ var helpSections = []helpSection{
 		{"init", "[claude|codex|cursor|gemini ...]", "write agent integration files into the project\n(default: the agents found on this machine)"},
 		{"stats", "[--log PATH] [--top N] [--export]", "count the refusals of the local audit log\n(--export: anonymised report, SQL shapes only)"},
 		{"config", "export|import [--project] [--profile P] ...", "share profiles and PII rules with your team\n(import: --dry-run, --allow-loosen, --local P.KEY=V)"},
+		{"managed", "show | check [--profile P]", "the company's managed configuration (managed.toml);\ncheck: the profiles against its bounds, as the console\ndoes at start (exit 3 when one is blocked)"},
 	}},
 	{title: "Client commands", rows: []helpRow{
 		{"status", "[--profile P] [--instance NAME]", ""},
@@ -189,6 +190,8 @@ func runEnv(e env, args []string) int {
 		return runPII(e, args[1:])
 	case "config":
 		return runConfig(e, args[1:])
+	case "managed":
+		return runManaged(e, args[1:])
 	case "tables", "describe", "plan", "run", "grant", "request", "logout":
 		return runClient(e, cmd, args[1:])
 	default:
