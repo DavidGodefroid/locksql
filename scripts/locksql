@@ -3,10 +3,6 @@
 # `locksql` on the host by scripts/install.sh, runs every command in the
 # image, each with the account and the volumes it needs (docs/docker.md):
 #
-#   console          as the console account (locksql), in a container of its
-#                    own per project (locksql-console-<n>), confined (no capability, read-only
-#                    root, bounded processes and memory), with the socket
-#                    and home volumes
 #   stats, forget    as the console account, with its home volume
 #   init, config     as you, with your home: they write your agents' files
 #                    and your user config
@@ -20,6 +16,9 @@
 #                    lox run, but doctor then runs anyway and says why
 #   anything else    as the agent account, with no socket: help...
 #
+# The console is started by `lox run` only (lockhub): `locksql console`
+# says so and runs nothing.
+#
 # The project (the nearest directory up from here that holds .locksql/, or
 # this directory) is mounted at its own path. `locksql update` updates this
 # launcher and its image; `locksql version` prints both versions.
@@ -31,11 +30,6 @@
 #   LOCKSQL_VAULT=1      the image with the vault CLI (credentials = "vault")
 #   LOCKSQL_DOCKER_ARGS  extra `docker run` arguments, split on spaces
 #                        (e.g. --network shop)
-#   LOCKSQL_READONLY_PROJECT=1  the console mounts the project read-only,
-#                        but for .locksql/ (a project your agents write)
-#   LOCKSQL_CONSOLE_NAME the console's container name
-#   VAULT_ADDR, VAULT_NAMESPACE, VAULT_CACERT  passed to the console (the
-#                        file of VAULT_CACERT mounted read-only)
 set -eu
 
 # scripts/install.sh and locksql update write the release version here,
@@ -83,15 +77,15 @@ while :; do
 	d="$(dirname "$d")"
 done
 
-# An explicit --project DIR (or --project=DIR) of console or profile, the
-# commands that take it (neither takes a positional argument; config's
-# --project is a switch, and elsewhere it would be text such as SQL), is the
-# project instead: mounted at its physical path, which the command gets in
-# its place. "--" ends the options.
+# An explicit --project DIR (or --project=DIR) of profile, the command
+# that takes it (it takes no positional argument; config's --project is
+# a switch, and elsewhere it would be text such as SQL), is the project
+# instead: mounted at its physical path, which the command gets in its
+# place. "--" ends the options.
 take=
 explicit=
 case "${1:-}" in
-console | profile) scan=1 ;;
+profile) scan=1 ;;
 *) scan= ;;
 esac
 for a in "$@"; do
@@ -143,7 +137,7 @@ docker_run() {
 	# LOCKSQL_DOCKER_ARGS is split on spaces, never globbed.
 	set -f
 	# shellcheck disable=SC2086 # LOCKSQL_DOCKER_ARGS is split on purpose
-	exec docker run --rm -v "$project:$project${project_mode:-}" -w "$workdir" ${LOCKSQL_DOCKER_ARGS:-} "$@"
+	exec docker run --rm -v "$project:$project" -w "$workdir" ${LOCKSQL_DOCKER_ARGS:-} "$@"
 }
 
 # docker_run_then ARGS...: docker_run, back in the launcher afterwards; it
@@ -152,7 +146,7 @@ docker_run_then() {
 	docker_prep
 	set -f
 	# shellcheck disable=SC2086 # LOCKSQL_DOCKER_ARGS is split on purpose
-	docker run --rm -v "$project:$project${project_mode:-}" -w "$workdir" ${LOCKSQL_DOCKER_ARGS:-} "$@"
+	docker run --rm -v "$project:$project" -w "$workdir" ${LOCKSQL_DOCKER_ARGS:-} "$@"
 	rc=$?
 	set +f
 	return "$rc"
@@ -176,15 +170,6 @@ mountable() {
 	case "$1" in
 	*:*) die "$1 holds a \":\", which docker -v cannot mount: move or rename it" ;;
 	esac
-}
-
-# check_locksql_dir: $locksql_dir is a directory of its own, no symbolic
-# link on its path (its physical path is itself).
-check_locksql_dir() {
-	if [ -L "$locksql_dir" ] || [ ! -d "$locksql_dir" ] ||
-		[ "$(cd "$locksql_dir" 2>/dev/null && pwd -P)" != "$locksql_dir" ]; then
-		die "$locksql_dir is not a directory: the console writes there"
-	fi
 }
 
 # has_flag FLAG ARGS...: whether the options in ARGS (up to "--") hold
@@ -446,6 +431,17 @@ lockup_volume() {
 		lockup_why="no .lockfamily/up.json in $here or above it: start the workspace's locks with \`lox run\` (lockhub), then run locksql from the workspace"
 		return 1
 	fi
+	# A sub-project with its own .locksql/config.toml below the workspace:
+	# its clients key their socket on the sub-project, lox run's console on
+	# the workspace, so none of them would reach the console.
+	lu_d=$here
+	while [ "$lu_d" != "$lu_ws" ]; do
+		if [ -f "$lu_d/.locksql/config.toml" ]; then
+			lockup_why="$lu_d has its own .locksql/ below the workspace $lu_ws: lox run's console serves the workspace's .locksql only; run locksql from $lu_ws, or make $lu_d a workspace of its own (lox init there)"
+			return 1
+		fi
+		lu_d=$(dirname "$lu_d")
+	done
 	lu_lf=$lu_ws/.lockfamily
 	lu_f=$lu_lf/up.json
 	if [ -L "$lu_lf" ] || [ ! -d "$lu_lf" ]; then
@@ -470,7 +466,13 @@ lockup_volume() {
 	fi
 	lu_ino=$(ls -di "$lu_f")
 	if ! lu_state=$(lockup_parse <"$lu_f") || [ -L "$lu_f" ] || [ "$(ls -di "$lu_f")" != "$lu_ino" ]; then
-		lockup_why="$lu_f is not lox run's state (version 1): run \`lox run\`"
+		# Go's json.MarshalIndent writes &, < and > as &, < and
+		# >, which lockup_parse never unescapes.
+		if grep -Eq '\\u00(26|3[cCeE])' "$lu_f"; then
+			lockup_why="the workspace's path holds &, < or >, which lox run's state escapes: locksql cannot check it; move or rename the workspace"
+		else
+			lockup_why="$lu_f is not lox run's state (version 1): run \`lox run\`"
+		fi
 		return 1
 	fi
 	lu_project= lu_wsf= lu_locks=
@@ -686,58 +688,10 @@ version | --version)
 	docker_run "$image" version
 	;;
 console)
-	shift
-	command -v docker >/dev/null 2>&1 || die "docker is required: locksql runs in Docker (docs/docker.md)"
-	has_flag --project "$@" || set -- --project "$project" "$@"
-	# LOCKSQL_READONLY_PROJECT=1: the console reads the project and writes
-	# only .locksql/ (its PII rules), for a project your agents write. A bind
-	# mount follows a symbolic link, so .locksql must be a directory.
-	# Checked again right before docker run; on Linux the console also
-	# checks the inode of what Docker mounted.
-	locksql_dir=
-	inode=
-	if [ "${LOCKSQL_READONLY_PROJECT:-0}" = 1 ]; then
-		locksql_dir="$project/.locksql"
-		check_locksql_dir
-		project_mode=:ro
-		# On Linux the console refuses to start on a .locksql other than
-		# this one (its device and inode), one swapped in before Docker's
-		# mount.
-		if [ "$(uname -s)" = Linux ]; then
-			inode="$(stat -c '%d:%i' "$locksql_dir")" || die "could not stat $locksql_dir"
-		fi
-	fi
-	# VAULT_CACERT: the file the vault CLI checks Vault's certificate
-	# against, mounted read-only at its own path.
-	cacert=
-	if [ -n "${VAULT_CACERT:-}" ]; then
-		case "$VAULT_CACERT" in /*) cacert=$VAULT_CACERT ;; *) cacert="$here/$VAULT_CACERT" ;; esac
-		[ -f "$cacert" ] || die "VAULT_CACERT: no file $cacert"
-		mountable "$cacert"
-	fi
-	# One console container per project, so that two can run.
-	name="${LOCKSQL_CONSOLE_NAME:-locksql-console-$(printf '%s' "$project" | cksum | awk '{ print $1 }')}"
-	# A console that ended without --rm keeps the name: a stopped one is only in the way.
-	if [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" = false ]; then
-		docker rm "$name" >/dev/null
-	fi
-	# No log driver: with a terminal, docker's json-file log would keep every
-	# screen of the console (results you chose to show) for anyone who runs
-	# docker logs. host.docker.internal is this machine, as the profile
-	# wizard offers it. The console holds the credentials: no capability, no
-	# privilege gain, a read-only root with a small /tmp, bounded processes
-	# and memory.
-	set -- --name "$name" --log-driver none --user locksql \
-		--cap-drop ALL --security-opt no-new-privileges --read-only \
-		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m --pids-limit 256 --memory 1g \
-		--add-host=host.docker.internal:host-gateway -e VAULT_ADDR -e VAULT_NAMESPACE \
-		-v locksql-run:/run/locksql -v locksql-home:/home/locksql \
-		${locksql_dir:+-v} ${locksql_dir:+"$locksql_dir:$locksql_dir"} \
-		${inode:+-e} ${inode:+"LOCKSQL_EXPECT_DIR=$inode"} \
-		${cacert:+-v} ${cacert:+"$cacert:$cacert:ro"} ${cacert:+-e} ${cacert:+"VAULT_CACERT=$cacert"} \
-		"$image" console "$@"
-	[ -z "$locksql_dir" ] || check_locksql_dir
-	docker_run "$tty" "$@"
+	# No agent command mounts a console's socket but lox run's: a console
+	# started here would be one no client reaches.
+	say "the console is started by lox run only (lockhub): run lox run in the workspace"
+	exit 2
 	;;
 stats | forget)
 	docker_run "$tty" --user locksql -v locksql-home:/home/locksql "$image" "$@"

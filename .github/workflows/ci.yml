@@ -106,8 +106,8 @@ jobs:
         run: docker build -t locksql .
       - name: doctor (agent and console accounts)
         run: |
-          docker run --rm -v locksql-run:/run/locksql locksql doctor
-          docker run --rm --user locksql -v locksql-run:/run/locksql -v locksql-home:/home/locksql locksql doctor
+          docker run --rm -v locksql-ci-run:/run/locksql locksql doctor
+          docker run --rm --user locksql -v locksql-ci-run:/run/locksql -v locksql-home:/home/locksql locksql doctor
       - name: the launcher runs every command in the image
         run: |
           set -ex
@@ -142,7 +142,7 @@ jobs:
           sudo chown -R 10001 .locksql
           fix_ok
           # No lox run here: no console's socket to mount (exit 2, as a client
-          # that finds no console), never the fixed locksql-run instead.
+          # that finds no console), never another volume instead.
           code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" status --profile local 2>err || code=$?
           test "$code" = 2 && grep -q 'no .lockfamily/up.json' err
           code=0; sh "$GITHUB_WORKSPACE/scripts/locksql" install 2>err || code=$?
