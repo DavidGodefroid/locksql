@@ -22,7 +22,7 @@
         "Detail": ""
       }
     ],
-    "notes": "Claude Code asks once whether to use the project MCP server \"locksql\"; approve it.\nOptional: the calls below never touch data without the console's approval. To stop\nClaude Code prompting for them, add them to \"permissions.allow\" in\n.claude/settings.local.json (personal) or .claude/settings.json (shared):\n\n  \"mcp__locksql__locksql_status\",\n  \"mcp__locksql__locksql_list_tables\",\n  \"mcp__locksql__locksql_describe\",\n  \"mcp__locksql__locksql_plan\",\n  \"mcp__locksql__locksql_pii_list\",\n  \"Bash(locksql status:*)\",\n  \"Bash(locksql tables:*)\",\n  \"Bash(locksql describe:*)\",\n  \"Bash(locksql plan:*)\"\n\n\"mcp__locksql__locksql_run\" and \"Bash(locksql run:*)\" may be added too: every run\nis still approved by the human in the console.\n\n"
+    "notes": "Claude Code asks once whether to use the project MCP server \"locksql\"; approve it.\nThe calls below answer within the console's policy and budgets, without a prompt.\nOptional: to stop Claude Code prompting for them, add them to\n\"permissions.allow\" in .claude/settings.local.json (personal) or\n.claude/settings.json (shared):\n\n  \"mcp__locksql__locksql_status\",\n  \"mcp__locksql__locksql_list_tables\",\n  \"mcp__locksql__locksql_describe\",\n  \"mcp__locksql__locksql_plan\",\n  \"mcp__locksql__locksql_pii_list\",\n  \"Bash(locksql status:*)\",\n  \"Bash(locksql tables:*)\",\n  \"Bash(locksql describe:*)\",\n  \"Bash(locksql plan:*)\"\n\n\"mcp__locksql__locksql_run\" and \"Bash(locksql run:*)\" may be added too: every run\nis still approved by the human in the console.\n\n"
   },
   "project claude bad json": {
     "files": {
@@ -54,7 +54,7 @@
         "Detail": ""
       }
     ],
-    "notes": "Claude Code asks once whether to use the project MCP server \"locksql\"; approve it.\nOptional: the calls below never touch data without the console's approval. To stop\nClaude Code prompting for them, add them to \"permissions.allow\" in\n.claude/settings.local.json (personal) or .claude/settings.json (shared):\n\n  \"mcp__locksql__locksql_status\",\n  \"mcp__locksql__locksql_list_tables\",\n  \"mcp__locksql__locksql_describe\",\n  \"mcp__locksql__locksql_plan\",\n  \"mcp__locksql__locksql_pii_list\",\n  \"Bash(locksql status:*)\",\n  \"Bash(locksql tables:*)\",\n  \"Bash(locksql describe:*)\",\n  \"Bash(locksql plan:*)\"\n\n\"mcp__locksql__locksql_run\" and \"Bash(locksql run:*)\" may be added too: every run\nis still approved by the human in the console.\n\n"
+    "notes": "Claude Code asks once whether to use the project MCP server \"locksql\"; approve it.\nThe calls below answer within the console's policy and budgets, without a prompt.\nOptional: to stop Claude Code prompting for them, add them to\n\"permissions.allow\" in .claude/settings.local.json (personal) or\n.claude/settings.json (shared):\n\n  \"mcp__locksql__locksql_status\",\n  \"mcp__locksql__locksql_list_tables\",\n  \"mcp__locksql__locksql_describe\",\n  \"mcp__locksql__locksql_plan\",\n  \"mcp__locksql__locksql_pii_list\",\n  \"Bash(locksql status:*)\",\n  \"Bash(locksql tables:*)\",\n  \"Bash(locksql describe:*)\",\n  \"Bash(locksql plan:*)\"\n\n\"mcp__locksql__locksql_run\" and \"Bash(locksql run:*)\" may be added too: every run\nis still approved by the human in the console.\n\n"
   },
   "project claude own entry": {
     "files": {
@@ -79,7 +79,7 @@
         "Detail": ""
       }
     ],
-    "notes": "Claude Code asks once whether to use the project MCP server \"locksql\"; approve it.\nOptional: the calls below never touch data without the console's approval. To stop\nClaude Code prompting for them, add them to \"permissions.allow\" in\n.claude/settings.local.json (personal) or .claude/settings.json (shared):\n\n  \"mcp__locksql__locksql_status\",\n  \"mcp__locksql__locksql_list_tables\",\n  \"mcp__locksql__locksql_describe\",\n  \"mcp__locksql__locksql_plan\",\n  \"mcp__locksql__locksql_pii_list\",\n  \"Bash(locksql status:*)\",\n  \"Bash(locksql tables:*)\",\n  \"Bash(locksql describe:*)\",\n  \"Bash(locksql plan:*)\"\n\n\"mcp__locksql__locksql_run\" and \"Bash(locksql run:*)\" may be added too: every run\nis still approved by the human in the console.\n\n"
+    "notes": ".mcp.json already has a \"locksql\" server that locksql init did not write: check what it runs before Claude Code asks you to approve it; no calls were allowed. Remove that entry and run init again to wire locksql.\n\n"
   },
   "project codex": {
     "files": {
@@ -167,7 +167,7 @@
         "Detail": ""
       }
     ],
-    "notes": "Claude Code asks once whether to use the project MCP server \"locksql\"; approve it.\nOptional: the calls below never touch data without the console's approval. To stop\nClaude Code prompting for them, add them to \"permissions.allow\" in\n.claude/settings.local.json (personal) or .claude/settings.json (shared):\n\n  \"mcp__locksql__locksql_status\",\n  \"mcp__locksql__locksql_list_tables\",\n  \"mcp__locksql__locksql_describe\",\n  \"mcp__locksql__locksql_plan\",\n  \"mcp__locksql__locksql_pii_list\",\n  \"Bash(locksql status:*)\",\n  \"Bash(locksql tables:*)\",\n  \"Bash(locksql describe:*)\",\n  \"Bash(locksql plan:*)\"\n\n\"mcp__locksql__locksql_run\" and \"Bash(locksql run:*)\" may be added too: every run\nis still approved by the human in the console.\n\n"
+    "notes": "Claude Code asks once whether to use the project MCP server \"locksql\"; approve it.\nThe calls below answer within the console's policy and budgets, without a prompt.\nOptional: to stop Claude Code prompting for them, add them to\n\"permissions.allow\" in .claude/settings.local.json (personal) or\n.claude/settings.json (shared):\n\n  \"mcp__locksql__locksql_status\",\n  \"mcp__locksql__locksql_list_tables\",\n  \"mcp__locksql__locksql_describe\",\n  \"mcp__locksql__locksql_plan\",\n  \"mcp__locksql__locksql_pii_list\",\n  \"Bash(locksql status:*)\",\n  \"Bash(locksql tables:*)\",\n  \"Bash(locksql describe:*)\",\n  \"Bash(locksql plan:*)\"\n\n\"mcp__locksql__locksql_run\" and \"Bash(locksql run:*)\" may be added too: every run\nis still approved by the human in the console.\n\n"
   },
   "project gemini": {
     "files": {
