@@ -99,6 +99,7 @@ func TestDetachHintKeepsTerminalFaces(t *testing.T) {
 		"StatusLine":       is[interface{ SetStatus(string) }](h),
 		"Sized":            is[Sized](h),
 		"QuestionRecorder": is[interface{ SetQuestionFile(string) }](h),
+		"ContextPrinter":   is[interface{ PrintContext(string) }](h),
 		"Beller":           is[interface{ Bell() }](h),
 		"KeySource":        is[interface{ SetKeyHandler(func(Key)) }](h),
 	} {
