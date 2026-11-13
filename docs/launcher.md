@@ -27,7 +27,7 @@ terminals, else `-i`.
 
 | Subcommand | Account | Extra | Why |
 |---|---|---|---|
-| `stats`, `forget` | `locksql` | volume `locksql-home` | they read the console account's state |
+| `stats`, `forget` | `locksql` | volume `locksql-home` | they read the console account's state; not yet the lock's home volume that `lox run` gives the console ([#220](https://github.com/DavidGodefroid/locksql/issues/220)) |
 | `init`, `config` | you (`id -u`:`id -g`) | `-e HOME=$HOME -v $HOME:$HOME` | they write your agents' files and your user config, owned by you |
 | `profile` | you | `-e HOME=/tmp` | it writes `.locksql/config.toml`, yours to edit |
 | `doctor --fix` | you (`id -u`:`id -g`), in the group `locksql-clients`; root (`--user 0`) first, only when `.locksql/` holds entries that are not yours | `-e HOME=$HOME -e USER -v $HOME:$HOME`, `-e LOCKSQL_DOCTOR_FOR=uid:gid`; no socket volume | it wires your agents and keeps `.locksql/` as `lox run` reads it: yours, writable by you only. The root run gives back to you what the console account owns in `.locksql/` (left by `doctor --fix` up to v0.13.0, which `lox run` refuses), nothing else, its output on stderr |

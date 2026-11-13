@@ -94,7 +94,7 @@ LOCKSQL_VERSION=$V sh install.sh</code></pre>
     <ul>
       <li><code>locksql version</code> prints the launcher’s version and its image’s.</li>
       <li><code>locksql update</code> installs the latest release’s launcher and pulls its image.</li>
-      <li><code>LOCKSQL_VAULT=1</code> selects the image with the vault CLI (some 550 MB more), for <code>credentials = "vault"</code>.</li>
+      <li><code>LOCKSQL_VAULT=1</code> selects the image with the vault CLI (some 550 MB more) for the launcher’s commands; the console’s image is the lock’s, which <code>lox add</code> pins.</li>
       <li><code>LOCKSQL_IMAGE</code> runs an image of your own, such as <code>docker build -t locksql .</code> from a clone.</li>
     </ul>
   </div>
@@ -120,8 +120,8 @@ locksql doctor --fix --yes</code></pre>
     <p><code>--engine</code> and its flags skip their questions; <code>--non-interactive</code> asks none (<code>locksql profile add --non-interactive --engine postgres --host db.internal --credentials vault --vault-path database/creds/ro</code>).</p>
     <p>Inside a container <code>localhost</code> is the container itself, and the wizard knows it:</p>
     <ul>
-      <li>a database on your machine is <code>host = "host.docker.internal"</code>, which the launcher maps to your machine. <code>tls</code> defaults to <code>prefer</code>: a local server without TLS connects in plain TCP, with a warning;</li>
-      <li>a database in another container is reached by its name on a shared network (<code>LOCKSQL_DOCKER_ARGS="--network NAME" locksql console</code>);</li>
+      <li>a database on your machine is <code>host = "host.docker.internal"</code>, which the lock’s egress gateway maps to your machine. <code>tls</code> defaults to <code>prefer</code>: a local server without TLS connects in plain TCP, with a warning;</li>
+      <li>a database in another container: publish its port on your machine and name <code>host.docker.internal</code>; under <code>lox run</code> the lock reaches only its profile’s endpoints and cannot join the container’s network (<a href="https://github.com/DavidGodefroid/lockhub/issues/194">lockhub#194</a>);</li>
       <li><code>credentials = "keychain"</code> is not available in a container, which has no OS keychain: use <code>ask</code>, or <code>vault</code> with the vault image;</li>
       <li>a SQLite <code>path</code> is relative to the project root, which is mounted.</li>
     </ul>
@@ -163,7 +163,7 @@ k_anonymity         = 5
 explain_cost_refuse = 0             <span class="cmt"># engine cost units; 0 = off</span></code></pre>
   <div class="prose">
     <p>The <code>tls</code> settings go to the driver as they are, and the default is <code>prefer</code> whatever the host. Set <code>tls = "verify-full"</code> to verify the server certificate, with <code>tls_ca</code> for a private CA.</p>
-    <p><code>tls_server_name</code> names the certificate’s host when <code>host</code> is an IP address or an alias. <code>tls_cert</code> and <code>tls_key</code> go together and present a client certificate when the server asks for one; keep both in the console account’s home, the <code>locksql-home</code> volume.</p>
+    <p><code>tls_server_name</code> names the certificate’s host when <code>host</code> is an IP address or an alias. <code>tls_cert</code> and <code>tls_key</code> go together and present a client certificate when the server asks for one; keep both in the console account’s home, the lock’s home volume that <code>lox run</code> creates.</p>
     <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#tls-to-the-database">TLS to the database</a></p>
     <p>A database reachable only from a bastion gets an <code>ssh</code> table. The console opens the SSH connection itself, with no local listening port. It checks the bastion against the console account’s <code>~/.ssh/known_hosts</code>, asking on first use and refusing a changed key.</p>
     <p><code>host</code> is then the database as seen from the bastion.</p>
@@ -178,7 +178,7 @@ production  = true
 host        = "bastion.example.com"
 user        = "deploy"
 auth        = "key"                 <span class="cmt"># key | agent | password</span>
-key         = "~/.ssh/id_ed25519"   <span class="cmt"># in the locksql-home volume, owned by locksql, mode 0600</span></code></pre>
+key         = "~/.ssh/id_ed25519"   <span class="cmt"># in the lock’s home volume, owned by locksql, mode 0600</span></code></pre>
   <p><a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/configuration.md">All profile keys</a></p>
 </section>
 
@@ -201,14 +201,14 @@ key         = "~/.ssh/id_ed25519"   <span class="cmt"># in the locksql-home volu
   <div class="prose">
     <p>The console runs attached to <a href="https://github.com/DavidGodefroid/lockhub">lockhub</a> only. <code>lox add locksql</code> declares the lock; <code>lox run</code>, in a terminal of its own outside the agent, starts the hub and the workspace’s locks, then serves the decisions.</p>
     <p><code>lox attach NAME</code> attaches your terminal to the console (detach: Ctrl-P Ctrl-Q). There it asks its policy, the PII rules and the password; it asks again when it restarts.</p>
-    <p>Without its hub flags, which lockhub writes, <code>locksql console</code> exits with <code>launched by `lox run` only</code>. It runs as the <code>locksql</code> account in its own container, one per project.</p>
-    <p>The <code>locksql-home</code> volume keeps the console account’s state from one run to the next: the approved policy, the audit log, and <code>~/.ssh/known_hosts</code> for an <code>ssh</code> profile.</p>
+    <p><code>lox run</code> starts the console, never the launcher: <code>locksql console</code> exits with <code>the console is started by lox run only (lockhub): run lox run in the workspace</code>. It runs as the <code>locksql</code> account in its own container, one per lock.</p>
+    <p>The lock’s home volume, <code>&lt;compose project&gt;_&lt;instance&gt;-home</code>, keeps the console account’s state from one run to the next: the approved policy, the audit log, and <code>~/.ssh/known_hosts</code> for an <code>ssh</code> profile.</p>
   </div>
 
   <h3 id="vault">With HashiCorp Vault</h3>
   <div class="prose">
-    <p>With <code>credentials = "vault"</code>, use the vault image (<code>LOCKSQL_VAULT=1</code>) and set <code>VAULT_ADDR</code>. The console account needs no <code>vault login</code>.</p>
-    <p>At start the console asks for the Vault token (no echo) and keeps it in memory for the session, never on disk. When Vault refuses a read, it asks again.</p>
+    <p>With <code>credentials = "vault"</code>, declare the lock with Vault: <code>lox add locksql NAME --credentials vault --vault-path PATH --vault-address URL</code> pins the vault image and writes the <code>vault:</code> block of <code>lockfamily.yaml</code>, from which <code>lox run</code> gives the console <code>VAULT_ADDR</code>. The console account needs no <code>vault login</code>.</p>
+    <p>At start the console asks for the Vault token (no echo), on a card in <code>lox run</code>’s terminal, and keeps it in memory for the session, never on disk. When Vault refuses a read, it asks again.</p>
     <p>Get the token without storing it in your account, where the agent runs, then paste it at the prompt:</p>
   </div>
   <pre tabindex="0"><code>vault login -method=oidc -no-store -token-only</code></pre>
@@ -222,7 +222,7 @@ key         = "~/.ssh/id_ed25519"   <span class="cmt"># in the locksql-home volu
   <h2 id="separation">What Docker does and does not separate</h2>
   <div class="prose">
     <p>The agent’s container holds no credential, has no database connection and reaches the console only through the socket. A process that is neither the console account nor in <code>locksql-clients</code> is refused.</p>
-    <p>Your own account is another matter. Whoever can run <code>docker</code> commands can attach to the console and type an answer, exec into it and read its memory, or open the <code>locksql-home</code> volume.</p>
+    <p>Your own account is another matter. Whoever can run <code>docker</code> commands can attach to the console and type an answer, exec into it and read its memory, or open the lock’s home volume.</p>
     <p>An agent that runs shell commands in your account usually can: the launcher it runs for the MCP server is itself a <code>docker run</code>. This setup keeps the credentials out of the agent’s reach, but it does not stop an agent determined to go around it.</p>
     <p>The stronger boundary: run the agent itself in its own container, without the Docker socket, and start the console with <code>--allowed-uids</code> set to the agent’s uid (or build its image with <code>--build-arg ALLOWED_UIDS=</code> and run it with <code>LOCKSQL_IMAGE</code>). <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/docker.md#agent-in-its-own-container">Agent in its own container</a>.</p>
   </div>

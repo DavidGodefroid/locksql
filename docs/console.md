@@ -34,7 +34,7 @@ environment variable can set them) and each change is audited.
 
 ## Clear results (Ctrl-O)
 
-Ctrl-O (or `locksql console --show-results` to start that way) prints in
+Ctrl-O (or the console's `--show-results`, which `lox run` does not pass) prints in
 the console, in clear, the result of each masked query it runs, as an
 aligned table, so you see who the rows are while the agent still gets the
 masked cells. The cells the agent got masked are yellow and carry their

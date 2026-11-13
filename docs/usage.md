@@ -234,8 +234,8 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   (bastion unreachable, host key refused) are reported without asking.
   `locksql forget --profile P` removes both secrets.
 - `key` and `known_hosts` belong to the **console account**: `~` is its
-  home, `/home/locksql`, kept in the `locksql-home` volume
-  ([docker.md](docker.md#run-the-console)), and the bastion's host key is checked against its
+  home, `/home/locksql`, kept in the lock's home volume that `lox run`
+  creates ([docker.md](docker.md#run-the-console)), and the bastion's host key is checked against its
   `~/.ssh/known_hosts`. Nothing needs to be prepared there: the first
   connection shows the key and asks.
 
@@ -561,11 +561,16 @@ the hub and the workspace's locks, then serves the decisions there (reads
 pass by rule in auto mode; writes, connections and policy changes are
 asked). It starts the console with a terminal, with the hub flags
 (`--hub URL --hub-key-file PATH --instance NAME`, see
-[Approving in lockhub](#approving-in-lockhub)) and the lock's settings:
+[Approving in lockhub](#approving-in-lockhub)) and the lock's `profile:`, in
+the lock's container (not a command you run; the launcher's `locksql
+console` only says that `lox run` starts it):
 
 ```sh
-locksql console --hub URL --hub-key-file PATH --instance NAME [--profile dev] [--allow-unmask] [--show-results]
+console --hub URL --hub-key-file PATH --instance NAME [--profile dev]
 ```
+
+Clear results and unmasking are switched on at the console (Ctrl-O,
+`:unmask`): `lox run` passes neither `--show-results` nor `--allow-unmask`.
 
 `lox attach sql-dev` attaches your terminal to it (detach: Ctrl-P Ctrl-Q):
 the console asks its start-up questions there (below), and again when it
@@ -752,8 +757,8 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
   `REQUIRE X509`). The key file is read by the console account and refused
   when group or others can read it; keep both files in that account's home.
 - File keys (`tls_ca`, `tls_cert`, `tls_key`, `ssh.key`): a leading `~/` is
-  the console account's home (`/home/locksql` in the image, the
-  `locksql-home` volume); any other path is read as written. The console
+  the console account's home (`/home/locksql` in the image, the lock's
+  home volume under `lox run`); any other path is read as written. The console
   opens each file right after the policy review, before the production name
   or any secret is asked, and stops with `tls_ca: <path> not found in the
   console's home (/home/locksql)` when one is missing. `locksql doctor`, run
@@ -1429,7 +1434,8 @@ PII columns (columns under a mask rule) may be used as follows:
 - `EXPLAIN` of a statement that filters, groups or aggregates PII is refused.
 - Ask for unmasked values with `--unmask`. It is off by default: the console
   refuses the request unless the human allowed it there
-  (`locksql console --allow-unmask`, or `:unmask` while it runs;
+  (`:unmask` while it runs, or the console's `--allow-unmask`, which
+  `lox run` does not pass;
   `locksql status` shows `unmask allowed` or `off`). When allowed, the PII usage rules and the k-anonymity checks no
   longer apply, the approval screen shows `PII: UNMASKED` in red, and it is
   never auto-approved. Once it has run, the console prints the clear result
