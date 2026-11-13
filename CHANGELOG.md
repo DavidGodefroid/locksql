@@ -52,6 +52,11 @@ Built on lockkit v0.19.0.
 
 ### Fixed
 
+- The trust question of an unknown SSH host key now carries its context
+  (the host and `<type> key fingerprint is <fp>`) in the question file
+  (lockkit `PrintContext`): a human answering from `lox attach`, lea, the
+  hub or the mobile app sees which key they trust, and the 8 characters a
+  production profile asks for. The terminal shows the same lines (#213).
 - A ticket refused over the hub client's limits (`limits.tickets_per_window`,
   `limits.max_pending`) could answer one ask with another ask's limit or
   retry-after: the last refusal was shared. Each ask now gets its own

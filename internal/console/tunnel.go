@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/lockkit/tunnel"
 	"github.com/DavidGodefroid/locksql/internal/config"
@@ -44,6 +45,34 @@ func (st *starter) recordHostKey(host, fp string) bool {
 	return true
 }
 
+// confirmHostKey asks the human to trust the unknown key fp of host, and
+// records a trusted key before returning: the known_hosts write follows
+// it, and a key that cannot be recorded is not trusted. The host and the
+// fingerprint are printed as context of the question (PrintContext), so
+// that a human answering from the hub or the mobile app sees which key
+// they trust.
+func (st *starter) confirmHostKey(ctx context.Context, p config.Profile, khPath, host, keyType, fp string) bool {
+	kconsole.PrintContext(st.io, paint.Warn(fmt.Sprintf("The authenticity of %s can't be established.", safeText(host, false))))
+	kconsole.PrintContext(st.io, fmt.Sprintf("%s key fingerprint is %s", safeText(keyType, false), fp))
+	prompt := "Trust this key and add it to " + safeText(khPath, false) + "? [yes/N] "
+	if p.Production {
+		prompt = "Type the last 8 characters of the fingerprint to trust it: "
+	}
+	// The expected answer is matched exactly ("yes", or the last 8
+	// characters of the fingerprint), as hostKeyAnswerOK does.
+	expected := "yes"
+	if p.Production {
+		if len(fp) < 8 {
+			return false
+		}
+		expected = fp[len(fp)-8:]
+	}
+	if r := st.decide(ctx, Decision{Prompt: prompt, Expected: expected, Production: true}); r.Outcome != Approved {
+		return false
+	}
+	return st.recordHostKey(p.SSH.Host, fp)
+}
+
 // openTunnel opens the SSH tunnel of p, asking for its secret by p.SSH's
 // credentials mode and for any unknown host key. Open runs under ctx
 // itself, with no deadline of the console's: it bounds its own network
@@ -55,28 +84,8 @@ func (st *starter) openTunnel(ctx context.Context, p config.Profile) (*tunnel.Tu
 		return nil, fmt.Errorf("console: ssh: %w", err)
 	}
 	khPath := tunnel.KnownHostsPath(home)
-	// confirm records a trusted key before returning: the known_hosts
-	// write follows it, and a key that cannot be recorded is not trusted.
 	confirm := func(host, keyType, fp string) bool {
-		st.io.Println(paint.Warn(fmt.Sprintf("The authenticity of %s can't be established.", safeText(host, false))))
-		st.io.Println(fmt.Sprintf("%s key fingerprint is %s", safeText(keyType, false), fp))
-		prompt := "Trust this key and add it to " + safeText(khPath, false) + "? [yes/N] "
-		if p.Production {
-			prompt = "Type the last 8 characters of the fingerprint to trust it: "
-		}
-		// The expected answer is matched exactly ("yes", or the last 8
-		// characters of the fingerprint), as hostKeyAnswerOK does.
-		expected := "yes"
-		if p.Production {
-			if len(fp) < 8 {
-				return false
-			}
-			expected = fp[len(fp)-8:]
-		}
-		if r := st.decide(ctx, Decision{Prompt: prompt, Expected: expected, Production: true}); r.Outcome != Approved {
-			return false
-		}
-		return st.recordHostKey(s.Host, fp)
+		return st.confirmHostKey(ctx, p, khPath, host, keyType, fp)
 	}
 	hk, err := tunnel.KnownHosts(khPath, confirm)
 	if err != nil {
