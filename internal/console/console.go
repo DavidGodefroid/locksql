@@ -183,6 +183,9 @@ type plan struct {
 	an        *sqlast.Analysis
 	runSQL    string
 	isExplain bool
+	// writeJoins are the PII joins of a write that an is nil for
+	// (writePlan), for the human's warning.
+	writeJoins []string
 	// src is the statement as the agent sent it, and base the offset in
 	// it of the statement the checks read: refusals point into src.
 	src  string
