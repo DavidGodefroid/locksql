@@ -3,7 +3,12 @@
 # `locksql` on the host by scripts/install.sh, runs every command in the
 # image, each with the account and the volumes it needs (docs/docker.md):
 #
-#   stats, forget    as the console account, with its home volume
+#   stats, forget    as the console account, with the home volume of the
+#                    workspace's locksql lock that `lox run` runs (found as
+#                    the agent commands find its socket; --instance NAME
+#                    picks one of several); without lox run, the volume
+#                    locksql-home of a console started by hand
+#                    (`locksql console`, up to v0.17), when there is one
 #   init, config     as you, with your home: they write your agents' files
 #                    and your user config
 #   profile          as you, so that the files it writes are yours
@@ -413,7 +418,7 @@ lockup_parse() {
 # directory, in $lockup_vol; when there is none the agents can trust, why,
 # with what to do, in $lockup_why.
 lockup_volume() {
-	lockup_vol= lockup_why=
+	lockup_vol= lockup_why= lockup_none=
 	lu_inst=${1:-}
 	# The workspace: the nearest directory up from here whose .lockfamily
 	# holds up.json (a sub-project's own .lockfamily may hold none).
@@ -429,6 +434,7 @@ lockup_volume() {
 	done
 	if [ -z "$lu_ws" ]; then
 		lockup_why="no .lockfamily/up.json in $here or above it: start the workspace's locks with \`lox run\` (lockhub), then run locksql from the workspace"
+		lockup_none=1
 		return 1
 	fi
 	# A sub-project with its own .locksql/config.toml below the workspace:
@@ -604,14 +610,50 @@ EOF_STATE
 	done
 	lockup_vol=$lu_vol
 }
-lockup_vol= lockup_why=
+lockup_vol= lockup_why= lockup_none=
+
+# lockup_home: the home volume of the locksql lock (--instance, the only one
+# without it) that `lox run` runs for this workspace, in $home_vol: once
+# its socket volume passes lockup_volume's checks, lox run's compose
+# volume <project>_<instance>-home, whose compose labels Docker must
+# confirm (lox run gives it no others). Without lox run's state at all
+# (no .lockfamily/up.json), the volume locksql-home that a console started
+# by hand (`locksql console`, up to v0.17) used, when there is one: never a
+# new one. Else why, and exit 2.
+lockup_home() {
+	command -v docker >/dev/null 2>&1 || die "docker is required: locksql runs in Docker (docs/docker.md)"
+	mountable "$project"
+	mountable "$here"
+	if ! lockup_volume "$instance"; then
+		if [ -n "$lockup_none" ] && docker volume inspect locksql-home >/dev/null 2>&1; then
+			say "no lox run in this workspace: the volume locksql-home of a console started by hand (locksql console, up to v0.17)"
+			home_vol=locksql-home
+			return
+		fi
+		say "$lockup_why"
+		exit 2
+	fi
+	home_vol=${lockup_vol%-run}-home
+	lh_name=${home_vol#"${lu_project}_"}
+	lh_got=$(docker volume inspect --format '{{json (index .Labels "com.docker.compose.project")}}
+{{json (index .Labels "com.docker.compose.volume")}}' "$home_vol" 2>/dev/null) || {
+		say "lock $lu_name: no volume $home_vol: run \`lox run\`"
+		exit 2
+	}
+	if [ "$lh_got" != "\"$lu_project\"
+\"$lh_name\"" ]; then
+		say "lock $lu_name: volume $home_vol is not lox run's home volume of it (its labels): locksql trusts none of it; run \`lox run\`"
+		exit 2
+	fi
+}
 
 # --instance NAME (or --instance=NAME): the launcher's own option of the
 # agent commands, which of lox run's locksql locks when the workspace has
-# several. Taken out of the command line ("--" ends the options).
+# several (stats and forget too: whose home). Taken out of the command line
+# ("--" ends the options).
 instance=
 case "${1:-}" in
-mcp | doctor | status | tables | describe | plan | run | request | logout | pii)
+stats | forget | mcp | doctor | status | tables | describe | plan | run | request | logout | pii)
 	n=$#
 	take=
 	done_opts=
@@ -694,7 +736,10 @@ console)
 	exit 2
 	;;
 stats | forget)
-	docker_run "$tty" --user locksql -v locksql-home:/home/locksql "$image" "$@"
+	# The console account's state: the lock's home volume, as lox run
+	# mounts it on the console.
+	lockup_home
+	docker_run "$tty" --user locksql --mount "type=volume,src=$home_vol,dst=/home/locksql" "$image" "$@"
 	;;
 init | config)
 	# init also writes the agents' own files in your home (~/.codex, ...);
