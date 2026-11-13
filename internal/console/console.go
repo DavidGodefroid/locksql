@@ -298,6 +298,21 @@ type Server struct {
 	idleErr error
 }
 
+// noAwait is the hub approver without its wait for the decision on the
+// ticket it just pushed (kconsole.Awaiter, hubclient.DecisionWait): locksql
+// answers a submitted request pending and runs its ticket on the agent's
+// run of it, never in the same call, so that wait would only delay every
+// pending answer.
+type noAwait struct{ kconsole.AsyncApprover }
+
+// Withdraw implements kconsole.Withdrawer when the wrapped approver does.
+func (a noAwait) Withdraw(ctx context.Context, d kconsole.Decision, ticket, reason string) error {
+	if w, ok := a.AsyncApprover.(kconsole.Withdrawer); ok {
+		return w.Withdraw(ctx, d, ticket, reason)
+	}
+	return nil
+}
+
 // maxAuditFails consecutive failures of the hub goroutine's records end
 // the session, as lockkit's console does for its own.
 const maxAuditFails = 3
@@ -316,6 +331,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	if cfg.Approver == nil {
 		cfg.Approver = cfg.Hub.Approver(newTypedApprover(cfg.IO))
+	}
+	if aa, ok := cfg.Approver.(kconsole.AsyncApprover); ok {
+		if _, ok := aa.(kconsole.Awaiter); ok {
+			cfg.Approver = noAwait{aa}
+		}
 	}
 	cfg.Databases = servedDatabases(cfg.Policy.Profile.Database, cfg.Databases)
 	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, quantum: cfg.Quantum}

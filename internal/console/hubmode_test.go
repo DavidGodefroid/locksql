@@ -204,6 +204,20 @@ func TestHubModePendingThenRun(t *testing.T) {
 	}
 }
 
+// A pending answer comes at once: locksql runs a ticket on the agent's
+// run of it, so the hub approver's wait for a decision
+// (hubclient.DecisionWait) would only delay every pending answer.
+func TestHubModePendingAnswersAtOnce(t *testing.T) {
+	var hub *hubtest.Hub
+	h := newHarness(t, uatProfile(), withHub(t, &hub))
+	pr := h.plan(t, "SELECT id FROM users LIMIT 10", false)
+	start := time.Now()
+	pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	if d := time.Since(start); d >= hubclient.DecisionWait {
+		t.Fatalf("pending answered after %v, waiting for a decision", d)
+	}
+}
+
 // A denial reaches the agent with the human's reason, and nothing runs.
 func TestHubModeDenied(t *testing.T) {
 	var hub *hubtest.Hub
