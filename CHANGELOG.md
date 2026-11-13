@@ -10,6 +10,16 @@ Built on lockkit v0.15.0.
 
 ### Fixed
 
+- Joins between two PII columns (`ON a.email = b.email`, `IN (SELECT
+  ...)`, `USING`, `NATURAL`) passed as ordinary joins: the agent saw their
+  row estimates and `EXPLAIN`, and the human got no warning, while a stored
+  value the agent knows would tell it which subjects share it. They are
+  still allowed and run no k-anonymity count, but the ticket and the audit
+  record now warn `joins PII columns: <columns>` (reads and writes), the
+  estimates are hidden (`estimates hidden: the statement joins PII
+  columns`), their `EXPLAIN` is refused (`E_MASKED_FILTER`) and no grant
+  covers them (#150).
+
 - Two locksql locks in one workspace left the agent with no locksql tool:
   `locksql mcp` exited at start (`several locksql locks: ...; pass
   --instance NAME`). One server, as `locksql init` writes it, now serves

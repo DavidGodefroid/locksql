@@ -137,9 +137,10 @@ func (an *analyzer) write(w *Write, parent *scope) ([]column, error) {
 
 // lenient runs f with the PII usage rules off (see write).
 func (an *analyzer) lenient(f func() error) error {
-	saved := an.env.Masking
+	saved, savedJoins := an.env.Masking, an.lenientJoins
 	an.env.Masking = false
-	defer func() { an.env.Masking = saved }()
+	an.lenientJoins = saved
+	defer func() { an.env.Masking, an.lenientJoins = saved, savedJoins }()
 	return f()
 }
 

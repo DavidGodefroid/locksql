@@ -121,6 +121,14 @@ type Analysis struct {
 	// PIIFilter is set when a PII column is compared with a constant: row
 	// estimates must not reach the agent.
 	PIIFilter bool
+	// PIIJoins are the equalities between two PII columns (a join, a
+	// semi-join, USING or NATURAL), each "db.table.col = db.table.col",
+	// sources only, never a value. Sorted, each once. No k-anonymity count
+	// covers them (a join on an identifier matches one subject per value by
+	// design): the human is warned, and row estimates do not reach the
+	// agent, since a stored value it knows would tell it which subjects
+	// share that value.
+	PIIJoins []string
 	// Funcs are the functions the statement calls, folded, each once.
 	Funcs []string
 	// Steering are the source columns whose values steer the result
@@ -207,6 +215,11 @@ type analyzer struct {
 	plain    bool
 	// writes is set once a data-modifying statement is analysed.
 	writes bool
+	// piiJoins collects Analysis.PIIJoins. lenientJoins is set while the
+	// PII rules are off for a write's filters under masking (lenient): its
+	// PII equalities are still recorded, for the human's warning.
+	piiJoins     map[string]bool
+	lenientJoins bool
 }
 
 // Analyze resolves the provenance of every output column of st, checks the
@@ -219,7 +232,7 @@ func Analyze(st *Statement, env Env) (*Analysis, error) {
 	if HasPlaceholder(st.Dialect, st.SQL) {
 		return nil, refuse(refusal.Placeholder, PlaceholderRefusal)
 	}
-	an := &analyzer{env: env, st: st, d: st.Dialect, a: &Analysis{}, relations: map[string]bool{}, uses: map[Use]bool{}, steering: map[Source]bool{}}
+	an := &analyzer{env: env, st: st, d: st.Dialect, a: &Analysis{}, relations: map[string]bool{}, uses: map[Use]bool{}, steering: map[Source]bool{}, piiJoins: map[string]bool{}}
 	var cols []column
 	var err error
 	if st.Write != nil {
@@ -243,11 +256,15 @@ func Analyze(st *Statement, env Env) (*Analysis, error) {
 		an.a.Outputs = append(an.a.Outputs, Output{Label: label, Prov: c.prov, Mask: an.maskOf(c.prov)})
 	}
 	if st.Explain {
-		if env.Masking && (an.a.PIIFilter || len(an.a.KChecks) > 0) {
-			return nil, refuse(refusal.MaskedFilter, "EXPLAIN of a statement that filters, groups or aggregates PII columns is not allowed: its row estimates would reveal what the k-anonymity check protects")
+		if env.Masking && (an.a.PIIFilter || len(an.a.KChecks) > 0 || len(an.piiJoins) > 0) {
+			return nil, refuse(refusal.MaskedFilter, "EXPLAIN of a statement that filters, groups, aggregates or joins PII columns is not allowed: its row estimates would reveal what the k-anonymity check protects")
 		}
 		an.a.Outputs = nil
 	}
+	for j := range an.piiJoins {
+		an.a.PIIJoins = append(an.a.PIIJoins, j)
+	}
+	sort.Strings(an.a.PIIJoins)
 	for r := range an.relations {
 		an.a.Relations = append(an.a.Relations, r)
 	}
@@ -1802,7 +1819,13 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 	if err != nil {
 		return err
 	}
-	if !an.env.Masking || !l.Sensitive && !r.Sensitive {
+	if !an.env.Masking {
+		if pos && (op == "=" || op == "<=>" || op == "IS NOT DISTINCT FROM") {
+			an.lenientJoin(l, r)
+		}
+		return nil
+	}
+	if !l.Sensitive && !r.Sensitive {
 		return nil
 	}
 	if l.Sensitive && l.Kind != KindIdentity || r.Sensitive && r.Kind != KindIdentity {
@@ -1837,6 +1860,7 @@ func (an *analyzer) comparison(op string, le, re Expr, sc *scope, clause string,
 		if sameColumn(l, r) {
 			return selfComparison()
 		}
+		an.piiJoin(l, r)
 		return nil
 	}
 	return refusef(refusal.MaskedFilter, "a PII column (%s) may only be compared with a constant or another PII column", piiNames(col))
@@ -1889,12 +1913,15 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 				return refuse(refusal.InvalidSQL, "IN (subquery) must return one column")
 			}
 		}
-		if !an.env.Masking {
-			return nil
-		}
 		sub := cols[0].prov
 		for _, c := range cols[1:] {
 			sub = union(sub, c.prov)
+		}
+		if !an.env.Masking {
+			if !e.Not && pos {
+				an.lenientJoin(x, sub)
+			}
+			return nil
 		}
 		switch {
 		case !x.Sensitive && !sub.Sensitive:
@@ -1920,6 +1947,7 @@ func (an *analyzer) inFilter(e *In, sc *scope, clause string, pos bool) error {
 			if sameColumn(x, sub) {
 				return selfComparison()
 			}
+			an.piiJoin(x, sub)
 			return nil
 		}
 		return refusef(refusal.MaskedFilter, "a PII column (%s) may only be compared with constants or another PII column", piiNames(mixProv(x, sub)))
@@ -1994,7 +2022,11 @@ func StringValue(d sqlclass.Dialect, text string) (string, bool) {
 // may only be joined with another PII column, never with values that may be
 // literals of the statement.
 func (an *analyzer) joinEquality(l, r column) error {
-	if !an.env.Masking || !l.prov.Sensitive && !r.prov.Sensitive {
+	if !an.env.Masking {
+		an.lenientJoin(l.prov, r.prov)
+		return nil
+	}
+	if !l.prov.Sensitive && !r.prov.Sensitive {
 		return nil
 	}
 	if l.prov.Kind != KindIdentity || r.prov.Kind != KindIdentity {
@@ -2012,7 +2044,39 @@ func (an *analyzer) joinEquality(l, r column) error {
 	if sameColumn(l.prov, r.prov) {
 		return selfComparison()
 	}
+	an.piiJoin(l.prov, r.prov)
 	return nil
+}
+
+// lenientJoin records an equality of a write's filter, where the PII
+// rules are off (lenient), when both sides are plain PII columns that are
+// not the same column: the human is warned as for a read.
+func (an *analyzer) lenientJoin(a, b Prov) {
+	if an.lenientJoins && an.allPII(a) && an.allPII(b) && !sameColumn(a, b) {
+		an.piiJoin(a, b)
+	}
+}
+
+// piiJoin notes an accepted equality between two PII values: no count
+// covers it (Analysis.PIIJoins). A side with several sources (through a
+// UNION) names them all.
+func (an *analyzer) piiJoin(a, b Prov) {
+	if an.dry > 0 {
+		return
+	}
+	side := func(p Prov) string {
+		names := make([]string, 0, len(p.Sources))
+		for _, s := range p.Sources {
+			names = append(names, s.String())
+		}
+		slices.Sort(names)
+		return strings.Join(slices.Compact(names), ", ")
+	}
+	l, r := side(a), side(b)
+	if r < l {
+		l, r = r, l
+	}
+	an.piiJoins[l+" = "+r] = true
 }
 
 // ---- k-anonymity ----

@@ -375,6 +375,22 @@ it append-only for the console account too.
   tells the agent whether that value exists. Under `k` rows the human is
   warned before approving; once approved, the answer is the agent's. That is
   the purpose of this feature.
+- **Joins between PII columns.** An equality between two PII columns (`ON
+  a.email = b.email`, `a.email IN (SELECT b.email ...)`, `USING`,
+  `NATURAL`) is allowed: it compares stored values only. But a value the
+  agent knows can be stored in one of them (through a view matched by
+  name, a trigger, data written before the mask rule, another client, or an
+  approved unmasked write), and the join then tells the agent which
+  subjects share it. The analyser cannot see which stored values the agent
+  knows. Such a plan is not counted: a join on an identifier matches one
+  subject per value by design, so a per-value count would fall under `k` on
+  nearly every legitimate join and teach the human to ignore the warning.
+  Instead the ticket warns `joins PII columns: <columns>` (reads and writes
+  alike, column names only, never a value), the row estimates and `EXPLAIN`
+  stay on the console as under a PII filter, and a grant never covers it.
+  The human reading the join on the approval screen is the control. A PII
+  column joined with itself and a partner that may be a literal are still
+  refused.
 - **Relations that project another relation.** A view, a materialized view
   or a foreign table is masked by column name only: a view that renames a
   rule column (`firstname AS contact`) needs its own rule for the new name.
