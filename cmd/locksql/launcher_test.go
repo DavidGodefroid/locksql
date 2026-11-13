@@ -271,8 +271,8 @@ func TestLauncherAccountsPerCommand(t *testing.T) {
 		{[]string{"init", "claude"}, [][]string{{"--user", me}, {"-e", "HOME=" + home}, {"-v", home + ":" + home}}, [][]string{sock, fixed}},
 		{[]string{"config", "export", "--output", "team.json"}, [][]string{{"--user", me}, {"-e", "HOME=" + home}, {"-v", home + ":" + home}}, [][]string{sock, fixed}},
 		{[]string{"profile", "add"}, [][]string{{"--user", me}, {"-e", "HOME=/tmp"}}, [][]string{sock, fixed}},
-		{[]string{"stats", "--top", "3"}, [][]string{{"--user", "locksql"}, {"-v", "locksql-home:/home/locksql"}}, [][]string{sock, fixed}},
-		{[]string{"forget", "--profile", "p"}, [][]string{{"--user", "locksql"}, {"-v", "locksql-home:/home/locksql"}}, [][]string{sock, fixed}},
+		{[]string{"stats", "--top", "3"}, [][]string{{"--user", "locksql"}, homeOf(f.root, "db")}, [][]string{sock, fixed, {"-v", "locksql-home:/home/locksql"}}},
+		{[]string{"forget", "--profile", "p"}, [][]string{{"--user", "locksql"}, homeOf(f.root, "db")}, [][]string{sock, fixed, {"-v", "locksql-home:/home/locksql"}}},
 		{nil, nil, [][]string{{"--user"}, sock, fixed}},
 	} {
 		out, calls, err := f.run(t, f.project, nil, tc.args...)

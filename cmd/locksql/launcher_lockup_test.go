@@ -62,7 +62,7 @@ func jsonString(s string) string {
 // loxUp makes ws a workspace whose locks (instance: type) lox run runs:
 // its up.json (the user's, 0644 in a 0755 .lockfamily) and Docker's view
 // of each socket volume (lox run's labels; one console container, run by
-// compose from lox run's state directory).
+// compose from lox run's state directory) and home volume.
 func (f *launcherFixture) loxUp(t *testing.T, ws string, locks map[string]string) upState {
 	t.Helper()
 	p := loxProject(ws)
@@ -75,6 +75,7 @@ func (f *launcherFixture) loxUp(t *testing.T, ws string, locks map[string]string
 		}
 		s.Locks[name] = l
 		f.dockerVolume(t, l.Socket, volumeLabels(p, name, typ, ws))
+		f.dockerVolume(t, p+"_"+name+"-home", homeLabels(p, name))
 		h := sha256.Sum256([]byte(name))
 		id := hex.EncodeToString(h[:])
 		f.dockerContainers(t, l.Socket, map[string]string{id: containerLabels(p, f.stateDir(p), "-", "rw ")})
@@ -125,6 +126,12 @@ func volumeLabels(project, name, typ, ws string) string {
 		out = append(out, jsonString(v))
 	}
 	return strings.Join(out, "\n") + "\n"
+}
+
+// homeLabels is what the launcher's docker volume inspect prints for lox
+// run's home volume of the lock name: compose's labels only.
+func homeLabels(project, name string) string {
+	return jsonString(project) + "\n" + jsonString(name+"-home") + "\n"
 }
 
 // containerLabels is what the launcher's docker inspect prints for a
@@ -585,5 +592,115 @@ func TestLauncherDoctorWithoutLockUp(t *testing.T) {
 	}
 	if !strings.Contains(out, "no .lockfamily/up.json in "+f.project) || !strings.Contains(out, "lox run") {
 		t.Errorf("output:\n%s", out)
+	}
+}
+
+// homeOf is the mount of lox run's home volume of lock name in the
+// workspace ws, on the console account's home.
+func homeOf(ws, name string) []string {
+	return []string{"--mount", "type=volume,src=" + loxProject(ws) + "_" + name + "-home,dst=/home/locksql"}
+}
+
+// stats and forget run as the console account with the home volume lox run
+// gives the lock's console (#220): the only lock's, or the one --instance
+// names, which the launcher takes out of the command line; several and no
+// --instance, they say so. Without lox run's state, the volume
+// locksql-home of a console started by hand, but only when it exists:
+// never a new, empty one.
+func TestLauncherStatsForgetHome(t *testing.T) {
+	f := newLauncherFixture(t)
+	for _, args := range [][]string{{"stats"}, {"stats", "--top", "3"}, {"forget", "--profile", "p"}} {
+		out, calls, err := f.run(t, f.project, nil, args...)
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+		run := lastRun(t, calls)
+		if !hasSeq(run, homeOf(f.root, "db")...) || !hasSeq(run, "--user", "locksql") {
+			t.Errorf("%v: not the lock's home: %q", args, run)
+		}
+		if j := strings.Join(run, " "); strings.Contains(j, "locksql-home") || strings.Contains(j, "/run/locksql") {
+			t.Errorf("%v: %q", args, run)
+		}
+		if got := imageArgs(run, "locksql")[1:]; strings.Join(got, " ") != strings.Join(args, " ") {
+			t.Errorf("%v: command %q", args, got)
+		}
+	}
+
+	// Several locksql locks: --instance picks one.
+	f.loxUp(t, f.root, map[string]string{"db": "locksql", "crm-prod": "locksql", "web": "lockhttp"})
+	for _, tc := range []struct {
+		name       string
+		args, want []string
+	}{
+		{"crm-prod", []string{"stats", "--instance", "crm-prod"}, []string{"stats"}},
+		{"db", []string{"forget", "--instance=db", "--profile", "p"}, []string{"forget", "--profile", "p"}},
+	} {
+		out, calls, err := f.run(t, f.project, nil, tc.args...)
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", tc.args, err, out)
+		}
+		run := lastRun(t, calls)
+		if !hasSeq(run, homeOf(f.root, tc.name)...) {
+			t.Errorf("%v: %q", tc.args, run)
+		}
+		if got := imageArgs(run, "locksql")[1:]; strings.Join(got, " ") != strings.Join(tc.want, " ") {
+			t.Errorf("%v: command %q, want %q", tc.args, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"stats"}, "several locksql locks in " + f.root + " (crm-prod db): name one with --instance NAME"},
+		{[]string{"forget", "--instance", "web"}, "lox run runs no locksql lock web in "},
+		{[]string{"stats", "--instance", "nope"}, "lox run runs no locksql lock nope in "},
+	} {
+		out, calls, err := f.run(t, f.project, nil, tc.args...)
+		if exitCode(err) != 2 || !strings.Contains(out, tc.want) || hasRun(calls) {
+			t.Errorf("%v: exit %d, run %v:\n%s", tc.args, exitCode(err), hasRun(calls), out)
+		}
+	}
+
+	// The lock's home volume missing, or not lox run's: refused.
+	p := loxProject(f.root)
+	if err := os.Remove(filepath.Join(f.fake, "volume-"+p+"_db-home")); err != nil {
+		t.Fatal(err)
+	}
+	out, calls, err := f.run(t, f.project, nil, "stats", "--instance", "db")
+	if exitCode(err) != 2 || !strings.Contains(out, "lock db: no volume "+p+"_db-home: run `lox run`") || hasRun(calls) {
+		t.Errorf("no home volume: exit %d, run %v:\n%s", exitCode(err), hasRun(calls), out)
+	}
+	for _, labels := range []string{homeLabels("other", "db"), homeLabels(p, "crm-prod"), "\"\"\n\"\"\n"} {
+		f.dockerVolume(t, p+"_db-home", labels)
+		out, calls, err := f.run(t, f.project, nil, "forget", "--instance", "db")
+		if exitCode(err) != 2 || !strings.Contains(out, "volume "+p+"_db-home is not lox run's home volume") || hasRun(calls) {
+			t.Errorf("labels %q: exit %d, run %v:\n%s", labels, exitCode(err), hasRun(calls), out)
+		}
+	}
+
+	// No lox run: the hand-started console's locksql-home when it exists.
+	if err := os.RemoveAll(filepath.Join(f.root, ".lockfamily")); err != nil {
+		t.Fatal(err)
+	}
+	out, calls, err = f.run(t, f.project, nil, "stats")
+	if exitCode(err) != 2 || !strings.Contains(out, "no .lockfamily/up.json in ") || hasRun(calls) {
+		t.Errorf("no lox run, no locksql-home: exit %d, run %v:\n%s", exitCode(err), hasRun(calls), out)
+	}
+	f.dockerVolume(t, "locksql-home", "")
+	for _, args := range [][]string{{"stats"}, {"forget", "--profile", "p"}} {
+		out, calls, err := f.run(t, f.project, nil, args...)
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+		run := lastRun(t, calls)
+		if !hasSeq(run, "--mount", "type=volume,src=locksql-home,dst=/home/locksql") || !strings.Contains(out, "a console started by hand") {
+			t.Errorf("%v: %q\n%s", args, run, out)
+		}
+	}
+	// A broken up.json is no fallback.
+	f.writeUpFile(t, f.root, []byte("{}\n"))
+	out, calls, err = f.run(t, f.project, nil, "stats")
+	if exitCode(err) != 2 || !strings.Contains(out, "is not lox run's state") || hasRun(calls) {
+		t.Errorf("broken up.json: exit %d, run %v:\n%s", exitCode(err), hasRun(calls), out)
 	}
 }
