@@ -25,6 +25,13 @@ Built on lockkit v0.19.0.
   records `managed`. New `locksql managed show` and `locksql managed check
   [--profile P]` (lox runs it before it starts the lock), and a `managed`
   line in `locksql doctor`. See docs/configuration.md (#209).
+- **Launcher**: it mounts the machine's managed directory (`/etc/lockfamily`,
+  `/Library/Application Support/lockfamily` on macOS) read-only on
+  `/etc/lockfamily` in its containers, as `lox run` does in its locks:
+  `locksql managed show`, `managed check`, `doctor`, `profile`, `init` and
+  the other commands run from the host see the company's managed
+  configuration. No directory: no mount; a file, a dangling link or a `:`
+  in the path stops the launcher (docs/docker.md, #222).
 
 ### Changed
 

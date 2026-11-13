@@ -87,6 +87,28 @@ refuses it. On macOS, `doctor --fix` giving back `.locksql/` entries that
 are not yours (a `chown` as root through Docker Desktop's
 file sharing) is untested.
 
+### The company's managed configuration
+
+When this machine has the Lock Family's managed directory
+(`/etc/lockfamily` on Linux, `/Library/Application Support/lockfamily` on
+macOS: [configuration.md](configuration.md#managed-configuration)), the
+launcher mounts it read-only on `/etc/lockfamily` in every container it
+runs, the path the image reads `managed.toml` from, as `lox run` mounts it
+in its locks. So `locksql managed show`, `managed check`, `doctor`,
+`profile`, `init` and the agent commands run from the host see the bounds
+the lock enforces. The whole directory is mounted: the signature bundle,
+`signer.toml` and the `managed.toml.verified` stamp come along. Ownership
+is checked in the container as on the host (a bind mount keeps owner and
+mode): the file and the directory must be root's and writable by root
+only. No directory: no mount, and locksql runs without a managed policy. A
+path that is not a directory (a file, a dangling link) or that holds a `:`
+stops the launcher before Docker runs.
+
+On macOS, Docker Desktop shares `/Users`, `/Volumes`, `/private`, `/tmp`
+and `/var/folders` only: add `/Library/Application Support/lockfamily` in
+Settings > Resources > File sharing, or the launcher's commands fail with
+`mounts denied` (never without the policy).
+
 ### Your own build
 
 From a clone, or without cloning:

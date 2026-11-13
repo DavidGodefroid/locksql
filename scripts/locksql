@@ -25,7 +25,11 @@
 # says so and runs nothing.
 #
 # The project (the nearest directory up from here that holds .locksql/, or
-# this directory) is mounted at its own path. `locksql update` updates this
+# this directory) is mounted at its own path. Every container also mounts
+# the company's managed directory, when this machine has one
+# (/etc/lockfamily on Linux, /Library/Application Support/lockfamily on
+# macOS), read-only on /etc/lockfamily, where lockkit reads managed.toml in
+# the image, as lox run mounts it in its locks. `locksql update` updates this
 # launcher and its image; `locksql version` prints both versions.
 #
 # Environment:
@@ -134,15 +138,28 @@ fi
 tty=-i
 if [ -t 0 ] && [ -t 1 ]; then tty=-it; fi
 
+# The company-managed directory of this machine (lockkit's
+# managed.DefaultPath): managed.toml, its signature bundle, signer.toml and
+# lox's managed.toml.verified stamp. Every container mounts it read-only on
+# /etc/lockfamily, the path lockkit reads in the (Linux) image, as lox run
+# mounts it in its locks (lockhub#179): the commands see the bounds the
+# console enforces. lockkit's ownership checks still apply in the
+# container: a bind mount keeps the files' owner and mode.
+case "$(uname -s)" in
+Darwin) managed_dir="/Library/Application Support/lockfamily" ;;
+*) managed_dir=/etc/lockfamily ;;
+esac
+
 # docker_run ARGS...: docker run with the project mounted at its own path,
-# from this directory, then ARGS (the account, the volumes, the image and
-# its command). LOCKSQL_DOCKER_ARGS go before ARGS.
+# from this directory, then the managed directory, then ARGS (the account,
+# the volumes, the image and its command). LOCKSQL_DOCKER_ARGS go before
+# ARGS.
 docker_run() {
 	docker_prep
 	# LOCKSQL_DOCKER_ARGS is split on spaces, never globbed.
 	set -f
 	# shellcheck disable=SC2086 # LOCKSQL_DOCKER_ARGS is split on purpose
-	exec docker run --rm -v "$project:$project" -w "$workdir" ${LOCKSQL_DOCKER_ARGS:-} "$@"
+	exec docker run --rm -v "$project:$project" -w "$workdir" ${managed_mount:+-v} ${managed_mount:+"$managed_mount"} ${LOCKSQL_DOCKER_ARGS:-} "$@"
 }
 
 # docker_run_then ARGS...: docker_run, back in the launcher afterwards; it
@@ -151,18 +168,28 @@ docker_run_then() {
 	docker_prep
 	set -f
 	# shellcheck disable=SC2086 # LOCKSQL_DOCKER_ARGS is split on purpose
-	docker run --rm -v "$project:$project" -w "$workdir" ${LOCKSQL_DOCKER_ARGS:-} "$@"
+	docker run --rm -v "$project:$project" -w "$workdir" ${managed_mount:+-v} ${managed_mount:+"$managed_mount"} ${LOCKSQL_DOCKER_ARGS:-} "$@"
 	rc=$?
 	set +f
 	return "$rc"
 }
 
-# docker_prep: docker is there, the project and here can be mounted, and
-# $workdir is here when it is in the project, else the project.
+# docker_prep: docker is there, the project and here can be mounted,
+# $workdir is here when it is in the project, else the project, and
+# $managed_mount is the managed directory's -v argument, empty without one.
 docker_prep() {
 	command -v docker >/dev/null 2>&1 || die "docker is required: locksql runs in Docker (docs/docker.md)"
 	mountable "$project"
 	mountable "$here"
+	# No managed directory: no mount, no managed policy. One that is not a
+	# directory (a file, a dangling link) is refused, as lockkit refuses it
+	# on the host.
+	managed_mount=
+	if [ -e "$managed_dir" ] || [ -L "$managed_dir" ]; then
+		[ -d "$managed_dir" ] || die "$managed_dir is not a directory: locksql cannot mount the company-managed configuration"
+		mountable "$managed_dir"
+		managed_mount="$managed_dir:/etc/lockfamily:ro"
+	fi
 	case "$here" in
 	"$project" | "$project"/*) workdir=$here ;;
 	*) workdir=$project ;;
