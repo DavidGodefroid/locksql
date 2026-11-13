@@ -4,9 +4,83 @@ Release notes also list every commit on the
 [GitHub releases](https://github.com/DavidGodefroid/locksql/releases) page.
 This file records the changes a user or an agent has to know about.
 
-## v0.18.0 (2026-11-08)
+## v0.18.0 (2026-11-13)
 
-Built on lockkit v0.19.0.
+Supported lockhub: v0.9.0 or later (unchanged). Built on lockkit v0.19.1
+(v0.19.0 plus a perf-only patch of the PII finders).
+
+### Breaking
+
+- The launcher's `locksql console` is gone: it mounted the fixed
+  `locksql-run` volume, which no agent command mounts any more, so no client
+  reached it. It now exits 2 with `the console is started by lox run only
+  (lockhub): run lox run in the workspace`. `LOCKSQL_CONSOLE_NAME`,
+  `LOCKSQL_READONLY_PROJECT` and the launcher's `VAULT_*` pass-through went
+  with it (#155).
+- lockkit v0.19.0: the default PII detectors can mask more, or under
+  another kind (`fr_nir` before `card`, more phone formats, an e-mail with
+  an apostrophe); secret-looking config values are now refused as
+  "looks like it embeds a secret (a password or a token)"; the Claude Code
+  notes of `locksql init` introduce the allowed calls neutrally (#209).
+
+### Behaviour
+
+- Hub mode: the console opens at most 30 tickets a human decides per 5
+  minutes (was 10) and 30 pending ones (was 20); a ticket `lox run`'s
+  auto mode decides leaves that count, and a safety cap of 300 tickets per
+  window counts every one (lockkit v0.15.0, lockkit#150).
+- The profile's `limits.tickets_per_window`, `limits.ticket_window` and
+  `limits.max_pending` set those limits; more tickets, a shorter window or
+  more pending tickets is a loosening, reviewed like the others (the typed
+  profile name on production). They travel with `locksql config export`.
+- A run or a grant over a limit answers the agent with the limit, the
+  count, when the next ticket is accepted and the key that raises it
+  (`not submitted: too many tickets: … retry after 42s`), instead of a
+  general "too many requests are waiting".
+- `limits.idle_timeout` closes the database connection and the SSH tunnel
+  instead of ending the console (#198). The console keeps running and its
+  socket; the next request asks a connect ticket in `lox run`, and is
+  served once approved, without the start questions (policy review,
+  production name, unchanged privilege findings). A secret that is
+  `ask` (`credentials`, `ssh.credentials`) is typed in `lox run` and comes
+  sealed to a one-use key of the console; the bastion's takes a second
+  ticket. `max_session` still ends the session.
+- The agent commands, from a sub-project with its own `.locksql/config.toml`
+  below the workspace, stop (exit 2) and say why: lox run's console serves
+  the workspace's `.locksql` only, so the sub-project's socket name matched
+  no console (a generic "no console" before). A workspace path holding `&`,
+  `<` or `>` is still refused, now saying so instead of "is not lox run's
+  state" (#155).
+- An `UPDATE` or `DELETE` with no `WHERE` (or `WHERE TRUE`, `WHERE 1`,
+  `WHERE 1 = 1`) and no `LIMIT` got `verdict OK`: it now gets `verdict WARN`
+  and its screen says `whole table: N rows` (#208).
+- `pii add` (and `locksql_pii_add`) accepted a pattern that names no column
+  and left the column in clear: on PostgreSQL, `app.customers.name` with
+  `app` the database, where rules name `schema.table.column`
+  (`public.customers.name`). A pattern without `*` that matches no column of
+  the catalog is now refused with the columns it may mean (`did you mean
+  public.customers.name?`); a pattern with `*` that matches nothing yet is
+  added with a warning. `pii list` flags the dead rules, which name no
+  column (new console method `pii.unmatched`). The tool descriptions and
+  the CLI help say `schema.table.column` for PostgreSQL (#207).
+
+### Security
+
+- A weaker `tls` mode (`verify-full` to `require`, by `kconfig.TLSRank`),
+  another `tls_ca` or another `tls_server_name` is now a loosening the
+  human reviews: these changes were listed but applied without asking,
+  so a profile could be pointed at a server it trusted less. A profile
+  approved as `verify-full` (the former default) that now loads as
+  `prefer` is asked once (#209).
+- Joins between two PII columns (`ON a.email = b.email`, `IN (SELECT
+  ...)`, `USING`, `NATURAL`) passed as ordinary joins: the agent saw their
+  row estimates and `EXPLAIN`, and the human got no warning, while a stored
+  value the agent knows would tell it which subjects share it. They are
+  still allowed and run no k-anonymity count, but the ticket and the audit
+  record now warn `joins PII columns: <columns>` (reads and writes), the
+  estimates are hidden (`estimates hidden: the statement joins PII
+  columns`), their `EXPLAIN` is refused (`E_MASKED_FILTER`) and no grant
+  covers them (#150).
 
 ### Added
 
@@ -33,23 +107,6 @@ Built on lockkit v0.19.0.
   configuration. No directory: no mount; a file, a dangling link or a `:`
   in the path stops the launcher (docs/docker.md, #222).
 
-### Changed
-
-- lockkit v0.19.0: the default PII detectors can mask more, or under
-  another kind (`fr_nir` before `card`, more phone formats, an e-mail with
-  an apostrophe); secret-looking config values are now refused as
-  "looks like it embeds a secret (a password or a token)"; the Claude Code
-  notes of `locksql init` introduce the allowed calls neutrally (#209).
-
-### Security
-
-- A weaker `tls` mode (`verify-full` to `require`, by `kconfig.TLSRank`),
-  another `tls_ca` or another `tls_server_name` is now a loosening the
-  human reviews: these changes were listed but applied without asking,
-  so a profile could be pointed at a server it trusted less. A profile
-  approved as `verify-full` (the former default) that now loads as
-  `prefer` is asked once (#209).
-
 ### Fixed
 
 - The trust question of an unknown SSH host key now carries its context
@@ -62,16 +119,6 @@ Built on lockkit v0.19.0.
   retry-after: the last refusal was shared. Each ask now gets its own
   (`not submitted: <limit, count, retry after>; <what to do next>`), from
   lockkit v0.17.0 (#204).
-- Joins between two PII columns (`ON a.email = b.email`, `IN (SELECT
-  ...)`, `USING`, `NATURAL`) passed as ordinary joins: the agent saw their
-  row estimates and `EXPLAIN`, and the human got no warning, while a stored
-  value the agent knows would tell it which subjects share it. They are
-  still allowed and run no k-anonymity count, but the ticket and the audit
-  record now warn `joins PII columns: <columns>` (reads and writes), the
-  estimates are hidden (`estimates hidden: the statement joins PII
-  columns`), their `EXPLAIN` is refused (`E_MASKED_FILTER`) and no grant
-  covers them (#150).
-
 - Two locksql locks in one workspace left the agent with no locksql tool:
   `locksql mcp` exited at start (`several locksql locks: ...; pass
   --instance NAME`). One server, as `locksql init` writes it, now serves
@@ -89,25 +136,12 @@ Built on lockkit v0.19.0.
   statement with a literal. They now say so only when the statement names a
   column under a mask rule, and the screen names those columns; literals
   stay masked (#208).
-- An `UPDATE` or `DELETE` with no `WHERE` (or `WHERE TRUE`, `WHERE 1`,
-  `WHERE 1 = 1`) and no `LIMIT` got `verdict OK`: it now gets `verdict WARN`
-  and its screen says `whole table: N rows` (#208).
 - A statement with a data-modifying CTE passed `query.plan` and was refused
   only by `query.run`: the plan refuses it now, with the same
   `E_STATEMENT_KIND` (#208).
 - With `--instance`, `status` and the tools no longer report the profiles of
   another mounted lock as down, nor ask for a `profile` the lock does not
   need (#206).
-- `pii add` (and `locksql_pii_add`) accepted a pattern that names no column
-  and left the column in clear: on PostgreSQL, `app.customers.name` with
-  `app` the database, where rules name `schema.table.column`
-  (`public.customers.name`). A pattern without `*` that matches no column of
-  the catalog is now refused with the columns it may mean (`did you mean
-  public.customers.name?`); a pattern with `*` that matches nothing yet is
-  added with a warning. `pii list` flags the dead rules, which name no
-  column (new console method `pii.unmatched`). The tool descriptions and
-  the CLI help say `schema.table.column` for PostgreSQL (#207).
-
 - The launcher's `stats` and `forget` mounted the volume `locksql-home`,
   which no console uses since `lox run` starts them: `stats` read an empty
   or stale audit log, `forget` removed a secret no console reads. They now
@@ -116,41 +150,6 @@ Built on lockkit v0.19.0.
   agent commands find its socket, `--instance NAME` for one of several.
   Without lox run's state, they still mount `locksql-home` when it exists,
   and never create it (#220).
-
-### Changed
-
-- Hub mode: the console opens at most 30 tickets a human decides per 5
-  minutes (was 10) and 30 pending ones (was 20); a ticket `lox run`'s
-  auto mode decides leaves that count, and a safety cap of 300 tickets per
-  window counts every one (lockkit v0.15.0, lockkit#150).
-- The profile's `limits.tickets_per_window`, `limits.ticket_window` and
-  `limits.max_pending` set those limits; more tickets, a shorter window or
-  more pending tickets is a loosening, reviewed like the others (the typed
-  profile name on production). They travel with `locksql config export`.
-- A run or a grant over a limit answers the agent with the limit, the
-  count, when the next ticket is accepted and the key that raises it
-  (`not submitted: too many tickets: … retry after 42s`), instead of a
-  general "too many requests are waiting".
-- `limits.idle_timeout` closes the database connection and the SSH tunnel
-  instead of ending the console (#198). The console keeps running and its
-  socket; the next request asks a connect ticket in `lox run`, and is
-  served once approved, without the start questions (policy review,
-  production name, unchanged privilege findings). A secret that is
-  `ask` (`credentials`, `ssh.credentials`) is typed in `lox run` and comes
-  sealed to a one-use key of the console; the bastion's takes a second
-  ticket. `max_session` still ends the session.
-- The launcher's `locksql console` is gone: it mounted the fixed
-  `locksql-run` volume, which no agent command mounts any more, so no client
-  reached it. It now exits 2 with `the console is started by lox run only
-  (lockhub): run lox run in the workspace`. `LOCKSQL_CONSOLE_NAME`,
-  `LOCKSQL_READONLY_PROJECT` and the launcher's `VAULT_*` pass-through went
-  with it (#155).
-- The agent commands, from a sub-project with its own `.locksql/config.toml`
-  below the workspace, stop (exit 2) and say why: lox run's console serves
-  the workspace's `.locksql` only, so the sub-project's socket name matched
-  no console (a generic "no console" before). A workspace path holding `&`,
-  `<` or `>` is still refused, now saying so instead of "is not lox run's
-  state" (#155).
 
 ## v0.17.2 (2026-11-07)
 
