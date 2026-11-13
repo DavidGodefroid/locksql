@@ -463,6 +463,10 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 		}
 	}
 
+	// The company's managed file, as the console reads it; refused, the
+	// configuration check below fails on it too.
+	out = append(out, managedCheck())
+
 	// 5. Profiles: the secret store and the running consoles.
 	cfg, err := config.Load(cwd)
 	if err != nil {

@@ -1,0 +1,4 @@
+exit 3
+== stdout
+== stderr
+locksql managed check: config: managed: profile "prod-erp" is provided by the company's managed configuration and cannot be redefined in the project config: rename yours

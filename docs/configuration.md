@@ -1,6 +1,6 @@
 # Configuring locksql
 
-Profiles, PII rule sets and sharing a configuration. Setting a project up: [docker.md](docker.md); what each setting does at run time: [usage.md](usage.md).
+Profiles, PII rule sets, sharing a configuration and the company's [managed configuration](#managed-configuration). Setting a project up: [docker.md](docker.md); what each setting does at run time: [usage.md](usage.md).
 
 ## Profiles
 
@@ -236,3 +236,125 @@ locksql config import team.json --local uat.ssh.key=~/.ssh/id_ed25519
   and the console still asks you to approve it at its next start.
 
 The file describes your databases: keep it in a private repository.
+
+## Managed configuration
+
+A company can bound every locksql of a machine with one file its admin
+installs: `/etc/lockfamily/managed.toml` (Linux) or `/Library/Application
+Support/lockfamily/managed.toml` (macOS), owned by root and writable by root
+only, optionally signed (the family's format, signing and deployment:
+lockfamily [`docs/managed.md`](https://github.com/DavidGodefroid/lockfamily/blob/main/docs/managed.md)).
+A user may tighten what it allows, never loosen it. locksql reads its
+`[locksql]` section:
+
+```toml
+version = 1
+organisation = "Acme"
+
+[locksql.bounds]
+tier = "write"
+tls = "verify-full"
+credentials = ["vault", "ask"]
+hosts = ["*.db.acme.internal"]
+detectors = ["fr_nir"]
+auto = { ddl = "deny" }
+limits = { max_rows = 500, max_session = "2h" }
+
+[[locksql.bounds.pii_mask]]
+column = "crm.customers.email"
+mode = "email"
+
+[locksql.defaults]
+limits = { max_rows = 100, max_session = "2h" }
+
+[locksql.profiles.prod-erp]
+engine = "postgres"
+host = "erp.db.acme.internal"
+database = "erp"
+production = true
+credentials = "vault"
+vault_path = "database/creds/erp-ro"
+```
+
+The precedence is: the hard-coded floor > the managed bounds and profiles >
+the project file > the user file > the managed defaults > the built-in
+defaults. The merged result is checked against the bounds at the console's
+start and at every policy poll (every 2 s): a profile beyond them is refused
+with no prompt (no human can approve past it), one line each, audited
+`refused-managed`:
+
+```
+blocked by company policy: locksql.bounds.tier = write (profile dev: tier = ddl)
+```
+
+A managed file that cannot be read (badly owned, invalid, badly signed) is a
+refusal to start, never ignored. Once the console serves, a stricter file is
+applied at the next poll: the policy in force is replaced by the files'
+policy when that one is within the new bounds, else the session ends. The
+start screen shows `Managed by <organisation> (sha256:…)`, the approved
+policy records `managed_sha256` and every audit record `managed`.
+
+### Bounds
+
+`[locksql.bounds]` takes these keys; each is optional. "Looser" is what the
+bound refuses.
+
+| Key | Type | Looser |
+|---|---|---|
+| `production` | `true` | `production = false` |
+| `tier` | `read`, `write`, `ddl` or `admin` (a ceiling) | a higher tier |
+| `tls` | a TLS mode (a floor) | a weaker mode (`disable` < `prefer` < `require` < `verify-ca` < `verify-full`); SQLite has none |
+| `credentials` | allowed modes (`["vault", "ask"]`) | a mode outside the list |
+| `engine` | allowed engines (`["postgres"]`) | an engine outside the list |
+| `hosts` | host patterns (`*.db.acme.internal`, `path.Match` syntax, case-insensitive) on `host` and `ssh.host` | a host no pattern matches |
+| `write_functions` | `"allowlist"` | the denylist |
+| `credentials_ttl` | a duration (a ceiling) | longer, or none (the secret kept for the session) |
+| `auto.connect`, `auto.read`, `auto.write`, `auto.ddl`, `auto.unmask` | `deny`, `ask` or `auto` (a ceiling) | toward `auto` |
+| `limits.statement_timeout`, `limits.max_rows`, `limits.max_cell_chars`, `limits.max_output_bytes`, `limits.explain_rows_refuse` | a ceiling | higher, or 0 (unlimited) |
+| `limits.k_anonymity` | a floor | lower |
+| `limits.idle_timeout`, `limits.max_session` | a duration (a ceiling) | longer |
+| `limits.grant_max_duration` | a duration, or `0` (grants off) | longer, or grants on under `0` |
+| `limits.grant_max_statements`, `limits.grant_max_rows`, `limits.grant_max_bytes` | a ceiling | higher |
+| `detectors` | detectors every profile runs | added to every profile, never removed |
+| `[[pii_mask]]` | `column = "db.table.column"`, `mode = "redact"`, `"partial"` or `"email"` (as `[[mask]]` in a rule set) | masks added to every profile's rules, whatever its `pii_rules` |
+
+- `credentials`, `engine` and `hosts` are allowlists: a value outside one is
+  refused naming the key (`blocked by company policy:
+  locksql.bounds.hosts does not allow db.other.com (profile dev: host +
+  db.other.com)`).
+- `[family] vault = { required = true }` acts as `credentials = ["vault"]`
+  on every network profile, cited as `family.vault.required`.
+- A managed mask takes its mode over a rule of the same column in the rule
+  set. A user `[[allow]]` that could clear a managed mask (`*.*.email` over
+  `crm.customers.email`) is refused at load; a user may add mask rules,
+  never remove or weaken a managed one.
+- A bound on a duration or a size is never clamped silently: a profile
+  beyond it is refused, and you lower it in the config file.
+
+### Defaults and profiles
+
+- `[locksql.defaults]` takes the keys of a profile, `limits.*` included. A
+  key a profile leaves unset takes it, before the built-in defaults; a value
+  of the config file wins (within the bounds). The `limits` table is merged
+  key by key, `ssh` and `auto` are taken whole. A default beyond the bounds
+  is a load error.
+- `[locksql.profiles.<name>]` has exactly the keys of `[profiles.<name>]`,
+  is served as written (with the defaults), and wins as a whole: a project
+  or user profile of its name is refused (`profile "prod-erp" is provided
+  by the company's managed configuration and cannot be redefined in the
+  project config: rename yours`). A managed profile beyond the bounds is a
+  load error.
+
+### Commands
+
+- `locksql managed show`: the file's path, organisation, fingerprint and
+  signature, then the active bounds, defaults and managed profile names.
+  `no managed configuration` (exit 0) when there is none; a refused file
+  prints the error (exit 3).
+- `locksql managed check [--profile NAME]`: the profiles of the config
+  files against the bounds, as the console checks them at start, without a
+  connection or a credential: one `blocked by company policy: …` line per
+  violation (exit 3), else `ok: N profiles within the company policy
+  (…)` (exit 0). `lox` runs it before it starts the lock.
+- `locksql doctor` has a `managed` line: the file as above, `no managed
+  configuration`, or the error that refuses it.

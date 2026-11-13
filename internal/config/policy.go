@@ -105,7 +105,8 @@ func Fingerprint(p Policy) string { return kconfig.Fingerprint(canonical(p)) }
 // (spec section 4): a higher tier, production true→false, a larger limit
 // (0 means unlimited), a longer idle_timeout or max_session, a removed PII
 // rule or detector, an added allow rule, any change of engine, host, port,
-// path, database or user, and a credentials mode other than ask, any
+// path, database or user, a weaker tls mode, another tls_ca or
+// tls_server_name, a credentials mode other than ask, any
 // change of the ssh table or of proxy_command, any change of the PII rule
 // set, write_functions from allowlist to denylist, and an auto rule moved
 // toward auto (deny → ask → auto).
@@ -137,14 +138,21 @@ func Diff(approved, current Policy) []Change {
 	}
 	// Another Vault path is another login, possibly with more grants.
 	same("vault_path", ap.VaultPath, cp.VaultPath)
-	// Transport security is the driver's and the infrastructure's: a tls
-	// setting is listed, never a loosening.
-	for _, f := range []struct{ field, o, n string }{
-		{"tls", ap.TLS, cp.TLS}, {"tls_ca", ap.TLSCA, cp.TLSCA}, {"tls_cert", ap.TLSCert, cp.TLSCert},
-		{"tls_key", ap.TLSKey, cp.TLSKey}, {"tls_server_name", ap.TLSServerName, cp.TLSServerName},
+	// A weaker tls mode loosens (a managed tls bound holds on it), and so
+	// does another CA bundle or another name verify-full checks: either
+	// trusts another server. The client certificate is listed only.
+	if ap.TLS != cp.TLS {
+		out = append(out, Change{Field: "tls", Old: ap.TLS, New: cp.TLS, Loosens: TLSRank(cp.TLS) < TLSRank(ap.TLS)})
+	}
+	for _, f := range []struct {
+		field, o, n string
+		loosens     bool
+	}{
+		{"tls_ca", ap.TLSCA, cp.TLSCA, true}, {"tls_cert", ap.TLSCert, cp.TLSCert, false},
+		{"tls_key", ap.TLSKey, cp.TLSKey, false}, {"tls_server_name", ap.TLSServerName, cp.TLSServerName, true},
 	} {
 		if f.o != f.n {
-			out = append(out, Change{Field: f.field, Old: f.o, New: f.n})
+			out = append(out, Change{Field: f.field, Old: f.o, New: f.n, Loosens: f.loosens})
 		}
 	}
 
@@ -297,6 +305,12 @@ func LoadApproved(stateDir, key string) (*Policy, error) {
 // <stateDir>/locksql/approved/<key>.json with mode 0600.
 func SaveApproved(stateDir, key string, p Policy) error {
 	return kconfig.SaveApproved(product.P, stateDir, key, canonical(p))
+}
+
+// SaveApprovedManaged is SaveApproved recording the fingerprint of the
+// company's managed file in force (managed_sha256; "" for none).
+func SaveApprovedManaged(stateDir, key string, p Policy, managedFP string) error {
+	return kconfig.SaveApprovedManaged(product.P, stateDir, key, canonical(p), managedFP)
 }
 
 // confirmedKey names, in the approved-policy store, the production policy

@@ -27,6 +27,10 @@ import (
 	"github.com/DavidGodefroid/locksql/internal/ipc"
 )
 
+// buildTags are the tags of the binary buildLocksql builds: managed_test.go
+// adds lockfamily_managed_test when the tests carry it.
+var buildTags = "locksql_testhook"
+
 // buildLocksql builds the binary once per test binary, with the
 // locksql_testhook tag: the console then runs in this account, without a
 // separated setup (internal/console/isolation_testhook.go).
@@ -36,7 +40,7 @@ var buildLocksql = sync.OnceValues(func() (string, error) {
 		return "", err
 	}
 	bin := filepath.Join(dir, "locksql")
-	cmd := exec.Command("go", "build", "-tags", "locksql_testhook", "-o", bin, "github.com/DavidGodefroid/locksql/cmd/locksql")
+	cmd := exec.Command("go", "build", "-tags", buildTags, "-o", bin, "github.com/DavidGodefroid/locksql/cmd/locksql")
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("go build: %v: %s", err, out)

@@ -174,6 +174,18 @@ func openConsole(ctx context.Context, e env, profile string, f consoleFlags, pro
 		PIIDir:      os.Getenv(console.PIIDirEnv),
 	})
 	if err != nil {
+		if errors.Is(err, kconsole.ErrManaged) {
+			// Refused by the company's managed configuration: the lines
+			// cite the managed key; no human can approve past it.
+			lines := console.ManagedLines(err)
+			if len(lines) == 0 {
+				lines = []string{err.Error()}
+			}
+			for _, l := range lines {
+				fmt.Fprintln(e.stderr, "locksql console: "+l)
+			}
+			return exitUsage
+		}
 		fmt.Fprintln(e.stderr, "locksql console:", err)
 		if errors.Is(err, console.ErrConfig) {
 			return exitUsage

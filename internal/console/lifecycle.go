@@ -18,6 +18,7 @@ import (
 
 	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"github.com/DavidGodefroid/lockkit/hubclient"
+	"github.com/DavidGodefroid/lockkit/managed"
 	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/lockkit/tunnel"
 	"github.com/DavidGodefroid/lockkit/ui"
@@ -84,7 +85,22 @@ type starter struct {
 	// passphrase, a password) when the tunnel last opened.
 	sealed   *connectSecrets
 	sshAsked bool
+	// managed is the company's managed file read at start (nil: none).
+	managed *managed.File
 }
+
+// saveApproved saves p as the approved policy under key, with the
+// fingerprint of the managed file in force (managed_sha256).
+func (st *starter) saveApproved(stateDir, key string, p config.Policy) error {
+	fp := ""
+	if st.managed != nil {
+		fp = st.managed.Fingerprint
+	}
+	return config.SaveApprovedManaged(stateDir, key, p, fp)
+}
+
+// loadManagedFile reads the machine's managed file; tests replace it.
+var loadManagedFile = managed.Load
 
 // errNotSealed: a reconnection after an idle end needs a secret its
 // connect tickets did not carry.
@@ -136,6 +152,9 @@ func (st *starter) audit(rec audit.Record) error {
 	}
 	if st.profile.SSH != nil && rec.SSHHost == "" {
 		rec.SSHHost = st.profile.SSH.Host
+	}
+	if st.managed != nil && rec.Managed == "" {
+		rec.Managed = st.managed.Fingerprint
 	}
 	if err := st.log.Append(rec); err != nil {
 		st.io.Println("audit log write failed: " + err.Error())
@@ -340,7 +359,12 @@ func policyFromFiles(cwd, profile, rulesPath, set string) (config.Policy, error)
 		return config.Policy{}, err
 	}
 	cp.PIIRules = set
-	return config.NewPolicy(cp, r.Mask, r.Allow).WithModes(r.Modes), nil
+	// The managed mask rules apply whatever the rule set.
+	mask, allow, modes, err := c.Managed.BoundsOf().ApplyPII(r.Mask, r.Allow, r.Modes)
+	if err != nil {
+		return config.Policy{}, err
+	}
+	return config.NewPolicy(cp, mask, allow).WithModes(modes), nil
 }
 
 // Run is `locksql console`: the start-up sequence of spec §6, then the
@@ -426,7 +450,19 @@ func Run(ctx context.Context, o Options) error {
 	// watch has stopped (deferred later, so run first).
 	defer hub.Close()
 
-	cfg, err := config.Load(o.Cwd)
+	// The company's managed file bounds every policy below: unreadable,
+	// badly owned or badly signed, or a [locksql] section that cannot be
+	// applied, it refuses the start before any prompt.
+	mf, err := loadManagedFile(ctx)
+	var cm *config.Managed
+	if err == nil {
+		cm, err = config.ParseManaged(mf)
+	}
+	if err != nil {
+		return refuseManagedStart(o, err)
+	}
+	userPath, _ := config.UserConfigPath()
+	cfg, err := config.LoadWith(o.Cwd, userPath, cm)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrConfig, err)
 	}
@@ -525,7 +561,7 @@ func Run(ctx context.Context, o Options) error {
 	if iso.verifier != nil {
 		appr = newFingerprintApprover(o.IO, iso.verifier, iso.sys.Finger, FingerDeadline)
 	}
-	st := &starter{o: o, io: o.IO, log: log, profile: p, approver: appr}
+	st := &starter{o: o, io: o.IO, log: log, profile: p, approver: appr, managed: mf}
 	defer st.wipeVaultToken()
 
 	loadPolicy := func() (config.Policy, error) {
@@ -549,7 +585,7 @@ func Run(ctx context.Context, o Options) error {
 		// Approved before named sets: record the set in force, so that a
 		// later switch is shown as one.
 		approved.Profile.PIIRules = ruleSet
-		if err := config.SaveApproved(o.StateDir, key, approved); err != nil {
+		if err := st.saveApproved(o.StateDir, key, approved); err != nil {
 			return err
 		}
 	}
@@ -697,7 +733,7 @@ func Run(ctx context.Context, o Options) error {
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Approver: approver, Fingerprint: iso.verifier != nil, Boundary: iso.boundary(), Now: o.Now,
 		AllowUnmask: o.AllowUnmask, ShowResults: o.ShowResults, Version: o.Version, LoadPolicy: loadPolicy,
 		Reconnect: st.reconnect, IdleConnect: st, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health, Hub: hub,
-		RefuseProduction: refuseProduction,
+		RefuseProduction: refuseProduction, Managed: mf, LoadManaged: loadManagedFile,
 	})
 	if err != nil {
 		ln.Close()
@@ -796,10 +832,49 @@ func (st *starter) where() string {
 	return safeText(p.Host, false)
 }
 
-// startPolicy compares the current policy with the approved one (spec §4).
-// It returns the policy to enforce and, when the human refused a loosening,
-// the refused policy's fingerprint.
+// startPolicy checks the current policy against the company's managed
+// file, then compares it with the approved one (reviewPolicy). A policy
+// beyond the managed bounds is refused without any prompt: no human
+// approves beyond the company policy. It returns the policy to enforce
+// and, when the human refused a loosening, the refused policy's
+// fingerprint.
 func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur config.Policy) (config.Policy, string, error) {
+	if st.managed != nil {
+		st.io.Println(paint.Dim(safeText(st.managed.Describe(), false)))
+	}
+	if err := st.refuseManaged(cur); err != nil {
+		return config.Policy{}, "", err
+	}
+	inForce, refusedFP, err := st.reviewPolicy(ctx, stateDir, key, cur)
+	if err != nil {
+		return config.Policy{}, "", err
+	}
+	// The last approved policy, kept when the human refused a loosening,
+	// may predate the managed file.
+	if err := st.refuseManaged(inForce); err != nil {
+		return config.Policy{}, "", err
+	}
+	return inForce, refusedFP, nil
+}
+
+// refuseManaged refuses p when it goes beyond the managed file's bounds,
+// printing and auditing (refused-managed) every violation.
+func (st *starter) refuseManaged(p config.Policy) error {
+	err := kconsole.CheckManaged(product.P, managedChecker{}, kpolicy{p}, st.managed)
+	if err == nil {
+		return nil
+	}
+	lines := kconsole.ManagedLines(err)
+	for _, line := range lines {
+		st.io.Println(red + safeText(line, false) + reset)
+	}
+	st.audit(audit.Record{Event: audit.EventPolicy, Decision: kconsole.DecisionRefusedManaged, Error: strings.Join(lines, "; ")})
+	return err
+}
+
+// reviewPolicy compares the current policy with the approved one (spec
+// §4) and asks the human to approve a first policy or a loosening.
+func (st *starter) reviewPolicy(ctx context.Context, stateDir, key string, cur config.Policy) (config.Policy, string, error) {
 	io := st.io
 	ap, err := config.LoadApproved(stateDir, key)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -829,7 +904,7 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 		if st.audit(audit.Record{Event: audit.EventPolicy, Decision: "applied", Approval: st.appr().Mode()}) != nil {
 			return config.Policy{}, "", errApprovalUnrecorded
 		}
-		if err := config.SaveApproved(stateDir, key, cur); err != nil {
+		if err := st.saveApproved(stateDir, key, cur); err != nil {
 			return config.Policy{}, "", st.failed(true, err)
 		}
 		st.reviewed = true
@@ -843,7 +918,7 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 		return *ap, "", nil
 	}
 	if !kconsole.Loosens(changes) {
-		if err := config.SaveApproved(stateDir, key, cur); err != nil {
+		if err := st.saveApproved(stateDir, key, cur); err != nil {
 			return config.Policy{}, "", err
 		}
 		io.Println("policy tightened since the last session:")
@@ -870,7 +945,7 @@ func (st *starter) startPolicy(ctx context.Context, stateDir, key string, cur co
 	if st.audit(audit.Record{Event: audit.EventPolicy, Decision: "applied", Approval: st.appr().Mode()}) != nil {
 		return config.Policy{}, "", errApprovalUnrecorded
 	}
-	if err := config.SaveApproved(stateDir, key, cur); err != nil {
+	if err := st.saveApproved(stateDir, key, cur); err != nil {
 		return config.Policy{}, "", st.failed(true, err)
 	}
 	st.reviewed = true
@@ -1421,7 +1496,7 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 	}
 	next = config.NewPolicy(ap.Profile, rules.Mask, rules.Allow).WithModes(rules.Modes)
 	if changed {
-		if err := config.SaveApproved(stateDir, key, next); err != nil {
+		if err := st.saveApproved(stateDir, key, next); err != nil {
 			return ap, st.failed(allowed, err)
 		}
 		if !allowed {

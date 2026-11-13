@@ -1,0 +1,22 @@
+exit 0
+== stdout
+Managed by Acme (sha256:637a389db1c2)
+path: <dir>/managed.toml
+organisation: Acme
+fingerprint: sha256:637a389db1c2c89b2856af79000f11686ccc2a6d932a9741181de64a6384d558
+signed: no
+bounds:
+  locksql.bounds.tier = write
+  locksql.bounds.tls = verify-full
+  locksql.bounds.credentials = vault, ask
+  locksql.bounds.hosts = *.example.internal
+  locksql.bounds.auto.ddl = deny
+  locksql.bounds.limits.max_rows = 500
+  locksql.bounds.limits.max_session = 2h0m0s
+  locksql.bounds.detectors = fr_nir
+  locksql.bounds.pii_mask = app.users.email (redact)
+defaults:
+  locksql.defaults.limits.max_rows = 100
+  locksql.defaults.limits.max_session = "2h"
+profiles: prod-erp
+== stderr
