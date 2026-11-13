@@ -99,12 +99,15 @@ func TestDiffEveryRule(t *testing.T) {
 		{"database", "database", func(p *Policy) { p.Profile.Database = "other" }, true},
 		{"path", "path", func(p *Policy) { p.Profile.Path = "/tmp/x.db" }, true},
 		{"user", "user", func(p *Policy) { p.Profile.User = "admin" }, true},
-		// Transport security is the driver's: a tls change never loosens.
-		{"tls down", "tls", func(p *Policy) { p.Profile.TLS = TLSDisable }, false},
-		{"tls ca changed", "tls_ca", func(p *Policy) { p.Profile.TLSCA = "/other.pem" }, false},
+		// A weaker tls mode, another CA bundle or another verified name
+		// trusts another server: a loosening. The client certificate is
+		// listed only.
+		{"tls down", "tls", func(p *Policy) { p.Profile.TLS = TLSDisable }, true},
+		{"tls verify-full to require", "tls", func(p *Policy) { p.Profile.TLS = TLSRequire }, true},
+		{"tls ca changed", "tls_ca", func(p *Policy) { p.Profile.TLSCA = "/other.pem" }, true},
 		{"tls cert changed", "tls_cert", func(p *Policy) { p.Profile.TLSCert = "/other.pem" }, false},
 		{"tls key changed", "tls_key", func(p *Policy) { p.Profile.TLSKey = "/other.key" }, false},
-		{"tls server name set", "tls_server_name", func(p *Policy) { p.Profile.TLSServerName = "other.example" }, false},
+		{"tls server name set", "tls_server_name", func(p *Policy) { p.Profile.TLSServerName = "other.example" }, true},
 		{"ssh added", "ssh", func(p *Policy) {
 			p.Profile.SSH = &SSHProfile{Host: "b", Port: 22, User: "u", Auth: SSHAuthAgent, Credentials: CredentialsAsk}
 		}, true},
@@ -404,15 +407,15 @@ func TestDiffTLSUpTightens(t *testing.T) {
 }
 
 // TestDiffTLSDefaultChange: a remote profile without tls was approved as
-// verify-full, the former default, and now loads as prefer; the change is
-// listed, never a loosening, so the console applies it without asking.
+// verify-full, the former default, and now loads as prefer: a weaker mode,
+// so a loosening the human reviews once.
 func TestDiffTLSDefaultChange(t *testing.T) {
 	a := fullPolicy()
 	a.Profile.TLS = TLSVerifyFull
 	c := fullPolicy()
 	c.Profile.TLS = TLSPrefer
 	ch := Diff(a, c)
-	if len(ch) != 1 || ch[0].Field != "tls" || ch[0].Loosens {
+	if len(ch) != 1 || ch[0].Field != "tls" || !ch[0].Loosens {
 		t.Fatalf("changes = %+v", ch)
 	}
 }
