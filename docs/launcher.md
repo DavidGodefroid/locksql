@@ -3,8 +3,8 @@
 locksql runs in Docker. On the host there is one `locksql` command, the
 launcher [`scripts/locksql`](../scripts/locksql), a POSIX shell script that
 runs every subcommand in the release image. There is no other `locksql` on
-the host to explain: `locksql console`, `locksql version`, `locksql mcp` all
-go through it. This page is its design, the pattern for the other lock tools.
+the host to explain: `locksql version`, `locksql mcp` and the others all
+go through it; the console is started by `lox run` only (lockhub). This page is its design, the pattern for the other lock tools.
 
 ## What is installed
 
@@ -27,8 +27,7 @@ terminals, else `-i`.
 
 | Subcommand | Account | Extra | Why |
 |---|---|---|---|
-| `console` | `locksql` (uid 10001) | `--name locksql-console-<cksum of PROJECT>` (one console per project; `LOCKSQL_CONSOLE_NAME` overrides it), `--log-driver none`, `--cap-drop ALL`, `--security-opt no-new-privileges`, `--read-only` with a 64 MB `/tmp` tmpfs, `--pids-limit 256`, `--memory 1g`, `--add-host=host.docker.internal:host-gateway`, `-e VAULT_ADDR -e VAULT_NAMESPACE`, `VAULT_CACERT`'s file mounted read-only at its own path, volumes `locksql-run` and `locksql-home`, `--project PROJECT` unless given | the only holder of credentials; no log driver so `docker logs` keeps no screen; a stopped container of the same name is removed first |
-| `stats`, `forget` | `locksql` | volume `locksql-home` | they read the console account's state |
+| `stats`, `forget` | `locksql` | volume `locksql-home` | they read the console account's state; not yet the lock's home volume that `lox run` gives the console ([#220](https://github.com/DavidGodefroid/locksql/issues/220)) |
 | `init`, `config` | you (`id -u`:`id -g`) | `-e HOME=$HOME -v $HOME:$HOME` | they write your agents' files and your user config, owned by you |
 | `profile` | you | `-e HOME=/tmp` | it writes `.locksql/config.toml`, yours to edit |
 | `doctor --fix` | you (`id -u`:`id -g`), in the group `locksql-clients`; root (`--user 0`) first, only when `.locksql/` holds entries that are not yours | `-e HOME=$HOME -e USER -v $HOME:$HOME`, `-e LOCKSQL_DOCTOR_FOR=uid:gid`; no socket volume | it wires your agents and keeps `.locksql/` as `lox run` reads it: yours, writable by you only. The root run gives back to you what the console account owns in `.locksql/` (left by `doctor --fix` up to v0.13.0, which `lox run` refuses), nothing else, its output on stderr |
@@ -38,10 +37,10 @@ terminals, else `-i`.
 | anything else (`help`, ...) | `agent` | | no console to reach |
 | `version` | | | prints `locksql launcher X (image I)`, then runs `I version` |
 | `update [vX.Y.Z]` | (host) | | below |
+| `console` | | | none: it exits 2, `the console is started by lox run only (lockhub): run lox run in the workspace`, and runs nothing; no client reaches a console started by hand |
 
-Invariants: the Docker socket is never mounted; only the console's
-container gets `locksql-home`; the agent's containers share only the
-console's socket volume with it, read-only.
+Invariants: the Docker socket is never mounted; the agent's containers
+share only the console's socket volume with it, read-only.
 
 ## The socket of lox run's lock
 
@@ -51,8 +50,8 @@ under compose, with its socket in the volume
 names in `<workspace>/.lockfamily/up.json` (lockhub's `docs/lox-run.md`).
 The agent commands mount that volume on `/run/locksql`, read-only
 (connecting to a socket needs no write), and no other: without it they stop
-(exit 2) and say why, and what to do (`lox run`), never falling back to the
-fixed `locksql-run`. The launcher takes the volume only after the checks
+(exit 2) and say why, and what to do (`lox run`), never falling back to
+another volume. The launcher takes the volume only after the checks
 lea makes for its own agents:
 
 - `up.json` is found in the nearest directory up from here whose
@@ -97,7 +96,13 @@ itself, run it in lea, whose containers have no Docker access.
 
 The socket's name derives from the project (`.locksql/config.toml` up from
 the working directory) and the profile: run the agent from the workspace,
-whose `.locksql` lox run's console serves.
+whose `.locksql` lox run's console serves. A sub-project with a
+`.locksql/config.toml` of its own below the workspace would key its
+socket on itself, which no console serves: there the agent commands stop
+(exit 2) and say so (run locksql from the workspace, or make the
+sub-project a workspace of its own with `lox init`). A workspace path
+holding `&`, `<` or `>`, which `up.json` escapes, is refused too, with a
+message that says so: move or rename the workspace.
 
 ## Version pinning
 
@@ -125,9 +130,6 @@ launcher runs `registry:X.Y.Z`. A launcher run from a clone
 - `LOCKSQL_VAULT=1`: the `-vault` image;
 - `LOCKSQL_DOCKER_ARGS`: extra `docker run` arguments, split on spaces
   (`--network NAME`, `-e DOCKER_HOST=...`).
-- `LOCKSQL_READONLY_PROJECT=1`: the console mounts the project read-only and
-  only `.locksql/` writable (which must be a directory, not a link), for a
-  project your agents write; lea sets it.
 
 ## Install and update
 
@@ -163,23 +165,14 @@ Any failed check stops before the launcher is replaced. cosign is required
 
 ## Paths
 
-A project path, `$HOME` (for `init`, `config`) or a `VAULT_CACERT` path
-holding `:` is refused: docker `-v` separates on it. `LOCKSQL_DOCKER_ARGS`
+A project path or `$HOME` (for `init`, `config`) holding `:` is refused: docker `-v` separates on it. `LOCKSQL_DOCKER_ARGS`
 is split on spaces and never globbed.
 
-An explicit `--project DIR` (or `--project=DIR`), for any subcommand, is
+An explicit `--project DIR` (or `--project=DIR`) of `profile`, the
+subcommand that takes it, is
 the project mounted instead of the one of the working directory: resolved
 to its physical path, which replaces `DIR` in the command; the command runs
 from there unless the working directory is inside it.
-
-With `LOCKSQL_READONLY_PROJECT=1`, `.locksql/` must be a directory whose
-physical path is itself; the launcher checks it twice, the second time
-right before `docker run`. On Linux it also passes the device and inode it checked
-(`LOCKSQL_EXPECT_DIR=DEV:INO`), and the console refuses to start on a
-`.locksql` with others: a directory swapped in between the check and
-Docker's mount never gets the console. On macOS (Docker Desktop's file
-sharing reports other inodes) only the two checks run. lea also mounts
-`.locksql` read-only in its agents' containers, which cannot swap it.
 
 ## Former host install
 

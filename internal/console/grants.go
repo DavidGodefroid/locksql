@@ -435,7 +435,8 @@ func (s *Server) grantFor(ctx context.Context, pl *plan) *grant {
 // relation the analyser resolved, that reads at least one table, with no
 // PII filter, grouping or aggregate under the k-anonymity check (decision
 // 1: whether it ran at once or asked would tell the agent what the count
-// says), and not refused by the weight check.
+// says), with no warning (a PII join among them: the human must see it),
+// and not refused by the weight check.
 func grantable(pl *plan) bool {
 	return pl.st.Class == sqlclass.Read && !pl.unmask && pl.an != nil && pl.explain != nil && len(pl.warnings) == 0 &&
 		!pl.an.PIIFilter && len(pl.an.KChecks) == 0 && !estimatesHidden(pl) &&

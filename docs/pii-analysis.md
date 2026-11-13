@@ -110,12 +110,18 @@ refuses what would turn a masked column into an oracle. The checks are in
   ranges and functions over a PII column are refused: they compare it
   character by character.
 - **Joins** must pair two plain PII columns: a PII column joined with an
-  unmasked one would copy its values where no mask applies.
+  unmasked one would copy its values where no mask applies. An accepted
+  PII equality (`ON`, `WHERE`, `IN (subquery)`, `USING`, `NATURAL`, and in
+  a write's filters too) is recorded in `PIIJoins` as
+  `db.table.col = db.table.col`: it runs no count, but the console warns
+  the human on the ticket, hides the row estimates from the agent and
+  refuses its `EXPLAIN`, and no grant covers it (see "Joins between PII
+  columns" in [the security model](security-model.md)).
 - **Set operations.** `INTERSECT`, `EXCEPT` and the duplicate removal of
   `UNION` are equality tests: a PII column may meet only PII columns there.
 - **Ordering and windows.** `ORDER BY`, `PARTITION BY`, `DISTINCT ON` and
   `FILTER` over a PII column are refused (they rank values).
-- **`EXPLAIN`** of a statement that filters, groups or aggregates PII is
+- **`EXPLAIN`** of a statement that filters, groups, aggregates or joins PII is
   refused: the planner's row estimates would answer the question the
   counts guard.
 
@@ -142,7 +148,7 @@ structural rules that make a count meaningful (equality only, `AND` only,
 no self-comparison, no view column under a constant filter) still refuse.
 
 `PIIFilter` marks a statement whose row estimates must stay on the
-console.
+console; so does a non-empty `PIIJoins`.
 
 ## Masking the result
 

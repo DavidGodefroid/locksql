@@ -46,6 +46,24 @@ func TestWaitForFailsAnExitWithoutThePrompt(t *testing.T) {
 	}
 }
 
+// A console that exits while the terminal's reader never finishes: the
+// failure says the reader never finished, not only that the console exited.
+func TestWaitForFailsAReaderThatNeverDrains(t *testing.T) {
+	if os.Getenv("LOCKSQL_WAITFOR_CHILD") == "1" {
+		s := &screen{done: make(chan struct{}), drained: make(chan struct{})}
+		s.buf.WriteString("something else\n")
+		close(s.done)
+		s.waitFor(t, 0, time.Minute, "may also connect as a client")
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestWaitForFailsAReaderThatNeverDrains$", "-test.v")
+	cmd.Env = append(os.Environ(), "LOCKSQL_WAITFOR_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "the terminal's reader never finished") {
+		t.Fatalf("want a failure naming the reader: %v\n%s", err, out)
+	}
+}
+
 // The prompt that comes first wins, and from skips what was already seen.
 func TestFind(t *testing.T) {
 	out := "a Listening… b Apply these changes? [y/N] "

@@ -3,9 +3,10 @@
 locksql runs in Docker, with nothing on your machine but Docker and the
 `locksql` launcher. The launcher is a short shell script
 ([`scripts/locksql`](../scripts/locksql)): every command you type,
-`locksql console`, `locksql version`, `locksql mcp` and the others, runs in
-the locksql image, never in a binary of its own on your machine. The image
-holds the separated setup:
+`locksql version`, `locksql mcp` and the others, runs in the locksql image,
+never in a binary of its own on your machine. The console runs in that
+image too, but `lox run` starts it, not the launcher
+([Run the console](#run-the-console)). The image holds the separated setup:
 
 - the console runs as `locksql` (uid 10001), the only account that holds the
   database credentials;
@@ -58,8 +59,7 @@ runs each command with the account it needs:
 
 | Command | Runs as | Volumes |
 |---|---|---|
-| `console` | `locksql`, in a container of its own (`locksql-console-<n>`, one per project; `LOCKSQL_CONSOLE_NAME` names it), confined (no capability, no privilege gain, read-only root with a small `/tmp`, at most 256 processes and 1 GB), with `--add-host=host.docker.internal:host-gateway` and no log driver | `locksql-run`, `locksql-home` |
-| `stats`, `forget` | `locksql` | `locksql-home` |
+| `stats`, `forget` | `locksql` | `locksql-home`, not the lock's home volume that `lox run` gives the console: they do not see its state yet ([#220](https://github.com/DavidGodefroid/locksql/issues/220)) |
 | `init`, `config` | you (your uid and gid), with your home mounted: they write the agents' files and your user config; a `config` file must be under the project or your home | |
 | `profile` | you, with `HOME=/tmp` | |
 | `doctor --fix` | you, with your home mounted (your agents' wiring); first as root, only to give back `.locksql/` entries that are not yours | |
@@ -73,15 +73,14 @@ The launcher reads:
 
 - `LOCKSQL_IMAGE`: the image to run instead of the release's, for example
   your own build (below);
-- `LOCKSQL_VAULT=1`: the image with the `vault` CLI
-  ([Credentials from Vault](#credentials-from-vault));
-- `LOCKSQL_DOCKER_ARGS`: more `docker run` arguments, split on spaces, for
-  example `LOCKSQL_DOCKER_ARGS="--network shop" locksql console`;
-- `LOCKSQL_READONLY_PROJECT=1`: the console mounts the project read-only,
-  but for `.locksql/`, for a project your agents write;
-- `LOCKSQL_CONSOLE_NAME`: the console's container name (default
-  `locksql-console-<n>`, from the project path);
-- `VAULT_ADDR`, `VAULT_NAMESPACE`, `VAULT_CACERT`: passed to the console.
+- `LOCKSQL_VAULT=1`: the release's `-vault` image;
+- `LOCKSQL_DOCKER_ARGS`: more `docker run` arguments, split on spaces.
+
+They apply to the launcher's own commands only. The console is not one of
+them: `lox run` starts it with the image, volumes, networks and environment
+of the lock in `lockfamily.yaml` ([Run the console](#run-the-console)), and
+`locksql console` exits 2 with `the console is started by lox run only
+(lockhub): run lox run in the workspace`.
 
 A path holding `:` (the project, your home) cannot be mounted: the launcher
 refuses it. On macOS, `doctor --fix` giving back `.locksql/` entries that
@@ -100,6 +99,11 @@ docker build -t locksql https://github.com/DavidGodefroid/locksql.git
 then `LOCKSQL_IMAGE=locksql locksql ...`. The launcher of a clone
 (`sh scripts/locksql ...`) runs the image tagged `locksql` by default.
 `--build-arg VERSION=v0.8.0` sets the version that `locksql version` prints.
+
+Your build runs the launcher's commands, never the console: `lox run`
+starts a lock only from a release image, pinned by digest and checked
+against its release's cosign signature (`locks.<name>.image:
+ghcr.io/davidgodefroid/locksql@sha256:...`).
 
 ### Migrating from a host install
 
@@ -142,10 +146,17 @@ database/creds/ro`). Inside a container, `localhost` is
 the container itself, and the wizard knows it:
 
 - a database on your machine is `host = "host.docker.internal"`, which the
-  launcher maps to your machine. `tls` defaults to `prefer`, as for any
-  host: a local server without TLS connects in plain TCP, with a warning;
-- a database in another container is reached by its name on a shared
-  network (`LOCKSQL_DOCKER_ARGS="--network NAME" locksql console`);
+  lock's egress gateway maps to your machine. `tls` defaults to `prefer`,
+  as for any host: a local server without TLS connects in plain TCP, with a
+  warning;
+- a database in another container: publish its port on your machine
+  (`docker run -p 127.0.0.1:5432:5432 ...`, or `ports:` in its compose
+  file) and name `host.docker.internal` with that port. Under `lox run` the
+  lock sits on an internal network of its own and reaches only its
+  profile's endpoints, through its gateway
+  ([lockhub: egress](https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-run.md#egress-each-lock-reaches-its-reviewed-endpoints-only)):
+  it cannot join the container's network to reach it by name
+  ([lockhub#194](https://github.com/DavidGodefroid/lockhub/issues/194));
 - `credentials = "keychain"` needs an OS keychain, which the container does
   not have: use `credentials = "ask"`, or `"vault"` with the image below;
 - a SQLite `path` is relative to the project root, which is mounted.
@@ -178,41 +189,60 @@ lox attach sql-dev     # in another terminal
 ```
 
 `lox run` starts the hub and the workspace's locks, then serves the
-decisions in its terminal. It starts the console with its hub flags, through the launcher
-(`locksql console --hub URL --hub-key-file PATH --instance NAME`, plus
-`--profile P`, `--show-results` or `--allow-unmask` from the lock's
-settings: [Start the console](usage.md#2-start-the-console)). Started
-without them, `locksql console` exits with ``launched by `lox run` only``.
-`lox attach sql-dev` attaches your terminal to it (detach: Ctrl-P Ctrl-Q):
-the console asks its start-up questions there, and again when it restarts. The
-`locksql-home` volume keeps the console account's state from one run to the
-next: the approved policy, the audit log and `~/.ssh/known_hosts` for an
-`ssh` profile. A key for `auth = "key"` must be in that volume, owned by
-`locksql` with mode 0600; `auth = "password"` needs nothing there.
+decisions in its terminal. It runs the console in a container of its own,
+from the image `lockfamily.yaml` pins for the lock, with its hub flags
+(`console --hub URL --hub-key-file PATH --instance NAME`, plus `--profile P`
+from the lock's `profile:`: [Start the console](usage.md#2-start-the-console));
+clear results (Ctrl-O) and unmasking (`:unmask`) are switched on at the
+console. The launcher starts no console: `locksql console` exits 2 with
+`the console is started by lox run only (lockhub): run lox run in the
+workspace`, and the console binary started without its hub flags exits with
+``launched by `lox run` only``. `lox run` shows the console's start-up
+questions in its own terminal, again when it restarts; `lox attach sql-dev`
+attaches yours to the console instead (detach: Ctrl-P Ctrl-Q).
+
+The lock's home volume, `<compose project>_<instance>-home`
+(`lockfamily-<8 hex of sha256(workspace)>_sql-dev-home`), keeps the console
+account's state from one run to the next: the approved policy, the audit
+log, the PII rule sets and `~/.ssh/known_hosts` for an `ssh` profile. The
+files a profile names under `~/` (`tls_ca`, `tls_cert`, `tls_key`, the key
+of `auth = "key"`, owned by `locksql` with mode 0600) are in that volume
+too: `lox add` and `lox run` check them and print the command that copies a
+missing one there
+([lockhub: the files a locksql profile names](https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-add.md#the-files-a-locksql-profile-names)).
+`auth = "password"` needs nothing there. The `locksql-home` volume of
+earlier releases holds no console's state any more; the launcher's `stats`
+and `forget` still mount it
+([#220](https://github.com/DavidGodefroid/locksql/issues/220)).
 
 ## Credentials from Vault
 
 `credentials = "vault"` runs the `vault` CLI in the console's container. The
 default image leaves it out (it adds some 550 MB); the release's `-vault`
-image has it (`ghcr.io/davidgodefroid/locksql:X.Y.Z-vault`), which
-`LOCKSQL_VAULT=1` selects. For your own build, `docker build --target vault
--t locksql:vault .` and `LOCKSQL_IMAGE=locksql:vault`.
-
-The console reads `VAULT_ADDR` and `VAULT_NAMESPACE` from its environment,
-which the launcher passes on, nothing else. The console account needs no
-`vault login`: at start the console asks `Vault token for <VAULT_ADDR>:` in its terminal (no
-echo) and keeps the token in memory for the session, never in
-`locksql-home` or anywhere on disk:
+image has it (`ghcr.io/davidgodefroid/locksql:X.Y.Z-vault`). Under `lox
+run`, Vault is a setting of the lock, not of the launcher: declare the lock
+with Vault credentials, and `lox add` pins the `-vault` image, marks the
+lock `vault: true` and writes the workspace's one `vault:` block (address,
+namespace, CA file) in `lockfamily.yaml`:
 
 ```sh
-LOCKSQL_VAULT=1 VAULT_ADDR=https://vault.example.com locksql console
+lox add locksql sql-dev --credentials vault --vault-path database/creds/ro \
+  --vault-address https://vault.example.com:8200   # [--vault-namespace NS] [--vault-ca-file PATH]
+lox run
 ```
 
-`VAULT_CACERT` (a CA bundle for Vault's certificate) is passed too, its file
-mounted read-only at its own path: it must be readable by the console
-account (uid 10001), mode 0644 for example.
+`lox vault set --address URL [--namespace NS] [--ca-file PATH]` changes the
+block later. `lox run` reviews it, then gives the console `VAULT_ADDR`, and
+`VAULT_NAMESPACE` when set, nothing else; the CA file, copied once reviewed,
+is mounted read-only in the lock. The launcher's `LOCKSQL_VAULT` and the
+`VAULT_*` variables of your shell play no part. See [lockhub: Vault, per
+lock](https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-add.md#vault-per-lock).
 
-Get the token without storing it, then paste it at the prompt:
+The console account needs no `vault login`: at start the console asks
+`Vault token for <VAULT_ADDR>:` (no echo), which `lox run` shows on a card
+in its terminal, and keeps the token in memory for the session, never in
+the lock's home volume or anywhere on disk. Get the token without storing
+it, then type it there:
 
 ```sh
 vault login -method=oidc -no-store -token-only
@@ -222,76 +252,35 @@ vault login -method=oidc -no-store -token-only
 A plain `vault login` would store the token in your account, where the
 agent runs: the agent could read it and fetch the login from Vault itself,
 bypassing the console (`locksql doctor` fails on it). For the same reason,
-do not leave `VAULT_TOKEN` set in that shell. When Vault refuses a read (`not authenticated or not allowed`: the
-token is expired or revoked, or its policy may not read `vault_path`), the
-console asks for a token again; three refusals in a row stop the
-connection.
+do not leave `VAULT_TOKEN` set in that shell. If you accept a token stored
+in your account, `vault_token: cli` on the lock lets `lox run` answer the
+prompt with your Vault CLI's token, checked first ([lockhub: the host's
+Vault CLI
+token](https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-add.md#the-hosts-vault-cli-token-vault_token)).
+When Vault refuses a read (`not authenticated or not allowed`: the token is
+expired or revoked, or its policy may not read `vault_path`), the console
+asks for a token again; three refusals in a row stop the connection.
 
 ## Databases that publish no port
 
 A profile with `proxy_command`
-([usage.md](usage.md#databases-that-publish-no-port)) runs its command in the
-console's container, as the `locksql` account. The image has none of the
-clients the recipes use (`ssh`, `docker`, `kubectl`), so a profile using one
-fails with `proxy_command: exec: "ssh": executable file not found in $PATH`.
-Build an image of your own on top of it, with only the client you need:
+([usage.md](usage.md#databases-that-publish-no-port)) is **not supported
+under `lox run` yet**
+([lockhub#193](https://github.com/DavidGodefroid/lockhub/issues/193)):
 
-```dockerfile
-# Dockerfile.proxy
-FROM locksql
-USER root
-RUN apk add --no-cache openssh-client
-USER agent
-```
+- a lock reaches only the endpoints its gateway can name, and a program is
+  not one: the review shows the lock's egress `unreachable`
+  (`proxy_command runs a program the gateway cannot follow`), and the
+  console reaches nothing;
+- the command's client (`ssh`, `docker`, `kubectl`) is not in the release
+  image, and `lox run` runs no image of your own
+  ([Your own build](#your-own-build)).
 
-```sh
-docker build -t locksql-proxy -f Dockerfile.proxy .   # after docker build -t locksql .
-docker run --rm --entrypoint ssh locksql-proxy -V     # the client is there
-LOCKSQL_IMAGE=locksql-proxy locksql console
-```
-
-`FROM ghcr.io/davidgodefroid/locksql:X.Y.Z` builds on the release's image
-instead. Add
-`docker-cli` for a `docker exec` reached through `DOCKER_HOST=ssh://...`;
-for `kubectl`, copy a release binary checked against its published SHA-256,
-as the `Dockerfile` does for `vault`, and keep the kubeconfig in
-`locksql-home`. Pass `DOCKER_HOST`, `DOCKER_CONTEXT` or `KUBECONFIG` with
-`LOCKSQL_DOCKER_ARGS="-e DOCKER_HOST=..."` on `locksql console`; the command
-inherits them.
-
-**Prefer `ssh` to the Docker host**, even when it is the machine the console
-runs on (`deploy@host.docker.internal`, which the launcher maps to your
-machine). The command runs
-without a terminal, so `ssh` needs a key without passphrase and the host key
-already known. Create both in `locksql-home`, as the console account, and
-check the fingerprint `ssh-keyscan` prints against the host's own
-(`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` there):
-
-```sh
-docker run -it --rm --user locksql -v locksql-home:/home/locksql \
-  --add-host=host.docker.internal:host-gateway --entrypoint sh \
-  ghcr.io/davidgodefroid/locksql:X.Y.Z -c '
-    mkdir -p -m 0700 ~/.ssh &&
-    ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/id_ed25519 &&
-    ssh-keyscan -t ed25519 host.docker.internal >> ~/.ssh/known_hosts &&
-    ssh-keygen -lf ~/.ssh/known_hosts && cat ~/.ssh/id_ed25519.pub'
-```
-
-Authorize that public key for a dedicated account on the host, and limit it
-to the one relay it needs (`command="docker exec -i shop-db socat -
-TCP:127.0.0.1:3306",restrict` in its `authorized_keys`): an account that may
-run `docker` is root on that host.
-
-**Do not mount the Docker socket into the console's container** unless you
-accept what follows. With `-v /var/run/docker.sock:/var/run/docker.sock` (and
-`--group-add` the socket's group, since the console does not run as root,
-through `LOCKSQL_DOCKER_ARGS`; the launcher never mounts it),
-`docker exec` works from the console's container, but **the console's
-container becomes root on the host**: any process in it, the console or the
-command it runs, can start a privileged container that mounts the host's `/`.
-The agent's container does not get the socket; anything that takes over the
-console, or a `proxy_command` you approve without reading it, does. The
-`ssh` route above confines the same need to one relay command.
+For a database behind an SSH host, use the profile's `ssh` table instead
+([usage.md](usage.md#reaching-a-remote-server-through-ssh)): the console
+opens the tunnel itself, and `lox run` allows the bastion, and only it, as
+the lock's endpoint. For a database in a container on your machine, publish
+its port ([Set up a project](#set-up-a-project)).
 
 ## Wire the agent
 
@@ -320,9 +309,13 @@ an approval).
 
 The client commands run the same way: `locksql status`, `locksql tables`...
 
-`locksql doctor` runs as `agent`; `docker run --rm --user locksql -v
-locksql-run:/run/locksql -v locksql-home:/home/locksql
-ghcr.io/davidgodefroid/locksql:X.Y.Z doctor` checks the console account. It
+`locksql doctor` runs as `agent`. To check the console account, run it as
+`locksql` with the volumes `lox run` gives the lock (compose project
+`lockfamily-<8 hex of sha256(workspace)>`; `up.json` names the socket one
+as `socket_volume`): `docker run --rm --user locksql -v
+lockfamily-<hash>_<instance>-run:/run/locksql -v
+lockfamily-<hash>_<instance>-home:/home/locksql
+ghcr.io/davidgodefroid/locksql:X.Y.Z doctor`. It
 warns that `locksql` has no login session: in Docker the container takes the
 place of that session, and the checks of
 [`locksql doctor`](usage.md#locksql-doctor) about the host do not apply.
@@ -335,29 +328,18 @@ socket, the launcher cannot start the MCP server: the agent runs the
 console container. The two containers share only the socket volume.
 
 The console checks every peer by uid against its own container's accounts,
-where the agent's uid has none: name it when you start the console, with
-the release image as it is:
+where the agent's uid has none: name it in the lock's `allowed_uids`, in
+the `lockfamily.yaml` that `lox run` reviews with you (it passes
+`console --allowed-uids 1000` on), with the release image as it is.
 
-```sh
-locksql console --allowed-uids 1000
-```
-
-or at build time, in an image of your own:
-
-```sh
-docker build -t locksql --build-arg ALLOWED_UIDS=1000 .
-LOCKSQL_IMAGE=locksql locksql console
-```
-
-`--allowed-uids` and `ALLOWED_UIDS` are comma-separated lists of uids: the
-build writes them to `allowed_uids` in the image's
-`/etc/locksql/system.toml`, the flag adds them to it for that console only
-(the console prints them at start). Both refuse root (0), the console's own
-uid (10001) and 65534 (nobody, the kernel's overflow uid). Only whoever
-starts the console sets them: you, through the launcher (which passes the
-flag on) or through `lox run` (lockhub v0.3.0 or later: a lock's
-`allowed_uids` in the lockfamily.yaml lox run reviews with you); no client
-can. Every process of that uid, in any container that mounts the socket
+`--allowed-uids` is a comma-separated list of uids, which the console adds
+to `allowed_uids` of the image's `/etc/locksql/system.toml` for itself only
+(it prints them at start). It refuses root (0), the console's own uid
+(10001) and 65534 (nobody, the kernel's overflow uid). Only whoever starts
+the console sets it: you, through `lox run` (lockhub v0.3.0 or later); no
+client can. (`docker build --build-arg ALLOWED_UIDS=1000` writes the same
+list into an image of your own, which `lox run` does not run: [Your own
+build](#your-own-build).) Every process of that uid, in any container that mounts the socket
 volume, may then use the console. It is the uid the kernel reports
 for the agent's process, as the console sees it: the agent container's uid
 when neither container remaps user namespaces.
@@ -376,11 +358,13 @@ The agent's image needs what a client host has:
   the socket directory is mode 2710 and the socket 0660, group
   `locksql-clients`.
 
-Start the agent's container with the socket volume and the project at the
-same path as the console's, for example:
+Start the agent's container with lox run's socket volume of the lock
+(`socket_volume` in `.lockfamily/up.json`), read-only, and the workspace at
+the same path as the console's, for example:
 
 ```sh
-docker run … -v locksql-run:/run/locksql -v "$PWD:$PWD" -w "$PWD" agent-image
+docker run … --mount type=volume,src=lockfamily-<hash>_<instance>-run,dst=/run/locksql,readonly \
+  -v "$PWD:$PWD" -w "$PWD" agent-image
 ```
 
 `locksql init claude` then needs no change: the `locksql mcp` it writes in
@@ -398,7 +382,7 @@ is neither the console account nor in `locksql-clients` (or `allowed_uids`,
 
 Your own account is another matter. Whoever can run `docker` commands can
 `docker attach` to the console and type an approval, `docker exec` into it
-and read its memory, or open the `locksql-home` volume. An agent that runs
+and read its memory, or open the lock's home volume. An agent that runs
 shell commands in your account usually can: the launcher it runs for the
 MCP server is itself a `docker run`. The console cannot see this (its terminal belongs to the
 container), so treat this setup like the in-agent approval it improves on:

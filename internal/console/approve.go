@@ -159,6 +159,9 @@ func (s *Server) readDetails(pl *plan, add func(string)) {
 		if an.PIIFilter {
 			add("row estimates are hidden from the agent: the statement filters on a PII column")
 		}
+		if len(piiJoins(pl)) > 0 {
+			add("row estimates are hidden from the agent: the statement joins PII columns")
+		}
 	}
 }
 
