@@ -58,7 +58,6 @@ runs each command with the account it needs:
 
 | Command | Runs as | Volumes |
 |---|---|---|
-| `console` | `locksql`, in a container of its own (`locksql-console-<n>`, one per project; `LOCKSQL_CONSOLE_NAME` names it), confined (no capability, no privilege gain, read-only root with a small `/tmp`, at most 256 processes and 1 GB), with `--add-host=host.docker.internal:host-gateway` and no log driver | `locksql-run`, `locksql-home` |
 | `stats`, `forget` | `locksql` | `locksql-home` |
 | `init`, `config` | you (your uid and gid), with your home mounted: they write the agents' files and your user config; a `config` file must be under the project or your home | |
 | `profile` | you, with `HOME=/tmp` | |
@@ -77,11 +76,6 @@ The launcher reads:
   ([Credentials from Vault](#credentials-from-vault));
 - `LOCKSQL_DOCKER_ARGS`: more `docker run` arguments, split on spaces, for
   example `LOCKSQL_DOCKER_ARGS="--network shop" locksql console`;
-- `LOCKSQL_READONLY_PROJECT=1`: the console mounts the project read-only,
-  but for `.locksql/`, for a project your agents write;
-- `LOCKSQL_CONSOLE_NAME`: the console's container name (default
-  `locksql-console-<n>`, from the project path);
-- `VAULT_ADDR`, `VAULT_NAMESPACE`, `VAULT_CACERT`: passed to the console.
 
 A path holding `:` (the project, your home) cannot be mounted: the launcher
 refuses it. On macOS, `doctor --fix` giving back `.locksql/` entries that
@@ -320,9 +314,13 @@ an approval).
 
 The client commands run the same way: `locksql status`, `locksql tables`...
 
-`locksql doctor` runs as `agent`; `docker run --rm --user locksql -v
-locksql-run:/run/locksql -v locksql-home:/home/locksql
-ghcr.io/davidgodefroid/locksql:X.Y.Z doctor` checks the console account. It
+`locksql doctor` runs as `agent`. To check the console account, run it as
+`locksql` with the volumes `lox run` gives the lock (compose project
+`lockfamily-<8 hex of sha256(workspace)>`; `up.json` names the socket one
+as `socket_volume`): `docker run --rm --user locksql -v
+lockfamily-<hash>_<instance>-run:/run/locksql -v
+lockfamily-<hash>_<instance>-home:/home/locksql
+ghcr.io/davidgodefroid/locksql:X.Y.Z doctor`. It
 warns that `locksql` has no login session: in Docker the container takes the
 place of that session, and the checks of
 [`locksql doctor`](usage.md#locksql-doctor) about the host do not apply.
@@ -335,18 +333,13 @@ socket, the launcher cannot start the MCP server: the agent runs the
 console container. The two containers share only the socket volume.
 
 The console checks every peer by uid against its own container's accounts,
-where the agent's uid has none: name it when you start the console, with
-the release image as it is:
-
-```sh
-locksql console --allowed-uids 1000
-```
-
-or at build time, in an image of your own:
+where the agent's uid has none: name it in the lock's `allowed_uids`, in
+the `lockfamily.yaml` that `lox run` reviews with you (it passes
+`console --allowed-uids 1000` on), with the release image as it is; or at
+build time, in an image of your own that the lock's `image` names:
 
 ```sh
 docker build -t locksql --build-arg ALLOWED_UIDS=1000 .
-LOCKSQL_IMAGE=locksql locksql console
 ```
 
 `--allowed-uids` and `ALLOWED_UIDS` are comma-separated lists of uids: the
@@ -354,10 +347,8 @@ build writes them to `allowed_uids` in the image's
 `/etc/locksql/system.toml`, the flag adds them to it for that console only
 (the console prints them at start). Both refuse root (0), the console's own
 uid (10001) and 65534 (nobody, the kernel's overflow uid). Only whoever
-starts the console sets them: you, through the launcher (which passes the
-flag on) or through `lox run` (lockhub v0.3.0 or later: a lock's
-`allowed_uids` in the lockfamily.yaml lox run reviews with you); no client
-can. Every process of that uid, in any container that mounts the socket
+starts the console sets them: you, through `lox run` (lockhub v0.3.0 or
+later); no client can. Every process of that uid, in any container that mounts the socket
 volume, may then use the console. It is the uid the kernel reports
 for the agent's process, as the console sees it: the agent container's uid
 when neither container remaps user namespaces.
@@ -376,11 +367,13 @@ The agent's image needs what a client host has:
   the socket directory is mode 2710 and the socket 0660, group
   `locksql-clients`.
 
-Start the agent's container with the socket volume and the project at the
-same path as the console's, for example:
+Start the agent's container with lox run's socket volume of the lock
+(`socket_volume` in `.lockfamily/up.json`), read-only, and the workspace at
+the same path as the console's, for example:
 
 ```sh
-docker run … -v locksql-run:/run/locksql -v "$PWD:$PWD" -w "$PWD" agent-image
+docker run … --mount type=volume,src=lockfamily-<hash>_<instance>-run,dst=/run/locksql,readonly \
+  -v "$PWD:$PWD" -w "$PWD" agent-image
 ```
 
 `locksql init claude` then needs no change: the `locksql mcp` it writes in

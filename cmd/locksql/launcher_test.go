@@ -6,10 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 )
 
@@ -163,86 +161,21 @@ func imageArgs(args []string, image string) []string {
 	return nil
 }
 
-// The console runs as the console account, in its named container, with
-// the socket and home volumes, on the project found up from here.
+// The console is started by lox run only: `locksql console` says so,
+// exits 2 and runs no docker run.
 func TestLauncherConsole(t *testing.T) {
 	f := newLauncherFixture(t)
-	out, calls, err := f.run(t, filepath.Join(f.project, "sub"), nil, "console", "--profile", "uat")
-	if err != nil {
-		t.Fatalf("%v\n%s", err, out)
-	}
-	run := lastRun(t, calls)
-	for _, seq := range [][]string{
-		{"run", "--rm", "-v", f.project + ":" + f.project, "-w", filepath.Join(f.project, "sub")},
-		{"--log-driver", "none"}, {"--user", "locksql"},
-		{"--add-host=host.docker.internal:host-gateway"}, {"-e", "VAULT_ADDR"}, {"-e", "VAULT_NAMESPACE"},
-		{"-v", "locksql-run:/run/locksql"}, {"-v", "locksql-home:/home/locksql"},
-		{"--cap-drop", "ALL"}, {"--security-opt", "no-new-privileges"}, {"--read-only"},
-		{"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m"}, {"--pids-limit", "256"}, {"--memory", "1g"},
-	} {
-		if !hasSeq(run, seq...) {
-			t.Errorf("console run lacks %q:\n%q", seq, run)
+	for _, args := range [][]string{{"console"}, {"console", "--profile", "uat"}, {"console", "--project", f.project}} {
+		out, calls, err := f.run(t, filepath.Join(f.project, "sub"), nil, args...)
+		if code := exitCode(err); code != 2 {
+			t.Errorf("%v: exit %d (%v), want 2\n%s", args, code, err, out)
 		}
-	}
-	if hasSeq(run, "-v", f.project+":"+f.project+":ro") {
-		t.Errorf("project read-only without LOCKSQL_READONLY_PROJECT: %q", run)
-	}
-	if got, want := strings.Join(imageArgs(run, "locksql"), " "), "locksql console --project "+f.project+" --profile uat"; got != want {
-		t.Errorf("image and command %q, want %q", got, want)
-	}
-	if hasSeq(run, "-it") {
-		t.Errorf("a terminal without one: %q", run)
-	}
-}
-
-// LOCKSQL_READONLY_PROJECT=1: the console mounts the project read-only and
-// only .locksql/ writable; a .locksql that is not a directory stops it.
-func TestLauncherConsoleReadOnlyProject(t *testing.T) {
-	f := newLauncherFixture(t)
-	out, calls, err := f.run(t, f.project, []string{"LOCKSQL_READONLY_PROJECT=1"}, "console")
-	if err != nil {
-		t.Fatalf("%v\n%s", err, out)
-	}
-	run := lastRun(t, calls)
-	dir := filepath.Join(f.project, ".locksql")
-	if !hasSeq(run, "-v", f.project+":"+f.project+":ro") || !hasSeq(run, "-v", dir+":"+dir) {
-		t.Errorf("%q", run)
-	}
-	if err := os.Remove(dir); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(t.TempDir(), dir); err != nil {
-		t.Fatal(err)
-	}
-	out, calls, err = f.run(t, f.project, []string{"LOCKSQL_READONLY_PROJECT=1"}, "console")
-	if err == nil || !strings.Contains(out, "is not a directory") || len(calls) != 0 {
-		t.Errorf("symlinked .locksql: %v, calls %q\n%s", err, calls, out)
-	}
-}
-
-// --project given is kept, not doubled; a stopped console of the same name
-// is removed first.
-func TestLauncherConsoleProjectAndStaleContainer(t *testing.T) {
-	f := newLauncherFixture(t)
-	other := filepath.Join(f.root, "other")
-	if err := os.Mkdir(other, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	out, calls, err := f.run(t, f.root, []string{"DOCKER_INSPECT=false"}, "console", "--project=other")
-	if err != nil {
-		t.Fatalf("%v\n%s", err, out)
-	}
-	if got := strings.Join(imageArgs(lastRun(t, calls), "locksql"), " "); got != "locksql console --project="+other {
-		t.Errorf("command %q", got)
-	}
-	removed := false
-	for _, c := range calls {
-		if len(c) == 2 && c[0] == "rm" && strings.HasPrefix(c[1], "locksql-console-") {
-			removed = true
+		if want := "the console is started by lox run only (lockhub): run lox run in the workspace"; !strings.Contains(out, want) {
+			t.Errorf("%v: output lacks %q:\n%s", args, want, out)
 		}
-	}
-	if !removed {
-		t.Errorf("stopped console not removed: %q", calls)
+		if hasRun(calls) {
+			t.Errorf("%v: docker run: %q", args, calls)
+		}
 	}
 }
 
@@ -265,10 +198,10 @@ func TestLauncherExplicitProject(t *testing.T) {
 		want string // the command, from the image on
 		w    string
 	}{
-		{f.project, []string{"console", "--project", other}, "locksql console --project " + other, other},
-		{f.project, []string{"console", "--project=" + link, "--profile", "p"}, "locksql console --project=" + other + " --profile p", other},
+		{f.project, []string{"profile", "add", "--project", other}, "locksql profile add --project " + other, other},
+		{f.project, []string{"profile", "add", "--project=" + link, "--name", "p"}, "locksql profile add --project=" + other + " --name p", other},
 		{f.root, []string{"profile", "add", "--project", "other"}, "locksql profile add --project " + other, other},
-		{filepath.Join(other, ".locksql"), []string{"console", "--project", other}, "locksql console --project " + other, filepath.Join(other, ".locksql")},
+		{filepath.Join(other, ".locksql"), []string{"profile", "add", "--project", other}, "locksql profile add --project " + other, filepath.Join(other, ".locksql")},
 	} {
 		out, calls, err := f.run(t, tc.dir, nil, tc.args...)
 		if err != nil {
@@ -282,7 +215,7 @@ func TestLauncherExplicitProject(t *testing.T) {
 			t.Errorf("%v: command %q, want %q", tc.args, got, tc.want)
 		}
 	}
-	for _, args := range [][]string{{"console", "--project", filepath.Join(f.root, "missing")}, {"profile", "add", "--project"}} {
+	for _, args := range [][]string{{"profile", "add", "--project", filepath.Join(f.root, "missing")}, {"profile", "add", "--project"}} {
 		out, calls, err := f.run(t, f.project, nil, args...)
 		if err == nil || !strings.Contains(out, "--project") || len(calls) != 0 {
 			t.Errorf("%v: %v, calls %q\n%s", args, err, calls, out)
@@ -290,7 +223,7 @@ func TestLauncherExplicitProject(t *testing.T) {
 	}
 }
 
-// Only console and profile take --project DIR: elsewhere "--project" is
+// Only profile takes --project DIR: elsewhere "--project" is
 // another command's (config's switch) or text (SQL), and after "--" it is
 // an argument.
 func TestLauncherProjectOnlyWhereItIsAnOption(t *testing.T) {
@@ -299,7 +232,7 @@ func TestLauncherProjectOnlyWhereItIsAnOption(t *testing.T) {
 		{"plan", "--profile", "p", "SELECT '--project' FROM t LIMIT 1"},
 		{"plan", "--profile", "p", "--project", "/nowhere"},
 		{"config", "export", "--project", "--output", "team.json"},
-		{"console", "--", "--project", "/nowhere"},
+		{"profile", "add", "--", "--project", "/nowhere"},
 	} {
 		out, calls, err := f.run(t, f.project, nil, args...)
 		if err != nil {
@@ -310,43 +243,8 @@ func TestLauncherProjectOnlyWhereItIsAnOption(t *testing.T) {
 			t.Errorf("%v: not the working directory's project: %q", args, run)
 		}
 		got := imageArgs(run, "locksql")[1:]
-		if args[0] == "console" {
-			got = got[3:] // console --project PROJECT
-			args = args[1:]
-		}
 		if strings.Join(got, "\x00") != strings.Join(args, "\x00") {
 			t.Errorf("%v: command %q", args, got)
-		}
-	}
-}
-
-// LOCKSQL_READONLY_PROJECT, on Linux: the console gets the inode of the
-// .locksql the launcher checked (device and inode), and refuses any other (one
-// swapped in before Docker mounted it).
-func TestLauncherReadOnlyProjectPinsTheDirectory(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("the inode is passed on Linux only")
-	}
-	f := newLauncherFixture(t)
-	var st syscall.Stat_t
-	if err := syscall.Stat(filepath.Join(f.project, ".locksql"), &st); err != nil {
-		t.Fatal(err)
-	}
-	_, calls, err := f.run(t, f.project, []string{"LOCKSQL_READONLY_PROJECT=1"}, "console")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := strconv.FormatUint(uint64(st.Dev), 10) + ":" + strconv.FormatUint(uint64(st.Ino), 10)
-	if run := lastRun(t, calls); !hasSeq(run, "-e", "LOCKSQL_EXPECT_DIR="+want) {
-		t.Errorf("%q", run)
-	}
-	_, calls, err = f.run(t, f.project, nil, "console")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, a := range lastRun(t, calls) {
-		if strings.HasPrefix(a, "LOCKSQL_EXPECT_DIR=") {
-			t.Errorf("an inode without LOCKSQL_READONLY_PROJECT")
 		}
 	}
 }
@@ -357,7 +255,7 @@ func TestLauncherAccountsPerCommand(t *testing.T) {
 	me := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
 	home := filepath.Join(f.root, "home")
 	// The agent commands: lox run's socket volume, read-only; never the
-	// fixed one of a console the launcher started.
+	// fixed one a hand-started console used to serve.
 	sock, fixed := mountOf(f.root, "db"), []string{"-v", "locksql-run:/run/locksql"}
 	for _, tc := range []struct {
 		args       []string
@@ -449,7 +347,7 @@ func TestLauncherRunsTheVerifiedDigest(t *testing.T) {
 		{[]string{"LOCKSQL_VAULT=1"}, "ghcr.io/davidgodefroid/locksql@" + fakeVaultDigest},
 		{[]string{"LOCKSQL_IMAGE=mine"}, "mine"},
 	} {
-		_, calls, err := f.run(t, f.project, tc.env, "console")
+		_, calls, err := f.run(t, f.project, tc.env, "status")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -478,7 +376,7 @@ func TestLauncherVersion(t *testing.T) {
 // LOCKSQL_DOCKER_ARGS go before the image, split on spaces.
 func TestLauncherExtraDockerArgs(t *testing.T) {
 	f := newLauncherFixture(t)
-	_, calls, err := f.run(t, f.project, []string{"LOCKSQL_DOCKER_ARGS=--network shop"}, "console")
+	_, calls, err := f.run(t, f.project, []string{"LOCKSQL_DOCKER_ARGS=--network shop"}, "status")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +391,7 @@ func TestLauncherWithoutDocker(t *testing.T) {
 	if err := os.Remove(filepath.Join(f.bin, "docker")); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"status"}, {"console"}} {
+	for _, args := range [][]string{{"status"}, {"tables"}} {
 		out, _, err := f.run(t, f.project, nil, args...)
 		if err == nil || !strings.Contains(out, "docker is required") {
 			t.Errorf("%v: %v\n%s", args, err, out)
@@ -591,42 +489,6 @@ func TestScriptsPinTheExactReleaseTag(t *testing.T) {
 	}
 }
 
-// Each project gets its own console container, so two can run;
-// LOCKSQL_CONSOLE_NAME names it.
-func TestLauncherConsoleNamePerProject(t *testing.T) {
-	f := newLauncherFixture(t)
-	other := filepath.Join(f.root, "other")
-	if err := os.MkdirAll(filepath.Join(other, ".locksql"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	name := func(dir string, env ...string) string {
-		_, calls, err := f.run(t, dir, env, "console")
-		if err != nil {
-			t.Fatal(err)
-		}
-		run := lastRun(t, calls)
-		for i, a := range run {
-			if a == "--name" && i+1 < len(run) {
-				return run[i+1]
-			}
-		}
-		t.Fatalf("no --name: %q", run)
-		return ""
-	}
-	a, b := name(f.project), name(other)
-	if !strings.HasPrefix(a, "locksql-console-") || !strings.HasPrefix(b, "locksql-console-") || a == b {
-		t.Errorf("names %q and %q", a, b)
-	}
-	if a != name(filepath.Join(f.project, "sub")) {
-		t.Errorf("not stable within a project")
-	}
-	if got := name(f.project, "LOCKSQL_CONSOLE_NAME=locksql-console"); got != "locksql-console" {
-		t.Errorf("LOCKSQL_CONSOLE_NAME: %q", got)
-	}
-}
-
-// A path with ":" cannot be a docker -v source or target: refused, before
-// any docker call.
 func TestLauncherRefusesAColonInAPath(t *testing.T) {
 	f := newLauncherFixture(t)
 	dir := filepath.Join(f.root, "a:b")
@@ -655,29 +517,6 @@ func TestLauncherDockerArgsNotGlobbed(t *testing.T) {
 	}
 }
 
-// VAULT_CACERT reaches the console with its file, mounted read-only; a
-// missing file stops it.
-func TestLauncherVaultCACert(t *testing.T) {
-	f := newLauncherFixture(t)
-	ca := filepath.Join(f.project, "vault-ca.pem")
-	if err := os.WriteFile(ca, []byte("pem"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, calls, err := f.run(t, f.project, []string{"VAULT_CACERT=" + ca}, "console")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if run := lastRun(t, calls); !hasSeq(run, "-v", ca+":"+ca+":ro") || !hasSeq(run, "-e", "VAULT_CACERT="+ca) {
-		t.Errorf("%q", run)
-	}
-	out, calls, err := f.run(t, f.project, []string{"VAULT_CACERT=" + ca + ".missing"}, "console")
-	if err == nil || !strings.Contains(out, "VAULT_CACERT") || len(calls) != 0 {
-		t.Errorf("missing file: %v, calls %q\n%s", err, calls, out)
-	}
-}
-
-// update takes only a version tag: anything else never reaches a URL or
-// the sed that writes the launcher.
 func TestLauncherUpdateRefusesABadTag(t *testing.T) {
 	f := newLauncherFixture(t)
 	f.setVersion(t, "0.9.0")

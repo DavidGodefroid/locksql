@@ -488,7 +488,8 @@ func TestLauncherLockUpContainers(t *testing.T) {
 }
 
 // The nearest workspace up from here with up.json wins; a sub-project's
-// .lockfamily without one is passed over.
+// .lockfamily without one is passed over, as long as the sub-project has
+// no .locksql/config.toml of its own (TestLauncherLockUpOwnLocksql).
 func TestLauncherLockUpNearestWorkspace(t *testing.T) {
 	f := newLauncherFixture(t)
 	if err := os.MkdirAll(filepath.Join(f.project, ".lockfamily"), 0o755); err != nil {
@@ -497,9 +498,75 @@ func TestLauncherLockUpNearestWorkspace(t *testing.T) {
 	if out, calls, err := f.run(t, filepath.Join(f.project, "sub"), nil, "status"); err != nil || !hasSeq(lastRun(t, calls), mountOf(f.root, "db")...) {
 		t.Errorf("%v\n%s", err, out)
 	}
+	// A workspace of its own (lox init there) is served on its own.
+	if err := os.WriteFile(filepath.Join(f.project, ".locksql", "config.toml"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	f.loxUp(t, f.project, map[string]string{"sql": "locksql"})
 	if out, calls, err := f.run(t, filepath.Join(f.project, "sub"), nil, "status"); err != nil || !hasSeq(lastRun(t, calls), mountOf(f.project, "sql")...) {
 		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// A sub-project with its own .locksql/config.toml below the workspace: its
+// clients key their socket on the sub-project, lox run's console on the
+// workspace. The agent commands say so, exit 2 and mount nothing; from a
+// directory without .locksql the workspace's volume is still mounted.
+func TestLauncherLockUpOwnLocksql(t *testing.T) {
+	f := newLauncherFixture(t)
+	if err := os.WriteFile(filepath.Join(f.project, ".locksql", "config.toml"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := f.project + " has its own .locksql/ below the workspace " + f.root + ": lox run's console serves the workspace's .locksql only; run locksql from " + f.root + ", or make " + f.project + " a workspace of its own (lox init there)"
+	for _, args := range [][]string{{"status"}, {"mcp"}} {
+		for _, dir := range []string{f.project, filepath.Join(f.project, "sub")} {
+			out, calls, err := f.run(t, dir, nil, args...)
+			if code := exitCode(err); code != 2 {
+				t.Errorf("%v from %s: exit %d (%v), want 2\n%s", args, dir, code, err, out)
+			}
+			if !strings.Contains(out, want) {
+				t.Errorf("%v from %s: output lacks %q:\n%s", args, dir, want, out)
+			}
+			if hasRun(calls) {
+				t.Errorf("%v from %s: docker run: %q", args, dir, calls)
+			}
+		}
+	}
+	other := filepath.Join(f.root, "other")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{f.root, other} {
+		if out, calls, err := f.run(t, dir, nil, "status"); err != nil || !hasSeq(lastRun(t, calls), mountOf(f.root, "db")...) {
+			t.Errorf("from %s: %v\n%s", dir, err, out)
+		}
+	}
+}
+
+// A workspace path with &, < or >, which lox run's state escapes: the
+// launcher still refuses it, and says why.
+func TestLauncherLockUpEscapedWorkspace(t *testing.T) {
+	f := newLauncherFixture(t)
+	ws := filepath.Join(f.root, "a&b")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.loxUp(t, ws, map[string]string{"db": "locksql"})
+	if b, _ := os.ReadFile(filepath.Join(ws, ".lockfamily", "up.json")); !bytes.Contains(b, []byte(`a\u0026b`)) {
+		t.Fatalf("up.json does not escape &:\n%s", b)
+	}
+	out, calls, err := f.run(t, ws, nil, "status")
+	if code := exitCode(err); code != 2 {
+		t.Errorf("exit %d (%v), want 2\n%s", code, err, out)
+	}
+	if want := "the workspace's path holds &, < or >, which lox run's state escapes: locksql cannot check it; move or rename the workspace"; !strings.Contains(out, want) {
+		t.Errorf("output lacks %q:\n%s", want, out)
+	}
+	if strings.Contains(out, "is not lox run's state") {
+		t.Errorf("misleading output:\n%s", out)
+	}
+	if hasRun(calls) {
+		t.Errorf("docker run: %q", calls)
 	}
 }
 

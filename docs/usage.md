@@ -477,9 +477,14 @@ image ([docker.md](docker.md#wire-the-agent)):
 ```sh
 locksql doctor
 docker run --rm --user locksql -v "$PWD:$PWD" -w "$PWD" \
-  -v locksql-run:/run/locksql -v locksql-home:/home/locksql \
+  -v lockfamily-<hash>_<instance>-run:/run/locksql \
+  -v lockfamily-<hash>_<instance>-home:/home/locksql \
   ghcr.io/davidgodefroid/locksql:X.Y.Z doctor
 ```
+
+The two volumes are the ones `lox run` gives the lock, in its compose
+project `lockfamily-<8 hex of sha256(workspace)>`; `.lockfamily/up.json`
+names the socket one (`socket_volume`).
 
 Each check prints ✓ (ok), ▲ (warning) or ✗ (failed), with a remediation
 under each one that is not ✓, then a count of each; the exit code is 1 when
@@ -826,27 +831,29 @@ terminal. The hub URL
 is `http(s)://host[:port]` only: a path, query, fragment, user or password
 is refused.
 
-Supported lockhub versions: locksql v0.12.x to v0.16.x need lockhub v0.3.0 or
-later; grants (v0.16.0) need lockhub v0.6.0 or later. Its console runs only under `lox run`, lockhub's host CLI (named
-`lock` before v0.3.0; `lox up`, deprecated since lockhub v0.10.0, started the
-locks before `lox run`), and its agent commands read the
-`.lockfamily/up.json` that `lox run` writes. Earlier: locksql v0.11.x needs lockhub
-v0.2.1 or later, the first whose "Supported locks" (lockhub's CHANGELOG)
-lists locksql v0.11.0, with `devices: true`, reveals and renewals. Use
-lockhub v0.2.2 or later: it sets `LOCKSQL_PII_DIR` (below)
-and its `lox add` refuses locksql releases before v0.11.0 (lockhub v0.2.0
-and v0.2.1 accept v0.10.0 or later, and refuse to start a
-`.locksql/` without a PII rule set). From locksql v0.11.1 the console's
-audit records of the hub's decisions carry the hub's signature
-(`hub_sig`): `lox audit verify --lock INSTANCE=PATH` compares them with
-the decisions the hub signed (its data directory and keys, `--data` and
-`--hub-key-file`: `hub-keys.pub` in lox run's state directory). The records of older consoles are reported as unsigned
-there and checked on ticket, outcome, approver and facade only; and as
-those consoles do not record the hub's denials nor the approvals that
-expired before their run, those show as decisions not in the log, not as
-problems. From locksql v0.11.2, a lock's `allowed_uids` (passed
-as `console --allowed-uids`, for lea's agents) needs lockhub v0.2.5 or
-later on a locksql lock: earlier releases refuse the key there.
+Supported lockhub versions: locksql v0.12.x to v0.16.x need lockhub v0.3.0
+or later; grants (v0.16.0) need lockhub v0.6.0 or later. Its console runs
+only under `lox run`, lockhub's host CLI (named `lock` before v0.3.0;
+`lox up`, deprecated since lockhub v0.10.0, started the locks before
+`lox run`), and its agent commands read the `.lockfamily/up.json` that
+`lox run` writes. Earlier: locksql v0.11.x needs lockhub v0.2.1 or later,
+the first whose "Supported locks" (lockhub's CHANGELOG) lists locksql
+v0.11.0, with `devices: true`, reveals and renewals. Use lockhub v0.2.2 or
+later: it sets `LOCKSQL_PII_DIR` (below) and its `lock add` refuses locksql
+releases before v0.11.0 (lockhub v0.2.0 and v0.2.1 accept v0.10.0 or
+later, and refuse to start a `.locksql/` without a PII rule set). From
+locksql v0.11.1 the console's audit records of the hub's decisions carry
+the hub's signature (`hub_sig`): `lock audit verify --lock INSTANCE=PATH`
+(`lox audit verify` from lockhub v0.3.0) compares them with the decisions
+the hub signed (its data directory and keys, `--data` and
+`--hub-key-file`: `hub-keys.pub` in lox run's state directory). The
+records of older consoles are reported as unsigned there and checked on
+ticket, outcome, approver and facade only; and as those consoles do not
+record the hub's denials nor the approvals that expired before their run,
+those show as decisions not in the log, not as problems. From locksql
+v0.11.2, a lock's `allowed_uids` (passed as `console --allowed-uids`, for
+lea's agents) needs lockhub v0.2.5 or later on a locksql lock: earlier
+releases refuse the key there.
 
 Then:
 
@@ -1656,10 +1663,12 @@ finds the project's consoles.
 | `/etc/locksql/system.toml` | separated mode setup (root-owned) |
 | `<socket_dir>/<project-hash>-<profile>.sock` | console socket (separated mode), mode 0660 |
 
-In the image, the console account's home is `/home/locksql`, the
-`locksql-home` volume: its config, state (approved policies, audit log) and
-`~/.ssh` live there. `socket_dir` is `/run/locksql`, the `locksql-run`
-volume, and `/etc/locksql/system.toml` is the image's own.
+In the image, the console account's home is `/home/locksql`, the lock's
+home volume under `lox run` (`lockfamily-<hash>_<instance>-home`): its
+config, state (approved policies, audit log) and `~/.ssh` live there.
+`socket_dir` is `/run/locksql`, the lock's socket volume
+(`lockfamily-<hash>_<instance>-run`, named in `.lockfamily/up.json`), and
+`/etc/locksql/system.toml` is the image's own.
 
 - User config dir: `os.UserConfigDir()` (`~/.config` on Linux,
   `~/Library/Application Support` on macOS).

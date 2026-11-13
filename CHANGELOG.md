@@ -78,6 +78,18 @@ Built on lockkit v0.15.0.
   `ask` (`credentials`, `ssh.credentials`) is typed in `lox run` and comes
   sealed to a one-use key of the console; the bastion's takes a second
   ticket. `max_session` still ends the session.
+- The launcher's `locksql console` is gone: it mounted the fixed
+  `locksql-run` volume, which no agent command mounts any more, so no client
+  reached it. It now exits 2 with `the console is started by lox run only
+  (lockhub): run lox run in the workspace`. `LOCKSQL_CONSOLE_NAME`,
+  `LOCKSQL_READONLY_PROJECT` and the launcher's `VAULT_*` pass-through went
+  with it (#155).
+- The agent commands, from a sub-project with its own `.locksql/config.toml`
+  below the workspace, stop (exit 2) and say why: lox run's console serves
+  the workspace's `.locksql` only, so the sub-project's socket name matched
+  no console (a generic "no console" before). A workspace path holding `&`,
+  `<` or `>` is still refused, now saying so instead of "is not lox run's
+  state" (#155).
 
 ## v0.17.2 (2026-11-07)
 

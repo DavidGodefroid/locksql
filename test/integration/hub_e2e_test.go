@@ -53,7 +53,7 @@ func hubE2E(t *testing.T) string {
 	}
 	src := os.Getenv("LOCKHUB_SRC")
 	if src == "" {
-		t.Fatal("LOCKHUB_SRC: the lockhub checkout to build lockhub and lock from")
+		t.Fatal("LOCKHUB_SRC: the lockhub checkout to build lockhub and lox from")
 	}
 	return src
 }
