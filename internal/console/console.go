@@ -17,6 +17,7 @@ import (
 	"time"
 
 	kconsole "github.com/DavidGodefroid/lockkit/console"
+	"github.com/DavidGodefroid/lockkit/managed"
 	"github.com/DavidGodefroid/lockkit/secrets"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
@@ -158,6 +159,13 @@ type ServerConfig struct {
 	// connection at idle_timeout and keeps running. nil (tests of the
 	// server alone) ends the session at idle_timeout instead.
 	IdleConnect idleConnector
+	// Managed is the company's managed file in force at start (nil: none),
+	// and LoadManaged re-reads it at every policy poll (managed.Load in Run;
+	// nil keeps Managed for the session): a policy beyond its bounds is
+	// refused, never pending, and a stricter file ends the session or
+	// tightens the policy in force.
+	Managed     *managed.File
+	LoadManaged func(context.Context) (*managed.File, error)
 }
 
 // plan is a one-shot plan awaiting query.run.
@@ -328,6 +336,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		Session: cfg.Session, Audit: cfg.Audit, IO: cfg.IO, Approver: cfg.Approver, Level: level, Boundary: cfg.Boundary,
 		Now: cfg.Now, AllowUnmask: cfg.AllowUnmask, ShowResults: cfg.ShowResults && level == 0,
 		Quantum: cfg.Quantum, PeerAllowed: cfg.PeerAllowed, Refused: cfg.Refused, Hub: cfg.Hub,
+		Managed: cfg.Managed, LoadManaged: cfg.LoadManaged,
 	}
 	if refuseProd := cfg.RefuseProduction; refuseProd != nil {
 		// What a production profile is refused at start-up is refused when
@@ -410,6 +419,9 @@ func (s *Server) stamp(rec audit.Record) audit.Record {
 	rec.Host = s.host()
 	rec.DBUser = s.dbUser()
 	s.liveDBUser(rec.DBUser)
+	if rec.Managed == "" && s.k != nil && s.k.Managed() != nil {
+		rec.Managed = s.k.Managed().Fingerprint
+	}
 	return rec
 }
 

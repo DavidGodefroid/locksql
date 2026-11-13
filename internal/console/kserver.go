@@ -12,6 +12,7 @@ import (
 	kaudit "github.com/DavidGodefroid/lockkit/audit"
 	kconfig "github.com/DavidGodefroid/lockkit/config"
 	kconsole "github.com/DavidGodefroid/lockkit/console"
+	"github.com/DavidGodefroid/lockkit/managed"
 	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/lockkit/ticket"
 	"github.com/DavidGodefroid/locksql/internal/config"
@@ -132,6 +133,35 @@ func (s *Server) LoadPolicy() (kconsole.Policy, error) {
 		return nil, err
 	}
 	return kpolicy{p}, nil
+}
+
+var _ kconsole.ManagedBackend = (*Server)(nil)
+
+// ManagedBounds implements kconsole.ManagedBackend: kp at its ceiling under
+// the [locksql.bounds] of m, which lockkit's managed.Check compares kp with
+// through config.Diff. A value outside an allowlist bound (credentials,
+// engine, hosts, family.vault.required) is an error naming the managed
+// key; lockkit's console refuses kp on it as on a violation.
+func (s *Server) ManagedBounds(kp kconsole.Policy, m *managed.File) (managed.Bounds, error) {
+	return managedBounds(kp, m)
+}
+
+// managedBounds is ManagedBounds, for the start-up's checks too.
+func managedBounds(kp kconsole.Policy, m *managed.File) (managed.Bounds, error) {
+	p, ok := kp.(kpolicy)
+	if !ok {
+		return managed.Bounds{}, fmt.Errorf("not a locksql policy: %T", kp)
+	}
+	cm, err := config.ParseManaged(m)
+	if err != nil {
+		return managed.Bounds{}, err
+	}
+	ceiling, keys, err := cm.BoundsOf().Ceiling(p.p)
+	mb := managed.Bounds{Tool: config.ManagedTool, Profile: p.p.Profile.Name, Keys: keys}
+	if ceiling != nil {
+		mb.Ceiling = kpolicy{*ceiling}
+	}
+	return mb, err
 }
 
 // ApplyPolicy implements kconsole.PolicyApplier: it compiles the PII rules,
@@ -305,7 +335,7 @@ func (s *Server) Words() kconsole.Words {
 func (s *Server) AuditRecord(b kaudit.Base) kaudit.Record {
 	return s.stamp(audit.Record{Event: b.Event, Profile: b.Profile, Decision: b.Decision, Error: secrets.SanitizeString(b.Error), Code: b.Code, Span: b.Span,
 		Warnings: b.Warnings, Intent: b.Intent, Reason: b.Reason, Approval: b.Approval, PeerUID: b.PeerUID, PeerPID: b.PeerPID,
-		PeerUser: b.PeerUser, Ticket: b.Ticket, Approver: b.Approver, Facade: b.Facade, HubSig: b.HubSig})
+		PeerUser: b.PeerUser, Ticket: b.Ticket, Approver: b.Approver, Facade: b.Facade, HubSig: b.HubSig, Managed: b.Managed})
 }
 
 // PIIRules implements kconsole.PIIBackend (pii.list), sorted.

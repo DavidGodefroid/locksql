@@ -307,6 +307,12 @@ func SaveApproved(stateDir, key string, p Policy) error {
 	return kconfig.SaveApproved(product.P, stateDir, key, canonical(p))
 }
 
+// SaveApprovedManaged is SaveApproved recording the fingerprint of the
+// company's managed file in force (managed_sha256; "" for none).
+func SaveApprovedManaged(stateDir, key string, p Policy, managedFP string) error {
+	return kconfig.SaveApprovedManaged(product.P, stateDir, key, canonical(p), managedFP)
+}
+
 // confirmedKey names, in the approved-policy store, the production policy
 // whose profile name the human last typed at start-up (#178). Its prefix
 // never starts a policy key, which is "user-" or a hex project hash.

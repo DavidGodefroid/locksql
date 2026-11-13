@@ -104,7 +104,7 @@ func ParseManaged(f *managed.File) (*Managed, error) {
 			return nil, where(key, err)
 		}
 		if len(lines) > 0 {
-			return nil, where(key, fmt.Errorf("the managed profile is beyond the managed bounds: %s", lines[0]))
+			return nil, where(key, fmt.Errorf("the managed profile is beyond the managed bounds: %s", strings.TrimPrefix(lines[0], violationLead)))
 		}
 		m.Profiles[name] = p
 	}
@@ -139,21 +139,23 @@ func (m *Managed) checkDefaults() error {
 	for _, v := range vs {
 		for _, k := range set {
 			if v.Field == k || strings.HasPrefix(v.Field, k+".") {
-				return fmt.Errorf("the managed default is beyond the managed bounds: %s", strings.Replace(v.String(), "(profile managed-defaults: ", "(defaults: ", 1))
+				return fmt.Errorf("the managed default is beyond the managed bounds: %s", strings.Replace(strings.TrimPrefix(v.String(), violationLead), "(profile managed-defaults: ", "(defaults: ", 1))
 			}
 		}
 	}
 	return nil
 }
 
-// flatKeys lists the keys of t, a limits table's keys as "limits.max_rows".
+// flatKeys lists the keys of t, a limits table's keys as "limits.max_rows"
+// (the defaults merge limits key by key: the table itself sets none).
 func flatKeys(t map[string]any, prefix string) []string {
 	var out []string
 	for _, k := range slices.Sorted(maps.Keys(t)) {
-		out = append(out, prefix+k)
 		if sub, ok := t[k].(map[string]any); ok && k == "limits" {
 			out = append(out, flatKeys(sub, prefix+k+".")...)
+			continue
 		}
+		out = append(out, prefix+k)
 	}
 	return out
 }

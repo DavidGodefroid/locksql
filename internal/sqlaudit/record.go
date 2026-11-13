@@ -123,6 +123,9 @@ type Record struct {
 	// grant_end record (with Rows); set there only, 0 included.
 	StatementsUsed *int64 `json:"statements_used,omitempty"`
 	BytesUsed      *int64 `json:"bytes_used,omitempty"`
+	// Managed is the sha256 of the company's managed file in force when
+	// the record was made (lockkit's audit.Base name), "" for none.
+	Managed string `json:"managed,omitempty"`
 }
 
 // AuditEvent implements lockkit's audit.Record.
