@@ -1,0 +1,4 @@
+exit 3
+== stdout
+== stderr
+locksql managed check: managed: <dir>/managed.toml: version = 1 is required

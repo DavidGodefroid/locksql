@@ -56,7 +56,7 @@ func TestRunReassessesWeightAfterTightening(t *testing.T) {
 
 // A mask rule a client adds while a loosening is pending survives :review.
 func TestPIIAddWhilePending(t *testing.T) {
-	h := newHarness(t, uatProfile())
+	h := newHarness(t, uatProfile(), withColumn("app", "users", "phone"))
 	next := h.s.approved
 	next.Profile.Limits.MaxRows *= 2
 	h.s.setPending(next)

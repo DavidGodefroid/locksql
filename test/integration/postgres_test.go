@@ -276,7 +276,7 @@ func testPostgresServer(t *testing.T, version string, srv Server) {
 		seedReturned(t, s)
 		assertWriteRowsMasked(t, s, rules, writeMaskedQueries(sqlclass.Postgres))
 		assertPlanRefused(t, s, rules, writeRefusedQueries(sqlclass.Postgres))
-		assertRunRefused(t, s, rules, "E_STATEMENT_KIND", writeNestedQueries(sqlclass.Postgres))
+		assertPlanRefusedCode(t, s, rules, "E_STATEMENT_KIND", writeNestedQueries(sqlclass.Postgres))
 	})
 
 	t.Run("placeholder and reference refused", func(t *testing.T) {

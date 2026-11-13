@@ -161,3 +161,52 @@ func TestWriteValuesViolation(t *testing.T) {
 		}
 	}
 }
+
+// An INSERT without a column list stores into the table's columns by
+// position (PositionalInsert): the check by name alone refuses any chosen
+// value in it, while WriteValuesViolation leaves it to the write analysis,
+// which resolves the columns from the catalogue (#208).
+func TestPositionalInsert(t *testing.T) {
+	r := Rules{Mask: []string{"*.customers.email"}}
+	positional := []dsql{
+		{sqlclass.Postgres, "INSERT INTO orders VALUES (9999, 1, 1, '2026-01-01')"},
+		{sqlclass.Postgres, "INSERT INTO orders AS o VALUES (1, 2)"},
+		{sqlclass.Postgres, "INSERT INTO orders SELECT id, 1 FROM orders"},
+		{sqlclass.Postgres, "INSERT INTO orders (SELECT id, 1 FROM orders)"},
+		{sqlclass.MySQL, "INSERT INTO orders VALUES (9999, 1, 1, '2026-01-01')"},
+		{sqlclass.MySQL, "INSERT orders VALUE (1, 2)"},
+		{sqlclass.MySQL, "INSERT INTO orders PARTITION (p0) VALUES (1, 2)"},
+		{sqlclass.MySQL, "REPLACE INTO orders VALUES (1, 2)"},
+	}
+	for _, c := range positional {
+		st := classify(t, c)
+		if !PositionalInsert(st, c.d) {
+			t.Errorf("not positional: %s", c.sql)
+		}
+		if err := PlanCheck(st, r, c.d, true); err == nil {
+			t.Errorf("by name, accepted: %s", c.sql)
+		}
+		if err := WriteValuesViolation(st, r, c.d); err != nil {
+			t.Errorf("left to the analysis, refused %s: %v", c.sql, err)
+		}
+	}
+	for _, c := range []dsql{
+		{sqlclass.Postgres, "INSERT INTO orders (id, amount) VALUES (1, 2)"},
+		{sqlclass.Postgres, "INSERT INTO orders AS o (id) VALUES (1)"},
+		{sqlclass.Postgres, "INSERT INTO orders DEFAULT VALUES"},
+		{sqlclass.Postgres, "UPDATE orders SET amount = 0"},
+		{sqlclass.Postgres, "MERGE INTO orders o USING s ON s.id = o.id WHEN NOT MATCHED THEN INSERT VALUES (s.id, 1)"},
+		{sqlclass.MySQL, "INSERT INTO orders SET id = 1"},
+		{sqlclass.MySQL, "INSERT INTO orders PARTITION (p0) (id) VALUES (1)"},
+		{sqlclass.MySQL, "UPDATE orders SET note = INSERT(note, 1, 1, 'x') WHERE id = 1"},
+	} {
+		if PositionalInsert(classify(t, c), c.d) {
+			t.Errorf("positional: %s", c.sql)
+		}
+	}
+	// A MERGE's INSERT is not analysed by sqlast: still checked by name.
+	merge := dsql{sqlclass.Postgres, "MERGE INTO customers c USING s ON s.id = c.id WHEN NOT MATCHED THEN INSERT VALUES (s.id, 'v@x.example')"}
+	if err := WriteValuesViolation(classify(t, merge), r, merge.d); err == nil {
+		t.Errorf("accepted: %s", merge.sql)
+	}
+}

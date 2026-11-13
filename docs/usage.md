@@ -234,8 +234,8 @@ credentials = "ask"         # passphrase / ssh password; default: the profile's
   (bastion unreachable, host key refused) are reported without asking.
   `locksql forget --profile P` removes both secrets.
 - `key` and `known_hosts` belong to the **console account**: `~` is its
-  home, `/home/locksql`, kept in the `locksql-home` volume
-  ([docker.md](docker.md#run-the-console)), and the bastion's host key is checked against its
+  home, `/home/locksql`, kept in the lock's home volume that `lox run`
+  creates ([docker.md](docker.md#run-the-console)), and the bastion's host key is checked against its
   `~/.ssh/known_hosts`. Nothing needs to be prepared there: the first
   connection shows the key and asks.
 
@@ -477,9 +477,14 @@ image ([docker.md](docker.md#wire-the-agent)):
 ```sh
 locksql doctor
 docker run --rm --user locksql -v "$PWD:$PWD" -w "$PWD" \
-  -v locksql-run:/run/locksql -v locksql-home:/home/locksql \
+  -v lockfamily-<hash>_<instance>-run:/run/locksql \
+  -v lockfamily-<hash>_<instance>-home:/home/locksql \
   ghcr.io/davidgodefroid/locksql:X.Y.Z doctor
 ```
+
+The two volumes are the ones `lox run` gives the lock, in its compose
+project `lockfamily-<8 hex of sha256(workspace)>`; `.lockfamily/up.json`
+names the socket one (`socket_volume`).
 
 Each check prints ✓ (ok), ▲ (warning) or ✗ (failed), with a remediation
 under each one that is not ✓, then a count of each; the exit code is 1 when
@@ -556,11 +561,16 @@ the hub and the workspace's locks, then serves the decisions there (reads
 pass by rule in auto mode; writes, connections and policy changes are
 asked). It starts the console with a terminal, with the hub flags
 (`--hub URL --hub-key-file PATH --instance NAME`, see
-[Approving in lockhub](#approving-in-lockhub)) and the lock's settings:
+[Approving in lockhub](#approving-in-lockhub)) and the lock's `profile:`, in
+the lock's container (not a command you run; the launcher's `locksql
+console` only says that `lox run` starts it):
 
 ```sh
-locksql console --hub URL --hub-key-file PATH --instance NAME [--profile dev] [--allow-unmask] [--show-results]
+console --hub URL --hub-key-file PATH --instance NAME [--profile dev]
 ```
+
+Clear results and unmasking are switched on at the console (Ctrl-O,
+`:unmask`): `lox run` passes neither `--show-results` nor `--allow-unmask`.
 
 `lox attach sql-dev` attaches your terminal to it (detach: Ctrl-P Ctrl-Q):
 the console asks its start-up questions there (below), and again when it
@@ -747,8 +757,8 @@ tls_server_name = "db.internal"  # optional: the name verify-full checks instead
   `REQUIRE X509`). The key file is read by the console account and refused
   when group or others can read it; keep both files in that account's home.
 - File keys (`tls_ca`, `tls_cert`, `tls_key`, `ssh.key`): a leading `~/` is
-  the console account's home (`/home/locksql` in the image, the
-  `locksql-home` volume); any other path is read as written. The console
+  the console account's home (`/home/locksql` in the image, the lock's
+  home volume under `lox run`); any other path is read as written. The console
   opens each file right after the policy review, before the production name
   or any secret is asked, and stops with `tls_ca: <path> not found in the
   console's home (/home/locksql)` when one is missing. `locksql doctor`, run
@@ -826,27 +836,29 @@ terminal. The hub URL
 is `http(s)://host[:port]` only: a path, query, fragment, user or password
 is refused.
 
-Supported lockhub versions: locksql v0.12.x to v0.16.x need lockhub v0.3.0 or
-later; grants (v0.16.0) need lockhub v0.6.0 or later. Its console runs only under `lox run`, lockhub's host CLI (named
-`lock` before v0.3.0; `lox up`, deprecated since lockhub v0.10.0, started the
-locks before `lox run`), and its agent commands read the
-`.lockfamily/up.json` that `lox run` writes. Earlier: locksql v0.11.x needs lockhub
-v0.2.1 or later, the first whose "Supported locks" (lockhub's CHANGELOG)
-lists locksql v0.11.0, with `devices: true`, reveals and renewals. Use
-lockhub v0.2.2 or later: it sets `LOCKSQL_PII_DIR` (below)
-and its `lox add` refuses locksql releases before v0.11.0 (lockhub v0.2.0
-and v0.2.1 accept v0.10.0 or later, and refuse to start a
-`.locksql/` without a PII rule set). From locksql v0.11.1 the console's
-audit records of the hub's decisions carry the hub's signature
-(`hub_sig`): `lox audit verify --lock INSTANCE=PATH` compares them with
-the decisions the hub signed (its data directory and keys, `--data` and
-`--hub-key-file`: `hub-keys.pub` in lox run's state directory). The records of older consoles are reported as unsigned
-there and checked on ticket, outcome, approver and facade only; and as
-those consoles do not record the hub's denials nor the approvals that
-expired before their run, those show as decisions not in the log, not as
-problems. From locksql v0.11.2, a lock's `allowed_uids` (passed
-as `console --allowed-uids`, for lea's agents) needs lockhub v0.2.5 or
-later on a locksql lock: earlier releases refuse the key there.
+Supported lockhub versions: locksql v0.12.x to v0.16.x need lockhub v0.3.0
+or later; grants (v0.16.0) need lockhub v0.6.0 or later. Its console runs
+only under `lox run`, lockhub's host CLI (named `lock` before v0.3.0;
+`lox up`, deprecated since lockhub v0.10.0, started the locks before
+`lox run`), and its agent commands read the `.lockfamily/up.json` that
+`lox run` writes. Earlier: locksql v0.11.x needs lockhub v0.2.1 or later,
+the first whose "Supported locks" (lockhub's CHANGELOG) lists locksql
+v0.11.0, with `devices: true`, reveals and renewals. Use lockhub v0.2.2 or
+later: it sets `LOCKSQL_PII_DIR` (below) and its `lock add` refuses locksql
+releases before v0.11.0 (lockhub v0.2.0 and v0.2.1 accept v0.10.0 or
+later, and refuse to start a `.locksql/` without a PII rule set). From
+locksql v0.11.1 the console's audit records of the hub's decisions carry
+the hub's signature (`hub_sig`): `lock audit verify --lock INSTANCE=PATH`
+(`lox audit verify` from lockhub v0.3.0) compares them with the decisions
+the hub signed (its data directory and keys, `--data` and
+`--hub-key-file`: `hub-keys.pub` in lox run's state directory). The
+records of older consoles are reported as unsigned there and checked on
+ticket, outcome, approver and facade only; and as those consoles do not
+record the hub's denials nor the approvals that expired before their run,
+those show as decisions not in the log, not as problems. From locksql
+v0.11.2, a lock's `allowed_uids` (passed as `console --allowed-uids`, for
+lea's agents) needs lockhub v0.2.5 or later on a locksql lock: earlier
+releases refuse the key there.
 
 Then:
 
@@ -878,6 +890,15 @@ Then:
   covering them. The plan hash is checked in the same transaction, before
   and after the statement. No `LOCK TABLE` or `SERIALIZABLE`: the write
   takes only its own locks.
+- An `UPDATE` or `DELETE` with no `WHERE` (or an always-true one: `WHERE
+  TRUE`, `WHERE 1`, `WHERE 1 = 1`) and no `LIMIT` changes the whole table:
+  its plan answers `verdict WARN` with the reason `no WHERE: the write
+  changes every row of the table`, and its screen says `whole table: N rows`
+  (the planner's estimate).
+- Every literal of the statement is masked on the screen the hub shows. The
+  ticket says personal data is touched (`personal_column`), and the screen
+  names the columns (`personal data: masked columns email`), only when the
+  statement names a column under a mask rule (by name).
 - The bound counts the statement's own rows. Rows changed by triggers, functions,
   rules or foreign-key cascades are not counted: on PostgreSQL the ticket
   names the triggers, rules, volatile functions and cascading foreign keys the write reaches;
@@ -887,8 +908,8 @@ Then:
   approval does not make the ticket stale; under `ANSI_QUOTES` a table
   named in double quotes gets none listed). A
   statement with a data-modifying statement inside it (`WITH d AS (DELETE
-  ...) UPDATE ...`) is refused in hub mode (`E_STATEMENT_KIND`): its count
-  would not cover its rows. On MySQL/MariaDB a write naming a table a
+  ...) UPDATE ...`) is refused in hub mode (`E_STATEMENT_KIND`), by its
+  plan already: its count would not cover its rows. On MySQL/MariaDB a write naming a table a
   `ROLLBACK` cannot undo (MyISAM, Aria, MEMORY, ... or a view: of the
   current database by its bare name, or of any schema with its schema) is
   not run and refused with `E_STATEMENT_KIND` (as a DDL statement or
@@ -1267,7 +1288,7 @@ locksql describe --profile P [--instance NAME] [--db D] TABLE
 locksql plan     --profile P [--instance NAME] [--db D] [--unmask] [--intent TEXT] "SQL" | -   # "-" reads SQL from stdin
 locksql run      --profile P [--instance NAME] PLAN_ID        # waits for the human's approval
 locksql grant    --profile P [--instance NAME] [--db D] [--duration 30m] [--statements N] [--rows N] [--bytes N] [--intent TEXT] TABLE... | TICKET
-locksql pii      list|add --profile P [--instance NAME] [DB.TABLE.COLUMN]
+locksql pii      list|add --profile P [--instance NAME] [SCHEMA.TABLE.COLUMN | DB.TABLE.COLUMN]
 locksql request  --profile P [--instance NAME] "tier=write" | "limits.max_rows=500" | "allow=app.t.c"
 locksql logout   --profile P [--instance NAME]
 locksql doctor   [--profile P] [--instance NAME] [--fix [--yes]] [--json]
@@ -1278,10 +1299,14 @@ locksql doctor   [--profile P] [--instance NAME] [--fix [--yes]] [--json]
 - `--instance NAME` reaches one lock among several of this type (lea mounts
   each at `/run/locksql/NAME`; a name is lowercase letters, digits and `-`).
   `$LOCKSQL_INSTANCE` does the same when no flag is given, and lea lists its
-  locks in `$LEA_LOCKSQL_INSTANCES`: with one lock the client takes it, with
-  several and no `--instance` the error names them (`several locksql locks:
-  NAME NAME; pass --instance NAME (or set LOCKSQL_INSTANCE)`). It is not the
-  console's `--instance`, which `lox run` passes.
+  locks in `$LEA_LOCKSQL_INSTANCES`: with one lock the client takes it; with
+  several and no `--instance`, each profile goes to the lock whose directory
+  holds its console socket (profile names are unique in a workspace), so
+  `--profile` alone picks the lock. Only a profile whose socket is in several
+  locks needs `--instance`. With `--instance`, the profiles whose console
+  runs in another of those locks are left out (`status` does not report
+  them, and a lock that serves one profile needs no `--profile`). It is not
+  the console's `--instance`, which `lox run` passes.
 - `--db` defaults to the profile's `database`. A profile that names one
   serves that database only: another `--db` is refused.
 - `--json` gives machine-readable output on every client command. A failure
@@ -1323,7 +1348,13 @@ locksql doctor   [--profile P] [--instance NAME] [--fix [--yes]] [--json]
   the verdict and its reasons and sends the ticket to lockhub; only once
   the human decided it does the run of the ticket answer the agent a
   generic `refused by the weight check`, whatever the decision.
-- `pii add` adds a mask rule at once, since it only tightens.
+- `pii add` adds a mask rule at once, since it only tightens. The pattern
+  names the column as `describe` does: `schema.table.column` on PostgreSQL
+  (`public.customers.name`, not the database name), `db.table.column` on
+  MySQL and MariaDB, `main.table.column` on SQLite. A pattern without `*`
+  that matches no column of the catalog is refused, with the columns it may
+  mean; a pattern with `*` that matches nothing yet is added with a warning.
+- `pii list` flags the dead rules, which name no column of the catalog.
 - `request` queues a proposal that the human sees in `:review`. It never
   changes the policy; the human edits the config, and the console then asks
   for confirmation.
@@ -1403,7 +1434,8 @@ PII columns (columns under a mask rule) may be used as follows:
 - `EXPLAIN` of a statement that filters, groups or aggregates PII is refused.
 - Ask for unmasked values with `--unmask`. It is off by default: the console
   refuses the request unless the human allowed it there
-  (`locksql console --allow-unmask`, or `:unmask` while it runs;
+  (`:unmask` while it runs, or the console's `--allow-unmask`, which
+  `lox run` does not pass;
   `locksql status` shows `unmask allowed` or `off`). When allowed, the PII usage rules and the k-anonymity checks no
   longer apply, the approval screen shows `PII: UNMASKED` in red, and it is
   never auto-approved. Once it has run, the console prints the clear result
@@ -1423,9 +1455,13 @@ PII columns (columns under a mask rule) may be used as follows:
   another column is refused (`a masked column cannot receive values the agent
   chose`): masked on the next read, the value would still be one the agent
   knows, and joining that column with `=` to another PII column (which no
-  k-anonymity count covers) would tell it whose value matches. An `INSERT` without a column list must name its
-  columns (or store only `NULL`/`DEFAULT`); an `INSERT` into a masked column
-  from a query is refused. Writing other columns is unaffected.
+  k-anonymity count covers) would tell it whose value matches. An `INSERT` without a column list
+  (`INSERT INTO orders VALUES (...)`) is analysed like a write whose rows
+  come back: its values are matched to the table's columns in their
+  catalogue order, and it is refused only when a value lands in a masked
+  column (a table the catalogue does not list is refused as unknown); an
+  `INSERT` into a masked column from a query is refused. Writing other
+  columns is unaffected.
 
 #### Functions in writes (`write_functions`)
 
@@ -1571,9 +1607,14 @@ finds the project's consoles.
 | `locksql_request_change` | queued for the human; never applied by the tool |
 
 - Each tool takes an optional `profile` argument. With `--profile`, the server
-  is pinned to that profile and refuses any other. `--instance NAME` pins it
-  to one lock among several (in `.mcp.json`, `"args": ["mcp", "--instance",
-  "NAME"]`).
+  is pinned to that profile and refuses any other. One server serves every
+  locksql lock of the workspace: with several, each tool goes to the lock that
+  serves its `profile`, so adding a lock (`lox add locksql`) needs no change
+  to `.mcp.json`. `--instance NAME` still pins it to one lock among several
+  (in `.mcp.json`, `"args": ["mcp", "--instance", "NAME"]`).
+- The server never exits at start over the lock instance: a bad
+  `$LOCKSQL_INSTANCE`, or a profile whose console socket is in several locks,
+  is reported by `locksql_status` and by each tool that needs that lock.
 - `locksql_run` blocks until the human decides and sends a progress
   notification every 5 seconds meanwhile, so that clients do not time out.
   Configure the agent's tool timeout above 5 minutes (`init` does this for
@@ -1628,10 +1669,12 @@ finds the project's consoles.
 | `/etc/locksql/system.toml` | separated mode setup (root-owned) |
 | `<socket_dir>/<project-hash>-<profile>.sock` | console socket (separated mode), mode 0660 |
 
-In the image, the console account's home is `/home/locksql`, the
-`locksql-home` volume: its config, state (approved policies, audit log) and
-`~/.ssh` live there. `socket_dir` is `/run/locksql`, the `locksql-run`
-volume, and `/etc/locksql/system.toml` is the image's own.
+In the image, the console account's home is `/home/locksql`, the lock's
+home volume under `lox run` (`lockfamily-<hash>_<instance>-home`): its
+config, state (approved policies, audit log) and `~/.ssh` live there.
+`socket_dir` is `/run/locksql`, the lock's socket volume
+(`lockfamily-<hash>_<instance>-run`, named in `.lockfamily/up.json`), and
+`/etc/locksql/system.toml` is the image's own.
 
 - User config dir: `os.UserConfigDir()` (`~/.config` on Linux,
   `~/Library/Application Support` on macOS).

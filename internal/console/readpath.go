@@ -373,13 +373,19 @@ func (s *Server) checkShadows(ctx context.Context, sess engine.Session, db strin
 // (sqlast.NeedsWriteAnalysis) is parsed and analysed like a read: its
 // RETURNING list and the outer SELECT of its data-modifying CTEs are
 // resolved to their base columns and masked by provenance when it runs,
-// and anything the analysis cannot resolve is refused. Other writes pass
-// the checks by column name (pii.PlanCheck).
+// and anything the analysis cannot resolve is refused. So is an INSERT
+// without a column list (pii.PositionalInsert): the analysis resolves its
+// columns from the catalogue, in the table's order, so that only a value
+// landing in a masked column is refused. Other writes pass the checks by
+// column name (pii.PlanCheck).
 func (s *Server) writePlan(ctx context.Context, sess engine.Session, pl *plan) (*refusal.Error, error) {
 	st := pl.st
-	if len(s.rules.Mask) == 0 || !sqlast.NeedsWriteAnalysis(s.dialect, st.SQL) {
+	if len(s.rules.Mask) == 0 || !sqlast.NeedsWriteAnalysis(s.dialect, st.SQL) && !pii.PositionalInsert(st, s.dialect) {
 		if err := pii.PlanCheck(st, s.rules, s.dialect, sess.OriginColumns()); err != nil {
 			return shifted(err, pl.base), nil
+		}
+		if len(s.rules.Mask) > 0 {
+			pl.writeJoins = s.writeJoins(ctx, sess, pl)
 		}
 		return nil, nil
 	}
@@ -410,12 +416,39 @@ func (s *Server) writePlan(ctx context.Context, sess engine.Session, pl *plan) (
 // clientSummary is the plan summary a client may see: row estimates and
 // costs are hidden when the statement filters on a PII column, since the
 // planner's statistics would answer the question the k-anonymity check
-// guards.
+// guards, and when it joins PII columns, since they would count the
+// subjects that share a value.
 func clientSummary(pl *plan) (string, []string) {
 	if estimatesHidden(pl) {
+		if pl.an == nil || !pl.an.PIIFilter {
+			return "estimates hidden: the statement joins PII columns", nil
+		}
 		return "estimates hidden: the statement filters on a PII column", nil
 	}
 	return pl.summary, pl.reasons
+}
+
+// writeJoins are the PII joins of a write the checks pass by column name
+// (writePlan), for the human's warning. The analysis is best effort: a
+// statement it cannot resolve gets no join warning, but is not refused.
+func (s *Server) writeJoins(ctx context.Context, sess engine.Session, pl *plan) []string {
+	parsed, err := sqlast.ParseWrite(s.dialect, pl.st.SQL)
+	if err != nil {
+		return nil
+	}
+	an, err := sqlast.Analyze(parsed, s.astEnv(ctx, sess, pl.db, false))
+	if err != nil {
+		return nil
+	}
+	return an.PIIJoins
+}
+
+// piiJoins are the PII joins of a plan (sqlast.Analysis.PIIJoins).
+func piiJoins(pl *plan) []string {
+	if pl.an != nil {
+		return pl.an.PIIJoins
+	}
+	return pl.writeJoins
 }
 
 // estimatesHidden reports whether the plan's weight check stays on the
@@ -423,7 +456,7 @@ func clientSummary(pl *plan) (string, []string) {
 // decided when the plan runs, so that query.plan answers the same whatever
 // the planner's statistics say about the filtered value.
 func estimatesHidden(pl *plan) bool {
-	return pl.an != nil && pl.an.PIIFilter && !pl.unmask
+	return (pl.an != nil && pl.an.PIIFilter || len(piiJoins(pl)) > 0) && !pl.unmask
 }
 
 // hiddenWeightRefusal is the client answer of a weight refusal whose

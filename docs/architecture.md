@@ -80,7 +80,9 @@ sequenceDiagram
 
 Every client command, `locksql mcp` and `locksql doctor` also take `--instance NAME`, to
 reach one lock among several of this type that lea mounts (without it:
-`$LOCKSQL_INSTANCE`, else the one lock in `$LEA_LOCKSQL_INSTANCES`). `locksql console`
+`$LOCKSQL_INSTANCE`, else the one lock in `$LEA_LOCKSQL_INSTANCES`, else, with
+several, the lock whose directory holds the profile's console socket: one
+`locksql mcp` serves them all). `locksql console`
 and `locksql hub-key` take an `--instance` too, but that one is the name `lox run`
 gives the lock.
 

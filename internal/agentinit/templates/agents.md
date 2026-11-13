@@ -7,7 +7,7 @@ user's explicit request. If a database fact would merely help, propose the query
 
 Workflow (MCP tools `locksql_*`, or the `locksql` CLI from the workspace or a directory below it:
 the CLI and MCP reach the lock that `lox run` runs for the workspace, found through its
-`.lockfamily/up.json`; with several locksql locks there, add `--instance NAME`):
+`.lockfamily/up.json`; with several locksql locks there, the profile picks the lock):
 
 1. Prefer a non-production profile unless the question is about real production data. Find the
    database and table from the code first.

@@ -119,11 +119,11 @@ func realDoctorEnv(instanceFlag string) doctorEnv {
 		keychain:   product.Keychain.Has,
 		readFile:   os.ReadFile,
 		status: func(cwd, profile string) (*ipc.StatusResult, error) {
-			instance, err := client.ResolveInstance(instanceFlag)
+			locks, err := client.ResolveLocks(cwd, instanceFlag)
 			if err != nil {
 				return nil, err
 			}
-			c, err := client.DialInstance(cwd, profile, instance)
+			c, err := locks.Dial(profile)
 			if err != nil {
 				return nil, err
 			}
@@ -462,6 +462,10 @@ func doctor(d doctorEnv, cwd, onlyProfile string) []check {
 			}
 		}
 	}
+
+	// The company's managed file, as the console reads it; refused, the
+	// configuration check below fails on it too.
+	out = append(out, managedCheck())
 
 	// 5. Profiles: the secret store and the running consoles.
 	cfg, err := config.Load(cwd)

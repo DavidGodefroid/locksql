@@ -23,6 +23,7 @@ package firstquery
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"database/sql"
@@ -135,8 +136,8 @@ type screen struct {
 	buf  strings.Builder
 	done chan struct{} // closed when the console exits
 	err  error         // the console's exit, once done is closed
-	// drained is closed when the terminal's last output is in buf; nil
-	// when nothing reads a terminal.
+	// drained is closed when the terminal's reader has put the last
+	// output in buf.
 	drained chan struct{}
 }
 
@@ -155,14 +156,17 @@ func (s *screen) waitFor(t *testing.T, from int, d time.Duration, prompts ...str
 		case <-s.done:
 			// The console may have printed the prompt just before it
 			// exited: look once more, after its last output is read.
-			if s.drained != nil {
-				select {
-				case <-s.drained:
-				case <-time.After(5 * time.Second):
-				}
+			drained := true
+			select {
+			case <-s.drained:
+			case <-time.After(5 * time.Second):
+				drained = false
 			}
 			if best, at := find(s.String(), from, prompts); at >= 0 {
 				return best, at
+			}
+			if !drained {
+				t.Fatalf("console: exited (%v) before %q, and the terminal's reader never finished within 5s; screen:\n%s", s.err, prompts, s.String())
 			}
 			t.Fatalf("console: exited (%v) before %q; screen:\n%s", s.err, prompts, s.String())
 		case <-time.After(50 * time.Millisecond):
@@ -240,8 +244,8 @@ func startConsole(t *testing.T, cmd *exec.Cmd) (*screen, *os.File, func()) {
 
 // The quick start, with the project mounted read-write in the console's
 // container, then read-only but for .locksql: there the console checks,
-// through Docker's bind mount, that .locksql has the device and inode the
-// launcher's LOCKSQL_READONLY_PROJECT=1 would pass it.
+// through Docker's bind mount, that .locksql has the device and inode
+// LOCKSQL_EXPECT_DIR names.
 func TestFirstQueryThroughTheLauncher(t *testing.T) {
 	setup(t)
 	t.Run("read-write project", func(t *testing.T) { firstQuery(t, false) })
@@ -258,8 +262,10 @@ func TestConsoleRefusesAnotherLocksqlDir(t *testing.T) {
 	image := imageName()
 	_, hubFlags := fakeHub(t, "locksql-home", project)
 	dir := filepath.Join(project, ".locksql")
+	runVol := "locksql-e2e-refuse-run"
+	t.Cleanup(func() { exec.Command("docker", "volume", "rm", "-f", runVol).Run() })
 	cmd := exec.Command("docker", append([]string{"run", "-it", "--rm", "--network", "host", "--user", "locksql", "-v", project + ":" + project + ":ro",
-		"-v", dir + ":" + dir, "-v", "locksql-run:/run/locksql", "-v", "locksql-home:/home/locksql",
+		"-v", dir + ":" + dir, "-v", runVol + ":/run/locksql", "-v", "locksql-home:/home/locksql",
 		"-e", "LOCKSQL_EXPECT_DIR=0:0", image, "console", "--project", project}, hubFlags...)...)
 	scr, _, end := startConsole(t, cmd)
 	defer end()
@@ -276,14 +282,12 @@ func TestConsoleRefusesAnotherLocksqlDir(t *testing.T) {
 // (instance fq-<pid>-<n>) in compose project lockfamily-<hash>, run by
 // compose from lox run's state directory ($XDG_STATE_HOME, a directory of
 // the test's), its socket in the volume lockfamily-<hash>_<instance>-run
-// with lox run's labels, named in <project>/.lockfamily/up.json, the home
-// volume locksql-home; on the host network, where the fake hub listens.
-// The socket volume is removed at the end.
-func loxUpConsole(t *testing.T, project string, readOnly bool, hubFlags []string) (*exec.Cmd, string) {
+// with lox run's labels, named in <project>/.lockfamily/up.json, its home
+// lox run's lockfamily-<hash>_<instance>-home (loxHome); on the host
+// network, where the fake hub listens. The socket volume is removed at the
+// end.
+func loxUpConsole(t *testing.T, project, p, instance string, readOnly bool, hubFlags []string) (*exec.Cmd, string) {
 	t.Helper()
-	h := sha256.Sum256([]byte(project))
-	p := "lockfamily-" + hex.EncodeToString(h[:4])
-	instance := fmt.Sprintf("fq-%d-%d", os.Getpid(), instances)
 	vol := p + "_" + instance + "-run"
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)
@@ -316,15 +320,15 @@ func loxUpConsole(t *testing.T, project string, readOnly bool, hubFlags []string
 	// confines it, its socket volume labelled as lox run labels it.
 	mounts := []map[string]any{
 		{"type": "volume", "source": instance + "-run", "target": "/run/locksql"},
-		{"type": "volume", "source": "home", "target": "/home/locksql"},
+		{"type": "volume", "source": instance + "-home", "target": "/home/locksql"},
 		{"type": "bind", "source": project, "target": project, "read_only": readOnly},
 	}
 	// lox run's: the console keeps its PII rule sets in its home volume,
 	// never in the project's .locksql, which is yours.
 	env := map[string]string{"LOCKSQL_PII_DIR": "/home/locksql/pii-rules"}
 	if readOnly {
-		// As the launcher's LOCKSQL_READONLY_PROJECT=1: .locksql the only
-		// writable directory, pinned by its device and inode.
+		// .locksql the only writable directory, pinned by its device and
+		// inode (LOCKSQL_EXPECT_DIR).
 		dir := filepath.Join(project, ".locksql")
 		var st syscall.Stat_t
 		if err := syscall.Lstat(dir, &st); err != nil {
@@ -336,7 +340,7 @@ func loxUpConsole(t *testing.T, project string, readOnly bool, hubFlags []string
 	compose := map[string]any{
 		"name": p,
 		"services": map[string]any{"lock-" + instance: map[string]any{
-			"image": imageName(), "user": "locksql", "tty": true, "stdin_open": true, "network_mode": "host",
+			"container_name": "locksql-" + instance, "image": imageName(), "user": "locksql", "tty": true, "stdin_open": true, "network_mode": "host",
 			"working_dir": project, "read_only": true, "cap_drop": []string{"ALL"}, "security_opt": []string{"no-new-privileges"},
 			"tmpfs": []string{"/tmp:rw,nosuid,nodev,noexec,size=64m"}, "logging": map[string]string{"driver": "none"},
 			"environment": env, "command": append([]string{"console", "--project", project}, hubFlags...), "volumes": mounts,
@@ -344,19 +348,49 @@ func loxUpConsole(t *testing.T, project string, readOnly bool, hubFlags []string
 		"volumes": map[string]any{
 			instance + "-run": map[string]any{"labels": map[string]string{"dev.lockfamily.role": "socket", "dev.lockfamily.instance": instance,
 				"dev.lockfamily.type": "locksql", "dev.lockfamily.workspace": project}},
-			"home": map[string]any{"external": true, "name": "locksql-home"},
+			instance + "-home": map[string]any{},
 		},
 	}
 	cb, err := json.MarshalIndent(compose, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	file := filepath.Join(state, "compose.yaml")
-	if err := os.WriteFile(file, cb, 0o600); err != nil {
-		t.Fatal(err)
+	// As lox run, the compose file on stdin (-f -): Docker labels the
+	// container's config_files "-", which the launcher must trust. Its
+	// terminal is then the one docker start attaches.
+	name := "locksql-" + instance
+	create := exec.Command("docker", "compose", "-p", p, "--project-directory", state, "-f", "-", "create", "lock-"+instance)
+	create.Stdin = bytes.NewReader(cb)
+	if out, err := create.CombinedOutput(); err != nil {
+		t.Fatalf("docker compose -f - create: %v\n%s", err, out)
 	}
-	return exec.Command("docker", "compose", "-p", p, "--project-directory", state, "-f", file,
-		"run", "--rm", "--name", "locksql-"+instance, "lock-"+instance), vol
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	return exec.Command("docker", "start", "-ai", name), vol
+}
+
+// loxLocks counts the locks loxNames names.
+var loxLocks int
+
+// loxNames is lox run's compose project of project and a new lock's
+// instance name, fq-<pid>-<n>.
+func loxNames(project string) (p, instance string) {
+	h := sha256.Sum256([]byte(project))
+	loxLocks++
+	return "lockfamily-" + hex.EncodeToString(h[:4]), fmt.Sprintf("fq-%d-%d", os.Getpid(), loxLocks)
+}
+
+// loxHome creates the lock's home volume <p>_<instance>-home as compose
+// creates lox run's (its labels), before the console runs, so that the
+// fake hub can pin the instance key made there; removed at the end.
+func loxHome(t *testing.T, p, instance string) string {
+	t.Helper()
+	vol := p + "_" + instance + "-home"
+	t.Cleanup(func() { exec.Command("docker", "volume", "rm", "-f", vol).Run() })
+	if out, err := exec.Command("docker", "volume", "create", "--label", "com.docker.compose.project="+p,
+		"--label", "com.docker.compose.volume="+instance+"-home", vol).CombinedOutput(); err != nil {
+		t.Fatalf("docker volume create %s: %v\n%s", vol, err, out)
+	}
+	return vol
 }
 
 // demoProject is a project with a SQLite database, where every account may
@@ -410,8 +444,9 @@ func firstQuery(t *testing.T, readOnly bool) {
 	// account, in its own container, attached to the hub, with its socket
 	// in a volume of lox run's (its labels, named in .lockfamily/up.json),
 	// which the launcher mounts for the agent's commands.
-	hub, hubFlags := fakeHub(t, "locksql-home", project)
-	cmd, vol := loxUpConsole(t, project, readOnly, hubFlags)
+	p, instance := loxNames(project)
+	hub, hubFlags := fakeHub(t, loxHome(t, p, instance), project)
+	cmd, vol := loxUpConsole(t, project, p, instance, readOnly, hubFlags)
 	t.Logf("command 4: docker %s", strings.Join(cmd.Args[1:], " "))
 	scr, tty, end := startConsole(t, cmd)
 	defer end()
@@ -482,6 +517,21 @@ func firstQuery(t *testing.T, readOnly bool) {
 		t.Fatalf("first query: %v %v, want [[3 42]]", rows.Columns, rows.Rows)
 	}
 	t.Logf("first approved query: %v %v", rows.Columns, rows.Rows)
+
+	// A statement the read tier refuses, audited by the console in its
+	// home volume: locksql stats, through the launcher, reads that log
+	// (the lock's home volume, not locksql-home: #220).
+	if out, err := agent(t, project, "plan", "--profile", "dev", "--db", "main", "--json", "DELETE FROM orders WHERE id = 1"); err == nil {
+		t.Fatalf("plan of a DELETE at the read tier passed:\n%s", out)
+	}
+	t.Logf("command 5: locksql stats")
+	cmd = exec.Command("sh", launcher, "stats")
+	cmd.Dir = project
+	sb, err := cmd.CombinedOutput()
+	t.Logf("%s", sb)
+	if err != nil || !strings.Contains(string(sb), "audit log /home/locksql/") || strings.Contains(string(sb), "\n0 refusals") {
+		t.Fatalf("locksql stats: %v, want the lock's audit log with the refusal:\n%s", err, sb)
+	}
 
 	// A container lox run did not start that mounts the socket volume
 	// read-write could listen on the socket's path: the launcher then

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	kconsole "github.com/DavidGodefroid/lockkit/console"
+	"github.com/DavidGodefroid/lockkit/managed"
 	"github.com/DavidGodefroid/lockkit/secrets"
 
 	"github.com/DavidGodefroid/locksql/internal/config"
@@ -158,6 +159,13 @@ type ServerConfig struct {
 	// connection at idle_timeout and keeps running. nil (tests of the
 	// server alone) ends the session at idle_timeout instead.
 	IdleConnect idleConnector
+	// Managed is the company's managed file in force at start (nil: none),
+	// and LoadManaged re-reads it at every policy poll (managed.Load in Run;
+	// nil keeps Managed for the session): a policy beyond its bounds is
+	// refused, never pending, and a stricter file ends the session or
+	// tightens the policy in force.
+	Managed     *managed.File
+	LoadManaged func(context.Context) (*managed.File, error)
 }
 
 // plan is a one-shot plan awaiting query.run.
@@ -183,6 +191,9 @@ type plan struct {
 	an        *sqlast.Analysis
 	runSQL    string
 	isExplain bool
+	// writeJoins are the PII joins of a write that an is nil for
+	// (writePlan), for the human's warning.
+	writeJoins []string
 	// src is the statement as the agent sent it, and base the offset in
 	// it of the statement the checks read: refusals point into src.
 	src  string
@@ -213,6 +224,11 @@ type plan struct {
 	// so beside its rowcount: triggers, rules, foreign-key cascades (from
 	// the definitions read on PostgreSQL).
 	sideEffects []string
+	// wholeTable marks an UPDATE or DELETE with no WHERE (wholeTableWrite),
+	// and tableRows the planner's estimate of the rows it changes, for its
+	// ticket.
+	wholeTable bool
+	tableRows  int64
 	// grant is the grant the plan runs under (nil: a ticket); grantRows
 	// and grantBytes are what its run returned, charged to it.
 	grant      *grant
@@ -255,6 +271,9 @@ type Server struct {
 
 	// catalogCache holds the column catalog per database for the analyser.
 	catalogCache map[string][]engine.ColumnInfo
+	// addCtx is the context of the pii.add being served, nil otherwise:
+	// CheckMask reads the catalog with it.
+	addCtx context.Context
 	// quantum levels response times (ResponseQuantum; 0 in tests).
 	quantum time.Duration
 
@@ -298,10 +317,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Approver == nil {
 		cfg.Approver = cfg.Hub.Approver(newTypedApprover(cfg.IO))
 	}
-	if aa, ok := cfg.Approver.(kconsole.AsyncApprover); ok {
-		// Keeps the hub client's limit refusals for the agent (ratelimit.go).
-		cfg.Approver = &rateApprover{AsyncApprover: aa}
-	}
 	cfg.Databases = servedDatabases(cfg.Policy.Profile.Database, cfg.Databases)
 	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, quantum: cfg.Quantum}
 	s.lastSeen = cfg.Now()
@@ -321,6 +336,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		Session: cfg.Session, Audit: cfg.Audit, IO: cfg.IO, Approver: cfg.Approver, Level: level, Boundary: cfg.Boundary,
 		Now: cfg.Now, AllowUnmask: cfg.AllowUnmask, ShowResults: cfg.ShowResults && level == 0,
 		Quantum: cfg.Quantum, PeerAllowed: cfg.PeerAllowed, Refused: cfg.Refused, Hub: cfg.Hub,
+		Managed: cfg.Managed, LoadManaged: cfg.LoadManaged,
 	}
 	if refuseProd := cfg.RefuseProduction; refuseProd != nil {
 		// What a production profile is refused at start-up is refused when
@@ -403,6 +419,9 @@ func (s *Server) stamp(rec audit.Record) audit.Record {
 	rec.Host = s.host()
 	rec.DBUser = s.dbUser()
 	s.liveDBUser(rec.DBUser)
+	if rec.Managed == "" && s.k != nil && s.k.Managed() != nil {
+		rec.Managed = s.k.Managed().Fingerprint
+	}
 	return rec
 }
 
@@ -459,6 +478,12 @@ func (s *Server) Handle(ctx context.Context, req ipc.Request) ipc.Response {
 		// time.
 		s.seen()
 		defer s.seen()
+	}
+	if req.Method == ipc.MethodPIIAdd {
+		// CheckMask resolves the pattern against the catalog with the
+		// request's context; requests are served one at a time.
+		s.addCtx = ctx
+		defer func() { s.addCtx = nil }()
 	}
 	return s.k.Handle(ctx, req)
 }

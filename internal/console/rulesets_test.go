@@ -121,7 +121,7 @@ func TestRuleSetsShared(t *testing.T) {
 			c.Policy = pol
 			c.RulesPath = path
 			c.ApprovedKey = config.ApprovedKey(root, profile)
-		})
+		}, withColumn("app", "users", "phone"), withColumn("app", "users", "iban"))
 		h.ok(t, ipc.MethodPIIAdd, ipc.PIIAddParams{Pattern: pattern}, nil)
 	}
 	add("shop-dev", "app.users.phone")

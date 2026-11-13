@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	kaudit "github.com/DavidGodefroid/lockkit/audit"
 	kconsole "github.com/DavidGodefroid/lockkit/console"
 	"github.com/DavidGodefroid/lockkit/hubclient"
+	kpii "github.com/DavidGodefroid/lockkit/pii"
 	"github.com/DavidGodefroid/lockkit/plans"
 	"github.com/DavidGodefroid/lockkit/render"
 	"github.com/DavidGodefroid/lockkit/ticket"
@@ -95,6 +97,10 @@ func agentName(ctx context.Context, who ipc.Requester) string {
 	return peer + " · claims lea agent " + strconv.Quote(name)
 }
 
+// nestedDMLRefusal refuses a write with a data-modifying statement inside
+// it (nestedDML), at query.plan and again before its ticket.
+const nestedDMLRefusal = "a statement with a data-modifying statement inside it (WITH ... AS (INSERT/UPDATE/DELETE ...)) is not run in hub mode: its row count would not cover every row it changes; write one statement per change"
+
 // nestedDML reports a statement with a data-modifying statement inside
 // it (PostgreSQL's WITH u AS (DELETE ...) ...): its command tag counts
 // only the outer statement's rows, so its rowcount bound would not hold.
@@ -125,6 +131,53 @@ func nestedDML(d sqlclass.Dialect, sql string) bool {
 		}
 	}
 	return false
+}
+
+// wholeTableWrite reports an UPDATE or DELETE that changes every row of
+// its table: its own WHERE is missing or always true (WHERE TRUE, WHERE 1,
+// WHERE 1 = 1), and no LIMIT bounds it. Clauses inside parentheses (a
+// CTE, a subquery) do not count.
+func wholeTableWrite(d sqlclass.Dialect, sql string) bool {
+	toks, err := sqlclass.Lex(d, sql)
+	if err != nil {
+		return false
+	}
+	word := func(i int, w ...string) bool {
+		return i < len(toks) && toks[i].Kind == sqlclass.TokWord && toks[i].Depth == 0 && slices.Contains(w, toks[i].Text)
+	}
+	one := func(i int) bool {
+		return i < len(toks) && toks[i].Kind == sqlclass.TokNumber && toks[i].Text == "1"
+	}
+	verb, where := -1, -1
+	for i := range toks {
+		switch {
+		case verb < 0 && word(i, "INSERT", "REPLACE", "MERGE", "SELECT", "VALUES", "TABLE"):
+			return false
+		case verb < 0 && word(i, "UPDATE", "DELETE"):
+			verb = i
+		case verb >= 0 && word(i, "LIMIT"):
+			return false
+		case verb >= 0 && where < 0 && word(i, "WHERE"):
+			where = i
+		}
+	}
+	if verb < 0 {
+		return false
+	}
+	if where < 0 {
+		return true
+	}
+	// An always-true condition, alone up to the end of the WHERE.
+	end := where + 2
+	switch {
+	case word(where+1, "TRUE"):
+	case one(where+1) && where+2 < len(toks) && toks[where+2].Kind == sqlclass.TokPunct && toks[where+2].Text == "=" && one(where+3):
+		end = where + 4
+	case one(where + 1):
+	default:
+		return false
+	}
+	return end >= len(toks) || toks[end].Kind == sqlclass.TokPunct && toks[end].Text == ";" || word(end, "RETURNING", "ORDER")
 }
 
 // sideEffects lists, from the definitions a write resolves to, what
@@ -248,10 +301,83 @@ func (s *Server) hubScreen(pl *plan) (masked render.MaskedScreen, clear kconsole
 	if pl.unmask {
 		src.Body = append(src.Body, render.Structure("PII: UNMASKED"))
 	}
+	if pl.wholeTable {
+		rows := "row count unknown"
+		if pl.tableRows > 0 {
+			rows = fmt.Sprintf("%d rows", pl.tableRows)
+		}
+		src.Body = append(src.Body, render.Structure("whole table: "+rows+" (no WHERE: every row changes)"))
+	}
 	if pl.maxAffected > 0 {
 		src.Body = append(src.Body, render.Structure(fmt.Sprintf("rows changed: at most %d by the statement itself (checked before the commit; more rolls back); rows changed by triggers, rules, foreign-key cascades or functions are not counted", pl.maxAffected)))
 	}
-	return render.MaskScreen(src, render.Masking{Detectors: s.detectors, Personal: func(string, string) bool { return true }}), clearScreen(src)
+	names := s.maskedNames(pl.st.SQL)
+	if len(names) > 0 {
+		src.Body = append(src.Body, render.Structure("personal data: masked columns "+strings.Join(names, ", ")))
+	}
+	return s.maskScreen(src, len(names) > 0), clearScreen(src)
+}
+
+// touchedMark ends the line of an approval screen that names the masked
+// columns a statement reads or writes: the touchedMarker detector removes
+// it, and so reports render.TouchedColumn, the personal data the ticket
+// touches.
+const touchedMark = "\u2063"
+
+// touchedMarker is a detector that finds touchedMark (see maskScreen).
+type touchedMarker struct{}
+
+func (touchedMarker) Name() string         { return render.TouchedColumn }
+func (touchedMarker) Mask(s string) string { return strings.ReplaceAll(s, touchedMark, "") }
+
+// maskScreen is src as it leaves the lock: every literal of the statement
+// masked whatever column it goes to (the hub never sees a value of the
+// statement in clear), and the detectors over all of it. The ticket says
+// it touches personal data (render.TouchedColumn) only when touched: the
+// statement names a column under a mask rule (maskedNames), not for every
+// literal, or a warning that is always on would be ignored (#208).
+func (s *Server) maskScreen(src render.ScreenSource, touched bool) render.MaskedScreen {
+	out := src
+	out.Body = make([]render.Line, len(src.Body))
+	for i, l := range src.Body {
+		line := make(render.Line, len(l))
+		for j, p := range l {
+			if p.Value {
+				p = render.Part{Text: kpii.MaskText(p.Text)}
+			}
+			line[j] = p
+		}
+		out.Body[i] = line
+	}
+	dets := s.detectors
+	if len(dets) == 0 {
+		dets = kpii.AllDetectors()
+	}
+	if touched && len(out.Body) > 0 {
+		dets = append(slices.Clone(dets), touchedMarker{})
+		last := len(out.Body) - 1
+		out.Body[last] = append(slices.Clone(out.Body[last]), render.Part{Text: touchedMark})
+	}
+	return render.MaskScreen(out, render.Masking{Detectors: dets, Personal: func(string, string) bool { return false }})
+}
+
+// maskedNames are the names in sql of the columns under a mask rule, by
+// name (pii.Rules.MatchesName, as the checks by name match them), sorted:
+// the masked columns a statement may read or write.
+func (s *Server) maskedNames(sql string) []string {
+	toks, err := sqlclass.Lex(s.dialect, sql)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, t := range toks {
+		n := strings.ToLower(t.Name())
+		if n != "" && s.rules.MatchesName(n) && !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // clearScreen is src as the console's clear screen: each line its parts'
@@ -339,7 +465,7 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 		rec.Warnings = pl.warnings
 	}
 	if pl.st.Class == sqlclass.Write && nestedDML(s.dialect, pl.st.SQL) {
-		return s.refuseRec(id, rec, pl.src, refusal.New(refusal.StatementKind, "a statement with a data-modifying statement inside it (WITH ... AS (INSERT/UPDATE/DELETE ...)) is not run in hub mode: its row count would not cover every row it changes; write one statement per change"))
+		return s.refuseRec(id, rec, pl.src, refusal.New(refusal.StatementKind, nestedDMLRefusal))
 	}
 	if pl.st.Class == sqlclass.Write {
 		if len(pl.sideEffects) > 0 {
@@ -349,7 +475,11 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 		// The rows the write may change: about what the planner expects,
 		// or what a rolled-back run of an earlier ticket would have
 		// changed. The run checks it before its commit (H2).
-		pl.maxAffected = rowBound(max(s.writeEstimate(ctx, sess, pl), pl.affected))
+		est := s.writeEstimate(ctx, sess, pl)
+		if pl.wholeTable {
+			pl.tableRows = est
+		}
+		pl.maxAffected = rowBound(max(est, pl.affected))
 		if pl.staleTicket != "" && pl.affected > 0 {
 			pl.warnings = append(pl.warnings, fmt.Sprintf("the approved run of ticket %s would have changed %d rows: rolled back", pl.staleTicket, pl.affected))
 			rec.Warnings = pl.warnings
@@ -382,10 +512,10 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 	// run's auto mode. deny never reaches here (autoDenied).
 	sc.NeverAuto = s.neverAuto(pl.st.Class, pl.unmask)
 	rec.AutoRule = s.autoRuleText(pl.st.Class, pl.unmask)
-	a := s.ask(ctx, id, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
+	a := withAgain(s.asker().Ask(ctx, id, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
 		rec.Event, rec.Decision, rec.Reason, rec.Error, rec.Approval, rec.Ticket = b.Event, b.Decision, b.Reason, b.Error, b.Approval, b.Ticket
 		s.audit(rec)
-	}, "plan the query again after that (the plan is used)")
+	}), "plan the query again after that (the plan is used)")
 	return a.Refusal
 }
 
@@ -634,3 +764,17 @@ func (s *Server) withdraw(ctx context.Context, ticketID string, caller plans.Cal
 }
 
 func (s *Server) safeReason(r string) string { return safeText(r, false) }
+
+// withAgain adds what the agent does next (again) to a ticket the hub
+// client refused over its limits: lockkit's Asker answers it with the
+// limit, the count and when to retry ("not submitted: ..."), each ask
+// its own (lockkit#150).
+func withAgain(a kconsole.Approval, again string) kconsole.Approval {
+	if a.Pending != nil || a.Refusal.Error == nil || a.Refusal.Error.Code != ipc.CodeInternal {
+		return a
+	}
+	if e := a.Refusal.Error; strings.HasPrefix(e.Message, "not submitted: ") {
+		a.Refusal = errResp(a.Refusal.ID, ipc.CodeInternal, e.Message+"; "+again)
+	}
+	return a
+}

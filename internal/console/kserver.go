@@ -12,6 +12,7 @@ import (
 	kaudit "github.com/DavidGodefroid/lockkit/audit"
 	kconfig "github.com/DavidGodefroid/lockkit/config"
 	kconsole "github.com/DavidGodefroid/lockkit/console"
+	"github.com/DavidGodefroid/lockkit/managed"
 	"github.com/DavidGodefroid/lockkit/secrets"
 	"github.com/DavidGodefroid/lockkit/ticket"
 	"github.com/DavidGodefroid/locksql/internal/config"
@@ -59,7 +60,7 @@ func (k kpolicy) Profile() kconsole.Profile {
 	}
 	return kconsole.Profile{Name: pr.Name, Production: pr.Production, Where: where, Host: pr.Host, Port: pr.Port,
 		User: pr.User, Credentials: pr.Credentials, VaultPath: pr.VaultPath, CredentialsTTL: pr.CredentialsTTL,
-		IdleTimeout: noIdleEnd, MaxSession: pr.Limits.MaxSession}
+		IdleTimeout: noIdleEnd, MaxSession: pr.Limits.MaxSession, TicketLimits: pr.Limits.TicketLimits()}
 }
 
 // noFingerFields is the audit text of a refusal for want of a finger; it
@@ -83,6 +84,7 @@ func (s *Server) Methods() map[string]kconsole.Handler {
 		ipc.MethodQueryPlan:       h(s.queryPlan),
 		ipc.MethodQueryRun:        h(s.queryRun),
 		ipc.MethodGrant:           h(s.grantRequest),
+		ipc.MethodPIIUnmatched:    h(s.piiUnmatched),
 	}
 }
 
@@ -90,7 +92,7 @@ func (s *Server) Methods() map[string]kconsole.Handler {
 // and counts as activity for the idle timeout.
 func productMethod(m string) bool {
 	switch m {
-	case ipc.MethodCatalogList, ipc.MethodCatalogDescribe, ipc.MethodQueryPlan, ipc.MethodQueryRun, ipc.MethodGrant:
+	case ipc.MethodCatalogList, ipc.MethodCatalogDescribe, ipc.MethodQueryPlan, ipc.MethodQueryRun, ipc.MethodGrant, ipc.MethodPIIUnmatched:
 		return true
 	}
 	return false
@@ -133,6 +135,35 @@ func (s *Server) LoadPolicy() (kconsole.Policy, error) {
 	return kpolicy{p}, nil
 }
 
+var _ kconsole.ManagedBackend = (*Server)(nil)
+
+// ManagedBounds implements kconsole.ManagedBackend: kp at its ceiling under
+// the [locksql.bounds] of m, which lockkit's managed.Check compares kp with
+// through config.Diff. A value outside an allowlist bound (credentials,
+// engine, hosts, family.vault.required) is an error naming the managed
+// key; lockkit's console refuses kp on it as on a violation.
+func (s *Server) ManagedBounds(kp kconsole.Policy, m *managed.File) (managed.Bounds, error) {
+	return managedBounds(kp, m)
+}
+
+// managedBounds is ManagedBounds, for the start-up's checks too.
+func managedBounds(kp kconsole.Policy, m *managed.File) (managed.Bounds, error) {
+	p, ok := kp.(kpolicy)
+	if !ok {
+		return managed.Bounds{}, fmt.Errorf("not a locksql policy: %T", kp)
+	}
+	cm, err := config.ParseManaged(m)
+	if err != nil {
+		return managed.Bounds{}, err
+	}
+	ceiling, keys, err := cm.BoundsOf().Ceiling(p.p)
+	mb := managed.Bounds{Tool: config.ManagedTool, Profile: p.p.Profile.Name, Keys: keys}
+	if ceiling != nil {
+		mb.Ceiling = kpolicy{*ceiling}
+	}
+	return mb, err
+}
+
 // ApplyPolicy implements kconsole.PolicyApplier: it compiles the PII rules,
 // the detectors and the SQL dialect of p, which then is in force.
 func (s *Server) ApplyPolicy(kp kconsole.Policy) error {
@@ -159,7 +190,8 @@ func (s *Server) ApplyPolicy(kp kconsole.Policy) error {
 	s.setLive(fp) // what the hub's goroutine checks tickets against
 	if h := s.cfg.Hub; h != nil && h.Client != nil {
 		// The ticket limits of the policy in force: a raise reaches here
-		// only once reviewed (lockkit#150).
+		// only once reviewed (lockkit#150). lockkit sets the same from
+		// Profile().TicketLimits whenever it applies a policy.
 		h.Client.SetLimits(p.Profile.Limits.TicketLimits())
 	}
 	s.grantPolicyChanged(old, oldFP, p, fp)
@@ -303,7 +335,7 @@ func (s *Server) Words() kconsole.Words {
 func (s *Server) AuditRecord(b kaudit.Base) kaudit.Record {
 	return s.stamp(audit.Record{Event: b.Event, Profile: b.Profile, Decision: b.Decision, Error: secrets.SanitizeString(b.Error), Code: b.Code, Span: b.Span,
 		Warnings: b.Warnings, Intent: b.Intent, Reason: b.Reason, Approval: b.Approval, PeerUID: b.PeerUID, PeerPID: b.PeerPID,
-		PeerUser: b.PeerUser, Ticket: b.Ticket, Approver: b.Approver, Facade: b.Facade, HubSig: b.HubSig})
+		PeerUser: b.PeerUser, Ticket: b.Ticket, Approver: b.Approver, Facade: b.Facade, HubSig: b.HubSig, Managed: b.Managed})
 }
 
 // PIIRules implements kconsole.PIIBackend (pii.list), sorted.
@@ -313,13 +345,20 @@ func (s *Server) PIIRules(kp kconsole.Policy) (mask, allow []string) {
 }
 
 // CheckMask implements kconsole.PIIBackend: the canonical form of a
-// db.table.column pattern.
+// db.table.column pattern (schema.table.column on PostgreSQL), refused
+// when it names no column of the catalog (resolveMask).
 func (s *Server) CheckMask(pattern string) (string, error) {
 	var probe pii.Rules
 	if err := probe.Add(pattern); err != nil {
 		return "", err
 	}
-	return probe.Mask[0], nil
+	p := probe.Mask[0]
+	if s.addCtx != nil {
+		if err := s.resolveMask(s.addCtx, p); err != nil {
+			return "", err
+		}
+	}
+	return p, nil
 }
 
 // SaveMask implements kconsole.PIIBackend: the rule is added to the rule

@@ -12,10 +12,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/DavidGodefroid/locksql/internal/config"
 )
 
 // RulesFile is the rules file, relative to the project root.
@@ -376,32 +377,8 @@ func isASCII(s string) bool {
 	return true
 }
 
-// parsePattern validates "db.table.column": three non-empty segments, each
-// '*' or a name without '.', quotes, blanks, control characters or format
-// characters (bidi controls, zero-width marks), with at most one leading
-// and one trailing '*'. Patterns are shown to the human in review diffs,
-// where such characters could hide text. Errors never quote the pattern,
-// which may be a secret pasted in the wrong place.
-func parsePattern(p string) (string, error) {
-	segs := strings.Split(p, ".")
-	if len(segs) != 3 {
-		return "", errors.New("pii rule: want db.table.column ('*' allowed per segment)")
-	}
-	for _, s := range segs {
-		lit, _, _ := splitSeg(s)
-		if s == "" || (s != "*" && (lit == "" || strings.ContainsAny(lit, "*\"'`"))) || strings.IndexFunc(s, unsafeRune) >= 0 {
-			return "", errors.New("pii rule: each segment is '*' or a plain name, optionally with a leading or trailing '*'")
-		}
-	}
-	return p, nil
-}
-
-// unsafeRune reports a character that a plain name never holds and that
-// could alter or hide text on a terminal: controls, spaces of any kind and
-// format characters.
-func unsafeRune(r rune) bool {
-	return r == utf8.RuneError || unicode.IsControl(r) || unicode.IsSpace(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
-}
+// parsePattern validates "db.table.column" (config.ParsePIIPattern).
+func parsePattern(p string) (string, error) { return config.ParsePIIPattern(p) }
 
 func canonical(patterns []string) []string {
 	out := slices.Clone(patterns)

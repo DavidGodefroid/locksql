@@ -34,6 +34,10 @@ type fakeConn struct {
 	planIn    ipc.PlanParams
 	planErr   error
 	grantIn   ipc.GrantParams
+	// unmatched and unmatchedErr answer pii.unmatched (not recorded in
+	// calls: it shares the connection of pii.list or pii.add).
+	unmatched    ipc.PIIUnmatchedResult
+	unmatchedErr error
 }
 
 func (f *fakeConn) record(m string) {
@@ -110,6 +114,10 @@ func (f *fakeConn) PIIList(context.Context) (ipc.PIIListResult, error) {
 func (f *fakeConn) PIIAdd(_ context.Context, pattern string) (ipc.PIIListResult, error) {
 	f.record("pii.add " + pattern)
 	return ipc.PIIListResult{Mask: []string{"*.*.email", pattern}, Allow: []string{}}, nil
+}
+
+func (f *fakeConn) PIIUnmatched(context.Context) (ipc.PIIUnmatchedResult, error) {
+	return f.unmatched, f.unmatchedErr
 }
 
 func (f *fakeConn) Request(_ context.Context, change string) (ipc.ChangeResult, error) {
@@ -701,4 +709,62 @@ func TestGrantTool(t *testing.T) {
 	if r := call(t, cs, "locksql_grant", map[string]any{}); !r.IsError {
 		t.Fatal("a grant without tables or ticket")
 	}
+}
+
+// pii list flags the rules that name no column, and pii add warns when the
+// rule it added masks nothing yet (locksql#207).
+func TestPIIDeadRulesFlagged(t *testing.T) {
+	f := &fakeConn{profile: "uat", unmatched: ipc.PIIUnmatchedResult{Mask: []string{"*.*.email"}}}
+	cs := connect(t, withFake(f), nil)
+	r := call(t, cs, "locksql_pii_list", nil)
+	if r.IsError || !strings.Contains(text(r), "mask\t*.*.email\t(matches no column: dead rule)") {
+		t.Fatalf("pii list: %q", text(r))
+	}
+	b, err := json.Marshal(r.StructuredContent)
+	if err != nil || !strings.Contains(string(b), `"unmatched_mask":["*.*.email"]`) {
+		t.Errorf("structured: %s %v", b, err)
+	}
+
+	f.unmatched = ipc.PIIUnmatchedResult{Mask: []string{"*.*.phone*"}}
+	r = call(t, cs, "locksql_pii_add", map[string]any{"column": "*.*.phone*"})
+	if r.IsError || !strings.Contains(text(r), "warning: *.*.phone* matches no column today") {
+		t.Fatalf("pii add: %q", text(r))
+	}
+
+	f.unmatched = ipc.PIIUnmatchedResult{}
+	r = call(t, cs, "locksql_pii_add", map[string]any{"column": "public.customers.name"})
+	if r.IsError || strings.Contains(text(r), "warning") {
+		t.Fatalf("pii add of a live rule: %q", text(r))
+	}
+
+	// An older console without pii.unmatched: the rules are listed, marked
+	// unchecked.
+	f.unmatchedErr = &ipc.RPCError{Code: ipc.CodeMethodNotFound, Message: `unknown method "pii.unmatched"`}
+	r = call(t, cs, "locksql_pii_list", nil)
+	if r.IsError || !strings.Contains(text(r), "not checked against the catalog") || !strings.Contains(text(r), "mask\t*.*.email\n") {
+		t.Fatalf("pii list, old console: %q", text(r))
+	}
+}
+
+// The tool descriptions name the PostgreSQL pattern as describe does
+// (locksql#207).
+func TestPIIToolsNameSchemaPattern(t *testing.T) {
+	cs := connect(t, withFake(&fakeConn{profile: "uat"}), nil)
+	res, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range res.Tools {
+		if tool.Name != "locksql_pii_add" {
+			continue
+		}
+		schema, _ := json.Marshal(tool.InputSchema)
+		for _, s := range []string{tool.Description, string(schema)} {
+			if !strings.Contains(s, "schema.table.column") || !strings.Contains(s, "db.table.column") {
+				t.Errorf("locksql_pii_add does not name both patterns: %s", s)
+			}
+		}
+		return
+	}
+	t.Fatal("no locksql_pii_add tool")
 }

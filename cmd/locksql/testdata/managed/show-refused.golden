@@ -1,0 +1,4 @@
+exit 3
+== stdout
+== stderr
+locksql managed show: managed: <dir>/managed.toml: version 2 is not supported (this build reads version 1)
