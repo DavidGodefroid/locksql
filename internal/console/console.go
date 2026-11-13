@@ -309,10 +309,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Approver == nil {
 		cfg.Approver = cfg.Hub.Approver(newTypedApprover(cfg.IO))
 	}
-	if aa, ok := cfg.Approver.(kconsole.AsyncApprover); ok {
-		// Keeps the hub client's limit refusals for the agent (ratelimit.go).
-		cfg.Approver = &rateApprover{AsyncApprover: aa}
-	}
 	cfg.Databases = servedDatabases(cfg.Policy.Profile.Database, cfg.Databases)
 	s := &Server{cfg: cfg, sess: cfg.Session, now: cfg.Now, plans: map[string]*plan{}, quantum: cfg.Quantum}
 	s.lastSeen = cfg.Now()
