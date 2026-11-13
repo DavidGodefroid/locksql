@@ -3,7 +3,6 @@ package console
 import (
 	"context"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -64,44 +63,29 @@ func TestRateLimitRefusalNamesLimit(t *testing.T) {
 	wantLimit(t, g, rl, "ask for the grant again after that")
 }
 
-// Two asks refused at the same time with different limits each get their
-// own: no ask reads another's limit or retry-after (#204).
+// Asks refused with different limits each get their own: no ask reads
+// another's limit or retry-after (#204). The console serves requests one
+// at a time (lockkit's Loop.Serve, one goroutine), so the asks come one
+// after another, alternating their limits (#226).
 func TestRateLimitRefusalPerAsk(t *testing.T) {
 	one := &hubclient.RateLimitError{Limit: hubclient.LimitRate, Count: 3, Max: 3, Window: 10 * time.Minute, RetryAfter: 2 * time.Minute}
 	two := &hubclient.RateLimitError{Limit: hubclient.LimitPending, Count: 5, Max: 5}
-	// Both asks reach Submit before either returns, when the console lets
-	// them run together.
-	var arrived sync.WaitGroup
-	arrived.Add(2)
-	both := make(chan struct{})
-	go func() { arrived.Wait(); close(both) }()
 	h := newHarness(t, uatProfile(), withLimits(t, func(d kconsole.Decision) *hubclient.RateLimitError {
-		arrived.Done()
-		select {
-		case <-both:
-		case <-time.After(time.Second):
-		}
 		if strings.Contains(strings.Join(d.Screen.Body, "\n"), "111") {
 			return one
 		}
 		return two
 	}))
-	sqls := []string{"SELECT id FROM users WHERE id = 111 LIMIT 10", "SELECT id FROM users WHERE id = 222 LIMIT 10"}
-	ids := make([]string, len(sqls))
-	for i, q := range sqls {
-		ids[i] = h.plan(t, q, false).PlanID
-	}
-	resps := make([]ipc.Response, len(sqls))
-	var wg sync.WaitGroup
-	for i := range sqls {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			resps[i] = h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: ids[i]})
-		}()
-	}
-	wg.Wait()
 	const again = "plan the query again after that (the plan is used)"
-	wantLimit(t, resps[0], one, again)
-	wantLimit(t, resps[1], two, again)
+	for _, c := range []struct {
+		sql  string
+		want *hubclient.RateLimitError
+	}{
+		{"SELECT id FROM users WHERE id = 111 LIMIT 10", one},
+		{"SELECT id FROM users WHERE id = 222 LIMIT 10", two},
+		{"SELECT id FROM users WHERE id = 111 LIMIT 10", one},
+	} {
+		pr := h.plan(t, c.sql, false)
+		wantLimit(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), c.want, again)
+	}
 }

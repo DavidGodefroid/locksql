@@ -46,6 +46,23 @@ jobs:
       - name: go test -tags lockfamily_managed_test
         run: go test -tags lockfamily_managed_test ./...
 
+  # The console serves one request at a time on one goroutine; the race
+  # detector makes a data race in it (or in a test driving it) fail every
+  # run instead of a "concurrent map writes" now and then (#226).
+  race:
+    name: test -race (console)
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+      - name: go test -race
+        run: go test -race ./internal/console/
+
   # Windows: the module builds and its unit tests run, but locksql itself
   # refuses to run there (docs/usage.md, Windows (WSL2)). Test files that
   # need Unix accounts, file modes, sockets or terminals carry
