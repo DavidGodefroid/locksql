@@ -6,7 +6,10 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
-Built on lockkit v0.20.0.
+## v0.20.0 (2026-11-14)
+
+Supported lockhub: v0.9.0 or later (unchanged). Built on lockkit v0.20.0.
+Upgrade the client and the console together.
 
 ### Breaking
 
