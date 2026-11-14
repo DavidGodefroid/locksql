@@ -148,7 +148,7 @@ func consoleServer(t *testing.T, s engine.Session, db string, rules pii.Rules, t
 	hub, fake := inProcessHub(t, yesIO{t})
 	srv, err := console.NewServer(console.ServerConfig{
 		Policy: config.NewPolicy(p, rules.Mask, rules.Allow).WithModes(rules.Modes), RulesPath: filepath.Join(t.TempDir(), pii.RulesFile), Session: nopClose{s},
-		DBUser: "it", Databases: []string{db}, Audit: log, IO: yesIO{t}, Version: "it", Hub: hub,
+		DBUser: "it", Databases: []string{db}, Audit: log, IO: yesIO{t}, Version: "it", Hub: hub, DecisionWait: -1,
 	})
 	if err != nil {
 		t.Fatal(err)

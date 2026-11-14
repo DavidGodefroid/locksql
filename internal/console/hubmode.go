@@ -469,8 +469,11 @@ func (s *Server) ticketNotRun(id int64, ticketID string, err error) ipc.Response
 // hubSubmit hands pl to the hub instead of asking here: the plan goes to
 // the plans store, bound to the client and the plan hash, and the client
 // gets pending with the ticket. hidden is a refusal the human must see
-// first (estimates hidden under a PII filter).
-func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, pl *plan, rec audit.Record, hidden *refusal.Error) ipc.Response {
+// first (estimates hidden under a PII filter). With run, a ticket an auto
+// rule may decide waits for its decision a short while (DecisionWait), and
+// one decided by then runs in this same call (#233): an approval answers
+// the rows, a denial denied.
+func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, pl *plan, rec audit.Record, hidden *refusal.Error, run bool) ipc.Response {
 	var kw []string
 	if hidden == nil {
 		var refused *refusal.Error
@@ -534,10 +537,17 @@ func (s *Server) hubSubmit(ctx context.Context, id int64, sess engine.Session, p
 	// run's auto mode. deny never reaches here (autoDenied).
 	sc.NeverAuto = s.neverAuto(pl.st.Class, pl.unmask)
 	rec.AutoRule = s.autoRuleText(pl.st.Class, pl.unmask)
-	a := withAgain(s.asker().Ask(ctx, id, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
+	actx := ctx
+	if run && !sc.NeverAuto {
+		actx = withAwait(ctx)
+	}
+	a := withAgain(s.asker().Ask(actx, id, kconsole.Ask{Frame: s.frameColour(), Production: s.profile.Production, Screen: sc}, func(b kaudit.Base) {
 		rec.Event, rec.Decision, rec.Reason, rec.Error, rec.Approval, rec.Ticket = b.Event, b.Decision, b.Reason, b.Error, b.Approval, b.Ticket
 		s.audit(rec)
 	}), "plan the query again after that (the plan is used)")
+	if a.Decided && a.Pending != nil {
+		return s.queryRunTicket(ctx, id, a.Pending.Ticket, pl.requester)
+	}
 	return a.Refusal
 }
 
@@ -767,7 +777,7 @@ func (s *Server) hubStale(ctx context.Context, id int64, body hubPlan, old strin
 		return *r
 	}
 	rec := withPeerRecord(ctx, audit.Record{DB: pl.db, SQL: pl.st.SQL, Class: pl.st.Class.String(), Verdict: pl.level, Unmasked: pl.unmask, Intent: pl.intent})
-	resp := s.hubSubmit(ctx, id, sess, pl, rec, hidden)
+	resp := s.hubSubmit(ctx, id, sess, pl, rec, hidden, false)
 	var p struct {
 		Status, Ticket string
 	}

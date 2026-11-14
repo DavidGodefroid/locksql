@@ -213,12 +213,71 @@ func TestHubModePendingThenRun(t *testing.T) {
 	}
 }
 
-// A pending answer comes at once: locksql runs a ticket on the agent's
-// run of it, so the hub approver's wait for a decision
-// (hubclient.DecisionWait) would only delay every pending answer.
-func TestHubModePendingAnswersAtOnce(t *testing.T) {
+// withDecisionWait sets how long query.run waits for the hub's decision.
+func withDecisionWait(d time.Duration) hopt {
+	return func(c *ServerConfig) { c.DecisionWait = d }
+}
+
+// AUTO mode (#233): a read the hub's auto rule decides within the wait
+// runs in the same call, its ticket consumed, and the agent never hears
+// pending.
+func TestHubModeAutoDecidedRunsInOneCall(t *testing.T) {
 	var hub *hubtest.Hub
-	h := newHarness(t, uatProfile(), withHub(t, &hub))
+	h := newHarness(t, uatProfile(), withHub(t, &hub), withDecisionWait(hubclient.DecisionWait))
+	hub.AutoDecide("auto-read")
+	pr := h.plan(t, selectUsers, false)
+	start := time.Now()
+	r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID})
+	if r.Error != nil {
+		t.Fatalf("query.run: %d %q", r.Error.Code, r.Error.Message)
+	}
+	var rr ipc.RunResult
+	if err := json.Unmarshal(r.Result, &rr); err != nil || len(rr.Rows) != 1 {
+		t.Fatalf("result %s, want the rows", r.Result)
+	}
+	if d := time.Since(start); d >= hubclient.DecisionWait {
+		t.Errorf("answered after %v: the wait ran out", d)
+	}
+	tks := hub.Tickets()
+	if len(tks) != 1 || !hub.Consumed(tks[0]) {
+		t.Fatalf("tickets %q: want one, consumed", tks)
+	}
+	if again := h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: tks[0]}); again.Error == nil {
+		t.Fatal("the ticket ran twice")
+	}
+	if log := h.auditLog(t); !strings.Contains(log, `"event":"pending"`) || !strings.Contains(log, `"event":"approved"`) {
+		t.Errorf("want the pending and approved records:\n%s", log)
+	}
+}
+
+// No decision within the wait: pending with the ticket, as before #233,
+// and the ticket runs later on the agent's run of it.
+func TestHubModeUndecidedPendingAfterTheWait(t *testing.T) {
+	var hub *hubtest.Hub
+	const wait = 100 * time.Millisecond
+	h := newHarness(t, uatProfile(), withHub(t, &hub), withDecisionWait(wait))
+	pr := h.plan(t, selectUsers, false)
+	start := time.Now()
+	tk := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")
+	if d := time.Since(start); d < wait || d >= hubclient.DecisionWait {
+		t.Errorf("pending answered after %v, want the %v wait", d, wait)
+	}
+	if h.sess.runCount() != 0 {
+		t.Fatalf("runs %q before a decision", h.sess.runs)
+	}
+	hub.Decide(tk, ticket.Approved, "")
+	if r := runTicket(t, h, tk); r.Error != nil {
+		t.Fatalf("run of the approved ticket: %q", r.Error.Message)
+	}
+}
+
+// A ticket no auto rule may decide (auto.read = ask) answers pending at
+// once, whatever the wait: only a human decides it (#230).
+func TestHubModeNeverAutoPendingAnswersAtOnce(t *testing.T) {
+	var hub *hubtest.Hub
+	r := config.DefaultAutoRules
+	r.Read = config.AutoAsk
+	h := newHarness(t, autoProfile(&r), withHub(t, &hub), withDecisionWait(hubclient.DecisionWait))
 	pr := h.plan(t, "SELECT id FROM users LIMIT 10", false)
 	start := time.Now()
 	pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{PlanID: pr.PlanID}), "pending")

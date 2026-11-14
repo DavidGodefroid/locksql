@@ -130,7 +130,7 @@ GRANT INSERT ON hr_log TO rw;`)
 		Limits: config.DefaultLimits(false), Detectors: []string{}}
 	s, err := console.NewServer(console.ServerConfig{
 		Policy: config.NewPolicy(p, nil, nil), RulesPath: filepath.Join(t.TempDir(), pii.RulesFile), Session: nopClose{rw},
-		DBUser: "it", Databases: []string{"app"}, Audit: log, IO: io, Version: "it", Hub: h, Approver: h.Approver(kconsole.NewTypedApprover(io)),
+		DBUser: "it", Databases: []string{"app"}, Audit: log, IO: io, Version: "it", Hub: h, DecisionWait: -1, Approver: h.Approver(kconsole.NewTypedApprover(io)),
 	})
 	if err != nil {
 		t.Fatal(err)

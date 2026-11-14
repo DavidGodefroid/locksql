@@ -67,7 +67,7 @@ func TestPIIJoinEndToEnd(t *testing.T) {
 	srv, err := console.NewServer(console.ServerConfig{
 		Policy:    config.NewPolicy(p, []string{"main.people.email", "main.contacts.email"}, nil),
 		RulesPath: filepath.Join(t.TempDir(), pii.RulesFile), Session: nopClose{s},
-		DBUser: "it", Databases: []string{"main"}, Audit: log, IO: yesIO{t}, Version: "it", Hub: hub,
+		DBUser: "it", Databases: []string{"main"}, Audit: log, IO: yesIO{t}, Version: "it", Hub: hub, DecisionWait: -1,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -413,6 +413,9 @@ func newHarness(t *testing.T, p config.Profile, opts ...hopt) *harness {
 		IO:          h.io,
 		Now:         func() time.Time { return h.now },
 		Version:     "test",
+		// The fake hub decides no ticket at once: a pending answer comes
+		// without the wait (withDecisionWait sets one).
+		DecisionWait: -1,
 	}
 	for _, o := range opts {
 		o(&cfg)

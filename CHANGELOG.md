@@ -6,6 +6,16 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
+### Changed
+
+- Hub mode, auto mode: a statement whose ticket an auto rule may decide
+  (its action `auto` in the profile's auto rules) waits up to 2 s
+  (`hubclient.DecisionWait`) for the decision; decided by then, the ticket
+  runs in the same `locksql_run` (`plan_id`) call, which answers the rows
+  (or `denied`), instead of `pending` and a second run of the ticket. No
+  decision by then answers `pending` as before. A never-auto ticket (`ask`)
+  and a grant's still answer `pending` at once (#233, lockkit#162).
+
 ## v0.18.2 (2026-11-14)
 
 Supported lockhub: v0.9.0 or later (unchanged). Built on lockkit v0.19.1
