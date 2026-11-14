@@ -690,6 +690,38 @@ The console needs an interactive terminal (`lox attach` attaches yours). At star
 7. Lists the databases it serves (the profile's `database` alone when it names
    one, else every database the account can see) and prints `Listening…`.
 
+### Confined agents
+
+The console serves only agents that run confined (lockkit#133): every
+client reports in its `hello` whether it runs in a container, with no
+rootful container runtime socket it can reach, no Lock Family state it can
+read and a read-only `.lockfamily/` (an agent run inside lea is). The
+console also refuses a client holding a group that owns a runtime socket of
+the host (`--runtime-gids`, written by `lox run`, and the console's own
+machine), whatever it reports, and a client of an older locksql that sends
+no report (`old_client`): client and console must be the same version. A
+refused agent gets JSON-RPC error -32009 (lockkit's `CodeUnconfined`)
+naming the reasons,
+the console prints `refused an unconfined agent (...)` and audits
+`refused-unconfined`.
+
+An agent run on the host is served only on a profile that sets
+`unconfined = true` ([configuration](configuration.md)): the console then
+prints in red, at start and at each such connection,
+
+```
+unconfined: this lock protects against mistakes, not against a compromised agent
+```
+
+and marks every audit record of the connection `"unconfined":true` and its
+hub tickets `flags.unconfined`. Switching it on is a loosening, approved at
+the console. A production profile with `unconfined = true` does not start
+(`unconfined is never allowed on a production profile`), and a managed
+`[family] require_confined_agent = true` refuses unconfined agents whatever
+the profile says. The decision is taken again at every request: a policy
+that becomes production, or a managed file that comes to require confined
+agents, cuts an unconfined connection already open.
+
 ### Keys and status line
 
 The console runs its own line editor (backspace, Ctrl-U, Ctrl-W; Ctrl-D on

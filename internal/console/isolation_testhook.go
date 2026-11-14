@@ -7,4 +7,10 @@ package console
 // Release builds never carry the tag: there, nothing (config file, flag,
 // environment variable or client) lets the console run in the agent's
 // account.
-func init() { allowSameUserForTests = true }
+// The tests' clients report themselves confined on a CI runner whose
+// account owns the Docker socket: the console takes no runtime gid of this
+// machine (lockkit#133).
+func init() {
+	allowSameUserForTests = true
+	hostRuntimeGIDs = func() []int { return nil }
+}

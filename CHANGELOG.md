@@ -6,6 +6,32 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
+Built on lockkit v0.20.0.
+
+### Breaking
+
+- The console refuses agents that do not run confined (lockkit#133). Each
+  client reports in its `hello` whether it runs in a container, with no
+  rootful runtime socket, no Lock Family state and a read-only
+  `.lockfamily/`; the console refuses an unconfined one with error -32009
+  (`CodeUnconfined`), audited `refused-unconfined`, as it does a client
+  holding a group that owns a runtime socket (`--runtime-gids`, written by
+  `lox run`, plus the console machine's own) and a client of an older
+  locksql that sends no report. Client and console must be upgraded
+  together: an older console refuses the new `hello`, and an older client is
+  refused by the new console (#243).
+
+### Added
+
+- Profile key `unconfined = true`: serves agents that do not run confined
+  on a non-production profile, with a red banner at start and at each such
+  connection and `"unconfined":true` on their audit records. It is part of
+  the policy (switching it on is a loosening, approved at the console),
+  stays out of `locksql config export`, and a production profile with it
+  does not start. A managed `[family] require_confined_agent = true`
+  refuses unconfined agents whatever the profile says
+  ([Confined agents](docs/usage.md#confined-agents)) (#243).
+
 ## v0.19.0 (2026-11-14)
 
 Supported lockhub: v0.9.0 or later (unchanged). Built on lockkit v0.19.2.

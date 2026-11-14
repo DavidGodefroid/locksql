@@ -102,7 +102,8 @@ func (p Policy) modeOf(pat string) string {
 func Fingerprint(p Policy) string { return kconfig.Fingerprint(canonical(p)) }
 
 // Diff lists the changes from approved to current and marks each loosening
-// (spec section 4): a higher tier, production true→false, a larger limit
+// (spec section 4): a higher tier, production true→false, unconfined
+// false→true, a larger limit
 // (0 means unlimited), a longer idle_timeout or max_session, a removed PII
 // rule or detector, an added allow rule, any change of engine, host, port,
 // path, database or user, a weaker tls mode, another tls_ca or
@@ -132,6 +133,11 @@ func Diff(approved, current Policy) []Change {
 	}
 	if ap.Production != cp.Production {
 		out = append(out, Change{Field: "production", Old: strconv.FormatBool(ap.Production), New: strconv.FormatBool(cp.Production), Loosens: ap.Production})
+	}
+	if ap.Unconfined != cp.Unconfined {
+		// An unconfined agent may reach the console's account: letting one
+		// in loosens.
+		out = append(out, Change{Field: "unconfined", Old: strconv.FormatBool(ap.Unconfined), New: strconv.FormatBool(cp.Unconfined), Loosens: cp.Unconfined})
 	}
 	if ap.Credentials != cp.Credentials {
 		out = append(out, Change{Field: "credentials", Old: ap.Credentials, New: cp.Credentials, Loosens: cp.Credentials != CredentialsAsk})

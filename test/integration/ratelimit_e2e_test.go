@@ -66,7 +66,7 @@ ticket_window = "10m"
 	}
 	cl := dialConsole(t, m[1])
 	var hr ipc.HelloResult
-	if e := cl.call(ipc.MethodHello, ipc.HelloParams{ProtocolMajor: ipc.ProtocolMajor}, &hr); e != nil {
+	if e := cl.call(ipc.MethodHello, confinedHello, &hr); e != nil {
 		t.Fatal(e)
 	}
 	run := func(sql string) (ipc.RunResult, *ipc.RPCError) {

@@ -244,6 +244,9 @@ func describePolicy(p config.Policy) []string {
 		fmt.Sprintf("  PII rules: set %q · %d mask, %d allow", pr.PIIRules, len(p.PIIMask), len(p.PIIAllow)),
 		autoLine(pr),
 	}
+	if pr.Unconfined {
+		lines = append(lines, "  unconfined: agents that do not run confined are served")
+	}
 	if pr.Engine != config.EngineSQLite {
 		mode := pr.TLS
 		if mode == "" {

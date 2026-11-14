@@ -442,6 +442,10 @@ func Run(ctx context.Context, o Options) error {
 			return err
 		}
 	}
+	given, err := kconsole.ParseGIDs(o.Hub.RuntimeGIDs)
+	if err != nil {
+		return err
+	}
 	hub, err := kconsole.OpenHub(product.P, o.Hub, o.StateDir, o.Now)
 	if err != nil {
 		return err
@@ -476,6 +480,9 @@ func Run(ctx context.Context, o Options) error {
 		// The name is not quoted back: it may be a token or a URL pasted
 		// in the wrong place.
 		return fmt.Errorf("%w: no such profile: --profile names none of the profiles (%s)", ErrConfig, strings.Join(names, ", "))
+	}
+	if err := refuseUnconfinedProduction(p); err != nil {
+		return err
 	}
 	var ucp string
 	if cfg.ProjectRoot == "" {
@@ -591,6 +598,10 @@ func Run(ctx context.Context, o Options) error {
 	}
 	p = approved.Profile
 	st.profile = p
+	if err := refuseUnconfinedProduction(p); err != nil {
+		st.audit(audit.Record{Event: audit.EventLogin, Decision: "refused", Error: err.Error()})
+		return err
+	}
 	// connect = "deny" in the approved policy's auto rules: the profile
 	// is never connected, whoever asks (locksql#185).
 	if err := connectDenied(p); err != nil {
@@ -656,6 +667,9 @@ func Run(ctx context.Context, o Options) error {
 	// 3. Host (confirmed with the policy) and user.
 	o.IO.Println(paint.OK(fmt.Sprintf("profile %s · %s %s · PII rules %q %s", paint.Bold(p.Name), p.Engine, st.where(), p.PIIRules, paint.Dim("(approved policy)"))))
 	o.IO.Println(paint.Dim(autoLine(p)))
+	if p.Unconfined {
+		o.IO.Println(paint.Fail(kconsole.UnconfinedBanner))
+	}
 	st.user = p.User
 	// With credentials = "vault" the user comes with the login (connect).
 	if st.user == "" && p.Engine != config.EngineSQLite && p.Credentials != config.CredentialsVault {
@@ -733,7 +747,7 @@ func Run(ctx context.Context, o Options) error {
 		Session: sess, DBUser: st.user, Databases: dbs, Audit: log, IO: o.IO, Approver: approver, Fingerprint: iso.verifier != nil, Boundary: iso.boundary(), Now: o.Now,
 		AllowUnmask: o.AllowUnmask, ShowResults: o.ShowResults, Version: o.Version, LoadPolicy: loadPolicy,
 		Reconnect: st.reconnect, IdleConnect: st, Quantum: ResponseQuantum, PeerAllowed: iso.peerCheck(), Health: health, Hub: hub,
-		RefuseProduction: refuseProduction, Managed: mf, LoadManaged: loadManagedFile,
+		RefuseProduction: refuseProduction, Managed: mf, LoadManaged: loadManagedFile, RuntimeGIDs: runtimeGIDs(given),
 	})
 	if err != nil {
 		ln.Close()

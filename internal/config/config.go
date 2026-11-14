@@ -180,6 +180,11 @@ type Profile struct {
 	// differ from DefaultAutoRules, nil when none does. Read it with
 	// AutoRules.
 	Auto *AutoRules `json:"auto,omitempty"`
+	// Unconfined lets an agent that does not run confined use the profile
+	// (lockkit's config.Base.Unconfined, profile key unconfined = true):
+	// never on a production profile, where the console refuses to start.
+	// Omitted when false, so that existing fingerprints hold.
+	Unconfined bool `json:"unconfined,omitempty"`
 }
 
 // ruleSetRe is a valid PII rule set name: it becomes a file name, so no
@@ -330,7 +335,8 @@ type rawProfile struct {
 	PIIRules       *string `toml:"pii_rules"`
 	WriteFunctions string  `toml:"write_functions"`
 	// Auto is a preset name or a table of actions (auto.go).
-	Auto *rawAuto `toml:"auto"`
+	Auto       *rawAuto `toml:"auto"`
+	Unconfined bool     `toml:"unconfined"`
 }
 
 type rawFile struct {
@@ -431,7 +437,7 @@ func buildProfile(name string, r rawProfile, detectorsSet bool, baseDir string) 
 		Name: name, Engine: r.Engine, Host: r.Host, Path: r.Path, Port: r.Port,
 		User: r.User, Database: r.Database, Credentials: r.Credentials, VaultPath: r.VaultPath,
 		TLS: r.TLS, TLSCA: r.TLSCA, TLSCert: r.TLSCert, TLSKey: r.TLSKey, TLSServerName: r.TLSServer,
-		Production: r.Production, Detectors: r.Detectors, PIIRules: ruleSet,
+		Production: r.Production, Detectors: r.Detectors, PIIRules: ruleSet, Unconfined: r.Unconfined,
 		Limits: Limits{
 			ExplainRowsWarn: r.Limits.ExplainRowsWarn, ExplainRowsRefuse: r.Limits.ExplainRowsRefuse,
 			MaxRows: r.Limits.MaxRows, MaxCellChars: r.Limits.MaxCellChars, MaxOutputBytes: r.Limits.MaxOutputBytes,

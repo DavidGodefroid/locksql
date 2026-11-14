@@ -97,6 +97,9 @@ const (
 	// CodeWithdrawn: a hub ticket run by a console that now runs without
 	// its hub (rollback of hub mode): plan again.
 	CodeWithdrawn = kipc.CodeWithdrawn
+	// CodeUnconfined: the agent does not run confined and the profile does
+	// not set unconfined = true (lockkit#133).
+	CodeUnconfined = kipc.CodeUnconfined
 
 	CodeParseError     = kipc.CodeParseError
 	CodeInvalidRequest = kipc.CodeInvalidRequest
@@ -109,6 +112,7 @@ const (
 type (
 	HelloParams   = kipc.HelloParams
 	HelloResult   = kipc.HelloResult
+	Confinement   = kipc.Confinement
 	PIIListResult = kipc.PIIListResult
 	PIIAddParams  = kipc.PIIAddParams
 	ChangeParams  = kipc.ChangeParams

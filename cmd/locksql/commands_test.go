@@ -170,6 +170,8 @@ func startConsole(t *testing.T, dir, profile string) *testConsole {
 	if !ok {
 		t.Fatalf("no profile %s", profile)
 	}
+	// The client under test runs on the host, unconfined (lockkit#133).
+	p.Unconfined = !p.Production
 	state := t.TempDir()
 	log, err := audit.Open(state)
 	if err != nil {

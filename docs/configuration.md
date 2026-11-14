@@ -113,6 +113,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `credentials_ttl` | none | a duration of at least `1m` (`"20m"`, `"1h"`): the connection is closed and the secret asked again once it is that old |
 | `tier` | `read` | highest statement class allowed |
 | `production` | `false` | stricter limits, production banner at console start, and the typed profile name when its policy is first approved or loosened |
+| `unconfined` | `false` | `true` serves agents that do not run confined (on the host, beside a container runtime socket…), which the console refuses by default ([Confined agents](usage.md#confined-agents)); never on a production profile, where the console refuses to start; switching it on is a loosening; it stays on this machine (`locksql config export` leaves it out, `import` keeps yours) |
 | `detectors` | `email`, `phone`, `iban`, `card` | also `be_niss`, `fr_nir`, `nl_bsn`, `us_ssn` and `phone_loose`; `[]` disables them. `phone` masks `+` and 8 to 15 digits, `00` and 10 to 17 digits, or a national number with a trunk 0 (9 to 11 digits, a first group of at least 2 digits); `phone_loose` adds national numbers without a trunk 0 (`(415) 555-2671`, `612 345 678`: 9 to 11 digits in at least two groups, the first of 2 to 4) and also masks some grouped amounts (`123 456 789`). Every detector reads U+00A0, U+202F and U+2009 as a space and full-width digits as digits |
 | `pii_rules` | the profile name, in lower case | the PII rule set, `pii/<set>.toml`; 1 to 64 lower-case letters, digits, `_`, `-` or `.`; profiles on isomorphic databases share a set by naming it; any change is a loosening |
 | `limits.statement_timeout` | 30s (production 10s) | |
@@ -222,7 +223,8 @@ locksql config import team.json --local uat.ssh.key=~/.ssh/id_ed25519
   machine (`tls_ca`, `tls_cert`, `tls_key`, `ssh.key`: listed in
   `needs_local`, given on import with `--local NAME.KEY=VALUE`),
   `proxy_command` (a command line: kept from your own config, never
-  imported), SQLite and
+  imported), `unconfined` (whether agents run confined is a fact of each
+  machine: kept from your own config), SQLite and
   Unix-socket profiles, approved policies, the audit log and console flags.
   `--no-pii` leaves the rule sets out.
 - **Import:** a strict format (unknown fields, newer formats and invalid
@@ -322,6 +324,8 @@ bound refuses.
   refused naming the key (`blocked by company policy:
   locksql.bounds.hosts does not allow db.other.com (profile dev: host +
   db.other.com)`).
+- `[family] require_confined_agent = true` refuses every agent that does
+  not run confined, whatever a profile's `unconfined` says.
 - `[family] vault = { required = true }` acts as `credentials = ["vault"]`
   on every network profile, cited as `family.vault.required`.
 - A managed mask takes its mode over a rule of the same column in the rule

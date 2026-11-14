@@ -60,7 +60,8 @@ func (k kpolicy) Profile() kconsole.Profile {
 	}
 	return kconsole.Profile{Name: pr.Name, Production: pr.Production, Where: where, Host: pr.Host, Port: pr.Port,
 		User: pr.User, Credentials: pr.Credentials, VaultPath: pr.VaultPath, CredentialsTTL: pr.CredentialsTTL,
-		IdleTimeout: noIdleEnd, MaxSession: pr.Limits.MaxSession, TicketLimits: pr.Limits.TicketLimits()}
+		IdleTimeout: noIdleEnd, MaxSession: pr.Limits.MaxSession, TicketLimits: pr.Limits.TicketLimits(),
+		Unconfined: pr.Unconfined}
 }
 
 // noFingerFields is the audit text of a refusal for want of a finger; it

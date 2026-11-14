@@ -502,6 +502,26 @@ func TestDiffWriteFunctions(t *testing.T) {
 	}
 }
 
+// unconfined (lockkit#133): switching it on loosens, off tightens; it is
+// part of the fingerprint, and false leaves existing fingerprints as they
+// were.
+func TestDiffUnconfined(t *testing.T) {
+	off, on := fullPolicy(), fullPolicy()
+	on.Profile.Unconfined = true
+	if ch := Diff(off, on); len(ch) != 1 || ch[0].Field != "unconfined" || !ch[0].Loosens || ch[0].Old != "false" || ch[0].New != "true" {
+		t.Errorf("off -> on: %+v", ch)
+	}
+	if ch := Diff(on, off); len(ch) != 1 || ch[0].Field != "unconfined" || ch[0].Loosens {
+		t.Errorf("on -> off: %+v", ch)
+	}
+	if Fingerprint(on) == Fingerprint(off) {
+		t.Error("unconfined is not part of the fingerprint")
+	}
+	if b, err := json.Marshal(off.Profile); err != nil || strings.Contains(string(b), "unconfined") {
+		t.Errorf("unconfined = false is written: %s %v", b, err)
+	}
+}
+
 func TestDiffProxyCommand(t *testing.T) {
 	with := func(argv ...string) Policy {
 		p := fullPolicy()

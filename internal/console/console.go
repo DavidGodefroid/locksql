@@ -172,6 +172,9 @@ type ServerConfig struct {
 	// tightens the policy in force.
 	Managed     *managed.File
 	LoadManaged func(context.Context) (*managed.File, error)
+	// RuntimeGIDs are the groups owning a container runtime socket: a peer
+	// holding one is unconfined, whatever its hello reports (lockkit#133).
+	RuntimeGIDs []int
 }
 
 // plan is a one-shot plan awaiting query.run.
@@ -388,7 +391,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		Session: cfg.Session, Audit: cfg.Audit, IO: cfg.IO, Approver: cfg.Approver, Level: level, Boundary: cfg.Boundary,
 		Now: cfg.Now, AllowUnmask: cfg.AllowUnmask, ShowResults: cfg.ShowResults && level == 0,
 		Quantum: cfg.Quantum, PeerAllowed: cfg.PeerAllowed, Refused: cfg.Refused, Hub: cfg.Hub,
-		Managed: cfg.Managed, LoadManaged: cfg.LoadManaged,
+		Managed: cfg.Managed, LoadManaged: cfg.LoadManaged, RuntimeGIDs: cfg.RuntimeGIDs,
 	}
 	if refuseProd := cfg.RefuseProduction; refuseProd != nil {
 		// What a production profile is refused at start-up is refused when

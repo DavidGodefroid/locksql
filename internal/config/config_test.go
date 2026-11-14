@@ -339,6 +339,17 @@ func TestParseProfilesValidates(t *testing.T) {
 	}
 }
 
+// unconfined = true is read into the profile; absent, it is false.
+func TestParseUnconfined(t *testing.T) {
+	ps, err := ParseProfiles([]byte("[profiles.dev]\nengine = \"postgres\"\nhost = \"h\"\nunconfined = true\n\n[profiles.uat]\nengine = \"postgres\"\nhost = \"h\"\n"), "x.toml", "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ps["dev"].Unconfined || ps["uat"].Unconfined {
+		t.Errorf("dev %v, uat %v", ps["dev"].Unconfined, ps["uat"].Unconfined)
+	}
+}
+
 func TestUserConfigPath(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
