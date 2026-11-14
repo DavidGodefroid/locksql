@@ -56,7 +56,7 @@
 
 <section class="hero" aria-labelledby="hero-title">
   <div class="hero-text">
-    <p class="eyebrow"><span class="badge">v0.17 pre-release</span>A Lock of the Lock&nbsp;Family · open&nbsp;source · Apache&nbsp;2.0</p>
+    <p class="eyebrow"><span class="badge">v0.x pre-release</span>A Lock of the Lock&nbsp;Family · open&nbsp;source · Apache&nbsp;2.0</p>
     <h1 id="hero-title">Your agent writes the query. <span class="key">You hold the key.</span></h1>
     <p class="lead">Any AI agent can query MariaDB, MySQL, PostgreSQL or SQLite through locksql. Personal data comes back masked, and connections and writes wait for you.</p>
     <div class="install">
@@ -155,7 +155,7 @@
 <section aria-labelledby="highlights">
   <h2 id="highlights">Highlights</h2>
   <ul class="cards">
-    <li><span class="icon" aria-hidden="true">🔑</span><h3>One key holder</h3><p>Credentials are typed at console start, or read from HashiCorp Vault. Never in argv, env, files, logs, the socket or error messages.</p></li>
+    <li><span class="icon" aria-hidden="true">🔑</span><h3>One key holder</h3><p>Credentials are typed at console start, read from the OS keychain, or fetched from HashiCorp Vault. The database password is never in argv, env, files, logs, the socket or error messages; a Vault token goes only to the <code>vault</code> child’s environment.</p></li>
     <li><span class="icon" aria-hidden="true">👤</span><h3>Human in the loop</h3><p>Each statement carries its plan, cost and PII footprint. Writes, schema changes and unmasked reads run only once you approve them.</p></li>
     <li><span class="icon" aria-hidden="true">🧱</span><h3>Fail closed</h3><p>A dialect-aware classifier refuses anything it cannot classify with certainty. Reads are parsed in full; unknown syntax is refused.</p></li>
     <li><span class="icon" aria-hidden="true">🕶️</span><h3>PII masking</h3><p>Every output column is traced to its source through aliases, CTEs, unions and joins, then masked (<code>redact</code> by default, <code>partial</code> or <code>email</code>).</p></li>
@@ -232,7 +232,7 @@ lox add locksql</code></pre></li>
       </nav>
     </div>
     <div class="wrap footer-bottom">
-      <p>Pre-release (v0.17.x). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (v0.x). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
       <p><a href="https://lockfamily.dev">lockfamily.dev</a> · <a href="https://github.com/DavidGodefroid/lockfamily">the family on GitHub</a></p>
     </div>
   </footer>

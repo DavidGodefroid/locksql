@@ -105,7 +105,7 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 |---|---|---|
 | `engine` | required | `mariadb`, `mysql`, `postgres`, `sqlite` |
 | `host`, `port` | required host; port 3306 / 5432 | a host starting with `/` is a Unix socket (MariaDB/MySQL) |
-| `path` | required for sqlite | relative to the project root; the file is never created |
+| `path` | required for sqlite | relative to the project root (for a profile of the user config, to the user config directory); the file is never created |
 | `user` | asked at start | with `credentials = "vault"`: the secret's `username`; set it only for a secret without one |
 | `database` | none | the only database served (and scanned for PII); empty: every database the account can see, chosen per query with `--db` |
 | `credentials` | `ask` | `keychain` (not in a container) offers to save the secret after the first successful login; `locksql forget --profile P` removes it. `vault` reads the login from `vault_path` at every connection |
@@ -132,7 +132,12 @@ credentials = "ask"                 # passphrase or SSH password; default: the p
 | `ssh.host`, `ssh.port`, `ssh.user` | required host and user; port 22 | the bastion; not with sqlite or a Unix socket `host` |
 | `ssh.auth` | required | `key`, `agent` (`SSH_AUTH_SOCK` of the console) or `password` |
 | `ssh.key` | required with `auth = "key"` | private key of the console account, mode 0600 |
+| `tls` | `prefer` | the driver's TLS mode, libpq's names (`disable`, `prefer`, `require`, `verify-ca`, `verify-full`) ([TLS to the database](usage.md#tls-to-the-database)) |
+| `tls_server_name` | none | the name `verify-full` checks instead of `host` |
 | `tls_ca`, `tls_cert`, `tls_key` | none | PEM files read by the console account ([TLS to the database](usage.md#tls-to-the-database)) |
+| `write_functions` | `denylist` | `allowlist` applies the read function allowlist to writes ([Functions in writes](usage.md#functions-in-writes-write_functions)); back to `denylist` is a loosening |
+| `auto` | reads `auto`, the rest `ask` | how `lox run` decides this profile's tickets: a preset (`auto = "full-auto"`) or a table of `connect`, `read`, `write`, `ddl`, `unmask` set to `auto`, `ask` or `deny` ([Auto mode per profile](usage.md#auto-mode-per-profile)); a move toward `auto` is a loosening |
+| `limits.grant_max_duration`, `limits.grant_max_statements`, `limits.grant_max_rows`, `limits.grant_max_bytes` | `1h`, 200, 10 000, 1 MiB | the most a grant may ask for; `grant_max_duration = "0"` turns grants off ([Grants](usage.md#grants)) |
 | `ssh.credentials` | the profile's `credentials` (`ask` when that is `vault`) | `ask` or `keychain` for the passphrase or SSH password; `locksql forget --profile P` removes it too |
 | `proxy_command` | none | argv run without a shell, as the console account, once per connection; its stdin and stdout carry it (`docker exec`, `kubectl exec`, `ssh ... socat`). Not with `ssh`, sqlite or a Unix socket `host`; any change is a loosening |
 
@@ -274,9 +279,16 @@ engine = "postgres"
 host = "erp.db.acme.internal"
 database = "erp"
 production = true
+tls = "verify-full"
+auto = { ddl = "deny" }
 credentials = "vault"
 vault_path = "database/creds/erp-ro"
 ```
+
+A managed profile must itself be within the bounds: a key it and the managed
+defaults leave unset takes the built-in default (`tls = "prefer"`, `auto.ddl = "ask"`), which a
+stricter bound refuses, so the profile above sets `tls` and `auto` as the
+bounds require.
 
 The precedence is: the hard-coded floor > the managed bounds and profiles >
 the project file > the user file > the managed defaults > the built-in

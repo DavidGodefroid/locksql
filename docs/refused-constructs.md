@@ -10,8 +10,11 @@ issues, and worked top-down.
 
 1. A user runs `locksql stats --export > refusals.json` as the console
    account, reads the file, and attaches it to an issue labelled
-   `refusal-stats`. The export holds counts, refusal codes, engines and
-   statement shapes only: no literal, identifier, comment or message.
+   `refusal-stats`. The export holds the locksql version, a fixed note, the
+   refusal and skipped-record counts, refusal codes, engines, statement
+   shapes and closed-vocabulary tokens (keywords, known function names,
+   punctuation; any other word becomes `id`): no literal, identifier,
+   comment or message.
 2. A maintainer adds the report's `by_construct` and `shapes` counts to the
    table below, one row per construct and engine (a construct is a code and
    the token the check stopped at, or a shape when the token says too

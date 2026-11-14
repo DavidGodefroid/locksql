@@ -1,7 +1,8 @@
 ## Database access (locksql)
 
-Agents get database access only through locksql: every query is approved by the human
-in lockhub; the `locksql console`, a separate process that `lox run` starts, holds the credentials and
+Agents get database access only through locksql: every query goes through lockhub as a ticket,
+which `lox run` decides by the profile's rules (by default reads run on their own, while writes,
+DDL and unmasked reads are asked of the human); the `locksql console`, a separate process that `lox run` starts, holds the credentials and
 the only database connection. Use it for debugging and finding facts, one targeted question at a time, and only on the
 user's explicit request. If a database fact would merely help, propose the query and wait.
 
@@ -16,11 +17,11 @@ the CLI and MCP reach the lock that `lox run` runs for the workspace, found thro
 3. `locksql_list_tables` / `locksql_describe` if needed (no approval).
 4. `locksql_plan` with one narrow statement: indexed predicates, an explicit `LIMIT`, no comments, no
    variables. Use `unmask` only if the user asked to see personal data in clear; it is refused unless
-   the human allowed it in the console (`--allow-unmask` or `:unmask`).
+   the human allowed it in the console (`:unmask`).
    Pass `intent`: one line saying why, in the user's terms (the human reads it on the approval
    screen without the chat).
-5. Show the user the target, the SQL, the EXPLAIN summary and the verdict, and that the human
-   approves it in lockhub (`lox approve`). When the statement filters on a PII column the verdict is decided on the
+5. Show the user the target, the SQL, the EXPLAIN summary and the verdict, and that `lox run`
+   decides it (a read usually by rule; a write, DDL or unmasked read is asked of the human). When the statement filters on a PII column the verdict is decided on the
    console at run time and may still be refused there.
 6. `locksql_run` with the plan id, or `locksql run --profile P PLAN_ID`: it answers pending with a
    ticket. Do not retry: end your turn. The decision comes back to you by itself, as a new turn, when
@@ -29,22 +30,23 @@ the CLI and MCP reach the lock that `lox run` runs for the workspace, found thro
    denied, stop. Never ask the user to tell you it was approved. If your host delivers no decision,
    `locksql run --profile P TICKET` shows the ticket's state.
    For several reads of the same few tables, ask once for a grant instead (`locksql_grant` with the
-   tables and an `intent`, CLI `locksql grant --profile P --db D TABLE...`): it answers pending with
-   a ticket; end your turn the same way, and when told it is approved, activate it (`locksql_grant`
-   with `ticket`, CLI `locksql grant --profile P TICKET`). While it lasts, `locksql_run` runs your reads of those tables at once, within its
+   tables and an `intent`): it answers pending with a ticket; end your turn the same way, and when
+   told it is approved, activate it (`locksql_grant` with `ticket`). A grant needs a lea agent
+   (`LEA_AGENT_TOKEN`); elsewhere, plan and run each query. The CLI `locksql grant` does not reach
+   the console through the host launcher: use the MCP tool. While it lasts, `locksql_run` runs your reads of those tables at once, within its
    budget; writes, unmask and filters, groups or aggregates on PII columns still get a ticket.
 7. Report the answer, quoting rows as returned; masked values stay masked.
 
 What a statement may do (the console parses it and resolves every column to its source):
 
-- Only `SELECT`, `WITH ... SELECT` and `EXPLAIN SELECT`; functions from an allowlist; no system
-  catalogs (use `locksql_describe`).
+- At tier `read` (the default): only `SELECT`, `WITH ... SELECT` and `EXPLAIN SELECT`; functions
+  from an allowlist; no system catalogs (use `locksql_describe`).
 - PII columns: select them plainly (masked), count or aggregate them, join with `=` to another PII
   column, filter with `=`, `IN (...)` or `IS NULL` against literals, combined with `AND`. No
   functions, `LIKE`, ranges, negations (`<>`, `NOT IN`, `IS NOT NULL`, `NOT`/`OR`) or `ORDER BY` on
   them.
   Keep filters, groups and aggregates on them broad: when one covers fewer than k rows
-  (k-anonymity), the human is warned before approving and may deny the run.
+  (k-anonymity), the ticket carries a warning, and a human who sees it may deny the run.
 - Database errors come back generic; the human sees the details in the console.
 
 Refusal codes. A refusal reads `refused [CODE]: message` (in JSON and MCP structured content:

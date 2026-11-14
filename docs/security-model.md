@@ -9,8 +9,8 @@ weaknesses as described in [SECURITY.md](../SECURITY.md).
 - **Assets:** database credentials; the data (in particular personal data);
   the availability of the database server; the integrity of the data and of
   the policy that governs access.
-- **The human** starts `locksql console` with `lox run`, answers it in a
-  terminal (`lox attach`) and is trusted.
+- **The human** starts `locksql console` with `lox run`, answers its
+  questions and decides tickets in `lox run`'s terminal, and is trusted.
 - **The agent** (and anything that can steer it, such as text stored in the
   database or in files it reads) is *not* trusted. It runs the client
   commands and the MCP server.
@@ -49,25 +49,25 @@ root. Access to the Docker daemon is such a way: an agent that can run
 4. **Fail closed.** What cannot be classified with certainty is refused.
 5. **Defence in depth.** Server-side read-only and timeouts, a client-side
    classifier, a full parse and column analysis of reads, a privilege audit,
-   an EXPLAIN gate, result caps, then human approval, informed by
-   k-anonymity counts.
+   an EXPLAIN gate, result caps, then lockhub's decision (the human's, or
+   an auto rule of the profile), informed by k-anonymity counts.
 6. **Results are data, not instructions.**
 
 ## Threats and mitigations
 
 | Threat | Mitigation |
 |---|---|
-| The agent runs a query the human did not approve | The console is the only connection holder. `query.run` needs a one-shot plan id (valid 10 minutes), then answers pending with a ticket: the statement runs only once lockhub's signed decision approves that ticket, or, for a read, once such a decision approved a grant that covers it. There is no approval without a signed human decision, and no socket method that approves: a grant is one decision covering a bounded scope. |
+| The agent runs a query the human did not approve | The console is the only connection holder. `query.run` needs a one-shot plan id (valid 10 minutes), then answers pending with a ticket: the statement runs only once lockhub's signed decision approves that ticket, or, for a read, once such a decision approved a grant that covers it. Every run needs lockhub's signed decision. The human takes it, or an auto rule of the profile takes it in `lox run`: by default reads are approved automatically, while writes, DDL, unmasked results and grants are asked. No socket method approves: a grant is one decision covering a bounded scope. |
 | A grant is used to read more than the human approved | A grant's scope (database, tables, duration, budget) is the plan its ticket binds: the plan hash is the hash of the scope's canonical JSON, the ticket is risk `grant` and `never_auto`, and the console verifies the hub's signed decision before activating it. It covers only masked reads of the agent that asked for it, whose every table (CTEs and subqueries included) is in the scope, while its time lasts. Each run costs a statement before it runs and is capped at the rows and bytes left, which are charged after it: usage never passes the budget, so an export rebuilt piece by piece is bounded by it, and splitting it over several grants takes several human decisions. Writes, DDL, `unmask` and any read that filters, groups or aggregates on a PII column always get a ticket; the latter whatever its k-anonymity counts and budget say, so that "ran at once" versus "ticket" tells the agent nothing of a count. `:revoke`, the end of the session, any change of the approved policy (a tightening too, but for added mask rules: a covered run is always planned under the rules in force), or the end of its time end a grant; grants do not survive a restart. Every activation, covered run and end is audited with the grant id and the hub's signature of its decision. |
 | The agent loosens its own policy | The socket protocol has no method that loosens policy. Config and PII file edits are detected by a policy fingerprint diff; a loosening is held until the human confirms it. The approved policy is stored outside the repository. |
 | Credential leak | Secrets exist only in console memory or the OS keychain (the console account's, in separated mode). They never go through argv, environment, files, logs, the socket or error messages (errors are sanitised). Config keys named like secrets and DSNs with passwords are refused. Core dumps are disabled (`RLIMIT_CORE=0`, and `PR_SET_DUMPABLE=0` on Linux); when that fails, the console warns, and refuses to open a production profile. `credentials_ttl` bounds how long one secret stays in use; `limits.idle_timeout` closes an idle connection, its tunnel and its secret (the next request asks a connect ticket, the secret typed in `lox run` and sealed to a one-use key of the console), and `limits.max_session` ends a long session (raising either is a loosening). `doctor` flags a secret left in the agent's keychain. With `credentials = "vault"` the login is read from Vault by the console account at every connection and kept in memory only; the Vault token is asked of the human at start, kept in console memory for the session and handed to the `vault` CLI in its environment only (never argv or disk), and `doctor` fails when the agent's account holds one. |
 | Statement smuggling | The classifier refuses several statements, comments, variables, bind parameters and unbalanced quotes, and classifies by keywords outside literals per dialect. Reads are limited to `SELECT`, `WITH ... SELECT` and `EXPLAIN SELECT` and parsed in full by a fail-closed parser: unknown syntax is refused. Multi-statements are off in every driver; PostgreSQL uses the extended protocol only. Tier `read` is also enforced by a read-only session and transaction on the server. |
 | Dangerous functions and statements | Reads may call only allowlisted functions (`internal/sqlast/funcs.go`); schema-qualified (possibly user-defined) functions and system schemas and relations are refused, and so, on PostgreSQL, is a call to an allowlisted name, or an operator, that a function or operator outside `pg_catalog` (not owned by an extension) also bears, since the server would pick a user-defined overload with a closer argument type; the lookup runs when the statement is planned and again just before it runs. At every tier, statements and constructs on a denylist are refused: file and OS access, engine escape hatches (`ATTACH`, `load_extension`, `dblink`), SQLite raw storage tables (`sqlite_dbpage`, `dbstat`), sleeps, benchmarks, advisory locks, `FOR UPDATE`, session tampering (`SET ROLE`, `set_config`, guarded `SET` targets), statements carrying credentials, server, replication, backup and statistics control functions, and DDL that reaches the server's filesystem, another server or native code (`DATA DIRECTORY`, remote storage engines, foreign servers and tables, tablespaces, `LANGUAGE C` and untrusted languages, SQLite file modules). Above tier `read` this denylist is the only function check, and it is best-effort: user-defined functions and extensions can be named anything (see the limitations); the privilege audit and the human approval are the controls there. A profile with `write_functions = "allowlist"` applies the read allowlist to every function call in `INSERT`, `REPLACE`, `UPDATE` and `DELETE` and refuses `CALL`, `MERGE` and the writes the parser does not read; turning it off is a policy loosening. On PostgreSQL a read's transaction is rolled back, so a `SET` smuggled through a function it calls does not outlive the statement. |
 | Server overload | READ statements need `LIMIT n <= max_rows`; `EXPLAIN` estimates the rows examined and refuses heavy plans, and `explain_cost_refuse` caps the engine's total cost (not on SQLite); k-anonymity counts are weighed too; under a PII filter the verdict is decided at run time: a REFUSE verdict is shown to the human on the console before the agent is told, and the agent only learns that the weight check refused; a server-side timeout plus a client-side cancel (on MySQL the server-side `max_execution_time` covers SELECT only: a write or DDL is ended by the client-side `KILL QUERY` at the deadline); one request at a time. A recursive CTE gets a WARN on PostgreSQL and SQLite, whose planners mark it and can only guess how often it iterates. The parser bounds the bytes a statement can build from literals and size functions (65 536 per value, at most 64 column-width inputs, through every CTE and derived-table layer); `string_agg`-like aggregates over large stored columns remain bounded only by `statement_timeout`. |
-| PII exposure | Column rules proposed from the schema at every start; per-rule mask modes (`redact` by default); quasi-identifiers proposed apart and masked only on acceptance; value detectors with checksums; unmasking is off unless the human allows it in the console (`--allow-unmask` at start, `:unmask` while it runs), then per query, shown in red and decided in lockhub. A profile that names a `database` serves that database only, the one its scan covers, so another database the account can see is never read without rules. |
+| PII exposure | Column rules proposed from the schema at every start; per-rule mask modes (`redact` by default); quasi-identifiers proposed apart and masked only on acceptance; value detectors with checksums; unmasking is off unless the human allows it in the console (`:unmask` while it runs; `lox run` does not pass `--allow-unmask`), then per query, shown in red and decided in lockhub (asked of the human unless the approved policy sets `auto.unmask = "auto"`). A profile that names a `database` serves that database only, the one its scan covers, so another database the account can see is never read without rules. |
 | Alias or expression bypass | Every output column of a read is resolved to its base source columns through aliases, functions, subqueries, CTEs (recursive ones by fixpoint), set operations, joins and `*`, and masked on that source, not on its label. Expressions and functions over PII columns are refused; aggregates other than `COUNT` are redacted (`MIN` and `MAX` included: which cell they return depends on how the values order). The result's column count and labels must match the analysis or the result is dropped; the engine's origin metadata is a second check. |
 | Predicate oracles | A PII column may only be compared for equality with a literal (`=`, `IN (literals)`, `IS NULL`) in `WHERE`/`HAVING`, or joined with `=` (also `IN (subquery)`, `USING`, `NATURAL`) to another PII column: a join with an unmasked column would copy its values where no mask applies. These atoms must be positive and reached through `AND` only: a PII atom under `NOT`, `OR` or `XOR`, and `<>`, `!=`, `NOT IN`, `IS NOT NULL`, `IS DISTINCT FROM` on a PII column, would select the complement of what the k-anonymity check counts and are refused. A scalar subquery returning a PII value cannot be a filter operand. A `UNION`, `INTERSECT` or `EXCEPT` between a PII column and a non-PII arm (a literal, an expression, an unmasked column) is refused, because `INTERSECT`, `EXCEPT` and the duplicate removal of `UNION` are equality tests no k-anonymity check counts; `UNION ALL` compares nothing and stays allowed, but `DISTINCT`, an aggregate's `DISTINCT` or `GROUP BY` over a column it mixed is refused for the same reason. `LIKE`, ranges, functions over it, `ORDER BY`, window `PARTITION BY`/`ORDER BY`, `FILTER`, `DISTINCT ON` and constant comparisons in `JOIN ... ON` are refused, so a query cannot compare it character by character with generated values. |
-| Inference through aggregates and filters | A filter, grouping, duplicate removal (`DISTINCT`) or aggregate on a PII column runs console-built `COUNT` queries (from the statement's own `FROM`, `WHERE`, `GROUP BY` and `HAVING`, shown on the approval screen) before the ticket goes to lockhub. Fewer than `k_anonymity` rows (default 5, production 10) puts a warning on the ticket: the statement could single out one person or reveal a masked value by cross-checking. Since v0.5.2 it no longer refuses: the human decides in lockhub, and the warning goes to the ticket and to the audit records' `warnings`. This is a decision aid, not a guarantee (see the limitations). The agent learns nothing of the counts: no refusal code and the same answer, whether a count is under k or not. Row estimates are hidden from the agent, a filter on a PII column has its weight verdict decided at run time on the console (`query.plan` answers `OK`; a REFUSE verdict is shown to the human on the console before the agent is told, without its reasons), and `EXPLAIN` is refused for such statements, since the planner's figures would answer the same question. |
+| Inference through aggregates and filters | A filter, grouping, duplicate removal (`DISTINCT`) or aggregate on a PII column runs console-built `COUNT` queries (from the statement's own `FROM`, `WHERE`, `GROUP BY` and `HAVING`, shown on the approval screen) before the ticket goes to lockhub. Fewer than `k_anonymity` rows (default 5, production 10) puts a warning on the ticket: the statement could single out one person or reveal a masked value by cross-checking. Since v0.5.2 it no longer refuses: the ticket is decided in lockhub, and the warning goes to the ticket and to the audit records' `warnings`. Under the default `auto.read = "auto"`, `lox run` approves such a read without asking, so no human sees the warning before it runs: set `auto.read = "ask"`, or run `lox run --manual`, if a human must see these warnings. This is a decision aid, not a guarantee (see the limitations). The agent learns nothing of the counts: no refusal code and the same answer, whether a count is under k or not. Row estimates are hidden from the agent, a filter on a PII column has its weight verdict decided at run time on the console (`query.plan` answers `OK`; a REFUSE verdict is shown to the human on the console before the agent is told, without its reasons), and `EXPLAIN` is refused for such statements, since the planner's figures would answer the same question. |
 | Inference by equality probing | Placeholders (`'${name}'`) and cell references (`'${rN.R.C}'`) are not supported: a statement holding one is refused at plan time (`E_PLACEHOLDER`), before it is analysed, since requests are decided in lockhub, where no value is typed. Masked cells come back as plain `<redacted>`, and the console keeps no value of a result. The console warns (approval screen and audit `warnings`, never a refusal) when the agent wrote a clear value in its statement. |
 | Timing and error channels | Clients get a generic failure message, never the server's text: it is shown on the console and kept in the audit log, with the values it quotes redacted when the session masks (a mask rule or a detector); without masking the console and the audit log hold it as the server wrote it, secrets aside. A statement timeout answers `<operation> timed out (limits.statement_timeout)`. No timings are returned, and `query.run` answers on a 250 ms quantum, success or failure, once the statement is approved; refusals before approval are not quantized, except a weight refusal under a PII filter, which waits for the human's decision in lockhub. A refusal's structured form (code, retry rule, hint, span) is written by locksql: its span points into the agent's own statement and names a keyword, an operator or a name, never a literal, the database's text or a substituted value; a weight refusal under a PII filter carries its code and the code's hint only. |
 | Statement text | Some server views hold the text of past statements, literals included: `pg_stat_statements` and `pg_stat_activity` on PostgreSQL; `information_schema.PROCESSLIST`, every `performance_schema` and `sys` relation (`threads`, `events_statements_*`, `session`, `statement_analysis`, ...), `mysql.general_log` and `mysql.slow_log` on MySQL and MariaDB. The read path refuses every system schema, these included; the write path (`INSERT ... SELECT`, ...) refuses these names while mask rules exist. |
@@ -76,7 +76,7 @@ root. Access to the Docker daemon is such a way: an agent that can run
 | The agent mimics the human | In separated mode the console refuses to start as any account but `service_user`, when that account may also connect as a client, when started through `sudo`/`su` from the login session (`loginuid`) of an account that may reach the console, or when its terminal belongs to such an account (an unknown uid counts as one); a `machinectl shell` session is refused unless every running `machinectl shell` process belongs to an account outside the client group, and an SSH login from this machine is refused, since both relay the caller's terminal while naming the console account; the session or terminal of an account outside the client group, which the agent's account cannot read, is accepted, so that an administrator can hand the console off. `locksql console` run from the agent's account does not hand off: it prints the command for the console account's own session. An X11 session, where any client can read and inject input, is refused on production profiles and with `x11 = "refuse"`, and warned about otherwise. The binary and `system.toml` are root-owned; `doctor` fails on password-less `sudo` for the agent's account. |
 | Hub mode: a ticket run by another agent, or on other rows | A plan and its ticket are bound to the client's uid, the hash of the requesting agent's lea token, the policy fingerprint and the plan hash; another token is refused (`CodeWrongRequester`). **Residual**: agents of one account can read each other's token, so this catches mistakes, not a hostile agent of the same workspace. A write's run counts the rows it changed in its own transaction and rolls back past the bound shown on the ticket (stale, new ticket), and checks the plan hash before and after the statement in that transaction; **residual**: a `CREATE OR REPLACE FUNCTION` between the check after the statement and the `COMMIT` goes unseen (a very short window). |
 | Approval spoofing through the socket | A request is approved only by lockhub's signed decision, and the console's own prompts (`:review`, `:unmask`) are answered only at its terminal; no socket method approves, and no socket method loosens policy. The approval screen names the requesting uid and pid as the kernel reports them, and the process by its executable path when the kernel lets the console read it (a process of its own account), else by its self-reported name, labelled as such. |
-| A client stuck or killed during an approval | The approval is abandoned or times out after 5 minutes; the socket keeps serving. |
+| A client stuck or killed during an approval | `query.run` waits at most 2 s for an auto decision, then answers `pending` with a ticket, which the client runs later. A ticket expires on its risk's TTL (1 h for a read, 24 h for a write, 4 h for a grant); the console's own prompts time out after 5 minutes. The socket keeps serving. |
 | A fake console | In separated mode clients check through peer credentials that the socket is served by `service_user`, and the socket directory is owned by it. |
 | Another local user | The socket directory is `service_user:client_group` mode 2710 on Linux (0710 on macOS), the socket 0660, and each peer is checked with `SO_PEERCRED` (Linux) or `LOCAL_PEERCRED` (macOS): the console's own uid, a member of `client_group` or an `allowed_uids` entry. |
 
@@ -100,11 +100,13 @@ root. Access to the Docker daemon is such a way: an agent that can run
 ## Unmasked output
 
 Unmasked output is off unless the human allows it in the console:
-`--allow-unmask` at start, or `:unmask` while it runs. Both are
+`:unmask` while it runs (`--allow-unmask` sets it at start, but `lox run`
+does not pass it, and desktop security level 2 refuses it). Both are
 console-only: no client or config file can turn it on, so an agent cannot
 ask for raw PII values by itself. While it is off, an unmask request is
-refused before parsing and audited; while it is on, each unmasked query is
-still decided by the human in lockhub, and its clear result
+refused before parsing and audited; while it is on, each unmasked query
+still needs a ticket, asked of the human unless the approved policy sets
+`auto.unmask = "auto"` (e.g. `auto = "full-auto"`), and its clear result
 is printed in the console, never in the audit log.
 
 ## Console switches: clear results, unmasked output
@@ -112,9 +114,10 @@ is printed in the console, never in the audit log.
 Two behaviours of the console switch while it runs, from its own keyboard
 only: Ctrl-O (or `:results`) prints the clear result of each masked query
 in the console, and `:unmask` allows or stops unmasked output.
-`--show-results` and `--allow-unmask` only set the starting state. There is
-no approval without a signed human decision: every request is decided in
-lockhub, and a grant is one such decision covering a bounded read scope. No client,
+`--show-results` and `--allow-unmask` only set the starting state (`lox
+run` passes neither). Every request needs lockhub's signed decision, taken
+by the human or by an auto rule of the profile in `lox run`, and a grant is
+one such decision covering a bounded read scope. No client,
 config file or environment variable can set any of them: the keys and
 commands are read from the console's terminal, which the separated setup
 keeps away from the agent, and no socket method or config field reaches
@@ -129,12 +132,12 @@ The transitions:
 |---|---|---|---|---|---|
 | Clear results | hidden → shown | Ctrl-O, `:results` | none (red warning on production); refused at levels 1 and 2 (nothing audited) | `results` / `shown` | the next run |
 | Clear results | shown → hidden | Ctrl-O, `:results` | none | `results` / `hidden` | the next run |
-| Unmasked output | off → allowed | `:unmask` only, never a single key | `y` to a prompt (anything else, or no answer within 5 minutes, leaves it off, unaudited) | `unmask` / `allowed` | the next `query.plan` |
+| Unmasked output | off → allowed | `:unmask` only, never a single key | `y` to a prompt, the profile name on production (anything else, or no answer within 5 minutes, leaves it off, unaudited); `--allow-unmask` is refused at level 2 | `unmask` / `allowed` | the next `query.plan` |
 | Unmasked output | allowed → off | `:unmask` | none | `unmask` / `off` | at once: an open unmask plan is refused at `query.run` |
 
 Tightening transitions (results hidden, unmask off) need no confirmation.
 Allowing unmasked output is the one that widens what a client may ask for,
-so it is a typed command confirmed with `y` at the console's terminal (the
+so it is a typed command confirmed with `y` (the profile name on production) at the console's terminal (the
 console's own decision, not a request lockhub decides), never a key that
 an accidental press could trigger. Turning on the clear results is a single
 key because it does not widen what reaches the agent: the clear results are
@@ -150,7 +153,8 @@ They are refused at desktop security levels 1 and 2 (the console runs in a
 desktop terminal of the console account): that window is on the agent's
 desktop, so whatever it prints in clear reaches the agent's account, which
 would hand it the very data masking keeps from it. `--show-results` is then
-a configuration error raised before any prompt or file write, and Ctrl-O or
+a configuration error raised before any prompt or file write (at level 2,
+so is `--allow-unmask`), and Ctrl-O or
 `:results` leave the results masked, with a message and no audit record.
 
 ## Audit
@@ -159,7 +163,9 @@ The console appends one JSONL record per event (login, policy change,
 refusal, ticket (pending), approval, denial, timeout, abandoned approval, run,
 catalog read, mode, results and unmask switch, logout) to
 `<user state dir>/locksql/audit.log`, mode 0600.
-Records contain the SQL and metadata, never secrets and never row data. The
+Records contain the SQL and metadata, never secrets and no result rows. A
+server error is kept as written when the session masks nothing, and may
+quote a stored value. The
 approval of a statement is written before anything runs,
 and a `run` record follows with the outcome (`decision` `ok` or `failed`,
 rows, affected, duration, error): a console stopped mid-run still leaves
@@ -176,8 +182,11 @@ the agent's statement).
 
 The log is protected from the agent by the uid separation (the console
 account's state directory is mode 0700), not from the console account or
-root: the file is opened `O_APPEND` with no hash chain, so it is
-append-only by convention, not tamper-evident. On Linux, `chattr +a` makes
+root: the file is opened `O_APPEND`, and each record carries `prev_hash`.
+`lox audit verify --data DIR --hub-key-file FILE --lock INSTANCE=PATH`
+detects an edited, removed, inserted or reordered record, and catches a cut
+tail against a kept anchor (`--anchors FILE`). The console account or root
+can still rewrite the whole chain. On Linux, `chattr +a` makes
 it append-only for the console account too.
 
 ## Out of scope and limitations
@@ -319,7 +328,7 @@ it append-only for the console account too.
   formatting of stored data (`jsonb_pretty`) can still make the server
   compute and send a value of hundreds of megabytes, bounded by
   `statement_timeout`. The console keeps at most 64 KiB of each cell
-  (`cut_cells` tells the agent which were cut): PostgreSQL columns are cut
+  (`cut_cells` tells the agent how many were cut): PostgreSQL columns are cut
   while they are read off the wire and the rest is dropped unread into
   memory; MariaDB and MySQL rows are read whole by the driver, up to the
   server's `max_allowed_packet`, and cut before they are copied; SQLite
@@ -339,7 +348,8 @@ it append-only for the console account too.
 - **Probing under the threshold.** The clear-value warning does not
   refuse: an agent that writes a value it knows in an equality filter learns
   whether it matches, under the k-anonymity warning; the human reading the
-  ticket is the control. The unmasked columns of a row the agent targets can identify it, and free text without a
+  ticket is the control when reads are asked (`auto.read = "ask"` or `lox
+  run --manual`): under the default `auto.read = "auto"` no human reads it. The unmasked columns of a row the agent targets can identify it, and free text without a
   detector is not masked.
 - **Duplicate removal on chosen rows.** `DISTINCT` or `COUNT(DISTINCT ...)`
   over a PII column compares its rows with each other, so on rows the agent
@@ -348,10 +358,12 @@ it append-only for the console account too.
   A set of at least `k` rows passes, and an agent that already knows how
   the other values of the set compare still learns whether the chosen
   subjects share theirs; the human reading the filter on the approval
-  screen is the control.
+  screen is the control, when reads are asked.
 - **k-anonymity is a decision aid, not a guarantee.** Since v0.5.2 a count
-  under `k` refuses nothing: it warns the human on the ticket, who may
-  approve anyway. A human who approves a warned statement lets the agent
+  under `k` refuses nothing: it puts a warning on the ticket, and the human
+  may approve anyway. Under the default `auto.read = "auto"`, `lox run`
+  approves a warned read without asking: set `auto.read = "ask"`, or run
+  `lox run --manual`, for a human to see the warnings first. A human who approves a warned statement lets the agent
   single out one person: whether an email is present, one customer's total. The structural
   rules (equality only on PII, no `LIKE`, range or negation, masking, no
   placeholders or cell references) are unchanged and still refuse. The counts
@@ -369,11 +381,11 @@ it append-only for the console account too.
   agent that user 3 is among them. It does
   not stop differencing attacks: two approved queries whose sets differ by
   one row (all customers of a city, then the same minus one email) still
-  reveal that row's other columns. The approval screen shows each PII filter
-  so the human can spot such sequences; `--unmask` queries skip the counts.
+  reveal that row's other columns. When reads are asked, the approval screen
+  shows each PII filter so the human can spot such sequences; `--unmask` queries skip the counts.
 - **Equality still leaks equality.** A filter `WHERE email = 'x@example.com'`
-  tells the agent whether that value exists. Under `k` rows the human is
-  warned before approving; once approved, the answer is the agent's. That is
+  tells the agent whether that value exists. Under `k` rows the ticket
+  carries a warning (seen by a human only when reads are asked); once approved, the answer is the agent's. That is
   the purpose of this feature.
 - **Joins between PII columns.** An equality between two PII columns (`ON
   a.email = b.email`, `a.email IN (SELECT b.email ...)`, `USING`,
@@ -388,7 +400,8 @@ it append-only for the console account too.
   Instead the ticket warns `joins PII columns: <columns>` (reads and writes
   alike, column names only, never a value), the row estimates and `EXPLAIN`
   stay on the console as under a PII filter, and a grant never covers it.
-  The human reading the join on the approval screen is the control. A PII
+  The human reading the join on the approval screen is the control, when
+  reads are asked. A PII
   column joined with itself and a partner that may be a literal are still
   refused.
 - **Relations that project another relation.** A view, a materialized view

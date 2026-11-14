@@ -6,6 +6,20 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
+### Fixed
+
+- The docs, the site and the agent-facing texts say what the code does
+  (#249): reads are approved by `lox run`'s default auto rule, a
+  k-anonymity warning included, unless `auto.read = "ask"` or `lox run
+  --manual`; `locksql_run` waits at most 2 s, then answers `pending` (no
+  5-minute approval timeout); `lox run` asks the console's questions in its
+  cards (`lox attach` is for debugging); the audit log is hash-chained; the
+  managed-file example of `docs/configuration.md` now loads (a test parses
+  it); the `init` next steps, the doctor hint and the MCP server texts no
+  longer name `lox attach` or a human decision for every ticket. Known gaps
+  are filed: `locksql grant` through the host launcher (#250), warned reads
+  auto-approved (#251, lockhub#224).
+
 ## v0.20.0 (2026-11-14)
 
 Supported lockhub: v0.9.0 or later (unchanged). Built on lockkit v0.20.0.
@@ -265,7 +279,7 @@ Supported lockhub: as v0.16.0. Built on lockkit v0.14.1.
 
 - Every user- and agent-facing text names `lox run`, which starts the hub
   and the locks and serves the decisions in a terminal of its own, outside
-  the agent, instead of `lox up`, deprecated since lockhub v0.10.0 (#192):
+  the agent, instead of `lox up`, deprecated since lockhub v0.9.0 (#192):
   the docs and the site, the agent assets `locksql init` writes (skill,
   AGENTS.md, config.toml), the MCP server's instructions, the launcher's
   errors, `doctor`, `init` and the console's messages. The shared texts

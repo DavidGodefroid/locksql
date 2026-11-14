@@ -21,8 +21,11 @@ image too, but `lox run` starts it, not the launcher
 
 ## Install
 
-Download the install script from the release you install, read it, then
-run it with that release:
+With Homebrew, `brew install davidgodefroid/tap/locksql` installs the same
+launcher, with the image digests pinned by the formula; it is owned by you
+and upgraded with `brew upgrade locksql`, not `locksql update`. Otherwise,
+download the install script from the release tag you install, read it, then
+run it with that release (it needs `cosign` on PATH):
 
 ```sh
 V=vX.Y.Z
@@ -46,9 +49,11 @@ locksql update     # the latest release: a new launcher, then docker pull
 locksql update vX.Y.Z
 ```
 
-`locksql update` checks the signatures and the checksum as `install.sh`
-does, and needs cosign the same way. With `LOCKSQL_SKIP_COSIGN=1` nothing is
-verified and the launcher runs the image by its tag.
+`locksql update` (for an install.sh install) checks the signatures and the
+checksum as `install.sh` does, and needs cosign the same way.
+`LOCKSQL_SKIP_COSIGN=1` is read only when cosign is not installed: then
+nothing is verified and the launcher runs the image by its tag. With cosign
+installed, the checks always run.
 
 ### What runs where
 
@@ -64,7 +69,7 @@ runs each command with the account it needs:
 | `profile` | you, with `HOME=/tmp` | |
 | `doctor --fix` | you, with your home mounted (your agents' wiring); first as root, only to give back `.locksql/` entries that are not yours | |
 | the agent commands: `mcp`, `status`, `tables`, `plan`, `run`, `doctor`... | `agent` | the socket volume of the workspace's locksql lock that `lox run` runs, read-only ([launcher.md](launcher.md#the-socket-of-lox-runs-lock)) |
-| everything else: `help`... | `agent` | none |
+| everything else: `help`, and `grant` for now (a known launcher bug: it reaches no console; agents use the MCP tool `locksql_grant`)... | `agent` | none |
 
 The socket name is derived from the project path, so the console and the
 agent see the same one, and the console's hints name real paths.
@@ -144,10 +149,11 @@ working.
 ## Set up a project
 
 In the project directory, `init` writes `.locksql/config.toml` with a
-commented example profile, and the agent files (here Claude Code's):
+commented example profile, and the agent files (of the agents found, or
+those you name):
 
 ```sh
-locksql init claude
+locksql init        # or: locksql init claude|codex|cursor|gemini
 ```
 
 The MCP command it writes, `locksql mcp`, is the launcher: the agent starts
@@ -207,7 +213,6 @@ The console runs attached to lockhub only: from the project directory,
 ```sh
 lox add locksql sql-dev
 lox run                # a terminal of its own, outside the agent: keep it open
-lox attach sql-dev     # in another terminal
 ```
 
 `lox run` starts the hub and the workspace's locks, then serves the
@@ -221,7 +226,8 @@ console. The launcher starts no console: `locksql console` exits 2 with
 workspace`, and the console binary started without its hub flags exits with
 ``launched by `lox run` only``. `lox run` shows the console's start-up
 questions in its own terminal, again when it restarts; `lox attach sql-dev`
-attaches yours to the console instead (detach: Ctrl-P Ctrl-Q).
+attaches yours to the console's terminal, for debugging (detach: Ctrl-P
+Ctrl-Q).
 
 The lock's home volume, `<compose project>_<instance>-home`
 (`lockfamily-<8 hex of sha256(workspace)>_sql-dev-home`), keeps the console
@@ -249,15 +255,15 @@ lock `vault: true` and writes the workspace's one `vault:` block (address,
 namespace, CA file) in `lockfamily.yaml`:
 
 ```sh
-lox add locksql sql-dev --credentials vault --vault-path database/creds/ro \
+lox add locksql --name sql-dev --credentials vault --vault-path database/creds/ro \
   --vault-address https://vault.example.com:8200   # [--vault-namespace NS] [--vault-ca-file PATH]
 lox run
 ```
 
 `lox vault set --address URL [--namespace NS] [--ca-file PATH]` changes the
 block later. `lox run` reviews it, then gives the console `VAULT_ADDR`, and
-`VAULT_NAMESPACE` when set, nothing else; the CA file, copied once reviewed,
-is mounted read-only in the lock. The launcher's `LOCKSQL_VAULT` and the
+`VAULT_NAMESPACE` when set, and `VAULT_CACERT` with a CA file, nothing
+else; the CA file, copied once reviewed, is mounted read-only in the lock. The launcher's `LOCKSQL_VAULT` and the
 `VAULT_*` variables of your shell play no part. See [lockhub: Vault, per
 lock](https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-add.md#vault-per-lock).
 
@@ -274,7 +280,10 @@ vault login -method=oidc -no-store -token-only
 `-no-store -token-only` prints the token and writes no `~/.vault-token`.
 A plain `vault login` would store the token in your account, where the
 agent runs: the agent could read it and fetch the login from Vault itself,
-bypassing the console (`locksql doctor` fails on it). For the same reason,
+bypassing the console. `locksql doctor` fails on it where it runs in the
+agent's account (in lea, or the binary in the agent's container); the
+launcher's `doctor` runs as `agent` without your home or environment, so it
+cannot see that token. For the same reason,
 do not leave `VAULT_TOKEN` set in that shell. If you accept a token stored
 in your account, `vault_token: cli` on the lock lets `lox run` answer the
 prompt with your Vault CLI's token, checked first ([lockhub: the host's
@@ -323,7 +332,9 @@ For a database in a container on your machine, publish its port
 
 ## Wire the agent
 
-`locksql init claude` wrote `locksql mcp` as the MCP command in `.mcp.json`:
+`locksql init` wrote `locksql mcp` as the MCP command in the agent's MCP
+config (`.mcp.json` for Claude Code, `.cursor/mcp.json`,
+`.gemini/settings.json`; the `~/.codex/config.toml` snippet for Codex):
 the agent runs the launcher, which starts the MCP server in a throwaway
 container, as `agent`, with the socket volume and the project mounted. Start
 the agent at the project root, or below it.
@@ -342,9 +353,9 @@ the agent at the project root, or below it.
 
 For every project instead, `claude mcp add --scope user locksql -- locksql
 mcp`. Codex, Gemini CLI and Cursor take the same `command` and `args` in the
-files listed in [Agent wiring](usage.md#agent-wiring) (keep
-`tool_timeout_sec` or `timeout` there: the console waits up to 5 minutes for
-an approval).
+files listed in [Agent wiring](usage.md#agent-wiring) (`locksql_run` waits
+at most 2 s for an auto decision, then answers `pending` with a ticket, so
+the default tool timeouts suffice).
 
 The client commands run the same way: `locksql status`, `locksql tables`...
 
@@ -406,8 +417,9 @@ docker run … --mount type=volume,src=lockfamily-<hash>_<instance>-run,dst=/run
   -v "$PWD:$PWD" -w "$PWD" agent-image
 ```
 
-`locksql init claude` then needs no change: the `locksql mcp` it writes in
-`.mcp.json` runs inside the agent's container. Check from there with
+`locksql init` then needs no change: the `locksql mcp` it writes in the
+agent's MCP config (`.mcp.json`, `.cursor/mcp.json`, `.gemini/settings.json`,
+`~/.codex/config.toml`) runs inside the agent's container. Check from there with
 `locksql status`. `locksql doctor` run there also checks the project's
 `.locksql/` as `lox run` reads it: yours, writable by you only
 ([Set up a project](#set-up-a-project)).

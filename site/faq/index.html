@@ -60,7 +60,7 @@
 <div class="faq prose">
 <section aria-labelledby="databases">
   <h2 id="databases">Which databases does locksql support?</h2>
-  <p>MariaDB 10.1+, MySQL 8.0+, PostgreSQL 13+ and SQLite 3. All engines are pure Go. See <a href="../how-it-works/#engines">supported engines</a>.</p>
+  <p>MariaDB 10.11+, MySQL 8.0+, PostgreSQL 13+ and SQLite 3. All engines are pure Go. See <a href="../how-it-works/#engines">supported engines</a>.</p>
 </section>
 <section aria-labelledby="agents">
   <h2 id="agents">Which AI agents does it work with?</h2>
@@ -79,7 +79,7 @@
 <section aria-labelledby="password">
   <h2 id="password">Does the agent ever see my database password?</h2>
   <p>No. The agent never sees a credential and never opens a connection. Credentials are typed at console start (no echo), or read from HashiCorp Vault.</p>
-  <p>They never appear in argv, environment, files, logs, the socket protocol or error messages. No config file may hold a secret.</p>
+  <p>The database password never appears in argv, environment, files, logs, the socket protocol or error messages; with Vault, the Vault token goes only to the <code>vault</code> child’s environment. No config file may hold a secret.</p>
 </section>
 <section aria-labelledby="self-approve">
   <h2 id="self-approve">Can the agent approve its own queries, or turn approval off?</h2>
@@ -118,7 +118,7 @@
 </section>
 <section aria-labelledby="k-anonymity">
   <h2 id="k-anonymity">Does k-anonymity stop all inference?</h2>
-  <p>No. It is a decision aid: a query whose PII filter, group or aggregate covers fewer than <code>k</code> rows warns you on the ticket, and you decide. It does not stop differencing attacks that combine several approved queries. <a href="../security/#k-anonymity">See the example</a>.</p>
+  <p>No. It is a decision aid: a query whose PII filter, group or aggregate covers fewer than <code>k</code> rows puts a warning on the ticket. Under the default <code>auto.read = "auto"</code>, <code>lox run</code> approves such a read without asking; set <code>auto.read = "ask"</code> to see it first. It does not stop differencing attacks that combine several approved queries. <a href="../security/#k-anonymity">See the example</a>.</p>
 </section>
 <section aria-labelledby="tls">
   <h2 id="tls">Is the connection to the database encrypted?</h2>
@@ -154,7 +154,7 @@
 </section>
 <section aria-labelledby="stable">
   <h2 id="stable">Is locksql stable?</h2>
-  <p>It is a pre-release (<code>v0.17.x</code>): any release may still change the config files, the MCP tools or the CLI. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/1.0.md">The path to 1.0</a> lists what must be true first, among others an external review and frozen contracts.</p>
+  <p>It is a pre-release (<code>v0.x</code>): any release may still change the config files, the MCP tools or the CLI. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/1.0.md">The path to 1.0</a> lists what must be true first, among others an external review and frozen contracts.</p>
   <p>The SQL analyzer is fuzzed nightly and a canary suite checks for leaks on real engines: <a href="../security/#assurance">how it is tested</a>.</p>
 </section>
 <section aria-labelledby="family">
@@ -207,7 +207,7 @@
       </nav>
     </div>
     <div class="wrap footer-bottom">
-      <p>Pre-release (v0.17.x). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (v0.x). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
       <p><a href="https://lockfamily.dev">lockfamily.dev</a> · <a href="https://github.com/DavidGodefroid/lockfamily">the family on GitHub</a></p>
     </div>
   </footer>

@@ -38,20 +38,30 @@ A `query.plan` request goes through these steps in the console
 5. **Count.** Before the ticket goes to lockhub, the k-anonymity counts run
    (`console.kCount`). Fewer than `k_anonymity` rows is a
    warning, never a refusal.
-6. **Approve.** The human sees, on the ticket in lockhub, the statement
+6. **Approve.** The ticket in lockhub carries the statement
    (every literal masked), the PII columns it touches (`Analysis.Uses`), the
    masked outputs, the counts and a `k-anonymity` warning for each count
-   under k; the warnings go to the audit records too.
+   under k; the warnings go to the audit records too. `lox run` decides it
+   by the profile's auto rules: a read is approved without asking under the
+   default `auto.read = "auto"`, warnings included, and is shown to the
+   human with `auto.read = "ask"` or `lox run --manual`.
 7. **Run and mask** (`pii.MaskOutputs`, `modes.go`). The rows are masked
    column by column from the analysis, then go through the value
    detectors, then through the output caps (`internal/render`).
 
-A write never reaches `sqlast`: the human's approval is its gate, and
-`pii.PlanCheck` and `pii.AliasViolation` (`mask.go`) refuse a write whose
-`RETURNING` list or data-modifying CTE would move a rule column under
-another label, or that copies a rule column into another column or plants
-an agent value into one. Its result, if any, is masked by origin and by
-name (`pii.MaskResult`).
+While mask rules exist, a write that returns rows, stores a query's rows
+(`sqlast.NeedsWriteAnalysis`) or inserts without a column list
+(`pii.PositionalInsert`) is parsed (`sqlast.ParseWrite`) and analysed like
+a read (`readpath.go`, `writePlan`). Its `RETURNING` list and
+data-modifying CTEs are resolved to base columns and masked by provenance
+(`pii.MaskOutputs`), and what cannot be resolved is refused. A profile with
+`write_functions = "allowlist"` runs its writes through `sqlast.Analyze`
+too, and the PII joins of the other writes are looked up for the ticket's
+warning. Other writes are checked by column name (`pii.PlanCheck` and
+`pii.AliasViolation`, `mask.go`: a rule column moved under another label,
+copied into another column, or an agent value planted into one is
+refused) and their result, if any, is masked by origin and by name
+(`pii.MaskResult`).
 
 ## Provenance
 
@@ -157,7 +167,8 @@ before it masks anything: the column count must match and every labelled
 output must carry its expected label, or the result is dropped, since
 masking by position could hit the wrong column. Then, per column:
 
-- the analysed mask applies (`redact`, `partial`, `email`; `rules.go`);
+- the analysed mask applies (`redact`, `partial`, `email`: lockkit's
+  `pii.MaskValue`, through `kit.go`; mode resolution in `rules.go`);
 - as a second line of defence, a column whose engine-reported origin
   (`OriginColumns`, when the driver reports one) matches a rule is masked
   even if the analysis did not mask it;

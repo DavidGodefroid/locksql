@@ -66,7 +66,7 @@
   <h2 id="trusted">Who is trusted</h2>
   <ul class="prose">
     <li><strong>Assets:</strong> database credentials; the data, personal data in particular; the availability of the database server; the integrity of the data and of the policy that governs access.</li>
-    <li><strong>The human</strong> starts the console through lockhub (<code>lox add</code>, <code>lox run</code>), answers it in a terminal (<code>lox attach</code>) and is trusted.</li>
+    <li><strong>The human</strong> starts the console through lockhub (<code>lox add</code>, <code>lox run</code>), answers its questions and decides tickets in <code>lox run</code>’s terminal, and is trusted.</li>
     <li><strong>The agent</strong>, and anything that can steer it (text stored in the database or in files it reads), is <em>not</em> trusted. It runs the client commands and the MCP server.</li>
     <li><strong>Other local users</strong> are not trusted.</li>
   </ul>
@@ -89,12 +89,12 @@
   <h2 id="enforces">What the console enforces</h2>
   <div class="prose">
     <h3 id="key-holder">One key holder</h3>
-    <p>Credentials are typed at console start (no echo), or read from HashiCorp Vault. They never appear in argv, environment, files, logs, the socket protocol or error messages.</p>
+    <p>Credentials are typed at console start (no echo, <code>credentials = "ask"</code>), read from the console account’s OS keychain (<code>keychain</code>), or fetched from HashiCorp Vault (<code>vault</code>); after an idle close, a typed secret is asked again in <code>lox run</code>, sealed to a one-use key of the console. The database password never appears in argv, environment, files, logs, the socket protocol or error messages; the Vault token goes only to the <code>vault</code> child’s environment.</p>
     <p>The console disables core dumps. <code>credentials_ttl</code> makes it ask again after a set time (Vault leases).</p>
 
     <h3 id="os-separation">OS separation</h3>
     <p>Two containers, built from one image. The console runs as <code>locksql</code> (uid 10001) in one; the agent’s MCP server runs as <code>agent</code> (uid 10002), a member of <code>locksql-clients</code>, in the other.</p>
-    <p>They share only the socket volume (the socket directory, mode <code>2710</code>, <code>locksql:locksql-clients</code>). The kernel checks every peer: a process that is neither the console account nor in <code>locksql-clients</code> is refused.</p>
+    <p>They share only the socket volume (the socket directory, mode <code>2710</code>, <code>locksql:locksql-clients</code>). The kernel checks every peer: a process that is neither the console account, nor in <code>locksql-clients</code>, nor an <code>allowed_uids</code> entry is refused.</p>
     <p>The credentials live only in the console’s container and its lock’s home volume. The console refuses to start without a separated setup, since an agent in its own account could read or type into its terminal. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/docker.md">Running locksql in Docker</a>.</p>
 
     <h3 id="approval">Approval outside the agent</h3>
@@ -120,14 +120,14 @@
 
     <h3 id="pii-usage">PII usage</h3>
     <p>PII columns may be selected, counted, joined with <code>=</code> and filtered with <code>=</code>, <code>IN (literals)</code> or <code>IS NULL</code>. Expressions over them, <code>LIKE</code>, ranges and <code>ORDER BY</code> are refused.</p>
-    <p>A filter, grouping or aggregate on PII that covers fewer than <code>k_anonymity</code> rows (default 5, production 10) warns you on the ticket; you decide.</p>
+    <p>A filter, grouping or aggregate on PII that covers fewer than <code>k_anonymity</code> rows (default 5, production 10) puts a warning on the ticket. Under the default <code>auto.read = "auto"</code>, <code>lox run</code> approves such a read without asking: set <code>auto.read = "ask"</code>, or run <code>lox run --manual</code>, if a human must see these warnings before the run.</p>
 
     <h3 id="placeholders">No typed values</h3>
     <p>Placeholders (<code>'${email}'</code>) and cell references (<code>'${r1.2.3}'</code>) are not supported: no value is typed in lockhub, so a statement holding one is refused at plan time (<code>E_PLACEHOLDER</code>).</p>
     <p>Masked cells come back as plain <code>&lt;redacted&gt;</code>. The approval screen warns, in red and in the audit log, when the agent put a clear value in its statement.</p>
 
     <h3 id="unmask-gate">Raw values only on your say-so</h3>
-    <p>An agent can ask for unmasked output only when you allowed it in the console: <code>--allow-unmask</code> at start, or <code>:unmask</code> while it runs, confirmed with <code>y</code>, never a single key. Without it the request is refused and audited.</p>
+    <p>An agent can ask for unmasked output only when you allowed it in the console: <code>:unmask</code> while it runs, confirmed with <code>y</code> (the profile name on production), never a single key; <code>lox run</code> does not pass the start-up flag <code>--allow-unmask</code>. Without it the request is refused and audited.</p>
     <p>Ctrl-O in the console (or <code>--show-results</code>) shows you the clear rows there while the agent still gets them masked. Both are console-only: no client or config file can turn them on.</p>
 
     <h3 id="quiet">Quiet failures</h3>
@@ -139,7 +139,7 @@
 
     <h3 id="audit">Audit</h3>
     <p>Every login, policy change, refusal (with its code), decision, catalog read, console switch and logout is appended to a JSONL audit log (mode 0600). Each decision names the rule or the human that took it.</p>
-    <p>Records contain the SQL and metadata, never secrets and never row data.</p>
+    <p>Records contain the SQL and metadata, never secrets and no result rows. A server error is kept as written when the session masks nothing, and may quote a stored value.</p>
 
     <h3 id="untrusted">Untrusted rows</h3>
     <p>Rows are framed as untrusted data in every output, and the generated agent instructions say so. Control and bidirectional characters are escaped in client output and on the console screen, so data cannot spoof the approval prompt.</p>
@@ -205,7 +205,7 @@
 
     <h3 id="size-bound">Size bound</h3>
     <p>The statement’s size bound counts bytes built from literals and string functions. Numeric arithmetic (<code>1e131071</code>, <code>^</code>) and formatting of stored data (<code>jsonb_pretty</code>) can still make the server compute and send a value of hundreds of megabytes, bounded by <code>statement_timeout</code>.</p>
-    <p>The console keeps at most 64 KiB of each cell (<code>cut_cells</code> tells the agent which were cut):</p>
+    <p>The console keeps at most 64 KiB of each cell (<code>cut_cells</code> tells the agent how many were cut):</p>
     <ul>
       <li>PostgreSQL columns are cut while they are read off the wire;</li>
       <li>MariaDB and MySQL rows are read whole by the driver, up to the server’s <code>max_allowed_packet</code>, and cut before they are copied;</li>
@@ -216,13 +216,13 @@
     <p>Column rules depend on the rules being right, and value detectors catch common formats only. Use a database account that cannot read what the agent must never see.</p>
 
     <h3 id="k-anonymity">k-anonymity is a decision aid, not a guarantee</h3>
-    <p>A query whose PII filter, group or aggregate covers fewer than <code>k</code> rows warns you on the ticket; it is not refused, and the warning goes to the audit log. An approved warned query can single out one person. The counts remain a query-set-size control.</p>
+    <p>A query whose PII filter, group or aggregate covers fewer than <code>k</code> rows puts a warning on the ticket; it is not refused, and the warning goes to the audit log. Under the default <code>auto.read = "auto"</code> no human sees it before the read runs. An approved warned query can single out one person. The counts remain a query-set-size control.</p>
     <p>Each constant PII filter is counted twice: the subjects of the column in its own base table (a join cannot multiply them; a column of a view, which has no base table to count in, cannot be filtered on), and the rows the statement’s own <code>FROM</code>/<code>WHERE</code> selects.</p>
     <p>A join still multiplies the second count. <code>WHERE u.id = 3 AND u.salary IN (...)</code> joined with a large table passes when at least <code>k</code> users earn one of those salaries, and tells the agent that user 3 is among them.</p>
     <p>It does not stop differencing attacks: two approved queries whose sets differ by one row (all customers of a city, then the same minus one email) still reveal that row’s other columns. The approval screen shows each PII filter so you can spot such sequences; <code>--unmask</code> queries skip the check.</p>
 
     <h3 id="equality">Equality still leaks equality</h3>
-    <p>A filter <code>WHERE email = 'x@example.com'</code> tells the agent whether that value exists. Under <code>k</code> rows you are warned before approving; once approved, the answer is the agent’s. That is the purpose of this feature.</p>
+    <p>A filter <code>WHERE email = 'x@example.com'</code> tells the agent whether that value exists. Under <code>k</code> rows the ticket carries a warning (you see it only when reads are asked); once approved, the answer is the agent’s. That is the purpose of this feature.</p>
 
     <h3 id="patient-agent">Equality probing leaves room for a patient agent</h3>
     <p>An equality filter on a value the agent knows only raises warnings (the clear value, the k-anonymity counts). An agent that spreads such probes across queries or sessions is not stopped: the human reading the tickets is the control.</p>
@@ -312,7 +312,7 @@
       </nav>
     </div>
     <div class="wrap footer-bottom">
-      <p>Pre-release (v0.17.x). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (v0.x). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
       <p><a href="https://lockfamily.dev">lockfamily.dev</a> · <a href="https://github.com/DavidGodefroid/lockfamily">the family on GitHub</a></p>
     </div>
   </footer>

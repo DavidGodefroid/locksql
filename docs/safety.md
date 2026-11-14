@@ -7,11 +7,15 @@ The [README](../README.md#safety-model) has the summary. The threat model and ev
 The console is the enforcement point. Skills, rules and MCP tool descriptions
 only guide the agent; the console's checks are the guarantee.
 
-- **One key holder.** Credentials are typed at console start (no echo), or
-  fetched from HashiCorp Vault with the `vault` CLI
-  at every connection (`credentials = "vault"`, suited to the database
-  secrets engine's per-user, short-lived logins). They never appear in argv,
-  environment, files, logs, the socket protocol or error messages. The
+- **One key holder.** Credentials are typed at console start (no echo,
+  `credentials = "ask"`, the default), read from the console account's OS
+  keychain (`credentials = "keychain"`), or fetched from HashiCorp Vault
+  with the `vault` CLI at every connection (`credentials = "vault"`, suited
+  to the database secrets engine's per-user, short-lived logins). After an
+  idle close, a typed secret is asked again in `lox run`, sealed to a
+  one-use key of the console. The database password never appears in
+  argv, environment, files, logs, the socket protocol or error messages;
+  the Vault token is handed only to the `vault` child's environment. The
   console disables core dumps. `credentials_ttl` makes it ask again after a
   set time; a Vault lease is renewed with a fresh login before it ends.
 - **OS separation.** The image holds a `locksql` console account and a
@@ -22,10 +26,15 @@ only guide the agent; the console's checks are the guarantee.
   the console's own account could read or type into its terminal. Whoever can
   run `docker` commands can still reach the console's container: see
   [what Docker does and does not separate](docker.md#what-docker-does-and-does-not-separate).
-- **Human approval.** Every statement goes to lockhub as a ticket and runs
-  only once lockhub's signed decision approves it, or is a read inside a
-  grant such a decision approved (below); no socket method can approve. You can deny with a reason the agent reads. The console's own
-  decisions (a loosened policy, `:unmask`) stay at its terminal.
+- **Lockhub's decision.** Every statement goes to lockhub as a ticket and
+  runs only once lockhub's signed decision approves it, or is a read inside
+  a grant such a decision approved (below); no socket method can approve.
+  `lox run` decides each ticket by the profile's auto rules (`auto` in
+  [configuration](configuration.md)): by default reads are approved
+  automatically, while writes, DDL, unmasked results and grants are asked
+  of you; `lox run --manual` asks every ticket. You can deny with a reason
+  the agent reads. The console's own decisions (a loosened policy,
+  `:unmask`) stay at its terminal.
 - **Grants, against approval fatigue.** An agent that needs several reads
   of the same few tables asks once for a grant (`locksql_grant`, `locksql
   grant`): a database, tables, a duration and a budget of statements, rows
@@ -35,7 +44,8 @@ only guide the agent; the console's checks are the guarantee.
   capped at what is left of the budget. Writes, `unmask`, any filter,
   grouping or aggregate on a PII column, and any predicate or expression
   on a text column no allow rule names still get a ticket. A grant needs
-  the agent's lea token. `:revoke` ends
+  the agent's lea token (`LEA_AGENT_TOKEN`), so grants exist only for
+  agents run by lea; other MCP clients plan and run each query. `:revoke` ends
   grants; they end with the session and never survive a restart. See
   [Grants](usage.md#grants).
 - **Fail closed.** A dialect-aware classifier refuses anything it cannot
@@ -71,9 +81,11 @@ only guide the agent; the console's checks are the guarantee.
   filtered with `=`, `IN (literals)` or `IS NULL`. Expressions over them,
   `LIKE`, ranges and `ORDER BY` are refused. A filter, grouping or aggregate on
   PII that covers fewer than `k_anonymity` rows (default 5, production 10)
-  warns you on the ticket, since it could single out one person; you decide.
-  The warning is kept in the audit log. The agent is told nothing of the
-  count.
+  puts a warning on the ticket, since it could single out one person. Under
+  the default `auto.read = "auto"`, `lox run` approves such a read without
+  asking: set `auto.read = "ask"`, or run `lox run --manual`, if a human
+  must see these warnings before the run. The warning is kept in the audit
+  log. The agent is told nothing of the count.
 - **No typed values.** Placeholders (`col = '${email}'`) and cell
   references (`col = '${r1.2.3}'`) are not supported: a statement holding
   one is refused at plan time (`E_PLACEHOLDER`), since no value is typed in
@@ -90,8 +102,9 @@ only guide the agent; the console's checks are the guarantee.
 - **Audit.** Every login, policy change, refusal, decision, run, catalog
   read and logout is appended to a JSONL audit log (mode 0600): the approval
   before the statement runs, its outcome after. The records of a client
-  request name the requester: its uid, pid and account. Never secrets, never
-  row data.
+  request name the requester: its uid, pid and account. Never secrets, no
+  result rows; a server error is kept as written when the session masks
+  nothing, and may quote a stored value.
 
 Details and threat model: [docs/security-model.md](security-model.md).
 
@@ -105,8 +118,9 @@ Details and threat model: [docs/security-model.md](security-model.md).
   Docker socket, for that boundary
   ([docs/docker.md](docker.md#agent-in-its-own-container)).
   Malware running as the console account, or as root, is out of scope.
-- **k-anonymity is a decision aid, not a guarantee.** A count under `k` warns
-  you before you approve; it refuses nothing. Even heeded, it is a query-set-size control: it does not stop
+- **k-anonymity is a decision aid, not a guarantee.** A count under `k` puts a
+  warning on the ticket; it refuses nothing, and under the default
+  `auto.read = "auto"` no human sees it before the read runs. Even heeded, it is a query-set-size control: it does not stop
   differencing attacks that combine several approved queries.
 - **Masking has limits.** The unmasked columns of a targeted row still
   identify it, and free text without a detector is not masked.

@@ -92,7 +92,7 @@ cosign verify ghcr.io/davidgodefroid/locksql:X.Y.Z \
 The actions the workflows run are pinned to full commit SHAs, and the
 release job pins the versions of GoReleaser, cosign and syft.
 
-Release tags are annotated, not yet signed (`v0.1.0` to `v0.8.1`). From
+Release tags are not signed yet (none is, up to v0.20.0). From
 the first signed tag on, its key is published on the maintainer's GitHub
 profile (<https://github.com/DavidGodefroid.gpg>, or the SSH signing keys),
 and a tag can be checked before you build from it:
