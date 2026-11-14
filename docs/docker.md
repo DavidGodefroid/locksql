@@ -288,22 +288,38 @@ asks for a token again; three refusals in a row stop the connection.
 
 A profile with `proxy_command`
 ([usage.md](usage.md#databases-that-publish-no-port)) is **not supported
-under `lox run` yet**
-([lockhub#193](https://github.com/DavidGodefroid/lockhub/issues/193)):
+under `lox run`**: a lock reaches only the endpoints its gateway can name,
+and a program is not one; the command's client (`ssh`, `docker`, `kubectl`)
+is not in the release image, and `lox run` runs no image of your own
+([Your own build](#your-own-build)). `lox run` stops before the review on
+such a lock
+([lockhub: proxy_command](https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-run.md#egress-each-lock-reaches-its-reviewed-endpoints-only)):
 
-- a lock reaches only the endpoints its gateway can name, and a program is
-  not one: the review shows the lock's egress `unreachable`
-  (`proxy_command runs a program the gateway cannot follow`), and the
-  console reaches nothing;
-- the command's client (`ssh`, `docker`, `kubectl`) is not in the release
-  image, and `lox run` runs no image of your own
-  ([Your own build](#your-own-build)).
+```
+egress of lock sql-dev: profile prod: proxy_command is not supported under lox run; reach the database through the built-in ssh bastion ([profiles.prod.ssh]) or publish its port (see docs/lox-run.md)
+```
 
-For a database behind an SSH host, use the profile's `ssh` table instead
-([usage.md](usage.md#reaching-a-remote-server-through-ssh)): the console
-opens the tunnel itself, and `lox run` allows the bastion, and only it, as
-the lock's endpoint. For a database in a container on your machine, publish
-its port ([Set up a project](#set-up-a-project)).
+For a database behind an SSH host, use the profile's built-in `ssh` table
+instead ([usage.md](usage.md#reaching-a-remote-server-through-ssh)): the
+console opens the tunnel itself, and `lox run` allows the bastion, and only
+it, as the lock's endpoint. In place of `proxy_command = ["ssh",
+"deploy@bastion.example.com", "socat", "-", "TCP:db.internal:5432"]`:
+
+```toml
+[profiles.prod]
+engine = "postgres"
+host = "db.internal"        # as the bastion resolves it
+port = 5432
+
+[profiles.prod.ssh]
+host = "bastion.example.com"
+user = "deploy"
+auth = "key"
+key = "~/.ssh/bastion_key"  # in the lock's home volume
+```
+
+For a database in a container on your machine, publish its port
+([Set up a project](#set-up-a-project)).
 
 ## Wire the agent
 

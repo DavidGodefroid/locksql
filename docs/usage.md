@@ -380,7 +380,10 @@ needs, and run the console from it ([docker.md, Databases that publish no
 port](docker.md#databases-that-publish-no-port)). `socat` or `nc` is only
 needed where the last step runs (the database's container or the remote
 host), never in the console's image. `locksql doctor` does not look for the
-program in the console's container; check it there yourself.
+program in the console's container; check it there yourself. `lox run`
+runs no image of your own and refuses a lock whose profile has a
+`proxy_command`: use the built-in `ssh` table there
+([docker.md](docker.md#databases-that-publish-no-port)).
 
 **Socket directory on the host.** A local MariaDB/MySQL whose socket
 directory is bind-mounted on the console's host is reached with
