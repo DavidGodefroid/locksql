@@ -203,6 +203,24 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 	return out, nil
 }
 
+// quoteIdent quotes a name as a MySQL identifier.
+func quoteIdent(s string) string { return "`" + strings.ReplaceAll(s, "`", "``") + "`" }
+
+// SampleColumn implements engine.Sampler.
+func (s *session) SampleColumn(ctx context.Context, db string, c engine.ColumnInfo, n int) ([]string, error) {
+	col := quoteIdent(c.Column)
+	rows, err := s.query(ctx, "SELECT LEFT(CAST("+col+" AS CHAR), "+strconv.Itoa(engine.SampleBytes)+") FROM "+
+		quoteIdent(c.DB)+"."+quoteIdent(c.Table)+" WHERE "+col+" IS NOT NULL LIMIT "+strconv.Itoa(max(n, 0)))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, str(r[0]))
+	}
+	return out, nil
+}
+
 // ExtraPrivileges reads SHOW GRANTS FOR CURRENT_USER() and lists what goes
 // beyond the tier, plus a warning when the server is not the flavour the
 // profile names.
