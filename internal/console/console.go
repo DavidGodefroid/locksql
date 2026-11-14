@@ -17,6 +17,7 @@ import (
 	"time"
 
 	kconsole "github.com/DavidGodefroid/lockkit/console"
+	"github.com/DavidGodefroid/lockkit/hubclient"
 	"github.com/DavidGodefroid/lockkit/managed"
 	"github.com/DavidGodefroid/lockkit/secrets"
 
@@ -154,6 +155,11 @@ type ServerConfig struct {
 	Refused string
 	// Hub is the lockhub the requests are decided on (required).
 	Hub *kconsole.Hub
+	// DecisionWait is how long query.run waits for the hub's decision on
+	// a ticket an auto rule may decide, before it answers pending: 0 is
+	// hubclient.DecisionWait, a negative one no wait (tests of tickets
+	// the fake hub never decides at once).
+	DecisionWait time.Duration
 	// IdleConnect opens the session again after an idle end, on approved
 	// connect tickets (idleconn.go): the console then closes its
 	// connection at idle_timeout and keeps running. nil (tests of the
@@ -298,15 +304,37 @@ type Server struct {
 	idleErr error
 }
 
-// noAwait is the hub approver without its wait for the decision on the
-// ticket it just pushed (kconsole.Awaiter, hubclient.DecisionWait): locksql
-// answers a submitted request pending and runs its ticket on the agent's
-// run of it, never in the same call, so that wait would only delay every
-// pending answer.
-type noAwait struct{ kconsole.AsyncApprover }
+// hubAwait is the hub approver whose wait for the decision on the ticket
+// it just pushed (kconsole.Awaiter) lasts wait, and only for a request
+// that asked for it (withAwait): a ticket an auto rule may decide, which
+// query.run then runs in the same call (Approval.Decided). Any other
+// pending answer comes at once (#230): no auto rule decides a grant or a
+// never-auto ticket in milliseconds.
+type hubAwait struct {
+	kconsole.AsyncApprover
+	client *hubclient.Client
+	wait   time.Duration
+}
+
+// awaitKey marks a context whose request waits for its decision.
+type awaitKey struct{}
+
+// withAwait marks ctx: the hub approver waits for the decision on the
+// ticket of its request.
+func withAwait(ctx context.Context) context.Context {
+	return context.WithValue(ctx, awaitKey{}, true)
+}
+
+// Await implements kconsole.Awaiter.
+func (a hubAwait) Await(ctx context.Context, ticket string) bool {
+	if a.wait <= 0 || a.client == nil || ctx.Value(awaitKey{}) == nil {
+		return false
+	}
+	return a.client.Await(ctx, ticket, a.wait)
+}
 
 // Withdraw implements kconsole.Withdrawer when the wrapped approver does.
-func (a noAwait) Withdraw(ctx context.Context, d kconsole.Decision, ticket, reason string) error {
+func (a hubAwait) Withdraw(ctx context.Context, d kconsole.Decision, ticket, reason string) error {
 	if w, ok := a.AsyncApprover.(kconsole.Withdrawer); ok {
 		return w.Withdraw(ctx, d, ticket, reason)
 	}
@@ -334,7 +362,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	if aa, ok := cfg.Approver.(kconsole.AsyncApprover); ok {
 		if _, ok := aa.(kconsole.Awaiter); ok {
-			cfg.Approver = noAwait{aa}
+			wait := cfg.DecisionWait
+			if wait == 0 {
+				wait = hubclient.DecisionWait
+			}
+			cfg.Approver = hubAwait{AsyncApprover: aa, client: cfg.Hub.Client, wait: wait}
 		}
 	}
 	cfg.Databases = servedDatabases(cfg.Policy.Profile.Database, cfg.Databases)

@@ -561,7 +561,7 @@ func (s *Server) queryRun(ctx context.Context, req ipc.Request) ipc.Response {
 			return s.runGranted(ctx, req.ID, sess, pl, g, rec)
 		}
 	}
-	return s.hubSubmit(ctx, req.ID, sess, pl, rec, hiddenRefusal)
+	return s.hubSubmit(ctx, req.ID, sess, pl, rec, hiddenRefusal, true)
 }
 
 // runChecks are the checks of a plan at run time, under the policy and the

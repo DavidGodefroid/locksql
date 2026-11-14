@@ -874,6 +874,13 @@ Then:
   second time after a denial answers it again. A ticket that already ran
   answers `no_such_plan`; any other failure to verify the decision is an
   `error` naming the reason, not a denial.
+- A statement whose ticket an auto rule may decide (its action is `auto`,
+  see [Auto mode per profile](#auto-mode-per-profile)) waits up to 2 s for
+  the decision before it answers `pending`: decided by then, as `lox run`'s
+  auto mode does in milliseconds, the ticket runs in the same
+  `query.run` call, which answers the rows (a denial answers `denied`),
+  and the agent never runs the ticket itself. A never-auto ticket (`ask`)
+  and a grant's answer `pending` at once.
 - The audit log records the hub's decisions the console acts on, with the
   ticket, the approver, the facade and the hub's signature (`hub_sig`): the
   `approved` record before the run (the `run` record after it carries no
@@ -1000,7 +1007,8 @@ does:
 - `ask` marks the ticket never-auto (`flags.never_auto`): an auto rule's
   approval of it is refused by the console (nothing runs, the refusal is
   audited), only a human's approval runs it.
-- `auto` leaves the ticket to `lox run`'s auto mode.
+- `auto` leaves the ticket to `lox run`'s auto mode; a statement decided
+  within the 2 s `query.run` waits for it runs in that same call.
 
 The rules in force are those of the approved policy: loosening one (toward
 `auto`) is a policy loosening, reviewed at start or at `:review`, with the

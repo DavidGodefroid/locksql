@@ -198,7 +198,7 @@ func startConsole(t *testing.T, dir, profile string) *testConsole {
 		Policy:    config.NewPolicy(p, []string{"app.users.email"}, nil),
 		RulesPath: filepath.Join(dir, pii.RulesFile), StateDir: state, ApprovedKey: config.ApprovedKey(dir, profile),
 		Session: fakeSession{}, DBUser: p.User, Databases: []string{"app"},
-		Audit: log, IO: sio, Version: "test", Hub: hub,
+		Audit: log, IO: sio, Version: "test", Hub: hub, DecisionWait: -1,
 	})
 	if err != nil {
 		t.Fatal(err)
