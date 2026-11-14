@@ -1213,6 +1213,11 @@ func (s *vaultSession) DBUser() string { return s.user }
 // fresh login; zero for never.
 func (s *vaultSession) CredentialsExpire() time.Time { return s.refreshAt }
 
+// SampleColumn passes the sampling on (engine.Sampler).
+func (s *vaultSession) SampleColumn(ctx context.Context, db string, c engine.ColumnInfo, n int) ([]string, error) {
+	return engine.SampleColumn(ctx, s.Session, db, c, n)
+}
+
 // ShadowedFunctions passes the lookup on (engine.FunctionShadows).
 func (s *vaultSession) ShadowedFunctions(ctx context.Context, db string, names []string) ([]string, error) {
 	return engine.ShadowedFunctions(ctx, s.Session, db, names)
@@ -1346,6 +1351,62 @@ func (st *starter) privileges(ctx context.Context, sess engine.Session) error {
 	return nil
 }
 
+// Bounds of the name-column sampling of the PII scan: rows per column,
+// columns per start, time per column and for the whole scan.
+const (
+	nameSampleRows    = 20
+	nameSampleColumns = 64
+)
+
+var (
+	nameSampleTimeout = 2 * time.Second
+	nameSampleBudget  = 10 * time.Second
+)
+
+// nameSampling samples, within its bounds, the columns whose name means
+// "name" and proposes those whose values are person names. The values stay
+// in memory: they are never printed, audited or sent to the agent.
+type nameSampling struct {
+	rules    pii.Rules
+	deadline time.Time
+	sampled  int
+	skipped  int
+}
+
+// names returns the patterns of the person-name columns of cols, read from
+// database db, that no rule names yet.
+func (ns *nameSampling) names(ctx context.Context, sess engine.Session, db string, cols []engine.ColumnInfo) []string {
+	var out []string
+	for _, c := range pii.NameCandidates(cols) {
+		if ns.rules.Covered(c.DB, c.Table, c.Column) {
+			continue
+		}
+		if ns.sampled >= nameSampleColumns || !time.Now().Before(ns.deadline) {
+			ns.skipped++
+			continue
+		}
+		ns.sampled++
+		end := time.Now().Add(nameSampleTimeout)
+		if ns.deadline.Before(end) {
+			end = ns.deadline
+		}
+		cctx, cancel := context.WithDeadline(ctx, end)
+		samples, err := engine.SampleColumn(cctx, sess, db, c, nameSampleRows)
+		cancel()
+		if errors.Is(err, engine.ErrNoSampling) {
+			return out
+		}
+		if err != nil {
+			ns.skipped++
+			continue
+		}
+		if pat := pii.ProposeName(c, samples); pat != "" {
+			out = append(out, pat)
+		}
+	}
+	return out
+}
+
 // piiBootstrap scans the schema at every start and proposes mask rules for
 // the columns that look like personal data and that no rule names yet
 // (neither a mask nor an allow rule). It returns the policy including the
@@ -1353,7 +1414,10 @@ func (st *starter) privileges(ctx context.Context, sess engine.Session) error {
 func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []string, rulesPath, stateDir, key string, ap config.Policy) (config.Policy, error) {
 	_, statErr := os.Stat(rulesPath)
 	firstRun := errors.Is(statErr, fs.ErrNotExist)
+	rules := pii.Rules{Mask: slices.Clone(ap.PIIMask), Allow: slices.Clone(ap.PIIAllow), Modes: maps.Clone(ap.PIIModes)}
 	var cols []engine.ColumnInfo
+	var named []string
+	sampling := nameSampling{rules: rules, deadline: time.Now().Add(nameSampleBudget)}
 	for _, db := range servedDatabases(st.profile.Database, dbs) {
 		c, err := sess.Columns(ctx, db)
 		if err != nil {
@@ -1361,10 +1425,15 @@ func (st *starter) piiBootstrap(ctx context.Context, sess engine.Session, dbs []
 			continue
 		}
 		cols = append(cols, c...)
+		named = append(named, sampling.names(ctx, sess, db, c)...)
 	}
-	rules := pii.Rules{Mask: slices.Clone(ap.PIIMask), Allow: slices.Clone(ap.PIIAllow), Modes: maps.Clone(ap.PIIModes)}
+	if sampling.skipped > 0 {
+		st.io.Println(fmt.Sprintf("PII scan: %d name column(s) not sampled (time or column budget, or a read error)", sampling.skipped))
+	}
 	var proposals []string
-	for _, pat := range pii.Propose(cols) {
+	all := append(pii.Propose(cols), named...)
+	slices.Sort(all)
+	for _, pat := range slices.Compact(all) {
 		seg := strings.SplitN(pat, ".", 3)
 		if len(seg) == 3 && rules.Covered(seg[0], seg[1], seg[2]) {
 			continue

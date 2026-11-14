@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -294,6 +295,23 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 	if out == nil && err == nil {
 		out = []engine.ColumnInfo{}
 	}
+	return out, err
+}
+
+// SampleColumn implements engine.Sampler. ColumnInfo.DB is the schema.
+func (s *session) SampleColumn(ctx context.Context, db string, c engine.ColumnInfo, n int) ([]string, error) {
+	col := pgx.Identifier{c.Column}.Sanitize()
+	q := "SELECT pg_catalog.left(" + col + "::text, " + strconv.Itoa(engine.SampleBytes) + ") FROM " +
+		pgx.Identifier{c.DB, c.Table}.Sanitize() + " WHERE " + col + " IS NOT NULL LIMIT $1::int"
+	var out []string
+	err := s.catalog(ctx, db, func(ctx context.Context, conn *pgx.Conn) error {
+		rows, err := conn.Query(ctx, q, max(n, 0))
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	})
 	return out, err
 }
 

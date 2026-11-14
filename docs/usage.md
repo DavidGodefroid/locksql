@@ -664,6 +664,21 @@ The console needs an interactive terminal (`lox attach` attaches yours). At star
    read: the console says so once while the new file does not exist; copy it
    there to keep its rules.
 
+   Person names are found from their values, not their column name alone:
+   for each table column of a text type whose name means "name" (`name`,
+   `full_name`, `nom`, `naam`, `customer_name`, `display_name`…) and that
+   no rule names yet, the console reads up to 20 non-null values (cut to 256
+   bytes each) in a read-only transaction and proposes the column when a
+   significant share of them are person names (lockkit's
+   `LooksPersonNameColumn`, tuned by the table name: `customers.name`
+   holding "Alice Dupont" is proposed; `products.name`, `roles.name`,
+   `cities.name` or `tags.name` holding things are not). Sampling is bounded:
+   2 s per column, 10 s and 64 columns per start; a column left out (budget
+   reached or a read error) is counted on the console and sampled again at
+   the next start. Views are not sampled. The sampled values stay in the
+   console's memory: they are not printed, logged, audited or sent to the
+   agent or the hub.
+
    Quasi-identifiers (birth date, postal code, gender; multilingual names) are
    listed apart, after the personal-data columns, one prompt each:
    `Mask <db.table.column>? (masking blocks range filters, LIKE and ORDER BY

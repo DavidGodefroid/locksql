@@ -30,6 +30,7 @@ var sessionOptional = []reflect.Type{
 	reflect.TypeFor[engine.ObjectGuard](),
 	reflect.TypeFor[engine.RowChecker](),
 	reflect.TypeFor[engine.TriggerLister](),
+	reflect.TypeFor[engine.Sampler](),
 }
 
 // notSessionOptional are the other interfaces of package engine.
@@ -181,6 +182,7 @@ func (s *fullWrap) ObjectState() {}
 func (s *fullWrap) RunGuarded() {}
 func (s *fullWrap) RunCounted() {}
 func (s *fullWrap) Triggers() {}
+func (s *fullWrap) SampleColumn() {}
 type halfWrap struct {
 	engine.Session
 	host string
@@ -193,7 +195,7 @@ type aliasWrap struct{ *eng.Session }
 func (s *aliasWrap) Notices() []string { return nil }
 `}
 	gaps := wrapperGaps(t, src)
-	want := []string{"FunctionShadows.ShadowedFunctions", "FunctionShadows.ShadowedOperators", "ObjectGuard.ObjectState", "ObjectGuard.RunGuarded", "RowChecker.RunCounted", "TriggerLister.Triggers"}
+	want := []string{"FunctionShadows.ShadowedFunctions", "FunctionShadows.ShadowedOperators", "ObjectGuard.ObjectState", "ObjectGuard.RunGuarded", "RowChecker.RunCounted", "TriggerLister.Triggers", "Sampler.SampleColumn"}
 	if len(gaps) != 2 || !slices.Equal(gaps["halfWrap"], want) || !slices.Equal(gaps["aliasWrap"], want) {
 		t.Fatalf("gaps = %v", gaps)
 	}

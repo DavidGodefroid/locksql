@@ -187,6 +187,16 @@ func (s *session) Columns(ctx context.Context, db string) ([]engine.ColumnInfo, 
 	return out, nil
 }
 
+// SampleColumn implements engine.Sampler. ColumnInfo.DB is the schema.
+func (s *session) SampleColumn(ctx context.Context, db string, c engine.ColumnInfo, n int) ([]string, error) {
+	if err := s.checkDB(ctx, c.DB); err != nil {
+		return nil, err
+	}
+	col := quoteIdent(c.Column)
+	return s.strings(ctx, "SELECT substr(CAST("+col+" AS TEXT), 1, "+strconv.Itoa(engine.SampleBytes)+") FROM "+
+		quoteIdent(orMain(c.DB))+"."+quoteIdent(c.Table)+" WHERE "+col+" IS NOT NULL LIMIT ?", max(n, 0))
+}
+
 // stats holds sqlite_stat1: the row count per table and the per-index
 // "rows per distinct prefix" figures, keyed by lower-cased name.
 type stats struct {

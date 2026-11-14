@@ -130,3 +130,43 @@ func TestProposeLoginsFreeTextCoordinates(t *testing.T) {
 		t.Error("login VARCHAR: not proposed")
 	}
 }
+
+func TestNameCandidates(t *testing.T) {
+	cols := []engine.ColumnInfo{
+		{DB: "public", Table: "customers", Column: "name", Type: "text"},
+		{DB: "public", Table: "customers", Column: "email", Type: "text"},  // Propose's
+		{DB: "public", Table: "customers", Column: "status", Type: "text"}, // not a name
+		{DB: "public", Table: "products", Column: "name", Type: "character varying(80)"},
+		{DB: "public", Table: "v_customers", Column: "name", Type: "text", View: true},
+		{DB: "public", Table: "codes", Column: "name", Type: "integer"},
+		{DB: "public", Table: "tags", Column: "name", Type: "text[]"},
+		{DB: "main", Table: "people", Column: "nom", Type: "", TypeLoose: true},
+	}
+	var got []string
+	for _, c := range NameCandidates(cols) {
+		got = append(got, c.Table+"."+c.Column)
+	}
+	if want := []string{"customers.name", "products.name", "people.nom"}; !slices.Equal(got, want) {
+		t.Errorf("NameCandidates = %v, want %v", got, want)
+	}
+}
+
+func TestProposeName(t *testing.T) {
+	cust := engine.ColumnInfo{DB: "public", Table: "customers", Column: "name", Type: "text"}
+	if got := ProposeName(cust, []string{"Alice Dupont", "Bob Martin", "Chloé Lambert"}); got != "public.customers.name" {
+		t.Errorf("customers.name: %q", got)
+	}
+	if got := ProposeName(cust, nil); got != "" {
+		t.Errorf("customers.name without samples: %q", got)
+	}
+	for table, samples := range map[string][]string{
+		"products": {"Laptop Pro 14", "USB-C Hub"},
+		"roles":    {"admin", "editor"},
+		"cities":   {"Namur", "Liège", "Gent"},
+		"tags":     {"urgent", "billing"},
+	} {
+		if got := ProposeName(engine.ColumnInfo{DB: "public", Table: table, Column: "name", Type: "text"}, samples); got != "" {
+			t.Errorf("%s.name proposed: %q", table, got)
+		}
+	}
+}

@@ -177,6 +177,11 @@ func (s *tunneledSession) ShadowedOperators(ctx context.Context, db string, name
 	return engine.ShadowedOperators(ctx, s.Session, db, names)
 }
 
+// SampleColumn passes the sampling on (engine.Sampler).
+func (s *tunneledSession) SampleColumn(ctx context.Context, db string, c engine.ColumnInfo, n int) ([]string, error) {
+	return engine.SampleColumn(ctx, s.Session, db, c, n)
+}
+
 func (s *tunneledSession) Close() error {
 	err := s.Session.Close()
 	if s.closeTunnel != nil {
@@ -228,6 +233,11 @@ func (s *proxiedSession) ShadowedFunctions(ctx context.Context, db string, names
 // ShadowedOperators passes the lookup on (engine.FunctionShadows).
 func (s *proxiedSession) ShadowedOperators(ctx context.Context, db string, names []string) ([]string, error) {
 	return engine.ShadowedOperators(ctx, s.Session, db, names)
+}
+
+// SampleColumn passes the sampling on (engine.Sampler).
+func (s *proxiedSession) SampleColumn(ctx context.Context, db string, c engine.ColumnInfo, n int) ([]string, error) {
+	return engine.SampleColumn(ctx, s.Session, db, c, n)
 }
 
 // withProxyStderr adds what the proxy command wrote to its stderr to a

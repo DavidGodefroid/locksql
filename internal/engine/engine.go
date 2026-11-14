@@ -226,6 +226,32 @@ func ShadowedOperators(ctx context.Context, s Session, db string, names []string
 	return fs.ShadowedOperators(ctx, db, names)
 }
 
+// SampleBytes caps each value SampleColumn returns.
+const SampleBytes = 256
+
+// Sampler is implemented by sessions that can read a few values of one
+// column for PII detection: at most n non-null values of column c (as
+// Columns reports it) in database db, as text cut to SampleBytes, read in
+// a read-only transaction under the statement timeout. The SQL is built by
+// the engine, the names quoted as identifiers. The values are for the
+// console's own heuristics: they are never logged, audited or sent on.
+type Sampler interface {
+	SampleColumn(ctx context.Context, db string, c ColumnInfo, n int) ([]string, error)
+}
+
+// ErrNoSampling is the error of a session wrapper whose session does not
+// implement Sampler.
+var ErrNoSampling = errors.New("engine: this session cannot sample column values")
+
+// SampleColumn passes the sampling on to s, for session wrappers.
+func SampleColumn(ctx context.Context, s Session, db string, c ColumnInfo, n int) ([]string, error) {
+	sm, ok := s.(Sampler)
+	if !ok {
+		return nil, ErrNoSampling
+	}
+	return sm.SampleColumn(ctx, db, c, n)
+}
+
 // DialFunc opens the network connection to the database server. nil is a
 // direct TCP or Unix socket connection.
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)

@@ -6,6 +6,20 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
+Built on lockkit v0.19.2.
+
+### Added
+
+- PII scan: person-name columns are proposed from their values. At every
+  start, the text columns of tables whose name means "name" (`name`,
+  `full_name`, `nom`, `naam`…) and that no rule names are sampled (up to 20
+  non-null values each, read-only, 2 s per column, 10 s and 64 columns per
+  start) and proposed when lockkit's `LooksPersonNameColumn` finds person
+  names in them: `public.customers.name` holding "Alice Dupont" is proposed,
+  `products.name` or `roles.name` are not. The column name alone never
+  proposes a column, and the sampled values never leave the console (#236,
+  lockkit#163).
+
 ## v0.18.3 (2026-11-14)
 
 Supported lockhub: v0.9.0 or later (unchanged). Built on lockkit v0.19.1
