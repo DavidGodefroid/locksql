@@ -433,8 +433,11 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 	}
 	const query = "SELECT id, label FROM hub_v ORDER BY id LIMIT 10"
 	p := submit(query)
-	if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: p.Ticket}, nil); e == nil {
-		t.Fatal("the ticket ran before a decision")
+	// Before a decision the ticket answers pending again, never denied
+	// (#234).
+	var early json.RawMessage
+	if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: p.Ticket}, &early); e != nil || !undecided(early) {
+		t.Fatalf("run before a decision: want pending, got %+v %s", e, early)
 	}
 
 	// 4. The human approves in `lox approve`.
@@ -480,8 +483,9 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 
 	t.Run("replayed decision refused", func(t *testing.T) {
 		_, e := runTicket(p.Ticket)
-		if e == nil || e.Code != ipc.CodeDenied || !strings.Contains(e.Message, "used") {
-			t.Fatalf("replay: want CodeDenied, plan already used; got %+v", e)
+		// An approved ticket that ran is not a denial (#234).
+		if e == nil || e.Code != ipc.CodeNoSuchPlan || !strings.Contains(e.Message, "already ran") {
+			t.Fatalf("replay: want CodeNoSuchPlan, already ran; got %+v", e)
 		}
 		if n := runs(p.Ticket); n != 1 {
 			t.Fatalf("the replay ran: %d runs", n)
@@ -747,8 +751,8 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		if err := json.Unmarshal(raw, &d); err != nil || d.Status != "pending" || d.Ticket == "" {
 			t.Fatalf("hub down: want pending, got %s", raw)
 		}
-		if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: d.Ticket}, nil); e == nil {
-			t.Fatal("ran with the hub down")
+		if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: d.Ticket}, &raw); e != nil || !undecided(raw) {
+			t.Fatalf("run of the ticket with the hub down: want pending, got %+v %s", e, raw)
 		}
 		if n := runs(d.Ticket); n != 0 {
 			t.Fatalf("ran with the hub down: %d runs", n)
