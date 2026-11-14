@@ -6,6 +6,11 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
+## v0.18.3 (2026-11-14)
+
+Supported lockhub: v0.9.0 or later (unchanged). Built on lockkit v0.19.1
+(unchanged).
+
 ### Changed
 
 - Hub mode, auto mode: a statement whose ticket an auto rule may decide
