@@ -13,3 +13,4 @@
 - [ ] No secret can reach argv, the environment, a file, a log, the socket or an error message.
 - [ ] No default is loosened and no way around the console is added (or the issue discusses it).
 - [ ] Docs (`README.md`, `docs/`) are updated if behaviour changes.
+- [ ] docs site: new docs/ file or renamed README section reflected in lockfamily docs-site/nav.toml (or not applicable)

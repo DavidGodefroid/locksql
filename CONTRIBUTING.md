@@ -122,6 +122,11 @@ Never point a test at a real or remote database.
   policy; fail closed on anything ambiguous.
 - One logical change per pull request, with a commit message that explains
   why.
+- Docs are published at [lockfamily.dev/docs](https://lockfamily.dev/docs/)
+  from this repo's Markdown. Adding a file under `docs/`, or renaming or
+  removing a README H2 section, needs a matching change to
+  [lockfamily's `docs-site/nav.toml`](https://github.com/DavidGodefroid/lockfamily/blob/main/docs-site/nav.toml):
+  open a lockfamily PR, or the nightly docs build fails.
 
 Pull requests target `main`, which is protected:
 
