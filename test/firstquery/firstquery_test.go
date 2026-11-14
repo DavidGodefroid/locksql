@@ -498,7 +498,7 @@ func firstQuery(t *testing.T, readOnly bool) {
 	deadline := time.Now().Add(time.Minute)
 	for {
 		out, err = agent(t, project, "run", "--profile", "dev", "--json", pending.Ticket)
-		if err == nil || !strings.Contains(out, "no decision") || time.Now().After(deadline) {
+		if err != nil || !strings.Contains(out, `"status":"pending"`) || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)

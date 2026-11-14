@@ -444,6 +444,28 @@ func statementLines(d sqlclass.Dialect, sql string) []render.Line {
 	return out
 }
 
+// ticketNotRun answers a ticket hubclient.Begin did not turn into a run
+// for a reason the caller does not handle itself. Only a denial answers
+// denied: the hub's (the caller's hubclient.ErrDenied case), or one the
+// plan ended with before (a denied ticket run again). A ticket not decided
+// yet answers pending with the same ticket, an unknown or used one no such
+// plan, and anything else (a decision that does not verify, a store error)
+// an internal error, never "denied by the human".
+func (s *Server) ticketNotRun(id int64, ticketID string, err error) ipc.Response {
+	switch {
+	case errors.Is(err, hubclient.ErrPending):
+		return kconsole.PendingResp(id, product.P.Name, kconsole.Pending{Ticket: ticketID, Instance: s.cfg.Hub.Instance})
+	case errors.Is(err, plans.ErrUsed):
+		if p, e := s.cfg.Hub.Store.TicketPlan(ticketID); e == nil && (p.State == plans.Denied || p.State == plans.Withdrawn) {
+			return errResp(id, ipc.CodeDenied, "ticket "+ticketID+" was denied by the human; do not retry unless asked")
+		}
+		return errResp(id, ipc.CodeNoSuchPlan, "ticket "+ticketID+" already ran: a ticket runs once")
+	case errors.Is(err, plans.ErrNoSuchPlan):
+		return errResp(id, ipc.CodeNoSuchPlan, "ticket "+ticketID+": no such ticket")
+	}
+	return errResp(id, ipc.CodeInternal, "ticket "+ticketID+": "+s.safeReason(err.Error()))
+}
+
 // hubSubmit hands pl to the hub instead of asking here: the plan goes to
 // the plans store, bound to the client and the plan hash, and the client
 // gets pending with the ticket. hidden is a refusal the human must see
@@ -598,7 +620,7 @@ func (s *Server) queryRunTicket(ctx context.Context, id int64, ticketID string, 
 		}
 		return errResp(id, ipc.CodeDenied, msg)
 	case err != nil:
-		return errResp(id, ipc.CodeDenied, "ticket "+ticketID+": "+s.safeReason(err.Error()))
+		return s.ticketNotRun(id, ticketID, err)
 	}
 	finish := func(ok bool, reason string) {
 		if err := h.Client.Finish(ctx, h.Store, hp.ID, caller, ok, reason); err != nil {

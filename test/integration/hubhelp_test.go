@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -86,7 +85,7 @@ func approving(t *testing.T, hub *hubtest.Hub, call func(method string, params a
 		deadline := time.Now().Add(30 * time.Second)
 		for {
 			r = call(method, ipc.RunParams{Ticket: p.Ticket, Requester: rp.Requester})
-			if r.Error == nil || !strings.Contains(r.Error.Message, "no decision") || time.Now().After(deadline) {
+			if r.Error != nil || !undecided(r.Result) || time.Now().After(deadline) {
 				return r
 			}
 			time.Sleep(50 * time.Millisecond)

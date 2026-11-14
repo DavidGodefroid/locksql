@@ -418,15 +418,11 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 	// runTicket runs a ticket, waiting for the decision to reach the lock.
 	runTicket := func(tk string) (json.RawMessage, *ipc.RPCError) {
 		t.Helper()
-		deadline := time.Now().Add(60 * time.Second)
-		for {
-			var raw json.RawMessage
-			e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: tk}, &raw)
-			if e == nil || !strings.Contains(e.Message, "no decision yet") || time.Now().After(deadline) {
-				return raw, e
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
+		var raw json.RawMessage
+		e := untilDecided(t, 60*time.Second, 200*time.Millisecond, func(o any) *ipc.RPCError {
+			return cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: tk}, o)
+		}, &raw)
+		return raw, e
 	}
 	// decided counts the decisions the human made in lockhub.
 	decided := 0
@@ -437,8 +433,11 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 	}
 	const query = "SELECT id, label FROM hub_v ORDER BY id LIMIT 10"
 	p := submit(query)
-	if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: p.Ticket}, nil); e == nil {
-		t.Fatal("the ticket ran before a decision")
+	// Before a decision the ticket answers pending again, never denied
+	// (#234).
+	var early json.RawMessage
+	if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: p.Ticket}, &early); e != nil || !undecided(early) {
+		t.Fatalf("run before a decision: want pending, got %+v %s", e, early)
 	}
 
 	// 4. The human approves in `lox approve`.
@@ -484,8 +483,9 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 
 	t.Run("replayed decision refused", func(t *testing.T) {
 		_, e := runTicket(p.Ticket)
-		if e == nil || e.Code != ipc.CodeDenied || !strings.Contains(e.Message, "used") {
-			t.Fatalf("replay: want CodeDenied, plan already used; got %+v", e)
+		// An approved ticket that ran is not a denial (#234).
+		if e == nil || e.Code != ipc.CodeNoSuchPlan || !strings.Contains(e.Message, "already ran") {
+			t.Fatalf("replay: want CodeNoSuchPlan, already ran; got %+v", e)
 		}
 		if n := runs(p.Ticket); n != 1 {
 			t.Fatalf("the replay ran: %d runs", n)
@@ -515,13 +515,10 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 			t.Fatalf("run: %+v %+v", p, e)
 		}
 		decide("y")
-		deadline := time.Now().Add(60 * time.Second)
 		for {
-			e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: p.Ticket, Requester: ipc.Requester{Agent: "dev-bob", Token: "hash-of-bob"}}, nil)
-			if e != nil && strings.Contains(e.Message, "no decision yet") && time.Now().Before(deadline) {
-				time.Sleep(200 * time.Millisecond)
-				continue
-			}
+			e := untilDecided(t, 60*time.Second, 200*time.Millisecond, func(o any) *ipc.RPCError {
+				return cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: p.Ticket, Requester: ipc.Requester{Agent: "dev-bob", Token: "hash-of-bob"}}, o)
+			}, nil)
 			if e == nil || e.Code != ipc.CodeWrongRequester {
 				t.Fatalf("another agent's ticket: %+v", e)
 			}
@@ -573,8 +570,9 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: f.Ticket}, nil); e == nil || !strings.Contains(e.Message, "no decision yet") {
-			t.Fatalf("run of the forged ticket: want no decision yet, got %+v", e)
+		var raw json.RawMessage
+		if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: f.Ticket}, &raw); e != nil || !undecided(raw) {
+			t.Fatalf("run of the forged ticket: want pending, got %+v %s", e, raw)
 		}
 		if n := runs(f.Ticket); n != 0 {
 			t.Fatalf("the forged decision ran: %d runs", n)
@@ -753,8 +751,8 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 		if err := json.Unmarshal(raw, &d); err != nil || d.Status != "pending" || d.Ticket == "" {
 			t.Fatalf("hub down: want pending, got %s", raw)
 		}
-		if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: d.Ticket}, nil); e == nil {
-			t.Fatal("ran with the hub down")
+		if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: d.Ticket}, &raw); e != nil || !undecided(raw) {
+			t.Fatalf("run of the ticket with the hub down: want pending, got %+v %s", e, raw)
 		}
 		if n := runs(d.Ticket); n != 0 {
 			t.Fatalf("ran with the hub down: %d runs", n)

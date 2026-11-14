@@ -244,7 +244,7 @@ func (c *testConsole) decided(t *testing.T, dir, id string, out ticket.Outcome, 
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		o = cli(t, dir, "", append([]string{"run", "--profile", "uat", rr.Ticket}, args...)...)
-		if !strings.Contains(o.stdout+o.stderr, "no decision") || time.Now().After(deadline) {
+		if !o.undecided() || time.Now().After(deadline) {
 			return o
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -254,6 +254,17 @@ func (c *testConsole) decided(t *testing.T, dir, id string, out ticket.Outcome, 
 type outcome struct {
 	code           int
 	stdout, stderr string
+}
+
+// undecided reports whether o is the pending answer to the run or the
+// activation of a ticket the hub's decision has not reached yet, as text
+// or as JSON (#234: pending, never an error).
+func (o outcome) undecided() bool {
+	if strings.Contains(o.stdout+o.stderr, "Pending human approval") {
+		return true
+	}
+	var p struct{ Status string }
+	return json.Unmarshal([]byte(o.stdout), &p) == nil && p.Status == "pending"
 }
 
 func cli(t *testing.T, dir, stdin string, args ...string) outcome {
@@ -635,7 +646,7 @@ func TestGrantCommand(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		o = cli(t, dir, "", "grant", "--profile", "uat", gr.Ticket)
-		if !strings.Contains(o.stdout+o.stderr, "no decision") || time.Now().After(deadline) {
+		if !o.undecided() || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)

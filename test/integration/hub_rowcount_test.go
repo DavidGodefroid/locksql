@@ -162,14 +162,9 @@ GRANT INSERT ON hr_log TO rw;`)
 	}
 	run := func(tk string, who ipc.Requester, out any) *ipc.RPCError {
 		t.Helper()
-		deadline := time.Now().Add(20 * time.Second)
-		for {
-			e := call(ipc.MethodQueryRun, ipc.RunParams{Ticket: tk, Requester: who}, out)
-			if e == nil || !strings.Contains(e.Message, "no decision") || time.Now().After(deadline) {
-				return e
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
+		return untilDecided(t, 20*time.Second, 50*time.Millisecond, func(o any) *ipc.RPCError {
+			return call(ipc.MethodQueryRun, ipc.RunParams{Ticket: tk, Requester: who}, o)
+		}, out)
 	}
 	count := func() string {
 		t.Helper()

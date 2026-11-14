@@ -176,14 +176,9 @@ auto = "full-auto"
 	// runTk runs a decided ticket once its decision reached the console.
 	runTk := func(t *testing.T, cl *rpc, tk string, out any) *ipc.RPCError {
 		t.Helper()
-		deadline := time.Now().Add(30 * time.Second)
-		for {
-			e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: tk}, out)
-			if e == nil || !strings.Contains(e.Message, "no decision") || time.Now().After(deadline) {
-				return e
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
+		return untilDecided(t, 30*time.Second, 50*time.Millisecond, func(o any) *ipc.RPCError {
+			return cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: tk}, o)
+		}, out)
 	}
 	label := func(t *testing.T, db string) string {
 		t.Helper()
@@ -354,15 +349,9 @@ auto = "full-auto"
 			t.Fatal("lox run would auto-approve a grant")
 		}
 		autoApprove(t, c.hub, gr.Ticket, "auto.read")
-		deadline := time.Now().Add(30 * time.Second)
-		var e *ipc.RPCError
-		for {
-			e = cl.call(ipc.MethodGrant, ipc.GrantParams{Ticket: gr.Ticket, Requester: agent}, nil)
-			if e == nil || !strings.Contains(e.Message, "no decision") || time.Now().After(deadline) {
-				break
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
+		e := untilDecided(t, 30*time.Second, 50*time.Millisecond, func(o any) *ipc.RPCError {
+			return cl.call(ipc.MethodGrant, ipc.GrantParams{Ticket: gr.Ticket, Requester: agent}, o)
+		}, nil)
 		if e == nil || e.Code != ipc.CodeDenied || !strings.Contains(e.Message, "approved by an auto rule") {
 			t.Fatalf("auto approval of a grant: %+v", e)
 		}

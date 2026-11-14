@@ -47,7 +47,7 @@ func activateGrant(t *testing.T, h *harness, tk string, who ipc.Requester) ipc.R
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		r := h.call(t, ipc.MethodGrant, ipc.GrantParams{Ticket: tk, Requester: who})
-		if r.Error == nil || !strings.Contains(r.Error.Message, "no decision") || time.Now().After(deadline) {
+		if !undecided(r) || time.Now().After(deadline) {
 			return r
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -314,9 +314,10 @@ func TestGrantTicket(t *testing.T) {
 		!strings.Contains(body, "10000 rows (asked 1000000000)") || !strings.Contains(body, "3 statements ·") {
 		t.Fatalf("screen %+v", sc)
 	}
-	// Not yet decided: nothing is active.
-	if r := h.call(t, ipc.MethodGrant, ipc.GrantParams{Ticket: tk}); r.Error == nil || len(grantStatus(t, h)) != 0 {
-		t.Fatal("activated before a decision")
+	// Not yet decided: pending with the same ticket, never denied (#234),
+	// and nothing is active.
+	if again := pendingTicket(t, h.call(t, ipc.MethodGrant, ipc.GrantParams{Ticket: tk, Requester: agentA}), "pending"); again != tk || len(grantStatus(t, h)) != 0 {
+		t.Fatalf("activation before a decision: ticket %s (want %s), grants %v", again, tk, grantStatus(t, h))
 	}
 	// Decided, the grant's ticket does not run as a statement's; it still
 	// activates the grant.
@@ -324,7 +325,7 @@ func TestGrantTicket(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: tk, Requester: agentA})
-		if r.Error != nil && strings.Contains(r.Error.Message, "no decision") && time.Now().Before(deadline) {
+		if undecided(r) && time.Now().Before(deadline) {
 			time.Sleep(20 * time.Millisecond)
 			continue
 		}
