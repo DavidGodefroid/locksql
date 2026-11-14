@@ -204,6 +204,12 @@ func (c *consoleProc) wait() error {
 	}
 }
 
+// confinedHello is the hello of a confined agent: these tests' clients
+// dial from the host, which the console refuses unless told the agent runs
+// confined (lockkit#133); the test binary takes no runtime gid of the
+// machine (internal/console/isolation_testhook.go).
+var confinedHello = ipc.HelloParams{ProtocolMajor: ipc.ProtocolMajor, Confinement: &ipc.Confinement{Confined: true}}
+
 // rpc is a raw socket client (the client commands are a later task).
 type rpc struct {
 	t  *testing.T
@@ -319,7 +325,7 @@ production = true
 
 		cl := dialConsole(t, sock)
 		var hr ipc.HelloResult
-		if e := cl.call(ipc.MethodHello, ipc.HelloParams{ProtocolMajor: ipc.ProtocolMajor}, &hr); e != nil {
+		if e := cl.call(ipc.MethodHello, confinedHello, &hr); e != nil {
 			t.Fatal(e)
 		}
 		plan := func() string {

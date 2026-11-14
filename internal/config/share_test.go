@@ -343,7 +343,7 @@ func kconfigDecode(data []byte, into any) (any, error) {
 // a key added to Profile must be placed on purpose, else an import would
 // drop it on the other machine.
 func TestEveryProfileKeyIsPlaced(t *testing.T) {
-	notShared := map[string]bool{"name": true, "path": true, "user": true, "tls_ca": true, "tls_cert": true, "tls_key": true, "proxy_command": true}
+	notShared := map[string]bool{"name": true, "path": true, "user": true, "tls_ca": true, "tls_cert": true, "tls_key": true, "proxy_command": true, "unconfined": true}
 	shared := map[string]bool{}
 	st := reflect.TypeOf(SharedProfile{})
 	for i := 0; i < st.NumField(); i++ {

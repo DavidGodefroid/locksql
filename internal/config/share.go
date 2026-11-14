@@ -410,6 +410,9 @@ func (f *ConfigFile) Import(s *Share, o ImportOptions) ([]Skipped, error) {
 		}
 		if had {
 			r.ProxyCmd = old.ProxyCmd
+			// Whether agents run confined is a fact of this machine: a
+			// shared config never sets unconfined, nor clears it.
+			r.Unconfined = old.Unconfined
 		}
 		var missing []string
 		for _, k := range sp.NeedsLocal {
@@ -536,6 +539,9 @@ func (f *ConfigFile) TOML(header string) []byte {
 			fmt.Fprintf(&b, "pii_rules = %s\n", tomlQuote(*r.PIIRules))
 		}
 		str("write_functions", r.WriteFunctions)
+		if r.Unconfined {
+			b.WriteString("unconfined = true\n")
+		}
 		if a := r.Auto; a != nil {
 			fmt.Fprintf(&b, "\n[profiles.%s.auto]\n", tomlQuote(name))
 			str("preset", a.Preset)

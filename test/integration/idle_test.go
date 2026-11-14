@@ -124,7 +124,7 @@ credentials = "ask"
 	}
 	cl := dialConsole(t, m[1])
 	var hr ipc.HelloResult
-	if e := cl.call(ipc.MethodHello, ipc.HelloParams{ProtocolMajor: ipc.ProtocolMajor}, &hr); e != nil {
+	if e := cl.call(ipc.MethodHello, confinedHello, &hr); e != nil {
 		t.Fatal(e)
 	}
 	selectOne := func() {

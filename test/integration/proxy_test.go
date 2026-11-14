@@ -137,7 +137,7 @@ proxy_command = [%q, "exec", "-i", %q, "/stdiotcp", "127.0.0.1:%d"]
 
 	cl := dialConsole(t, m[1])
 	var hr ipc.HelloResult
-	if e := cl.call(ipc.MethodHello, ipc.HelloParams{ProtocolMajor: ipc.ProtocolMajor}, &hr); e != nil {
+	if e := cl.call(ipc.MethodHello, confinedHello, &hr); e != nil {
 		t.Fatal(e)
 	}
 	var pr ipc.PlanResult

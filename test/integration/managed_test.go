@@ -144,7 +144,7 @@ func TestManagedTierBound(t *testing.T) {
 	c.expect("blocked by company policy: locksql.bounds.tier = write (profile dev: tier = ddl)")
 	cl := dialConsole(t, sock)
 	var hr ipc.HelloResult
-	if e := cl.call(ipc.MethodHello, ipc.HelloParams{ProtocolMajor: ipc.ProtocolMajor}, &hr); e != nil {
+	if e := cl.call(ipc.MethodHello, confinedHello, &hr); e != nil {
 		t.Fatal(e)
 	}
 	var pr ipc.PlanResult
@@ -165,7 +165,7 @@ func TestManagedProfile(t *testing.T) {
 	sock := listen(t, c)
 	cl := dialConsole(t, sock)
 	var hr ipc.HelloResult
-	if e := cl.call(ipc.MethodHello, ipc.HelloParams{ProtocolMajor: ipc.ProtocolMajor}, &hr); e != nil {
+	if e := cl.call(ipc.MethodHello, confinedHello, &hr); e != nil {
 		t.Fatal(e)
 	}
 	var pr ipc.PlanResult
