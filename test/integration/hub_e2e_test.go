@@ -418,15 +418,11 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 	// runTicket runs a ticket, waiting for the decision to reach the lock.
 	runTicket := func(tk string) (json.RawMessage, *ipc.RPCError) {
 		t.Helper()
-		deadline := time.Now().Add(60 * time.Second)
-		for {
-			var raw json.RawMessage
-			e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: tk}, &raw)
-			if e == nil || !strings.Contains(e.Message, "no decision yet") || time.Now().After(deadline) {
-				return raw, e
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
+		var raw json.RawMessage
+		e := untilDecided(t, 60*time.Second, 200*time.Millisecond, func(o any) *ipc.RPCError {
+			return cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: tk}, o)
+		}, &raw)
+		return raw, e
 	}
 	// decided counts the decisions the human made in lockhub.
 	decided := 0
@@ -515,13 +511,10 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 			t.Fatalf("run: %+v %+v", p, e)
 		}
 		decide("y")
-		deadline := time.Now().Add(60 * time.Second)
 		for {
-			e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: p.Ticket, Requester: ipc.Requester{Agent: "dev-bob", Token: "hash-of-bob"}}, nil)
-			if e != nil && strings.Contains(e.Message, "no decision yet") && time.Now().Before(deadline) {
-				time.Sleep(200 * time.Millisecond)
-				continue
-			}
+			e := untilDecided(t, 60*time.Second, 200*time.Millisecond, func(o any) *ipc.RPCError {
+				return cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: p.Ticket, Requester: ipc.Requester{Agent: "dev-bob", Token: "hash-of-bob"}}, o)
+			}, nil)
 			if e == nil || e.Code != ipc.CodeWrongRequester {
 				t.Fatalf("another agent's ticket: %+v", e)
 			}
@@ -573,8 +566,9 @@ GRANT SELECT ON hub_t, hub_v TO ro;`)
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: f.Ticket}, nil); e == nil || !strings.Contains(e.Message, "no decision yet") {
-			t.Fatalf("run of the forged ticket: want no decision yet, got %+v", e)
+		var raw json.RawMessage
+		if e := cl.call(ipc.MethodQueryRun, ipc.RunParams{Ticket: f.Ticket}, &raw); e != nil || !undecided(raw) {
+			t.Fatalf("run of the forged ticket: want pending, got %+v %s", e, raw)
 		}
 		if n := runs(f.Ticket); n != 0 {
 			t.Fatalf("the forged decision ran: %d runs", n)

@@ -865,7 +865,12 @@ Then:
 - `query.run` answers `{"status":"pending","ticket":…}`: the plan is kept in
   the console's plan store and its screen, every literal masked, goes to
   the hub in a signed ticket. `locksql run TICKET` (`locksql_run` with
-  `ticket`) runs it once the human decided.
+  `ticket`) runs it once the human decided. Run before the decision reached
+  the console, the ticket answers `pending` again with the same ticket
+  (never `denied`); only a denial answers `denied`, and a ticket run a
+  second time after a denial answers it again. A ticket that already ran
+  answers `no_such_plan`; any other failure to verify the decision is an
+  `error` naming the reason, not a denial.
 - The audit log records the hub's decisions the console acts on, with the
   ticket, the approver, the facade and the hub's signature (`hub_sig`): the
   `approved` record before the run (the `run` record after it carries no
@@ -1043,7 +1048,8 @@ locksql grant --profile P TICKET      # once the grant's ticket is decided
    by the pinned hub key, matching the ticket it signed, still usable) and
    the policy the grant was asked under. A grant ticket waits at most 4 h
    for its decision and its activation; it is never renewed (ask for a new
-   grant). The duration counts from the activation. Only the agent that
+   grant). Activated before the decision reached the console, the ticket
+   answers `pending` again, never `denied`. The duration counts from the activation. Only the agent that
    asked for the grant (same lea token and account) activates it and runs
    under it. A grant needs that token: asking for one or activating it
    without lea's `LEA_AGENT_TOKEN` is refused (`E_GRANT_NEEDS_AGENT`), since

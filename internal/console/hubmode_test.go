@@ -148,13 +148,20 @@ func (h *harness) okRun(t *testing.T, id string, out any) {
 	}
 }
 
+// undecided reports whether resp is the pending answer to the run of a
+// ticket the hub's decision has not reached yet.
+func undecided(resp ipc.Response) bool {
+	var m map[string]string
+	return resp.Error == nil && json.Unmarshal(resp.Result, &m) == nil && m["status"] == "pending"
+}
+
 // runTicket runs a ticket until the hub's decision has reached the console.
 func runTicket(t *testing.T, h *harness, tk string) ipc.Response {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: tk})
-		if r.Error == nil || !strings.Contains(r.Error.Message, "no decision") || time.Now().After(deadline) {
+		if !undecided(r) || time.Now().After(deadline) {
 			return r
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -181,8 +188,10 @@ func TestHubModePendingThenRun(t *testing.T) {
 	if log := h.auditLog(t); !strings.Contains(log, `"event":"pending"`) || !strings.Contains(log, `"ticket":"`+tk+`"`) {
 		t.Errorf("no pending record:\n%s", h.auditLog(t))
 	}
-	if r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: tk}); r.Error == nil {
-		t.Fatal("ran before a decision")
+	// Before a decision the ticket answers pending again, never denied
+	// (#234), and nothing runs.
+	if again := pendingTicket(t, h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: tk}), "pending"); again != tk || slices.Contains(h.sess.runs, q) {
+		t.Fatalf("run before a decision: ticket %s (want %s), runs %q", again, tk, h.sess.runs)
 	}
 	hub.Decide(tk, ticket.Approved, "")
 	r := runTicket(t, h, tk)
@@ -404,7 +413,7 @@ func TestHubModeWrongRequester(t *testing.T) {
 		deadline := time.Now().Add(10 * time.Second)
 		for {
 			r := h.call(t, ipc.MethodQueryRun, ipc.RunParams{Ticket: tk, Requester: who})
-			if r.Error == nil || !strings.Contains(r.Error.Message, "no decision") || time.Now().After(deadline) {
+			if !undecided(r) || time.Now().After(deadline) {
 				return r
 			}
 			time.Sleep(20 * time.Millisecond)

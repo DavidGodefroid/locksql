@@ -244,7 +244,7 @@ func (c *testConsole) decided(t *testing.T, dir, id string, out ticket.Outcome, 
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		o = cli(t, dir, "", append([]string{"run", "--profile", "uat", rr.Ticket}, args...)...)
-		if !strings.Contains(o.stdout+o.stderr, "no decision") || time.Now().After(deadline) {
+		if !strings.Contains(o.stdout+o.stderr, "Pending human approval") || time.Now().After(deadline) {
 			return o
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -635,7 +635,7 @@ func TestGrantCommand(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		o = cli(t, dir, "", "grant", "--profile", "uat", gr.Ticket)
-		if !strings.Contains(o.stdout+o.stderr, "no decision") || time.Now().After(deadline) {
+		if !strings.Contains(o.stdout+o.stderr, "Pending human approval") || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)

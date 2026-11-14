@@ -336,7 +336,7 @@ func (s *Server) grantActivate(ctx context.Context, id int64, ticketID string, w
 		}
 		return errResp(id, ipc.CodeDenied, msg)
 	case err != nil:
-		return errResp(id, ipc.CodeDenied, "ticket "+ticketID+": "+s.safeReason(err.Error()))
+		return s.ticketNotRun(id, ticketID, err)
 	}
 	finish := func(ok bool, reason string) {
 		if err := h.Client.Finish(ctx, h.Store, hp.ID, caller, ok, reason); err != nil {

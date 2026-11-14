@@ -13,6 +13,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	kconsole "github.com/DavidGodefroid/lockkit/console"
+
 	"github.com/DavidGodefroid/locksql/internal/client"
 	"github.com/DavidGodefroid/locksql/internal/engine"
 	"github.com/DavidGodefroid/locksql/internal/ipc"
@@ -34,6 +36,8 @@ type fakeConn struct {
 	planIn    ipc.PlanParams
 	planErr   error
 	grantIn   ipc.GrantParams
+	// activate, when set, answers grant.activate.
+	activate *ipc.GrantResult
 	// unmatched and unmatchedErr answer pii.unmatched (not recorded in
 	// calls: it shares the connection of pii.list or pii.add).
 	unmatched    ipc.PIIUnmatchedResult
@@ -90,6 +94,9 @@ func (f *fakeConn) Grant(_ context.Context, p ipc.GrantParams) (ipc.GrantResult,
 
 func (f *fakeConn) ActivateGrant(_ context.Context, ticket string) (ipc.GrantResult, error) {
 	f.record("activate " + ticket)
+	if f.activate != nil {
+		return *f.activate, nil
+	}
 	return ipc.GrantResult{Status: "active", Grant: &ipc.GrantInfo{ID: ticket, DB: "app", Tables: []string{"app.orders"}, Duration: "1h0m0s",
 		ExpiresInS: 3600, Budget: ipc.GrantBudget{Statements: 200, Rows: 10000, Bytes: 1 << 20}, Remaining: ipc.GrantBudget{Statements: 200, Rows: 10000, Bytes: 1 << 20}}}, nil
 }
@@ -433,6 +440,42 @@ func TestDeniedRunTellsTheAgentNotToRetry(t *testing.T) {
 	got := text(r)
 	if !strings.Contains(got, "denied") || !strings.Contains(strings.ToLower(got), "do not retry") {
 		t.Fatalf("denial text = %q", got)
+	}
+}
+
+// A ticket the hub has not decided yet answers the console's pending
+// answer: locksql_run and the activation of locksql_grant say pending with
+// the ticket, never the denied hint (#234).
+func TestUndecidedTicketIsPendingNotDenied(t *testing.T) {
+	const tk = "01JB0000000000000000000000"
+	resp := kconsole.PendingResp(1, product.P.Name, kconsole.Pending{Ticket: tk, Instance: "sql-uat"})
+	var rr ipc.RunResult
+	var gr ipc.GrantResult
+	if err := json.Unmarshal(resp.Result, &rr); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(resp.Result, &gr); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeConn{profile: "uat", runResult: rr, activate: &gr}
+	cs := connect(t, withFake(f), nil)
+	for _, c := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"locksql_run", map[string]any{"ticket": tk}},
+		{"locksql_grant", map[string]any{"ticket": tk}},
+	} {
+		r := call(t, cs, c.tool, c.args)
+		got := text(r)
+		if r.IsError || !strings.Contains(got, "Pending human approval") || !strings.Contains(got, tk) || strings.Contains(strings.ToLower(got), "denied") {
+			t.Fatalf("%s of an undecided ticket: error %v, %q", c.tool, r.IsError, got)
+		}
+		b, _ := json.Marshal(r.StructuredContent)
+		var out map[string]any
+		if err := json.Unmarshal(b, &out); err != nil || out["status"] != "pending" || out["ticket"] != tk || out["instance"] != "sql-uat" || out["lock"] != "locksql" {
+			t.Fatalf("%s structured content %s", c.tool, b)
+		}
 	}
 }
 

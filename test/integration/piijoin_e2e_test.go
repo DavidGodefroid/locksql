@@ -102,16 +102,11 @@ func TestPIIJoinEndToEnd(t *testing.T) {
 		t.Fatalf("hub ticket: %s", raw)
 	}
 	fake.Decide(tk, ticket.Approved, "")
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		e := call(ipc.MethodQueryRun, ipc.RunParams{Ticket: tk}, &rr)
-		if e == nil {
-			break
-		}
-		if !strings.Contains(e.Message, "no decision") || time.Now().After(deadline) {
-			t.Fatalf("run of the ticket: %s", e.Message)
-		}
-		time.Sleep(50 * time.Millisecond)
+	rr = ipc.RunResult{}
+	if e := untilDecided(t, 30*time.Second, 50*time.Millisecond, func(o any) *ipc.RPCError {
+		return call(ipc.MethodQueryRun, ipc.RunParams{Ticket: tk}, o)
+	}, &rr); e != nil {
+		t.Fatalf("run of the ticket: %s", e.Message)
 	}
 	if len(rr.Rows) != 1 {
 		t.Fatalf("rows %+v, want the one shared subject", rr.Rows)

@@ -148,14 +148,7 @@ func approvedRun(t *testing.T, hub *hubtest.Hub, call func(params any, out any) 
 		t.Fatalf("query.run: %+v, want pending", p)
 	}
 	hub.Decide(p.Ticket, ticket.Approved, "")
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		e := call(ipc.RunParams{Ticket: p.Ticket}, out)
-		if e == nil || !strings.Contains(e.Message, "no decision") || time.Now().After(deadline) {
-			return e
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	return untilDecided(t, 30*time.Second, 50*time.Millisecond, func(o any) *ipc.RPCError { return call(ipc.RunParams{Ticket: p.Ticket}, o) }, out)
 }
 
 // run is approvedRun on the console's socket.

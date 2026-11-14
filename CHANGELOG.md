@@ -6,6 +6,16 @@ This file records the changes a user or an agent has to know about.
 
 ## Unreleased
 
+### Fixed
+
+- Hub mode: running (`locksql_run` with `ticket`) or activating
+  (`locksql_grant` with `ticket`) a ticket the human has not decided yet
+  answered `denied: … hubclient: no decision yet` with "The human denied
+  this; do not retry it". It now answers `pending` with the same ticket,
+  like the first run. Only a denial answers `denied`; a ticket that already
+  ran answers `no_such_plan`, and a decision the console cannot verify an
+  `error` naming the reason (#234).
+
 ## v0.18.1 (2026-11-13)
 
 Supported lockhub: v0.9.0 or later (unchanged). Built on lockkit v0.19.1
