@@ -10,7 +10,7 @@ go through it; the console is started by `lox run` only (lockhub). This page is 
 
 | Where | What |
 |---|---|
-| host | `/usr/local/bin/locksql`: the launcher, root-owned (the agent's account cannot replace it), put there by `scripts/install.sh` |
+| host | `/usr/local/bin/locksql`: the launcher, put there by `scripts/install.sh`; root-owned when installed into a root-owned directory (the agent's account cannot replace it then), else owned by you. Or, with Homebrew (`brew install davidgodefroid/tap/locksql`), the same launcher with the digests pinned by the formula, owned by you, upgraded with `brew upgrade locksql` |
 | registry | `ghcr.io/davidgodefroid/locksql:X.Y.Z` and `:X.Y.Z-vault`, amd64 and arm64, cosign-signed by the release workflow |
 | release archives | the launcher (`scripts/locksql`) and the binary; the binary serves only an agent that runs in a container of its own ([docker.md](docker.md#agent-in-its-own-container)) |
 
@@ -39,6 +39,7 @@ stdin and stdout are terminals, else `-i`.
 | `doctor --fix` | you (`id -u`:`id -g`), in the group `locksql-clients`; root (`--user 0`) first, only when `.locksql/` holds entries that are not yours | `-e HOME=$HOME -e USER -v $HOME:$HOME`, `-e LOCKSQL_DOCTOR_FOR=uid:gid`; no socket volume | it wires your agents and keeps `.locksql/` as `lox run` reads it: yours, writable by you only. The root run gives back to you what the console account owns in `.locksql/` (left by `doctor --fix` up to v0.13.0, which `lox run` refuses), nothing else, its output on stderr |
 | `mcp` | `agent` (uid 10002, image default) | lox run's socket volume of the workspace's locksql lock, read-only (below), `-i` only | the agent speaks MCP on stdin/stdout |
 | `status`, `tables`, `describe`, `plan`, `run`, `request`, `logout`, `pii` | `agent` | lox run's socket volume, read-only (below) | client commands reach the console through the socket only |
+| `grant` | `agent` | none yet: it falls to "anything else" and reaches no console (a known launcher bug); agents use the MCP tool `locksql_grant` | |
 | `doctor` | `agent` | lox run's socket volume when there is one; else none, and the launcher says why; `-e LOCKSQL_DOCTOR_FOR=uid:gid` | the checks run either way; `.locksql/` is checked for you |
 | anything else (`help`, ...) | `agent` | | no console to reach |
 | `version` | | | prints `locksql launcher X (image I)`, then runs `I version` |
@@ -68,10 +69,13 @@ lea makes for its own agents:
   the launcher reads unescaped) of this very workspace (its `workspace`,
   and its `project` `lockfamily-<8 hex of sha256(workspace)>`);
 - the lock is the workspace's only locksql lock, or the one `--instance
-  NAME` names (the launcher's own option, taken out of the command line;
-  with several and no `--instance`, the error names them). In
-  `.mcp.json`, add it to the arguments: `"args": ["mcp", "--instance",
-  "NAME"]`;
+  NAME` names (the launcher's own option, taken out of the command line).
+  With several and no `--instance`, `mcp` and the client commands mount
+  each lock, checked as one is, on `/run/locksql/<instance>`, and the client
+  sends each profile to the lock that serves it; only `stats`, `forget` and
+  `doctor` stop, and their error names the locks. To pin the MCP server to
+  one, add it to its arguments in the agent's MCP config: `"args": ["mcp",
+  "--instance", "NAME"]`;
 - its socket volume is the one `lox run` names for it, its clients group
   the image's (10000);
 - Docker confirms the volume: lox run's labels (compose's project and
@@ -142,15 +146,17 @@ The digests come from `cosign verify` of the two images against the release
 workflow run for that exact tag
 (`.../release.yml@refs/tags/vX.Y.Z`: an older release's signed image, retagged,
 does not verify), and must differ; the launcher then runs
-`registry@sha256:...`, never a tag that could move. With
-`LOCKSQL_SKIP_COSIGN=1` nothing is verified: the digests stay empty and the
-launcher runs `registry:X.Y.Z`. A launcher run from a clone
+`registry@sha256:...`, never a tag that could move.
+`LOCKSQL_SKIP_COSIGN=1` is read only when cosign is not installed: then
+nothing is verified, the digests stay empty and the launcher runs
+`registry:X.Y.Z`. With cosign installed, the checks always run. A launcher run from a clone
 (`launcher_version=dev`) runs the local image `locksql`.
 
 ## Overrides
 
-- `LOCKSQL_IMAGE`: the image to run, instead of the pinned one (your own
-  build, an image with `ssh` for `proxy_command`, `ALLOWED_UIDS`);
+- `LOCKSQL_IMAGE`: the image the launcher's own commands run, instead of
+  the pinned one (your own build); it never affects the console, which
+  `lox run` starts from the lock's image;
 - `LOCKSQL_VAULT=1`: the `-vault` image;
 - `LOCKSQL_DOCKER_ARGS`: extra `docker run` arguments, split on spaces
   (`--network NAME`, `-e DOCKER_HOST=...`).
@@ -158,7 +164,8 @@ launcher runs `registry:X.Y.Z`. A launcher run from a clone
 ## Install and update
 
 `scripts/install.sh` (read it, then run it with `LOCKSQL_VERSION`) and
-`locksql update [vX.Y.Z]` do the same steps:
+`locksql update [vX.Y.Z]` do the same steps (`update` is for install.sh
+installs; a Homebrew install upgrades with `brew upgrade locksql`):
 
 1. refuse anything but a release tag (`vX.Y.Z[-pre]`): it goes into URLs
    and into the launcher's text;
@@ -170,16 +177,19 @@ launcher runs `registry:X.Y.Z`. A launcher run from a clone
 4. `cosign verify` both images against the same identity and take their
    digests, which must differ;
 5. extract `scripts/locksql`, write the version and digests into it, and
-   install it root-owned (with `sudo` when the directory is not writable);
+   install it (with `sudo` when the directory is not writable, then
+   root-owned; as you in a directory you can write);
 6. `update` then runs `docker pull` of the pinned image.
 
 Any failed check stops before the launcher is replaced. cosign is required
-(`LOCKSQL_SKIP_COSIGN=1` is the explicit way past it).
+(`LOCKSQL_SKIP_COSIGN=1` is the explicit way past it, read only when cosign
+is absent).
 
 ## Platforms
 
-- Linux: Docker Engine; `host.docker.internal` comes from the
-  `host-gateway` mapping the launcher adds.
+- Linux: Docker Engine; `host.docker.internal`, for the console, comes
+  from the lock's egress gateway that `lox run` starts. The launcher adds
+  no mapping.
 - macOS: Docker Desktop; same launcher. Untested so far: `doctor --fix`
   giving back `.locksql/` entries that are not yours (a `chown` as root
   through Docker Desktop's file sharing).

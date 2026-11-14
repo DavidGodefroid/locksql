@@ -130,9 +130,9 @@ const guidance = "\n\nSafety rules: use locksql only when the user explicitly as
 // instructions are the server instructions shown to the model.
 const instructions = "locksql gives read access (or more, if the human's policy allows) to a database through a console the human runs in a terminal. " +
 	"Workflow: locksql_status, then locksql_list_tables / locksql_describe, then locksql_plan with one SQL statement, then locksql_run with the plan_id; " +
-	"locksql_run answers pending with a ticket the human decides in lockhub; run the ticket once told it is decided. A policy can only be changed by the human: locksql_request_change merely queues a proposal. " +
+	"locksql_run answers pending with a ticket decided in lockhub (by an auto rule or the human); run the ticket once told it is decided. A policy can only be changed by the human: locksql_request_change merely queues a proposal. " +
 	"Statements are parsed and every column resolved to its source: PII columns may be selected (masked), counted or aggregated, joined with = and filtered with =, IN or IS NULL against literals; " +
-	"keep filters, groups and aggregates on PII broad: when one covers fewer than k rows (k-anonymity) the human is warned before approving and may deny the run. " +
+	"keep filters, groups and aggregates on PII broad: when one covers fewer than k rows (k-anonymity) the ticket carries a warning, and a human who sees it may deny the run. " +
 	"Masked cells come back as <redacted> and cannot be filtered on; placeholders ('${...}') are not supported and are refused (E_PLACEHOLDER). Never ask the user to type a PII value in the chat; at write tiers a masked column may only be set to NULL or DEFAULT. " +
 	"If no console runs, ask the user to run `lox run` (a console is started by lox run only); never start one yourself. Never edit the locksql config, and never reach a database with mysql, psql, sqlite3, a driver or a container shell." + guidance
 
@@ -255,14 +255,14 @@ func New(o Options) *mcp.Server {
 	no := false
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "locksql_run",
-		Description: "Run a plan from locksql_plan, or a ticket once decided. A plan answers pending with a ticket the human decides in lockhub: do not retry; once decided, run the ticket. " +
+		Description: "Run a plan from locksql_plan, or a ticket once decided. A plan answers pending with a ticket decided in lockhub (by an auto rule or the human): do not retry; once decided, run the ticket. " +
 			"A decided ticket returns the rows (capped and PII-masked) as structured columns and rows plus a text rendering." + guidance,
 		Annotations: &mcp.ToolAnnotations{OpenWorldHint: &no},
 	}, t.run)
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "locksql_grant",
 		Description: "Ask the human once for a grant: a bounded read scope (database, tables, duration, a budget of statements, rows and bytes returned) inside which locksql_run runs reads without a ticket each. " +
-			"Use it when you expect several reads of the same few tables; ask for the tables and budget you need, no more. It answers pending with a ticket the human decides in lockhub: do not retry; once decided, call locksql_grant with that ticket to activate it. " +
+			"Use it when you expect several reads of the same few tables; ask for the tables and budget you need, no more. It answers pending with a ticket decided in lockhub (by an auto rule or the human): do not retry; once decided, call locksql_grant with that ticket to activate it. " +
 			"Covered: SELECT, WITH ... SELECT and EXPLAIN SELECT of this agent on the grant's database whose every table is in the grant, while its time and budget last. " +
 			"Never covered (they get a normal ticket): writes, unmask, filters, groups or aggregates on PII columns, and reads whose estimate exceeds the rows left. The human can revoke a grant at any time." + guidance,
 		Annotations: &mcp.ToolAnnotations{OpenWorldHint: &no},
@@ -337,7 +337,7 @@ func toolError(err error) error {
 	case "no_such_plan":
 		hint = "Plans are one-shot and expire after 10 minutes: call locksql_plan again."
 	case "policy_pending":
-		hint = "A policy change awaits the human's review in the console (`lox attach` opens it); wait for it and tell the user."
+		hint = "A policy change awaits the human's review (`lox run` asks it); wait for it and tell the user."
 	case "connection_lost":
 		hint = "The console lost its database connection; tell the user."
 	case "console_closed":
@@ -466,7 +466,7 @@ func (t *tools) plan(ctx context.Context, _ *mcp.CallToolRequest, in PlanIn) (*m
 				w.WriteString(l)
 			}
 		}
-		fmt.Fprintf(w, "next: show this plan to the user, then call locksql_run with plan_id %s (one-shot, valid 10 min; it answers pending with a ticket the human decides in lockhub)\n", r.PlanID)
+		fmt.Fprintf(w, "next: show this plan to the user, then call locksql_run with plan_id %s (one-shot, valid 10 min; it answers pending with a ticket decided in lockhub (by an auto rule or the human))\n", r.PlanID)
 	}), PlanOut{PlanResult: r}, nil
 }
 

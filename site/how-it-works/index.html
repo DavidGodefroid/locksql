@@ -143,7 +143,7 @@
     <li>Nothing is asked in the console’s terminal. The ticket is decided in <code>lox run</code> (or <code>lox approve</code>); a denial carries a reason the agent reads.</li>
     <li>Each profile says which actions <code>lox run</code>’s auto mode may approve: by default reads, never writes, schema changes or unmasked reads. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#auto-mode-per-profile">Auto mode per profile</a>.</li>
     <li>Only lockhub’s signed decision runs a ticket; no socket method can approve. Requests are served one at a time.</li>
-    <li>The k-anonymity counts run before the ticket goes out. Each count under <code>k_anonymity</code> adds a warning; nothing is refused, you decide. The agent learns nothing of the counts.</li>
+    <li>The k-anonymity counts run before the ticket goes out. Each count under <code>k_anonymity</code> adds a warning; nothing is refused. Under the default <code>auto.read = "auto"</code>, <code>lox run</code> approves such a read without asking; set <code>auto.read = "ask"</code>, or run <code>lox run --manual</code>, to see the warnings first. The agent learns nothing of the counts.</li>
   </ul>
   <p class="prose">locksql never rewrites SQL: what you approve is what runs. <a href="https://github.com/DavidGodefroid/locksql/blob/main/docs/usage.md#the-approval-screen">The approval screen, in the usage guide</a>.</p>
 </section>
@@ -161,7 +161,7 @@
 <tr><th scope="row"><code>locksql_list_tables</code>, <code>locksql_describe</code></th><td>none (catalog reads, audited)</td></tr>
 <tr><th scope="row"><code>locksql_plan</code></th><td>none (validate and EXPLAIN only)</td></tr>
 <tr><th scope="row"><code>locksql_run</code></th><td>a ticket, decided in lockhub (none for a read inside an active grant)</td></tr>
-<tr><th scope="row"><code>locksql_grant</code></th><td>you, in lockhub, once for the grant’s scope</td></tr>
+<tr><th scope="row"><code>locksql_grant</code></th><td>you, in lockhub, once for the grant’s scope; only for agents run by lea (other MCP clients plan and run each query)</td></tr>
 <tr><th scope="row"><code>locksql_pii_list</code>, <code>locksql_pii_add</code></th><td>none (adding a mask rule only tightens)</td></tr>
 <tr><th scope="row"><code>locksql_request_change</code></th><td>queued for you; never applied by the tool</td></tr>
 </tbody>
@@ -231,7 +231,7 @@ locksql doctor   [--profile P] [--fix [--yes]] [--json]</code></pre>
 </div>
   <div class="prose">
     <p>PII columns may be selected, counted, joined with <code>=</code> and filtered with <code>=</code>, <code>IN (literals)</code> or <code>IS NULL</code>. Expressions over them, <code>LIKE</code>, ranges and <code>ORDER BY</code> are refused.</p>
-    <p>A filter, grouping or aggregate on PII that covers fewer than <code>k_anonymity</code> rows (default 5, production 10) warns you on the ticket; you decide.</p>
+    <p>A filter, grouping or aggregate on PII that covers fewer than <code>k_anonymity</code> rows (default 5, production 10) puts a warning on the ticket. Under the default <code>auto.read = "auto"</code>, <code>lox run</code> approves such a read without asking: set <code>auto.read = "ask"</code>, or run <code>lox run --manual</code>, if a human must see these warnings before the run.</p>
     <h3 id="writes">Writes</h3>
     <p>At tiers above <code>read</code>, while mask rules exist, some writes are analysed like a read before they run: a write whose rows come back (<code>RETURNING</code>, or a <code>SELECT</code> over PostgreSQL data-modifying CTEs), and one that stores a query’s rows (<code>INSERT ... SELECT</code>).</p>
     <p>Their returned columns are masked by where they come from, so renaming a masked column is fine. Refused: an expression over one, a function outside the allowlist, a PII filter, grouping or aggregate in the outer <code>SELECT</code>, and syntax the parser does not read (<code>MERGE</code>, multi-table MySQL writes, ...).</p>
@@ -256,8 +256,8 @@ locksql doctor   [--profile P] [--fix [--yes]] [--json]</code></pre>
 <caption>Supported database engines</caption>
 <thead><tr><th scope="col">Engine</th><th scope="col">Versions</th><th scope="col">Read-only session (tier <code>read</code>)</th><th scope="col">Server-side timeout</th><th scope="col">Plan source</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code>mariadb</code></th><td>10.1+ (tested 10.11, 11.4)</td><td><code>SET SESSION TRANSACTION READ ONLY</code> + <code>START TRANSACTION READ ONLY</code></td><td><code>max_statement_time</code> + <code>KILL QUERY</code></td><td><code>EXPLAIN FORMAT=JSON</code></td></tr>
-<tr><th scope="row"><code>mysql</code></th><td>8.0+ (tested 8.0, 8.4)</td><td>same as MariaDB</td><td><code>max_execution_time</code> + <code>KILL QUERY</code></td><td><code>EXPLAIN FORMAT=JSON</code></td></tr>
+<tr><th scope="row"><code>mariadb</code></th><td>10.11+ (tested 10.11, 11.4)</td><td><code>SET SESSION TRANSACTION READ ONLY</code> + <code>START TRANSACTION READ ONLY</code></td><td><code>max_statement_time</code> + <code>KILL QUERY</code></td><td><code>EXPLAIN FORMAT=JSON</code></td></tr>
+<tr><th scope="row"><code>mysql</code></th><td>8.0+ (tested 8.0, 8.4)</td><td>same as MariaDB</td><td><code>max_execution_time</code> (SELECT only; writes rely on <code>KILL QUERY</code>) + <code>KILL QUERY</code></td><td><code>EXPLAIN FORMAT=JSON</code></td></tr>
 <tr><th scope="row"><code>postgres</code></th><td>13+ (tested 13, 17)</td><td><code>SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY</code> + <code>BEGIN READ ONLY</code></td><td><code>statement_timeout</code> + cancel request</td><td><code>EXPLAIN (FORMAT JSON, VERBOSE)</code></td></tr>
 <tr><th scope="row"><code>sqlite</code></th><td>3 (pure Go, in-process)</td><td><code>mode=ro</code> + <code>query_only</code></td><td>interrupt on deadline</td><td><code>EXPLAIN QUERY PLAN</code> + <code>sqlite_stat1</code></td></tr>
 </tbody>
@@ -269,10 +269,10 @@ locksql doctor   [--profile P] [--fix [--yes]] [--json]</code></pre>
 <section aria-labelledby="unmask">
   <h2 id="unmask">Raw values: <code>--allow-unmask</code> and <code>:unmask</code></h2>
   <div class="prose">
-    <p>An agent can ask for unmasked PII output only when you allowed it in the console: <code>--allow-unmask</code> at start, or <code>:unmask</code> while it runs, without a restart.</p>
-    <p><code>:unmask</code> asks <code>Allow unmasked output? [y/N]</code>. Typed again, it turns unmasked output off at once and refuses the open unmask plans. It is never a single key, and the status line reads <code>unmask allowed</code> while it is on.</p>
+    <p>An agent can ask for unmasked PII output only when you allowed it in the console: <code>:unmask</code> while it runs, without a restart. The start-up flag <code>--allow-unmask</code> is not passed by <code>lox run</code>, and desktop security level 2 refuses it.</p>
+    <p><code>:unmask</code> asks <code>Allow unmasked output? [y/N]</code> (on production, the profile name typed). Typed again, it turns unmasked output off at once and refuses the open unmask plans. It is never a single key, and the status line reads <code>unmask allowed</code> while it is on.</p>
     <p>Without it, every unmask request is refused before anything runs. It is console-only: no client or config file can turn it on, and each switch and refusal is audited.</p>
-    <p>With it, each unmasked query is still asked, shown as <code>PII: UNMASKED</code> in red. The console then prints the clear result, so you see exactly what the agent received; the audit log still holds no row data.</p>
+    <p>With it, each unmasked query still needs a ticket, shown as <code>PII: UNMASKED</code> in red, asked of you unless the approved policy sets <code>auto.unmask = "auto"</code> (e.g. <code>auto = "full-auto"</code>). The console then prints the clear result, so you see exactly what the agent received; the audit log still holds no row data.</p>
   </div>
 </section>
 
@@ -333,7 +333,7 @@ locksql doctor   [--profile P] [--fix [--yes]] [--json]</code></pre>
       </nav>
     </div>
     <div class="wrap footer-bottom">
-      <p>Pre-release (v0.17.x). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
+      <p>Pre-release (v0.x). locksql is licensed under the <a href="https://github.com/DavidGodefroid/locksql/blob/main/LICENSE">Apache License 2.0</a>.</p>
       <p><a href="https://lockfamily.dev">lockfamily.dev</a> · <a href="https://github.com/DavidGodefroid/lockfamily">the family on GitHub</a></p>
     </div>
   </footer>

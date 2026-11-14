@@ -36,7 +36,7 @@ MariaDB, MySQL, PostgreSQL or SQLite: it holds the credentials, weighs every
 statement and masks personal data. The agent only asks.
 
 > [!NOTE]
-> **Pre-release** (`v0.17.x`): a release may still change the config files,
+> **Pre-release** (`v0.x`): a release may still change the config files,
 > the MCP tools or the CLI. See [the path to 1.0](docs/1.0.md).
 
 ## Why locksql
@@ -44,7 +44,8 @@ statement and masks personal data. The agent only asks.
 - **The agent never holds a password.** Credentials are typed at console
   start or read from Vault, in an account and a container the agent cannot reach.
 - **Approval outside the agent.** Each statement becomes a ticket on
-  [lockhub](https://github.com/DavidGodefroid/lockhub), decided in `lox run`.
+  [lockhub](https://github.com/DavidGodefroid/lockhub), decided in `lox run`
+  (or runs inside a grant you approved once).
   Reads pass on your rules; connections, writes and schema changes wait for you.
 - **Personal data stays masked.** Every output column is traced to its source
   column and masked there, whatever the query calls it.
@@ -64,7 +65,8 @@ locksql runs in Docker: Homebrew installs the `locksql` launcher, which runs
 every command in the release's image. `lox` is lockhub's CLI. The whole
 family instead: `brew install davidgodefroid/tap/lockfamily`.
 
-Without Homebrew, the signed install script of a release:
+Without Homebrew, the install script of a release tag (it verifies the
+release's cosign signatures, so it needs `cosign` on PATH):
 
 ```sh
 V=vX.Y.Z
@@ -108,8 +110,9 @@ directory, then `lea stop` and `lea`. Step by step, by hand:
 <td width="50%" valign="top">
 
 **🔑 One key holder**<br>
-Credentials live in the console only: never in argv, env, files, logs, the
-socket or an error message.
+Credentials live in the console only: the database password is never in
+argv, env, files, logs, the socket or an error message (a Vault token goes
+only to the `vault` child's environment).
 
 </td>
 <td width="50%" valign="top">
@@ -172,7 +175,7 @@ sequenceDiagram
 3. `lox run` decides, on your profile's rules or by asking you. The console
    checks the signed decision, runs the statement, masks and caps the rows.
 
-Engines: MariaDB 10.1+, MySQL 8.0+, PostgreSQL 13+, SQLite 3, all pure Go,
+Engines: MariaDB 10.11+, MySQL 8.0+, PostgreSQL 13+, SQLite 3, all pure Go,
 on amd64 and arm64. The approval screen, the process layout and the engines
 table: [docs/architecture.md](docs/architecture.md).
 
@@ -184,9 +187,10 @@ table: [docs/architecture.md](docs/architecture.md).
   container; the kernel checks every peer on the socket.
 - **The AI tightens, the human loosens.** Agents may add mask rules; any
   loosening of the policy waits for your confirmation in the console.
-- **Audit.** Every decision, refusal and run goes to an append-only JSONL log,
-  never with secrets or row data.
-- **Known limits.** Masking is best effort, k-anonymity is a warning, and
+- **Audit.** Every decision, refusal and run goes to a hash-chained JSONL
+  log, never with secrets or result rows.
+- **Known limits.** Masking is best effort, k-anonymity is a warning (on a
+  read the default auto rule approves without asking), and
   whoever can run `docker` commands can reach the console's container.
 
 Every rule and limit: [docs/safety.md](docs/safety.md). Threat model:

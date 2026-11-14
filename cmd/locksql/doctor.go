@@ -787,7 +787,7 @@ func profileChecks(d doctorEnv, p config.Profile, sys *sysconf.Config, cwd strin
 	if err != nil {
 		if errors.Is(err, client.ErrNoConsole) {
 			add(checkWarn, "console", "not running: connectivity, privileges and EXPLAIN are checked by a running console",
-				"start it: "+startCommandOf(err, p.Name)+" (then `lox attach INSTANCE` answers its questions)")
+				"start it: "+startCommandOf(err, p.Name)+" (lox run asks its questions)")
 		} else {
 			add(checkFail, "console", err.Error(), "")
 		}

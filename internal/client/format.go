@@ -248,7 +248,7 @@ func FormatPlan(w io.Writer, p ipc.PlanResult) {
 		kv("unmask", "yes: the human must approve unmasked output")
 	}
 	kv("sql", clean(p.SQL))
-	fmt.Fprintf(w, "next: locksql run --profile %s %s  (one-shot, valid 10 min; it answers pending with a ticket the human decides in lockhub)\n",
+	fmt.Fprintf(w, "next: locksql run --profile %s %s  (one-shot, valid 10 min; it answers pending with a ticket decided in lockhub (by an auto rule or the human))\n",
 		p.Profile, p.PlanID)
 }
 

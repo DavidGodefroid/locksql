@@ -22,7 +22,7 @@ sequenceDiagram
     C->>D: k-anonymity counts
     C-->>A: pending, ticket T
     C->>H: ticket T in lockhub (warns of a count under k)
-    H-->>C: lox approve: signed decision
+    H-->>C: lox run: signed decision (auto rule or you)
     A->>C: run T
     C->>D: the statement
     D-->>C: rows
@@ -55,7 +55,11 @@ sequenceDiagram
    ╰─ pending: ticket 01J…
    ```
 
-3. You decide the ticket in lockhub (`lox approve`). The agent runs the
+3. `lox run` decides the ticket by the profile's auto rules: by default a
+   read is approved without asking (a k-anonymity warning included; set
+   `auto.read = "ask"` or run `lox run --manual` to see it first), while
+   writes, DDL, unmasked reads and grants are asked of you (`lox approve`
+   answers too). The agent runs the
    ticket (`locksql run TICKET`); the console checks the hub's signed
    decision, plans the statement again, runs it, masks PII, caps the output
    and hands the rows back to the agent, framed as untrusted data.
@@ -92,7 +96,7 @@ Full walkthrough: [docs/usage.md](usage.md).
 
 | Engine | Versions | Read-only session (tier `read`) | Server-side timeout | Plan source |
 |---|---|---|---|---|
-| `mariadb` | 10.1+ (tested 10.11, 11.4) | `SET SESSION TRANSACTION READ ONLY` + `START TRANSACTION READ ONLY` | `max_statement_time` + `KILL QUERY` | `EXPLAIN FORMAT=JSON` |
+| `mariadb` | 10.11+ (tested 10.11, 11.4) | `SET SESSION TRANSACTION READ ONLY` + `START TRANSACTION READ ONLY` | `max_statement_time` + `KILL QUERY` | `EXPLAIN FORMAT=JSON` |
 | `mysql` | 8.0+ (tested 8.0, 8.4) | same as MariaDB | `max_execution_time` (SELECT only; writes rely on `KILL QUERY`) + `KILL QUERY` | `EXPLAIN FORMAT=JSON` |
 | `postgres` | 13+ (tested 13, 17) | `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY` + `BEGIN READ ONLY` … `ROLLBACK` | `statement_timeout` + cancel request | `EXPLAIN (FORMAT JSON, VERBOSE)` |
 | `sqlite` | 3 (pure Go, in-process) | `mode=ro` + `query_only` | interrupt on deadline | `EXPLAIN QUERY PLAN` + `sqlite_stat1` (run `ANALYZE` once, or every full scan is a WARN of unknown size) |
