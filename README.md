@@ -58,15 +58,18 @@ In-agent approval is a convenience; a separate approval process is a boundary.
 
 ```sh
 brew trust davidgodefroid/tap
-brew install davidgodefroid/tap/lox davidgodefroid/tap/locksql
+brew install davidgodefroid/tap/locksql davidgodefroid/tap/lox cosign
 ```
 
 locksql runs in Docker: Homebrew installs the `locksql` launcher, which runs
-every command in the release's image. `lox` is lockhub's CLI. The whole
-family instead: `brew install davidgodefroid/tap/lockfamily`.
+every command in the release's image. It also takes lockhub's CLI `lox`
+v0.12.0 or later and cosign v2.5.0 or later: `lox add` and `lox run` verify
+every image with cosign. The whole family instead, `lox` and cosign included:
+`brew install davidgodefroid/tap/lockfamily`.
 
 Without Homebrew, the install script of a release tag (it verifies the
-release's cosign signatures, so it needs `cosign` on PATH):
+release's cosign signatures, so it needs `cosign` v2.5.0 or later on PATH;
+install lockhub's `lox` v0.12.0 or later beside it):
 
 ```sh
 V=vX.Y.Z

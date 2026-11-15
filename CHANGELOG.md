@@ -19,6 +19,10 @@ This file records the changes a user or an agent has to know about.
   longer name `lox attach` or a human decision for every ticket. Known gaps
   are filed: `locksql grant` through the host launcher (#250), warned reads
   auto-approved (#251, lockhub#224).
+- The install docs and the site name everything locksql needs: `brew
+  install davidgodefroid/tap/locksql davidgodefroid/tap/lox cosign`, with
+  lockhub's `lox` v0.12.0 or later and cosign v2.5.0 or later (`lox add` and
+  `lox run` verify every image with cosign), as lockssh#44 does.
 
 ## v0.20.0 (2026-11-14)
 

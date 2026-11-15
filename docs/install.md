@@ -11,11 +11,14 @@ and where you decide each query.
 
 The shortest path is the Lock Family's: install it with Homebrew, then let
 [`lox add locksql`](https://github.com/DavidGodefroid/lockhub/blob/main/docs/lox-add.md)
-ask where your database is and set up its lock, then start it with `lox run`:
+ask where your database is and set up its lock, then start it with `lox run`.
+locksql takes lockhub's `lox` v0.12.0 or later and cosign v2.5.0 or later
+(`lox add` and `lox run` verify every image with cosign); the `lockfamily`
+formula installs both, the `locksql` formula neither:
 
 ```sh
 brew trust davidgodefroid/tap                # Homebrew asks you to trust a third-party tap once
-brew install davidgodefroid/tap/lockfamily   # or only this tool: brew install davidgodefroid/tap/locksql
+brew install davidgodefroid/tap/lockfamily   # or only this tool: brew install davidgodefroid/tap/locksql davidgodefroid/tap/lox cosign
 cd ~/projects                                 # with lea: its projects directory; with claude: the project
 lox add locksql                               # asks about the database, sets up the lock
 lox run                                       # a terminal of its own, outside the agent: starts the hub and the lock, approves
@@ -93,12 +96,12 @@ trust a third-party tap before it loads its formulas), then install:
 
 ```sh
 brew trust davidgodefroid/tap
-brew install davidgodefroid/tap/locksql   # or davidgodefroid/tap/lockfamily for the whole family
+brew install davidgodefroid/tap/locksql davidgodefroid/tap/lox cosign   # or davidgodefroid/tap/lockfamily for the whole family
 ```
 
 Otherwise, download the script from the release tag you install, read it,
 then run it. It needs [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
-on PATH, and exits with `cosign is required…` without it (unless
+v2.5.0 or later on PATH, and exits with `cosign is required…` without it (unless
 `LOCKSQL_SKIP_COSIGN=1`, which skips the checks only when cosign is absent):
 
 ```sh
