@@ -27,7 +27,7 @@ msg='In the dev database: our 3 Belgian customers with the highest total spend, 
 for ((i=0;i<${#msg};i++)); do tmux send-keys -t $L -l "${msg:$i:1}"; sleep 0.045; done
 sleep 0.9; tmux send-keys -t $L Enter
 for _ in $(seq 1 90); do right | grep -q 'QUESTION read' && break; sleep 1; done
-sleep 4.5; tmux send-keys -t $R d; sleep 5.5; tmux send-keys -t $R y; sleep 3
+sleep 6; tmux send-keys -t $R d; sleep 8; tmux send-keys -t $R y; sleep 3
 for _ in $(seq 1 60); do idle && break; sleep 1; done; sleep 2
 if ! left | grep -q '<redacted> *│'; then   # the agent stopped at "pending": tell it the ticket is decided
   msg='Approved.'; for ((i=0;i<${#msg};i++)); do tmux send-keys -t $L -l "${msg:$i:1}"; sleep 0.08; done

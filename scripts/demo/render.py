@@ -31,6 +31,7 @@ def emoji(ch):
         im = Image.new("RGBA", (136, 128), (0, 0, 0, 0)); ImageDraw.Draw(im).text((0, 0), ch, font=EMO, embedded_color=True)
         _ec[ch] = im.resize((17, 16), Image.LANCZOS)
     return _ec[ch]
+SCRUB = (re.compile(r"(?<=Sonnet \d\.\d) · Claude \w+"), re.compile(r" · ← \d+ agents?"))   # the recording account's plan and session count, blanked
 HIDE = ("Your login expires", "tmux focus-events off")   # notices of the recording machine (account, tmux tip), blanked
 UI = ImageFont.truetype(D + "DejaVuSansMono.ttf", 14)
 _hc = {}
@@ -77,6 +78,10 @@ def parse(text):
                     elif ps[k + 1] == 2: st[key] = tuple(ps[k + 2:k + 5]); k += 4
                 k += 1
         for ch in line[pos:]: cells.append((ch, dict(st)))
+        plain = "".join(c for c, _ in cells)
+        for rx in SCRUB:
+            for m in rx.finditer(plain):
+                for k in range(m.start(), m.end()): cells[k] = (" ", cells[k][1])
         rows.append(cells)
     return rows
 def wide(ch): return ord(ch) >= 0x1f000 or 0x2e80 <= ord(ch) <= 0xa4cf or 0xff00 <= ord(ch) <= 0xff60
