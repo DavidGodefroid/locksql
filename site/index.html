@@ -96,10 +96,10 @@
     <video controls autoplay muted loop playsinline preload="metadata" poster="assets/demo-poster.jpg" width="1700" height="940" aria-describedby="demo-caption">
       <source src="assets/demo.webm" type="video/webm">
       <source src="assets/demo.mp4" type="video/mp4">
-      <img src="assets/demo-poster.jpg" alt="The locksql console asking for approval of a query written by an agent (here Claude Code)" width="1700" height="940">
+      <img src="assets/demo-poster.jpg" alt="lox run asking for approval of a query written by an agent (here Claude Code); the personal data columns email and name are masked" width="1700" height="940">
     </video>
     <script>if (matchMedia("(prefers-reduced-motion: reduce)").matches) { const v = document.currentScript.previousElementSibling; v.removeAttribute("autoplay"); v.pause(); }</script>
-    <figcaption id="demo-caption">An agent (here Claude Code, left) asks for the top Belgian customers; the locksql console (right) stops each query for approval. Recorded before approvals moved to lockhub: today you answer in <code>lox run</code>, and masked cells come back as plain <code>&lt;redacted&gt;</code>.</figcaption>
+    <figcaption id="demo-caption">An agent (here Claude Code, left) asks for the top Belgian customers. Its query waits as a ticket in <code>lox run</code> (right, in manual mode: every ticket is asked) until you press <kbd>y</kbd>; the agent then gets names and emails as <code>&lt;redacted&gt;</code>.</figcaption>
   </figure>
 </section>
 
