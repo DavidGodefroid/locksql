@@ -16,9 +16,9 @@
 connections and writes wait for you, and the agent never holds a password.</b></p>
 
 <p align="center">
-  <img alt="Demo: an agent (here Claude Code, left) asks for the top Belgian customers; the locksql console (right) shows each query for approval. The agent gets names and emails masked." src="docs/assets/demo.gif" width="900">
+  <img alt="Demo, two terminals side by side. 1. Left, an agent (here Claude Code) is asked for the 3 Belgian customers with the highest total spend, with their name and email. 2. The agent plans a query through locksql and says it is pending. 3. Right, lox run (here in manual mode) shows the ticket as a question: the SQL, class READ, masked columns email and name. 4. The human presses y in lox run, then tells the agent it is approved. 5. The agent runs the ticket and shows three rows whose name and email are &lt;redacted&gt;." src="docs/assets/demo.gif" width="900">
 </p>
-<p align="center"><sub>An agent (here Claude Code, left) and the locksql console (right). Recorded before approvals moved to lockhub: today you answer in <code>lox run</code>, and masked cells come back as plain <code>&lt;redacted&gt;</code>.</sub></p>
+<p align="center"><sub>An agent (here Claude Code, left) and <code>lox run</code> (right, in manual mode: every ticket is asked).</sub></p>
 
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
